@@ -4,6 +4,7 @@ import 'package:glaze_flutter/core/llm/history_assembler.dart';
 import 'package:glaze_flutter/core/llm/macro_engine.dart';
 import 'package:glaze_flutter/core/llm/studio/studio_context.dart';
 import 'package:glaze_flutter/core/llm/studio_brief_deduper.dart';
+import 'package:glaze_flutter/core/llm/studio_agent_executor.dart';
 import 'package:glaze_flutter/core/llm/studio_brief_parser.dart';
 import 'package:glaze_flutter/core/llm/studio_message_builder.dart';
 import 'package:glaze_flutter/core/llm/studio_prompt_text.dart';
@@ -276,6 +277,52 @@ void main() {
     expect(messages, isEmpty);
     expect(schema, isEmpty);
     expect(prefills, ['<thinking>\nSafety audit passed.\n</thinking>']);
+  });
+
+  test('controller two-pass is collected separately from legacy two-pass', () {
+    final legacyPrefills = <String>[];
+    final controllerPrefills = <String>[];
+    final messages = builder.buildAgentMessages(
+      agent: const StudioAgent(id: 'final'),
+      context: context,
+      config: config,
+      studioPreset: const StudioPreset(
+        id: 'preset',
+        blocks: [
+          StudioPresetBlock(
+            id: 'controller-prefill',
+            type: StudioBlockType.instruction,
+            injectionPoint: 'final',
+            mode: 'functionPrefill',
+            prefillStyle: 'controller-two-pass',
+            content: '<thinking>controller analysis</thinking>',
+          ),
+        ],
+      ),
+      priorBriefs: const [],
+      isFinalResponse: true,
+      twoPassPrefills: legacyPrefills,
+      controllerTwoPassPrefills: controllerPrefills,
+    );
+
+    expect(legacyPrefills, isEmpty);
+    expect(controllerPrefills, ['<thinking>controller analysis</thinking>']);
+    expect(messages.any((message) => message['role'] == 'tool'), isFalse);
+  });
+
+  test('controller two-pass output is normalized to one thinking block', () {
+    expect(
+      StudioAgentExecutor.normalizeThinkingPrefill(
+        '```xml\n<audit>completed analysis</audit>\n```',
+      ),
+      '<thinking>\ncompleted analysis\n</thinking>',
+    );
+    expect(
+      StudioAgentExecutor.normalizeThinkingPrefill(
+        '<thinking>already normalized</thinking>',
+      ),
+      '<thinking>\nalready normalized\n</thinking>',
+    );
   });
 
   test('instruction blocks pass through author-set user/assistant roles', () {

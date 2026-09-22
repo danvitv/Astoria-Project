@@ -291,6 +291,7 @@ class StudioAgentExecutor {
     final emittedLorebookClassifications = <String>{};
     final responseJsonSchema = <String, dynamic>{};
     final twoPassPrefills = <String>[];
+    final controllerTwoPassPrefills = <String>[];
     final messages = _messageBuilder.buildAgentMessages(
       agent: agent,
       context: context,
@@ -306,9 +307,29 @@ class StudioAgentExecutor {
       emittedLorebookClassifications: emittedLorebookClassifications,
       responseJsonSchema: responseJsonSchema,
       twoPassPrefills: twoPassPrefills,
+      controllerTwoPassPrefills: controllerTwoPassPrefills,
     );
     onLorebookClassificationsBuilt?.call(emittedLorebookClassifications);
     onMessagesBuilt?.call(messages);
+    if (controllerTwoPassPrefills.isNotEmpty) {
+      return _runTwoPassGenerator(
+        agent: agent,
+        context: context,
+        apiConfig: apiConfig,
+        config: config,
+        studioPreset: studioPreset,
+        priorBriefs: priorBriefs,
+        sessionId: sessionId,
+        cancelToken: cancelToken,
+        apiConfigId: apiConfigId,
+        turnConfig: turnConfig,
+        baseMessages: messages,
+        beforeSend: beforeSend,
+        prefill: controllerTwoPassPrefills.single,
+        firstPassApiConfigId: studioPreset.cheapApiConfigId,
+        onFinalResponseUpdate: onFinalResponseUpdate,
+      );
+    }
     if (twoPassPrefills.isNotEmpty) {
       return _runTwoPassGenerator(
         agent: agent,
@@ -346,16 +367,11 @@ class StudioAgentExecutor {
     );
   }
 
-  /// Two-pass prefill: the final generator runs twice. Pass 1 is a quiet
-  /// ask that produces the internal `<thinking>` block (plain text — no
-  /// synthetic tool call, no JSON schema, so it survives Gemini 3.8's
-  /// `thought_signature` requirement). Both passes run through the final
-  /// generator config (`isFinalResponse: true`) so they hit the final model
-  /// and its reasoning settings — a controller-lane pass would resolve the
-  /// pre-gen model instead. Pass 2 seeds the block back into the conversation
-  /// as a prior assistant turn and asks for the visible reply only. The
-  /// produced reasoning is returned as `AgentRunResult.reasoning` so it still
-  /// surfaces in the UI.
+  /// Two-pass prefill: pass 1 produces an internal `<thinking>` block as plain
+  /// text, then pass 2 seeds it as a prior assistant turn and asks for visible
+  /// prose only. The legacy `two-pass` style runs both calls through the final
+  /// slot. The experimental `controller-two-pass` style runs pass 1 through
+  /// the controller slot and normalizes its output to one `<thinking>` block.
   Future<AgentRunResult> _runTwoPassGenerator({
     required StudioAgent agent,
     required StudioContext context,
@@ -369,6 +385,7 @@ class StudioAgentExecutor {
     StudioTurnConfigSnapshot? turnConfig,
     required List<Map<String, dynamic>> baseMessages,
     required String prefill,
+    String? firstPassApiConfigId,
     Future<void> Function()? beforeSend,
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
   }) async {
@@ -384,32 +401,39 @@ class StudioAgentExecutor {
       ...baseMessages,
       {'role': 'user', 'content': thinkingInstruction},
     ];
+    final usesController = firstPassApiConfigId != null;
     final thinking = await _runner.runAgent(
       agent: agent,
       messages: thinkingMessages,
       beforeSend: beforeSend,
       apiConfig: apiConfig,
       sessionId: sessionId,
-      isFinalResponse: true,
+      isFinalResponse: !usesController,
       cancelToken: cancelToken,
-      apiConfigId: apiConfigId,
+      apiConfigId: firstPassApiConfigId ?? apiConfigId,
       turnConfig: turnConfig,
       charName: context.macroContext.charName,
       userName: context.macroContext.userName,
     );
-    final thinkingText =
+    var thinkingText =
         (thinking.reasoning.trim().isNotEmpty
                 ? thinking.reasoning
                 : thinking.text)
             .trim();
+    if (usesController && thinkingText.isNotEmpty) {
+      thinkingText = normalizeThinkingPrefill(thinkingText);
+    }
     if (thinkingText.isEmpty) {
       return const AgentRunResult(text: '', reasoning: '');
     }
 
-    final nudge =
-        'The reasoning above is your internal analysis for this turn. Now '
-        'write your final response. Do not open a new <thinking> block — '
-        'output the reply only.';
+    final nudge = usesController
+        ? 'The <thinking> block above is the completed internal analysis for '
+              'this turn. Use it directly. Do not repeat, redo, extend, or '
+              'output any audit or reasoning. Write only the final response.'
+        : 'The reasoning above is your internal analysis for this turn. Now '
+              'write your final response. Do not open a new <thinking> block — '
+              'output the reply only.';
     final answerMessages = <Map<String, dynamic>>[
       ...baseMessages,
       {'role': 'assistant', 'content': thinkingText},
@@ -440,5 +464,22 @@ class StudioAgentExecutor {
       reasoning: combinedReasoning,
       rawResponseJson: answer.rawResponseJson,
     );
+  }
+
+  static String normalizeThinkingPrefill(String value) {
+    var body = value.trim();
+    body = body.replaceFirst(RegExp(r'^```(?:\w+)?\s*'), '');
+    body = body.replaceFirst(RegExp(r'\s*```$'), '');
+    for (final tag in const ['thinking', 'audit']) {
+      final wrapped = RegExp(
+        '<$tag\\b[^>]*>([\\s\\S]*?)</$tag\\s*>',
+        caseSensitive: false,
+      ).firstMatch(body);
+      if (wrapped != null) {
+        body = wrapped.group(1)!.trim();
+        break;
+      }
+    }
+    return '<thinking>\n$body\n</thinking>';
   }
 }
