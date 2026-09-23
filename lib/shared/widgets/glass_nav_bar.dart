@@ -98,21 +98,23 @@ class _GlassNavBarState extends ConsumerState<GlassNavBar> {
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: List.generate(
           _items.length,
-          (i) => _NavButton(
-            item: _items[i],
-            isActive: i == widget.currentIndex,
-            onTap: () {
-              if (i != widget.currentIndex) {
-                Haptics.selectionClick();
-              } else {
-                // Re-tap on the already-active tab: ask that branch's screen to
-                // return to the top of its main view (sub-routes are popped by
-                // the shell's goBranch(initialLocation: true)).
-                ref.read(navReTapProvider.notifier).reTap(i);
-              }
-              if (i == _kCharactersTabIndex) _registerCharactersTabTap();
-              widget.onTap(i);
-            },
+          (i) => Expanded(
+            child: _NavButton(
+              item: _items[i],
+              isActive: i == widget.currentIndex,
+              onTap: () {
+                if (i != widget.currentIndex) {
+                  Haptics.selectionClick();
+                } else {
+                  // Re-tap on the already-active tab: ask that branch's screen to
+                  // return to the top of its main view (sub-routes are popped by
+                  // the shell's goBranch(initialLocation: true)).
+                  ref.read(navReTapProvider.notifier).reTap(i);
+                }
+                if (i == _kCharactersTabIndex) _registerCharactersTabTap();
+                widget.onTap(i);
+              },
+            ),
           ),
         ),
       ),
@@ -193,7 +195,7 @@ class _NavButton extends StatelessWidget {
                           .toColor());
           final color = Color.lerp(inactive, effectiveActive, t)!;
           return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -206,6 +208,8 @@ class _NavButton extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w500,

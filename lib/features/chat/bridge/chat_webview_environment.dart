@@ -515,7 +515,9 @@ Directory _glazeDataDirectory() {
     if (appData != null && appData.isNotEmpty) {
       // Must track the same per-channel folder as getAppDataDir(), or the
       // file-serving root would point at another channel's install.
-      return Directory('$appData${Platform.pathSeparator}$glazeDataFolderName');
+      return Directory(
+        '$appData${Platform.pathSeparator}$astoriaDataFolderName',
+      );
     }
   }
   return Directory.current;

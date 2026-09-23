@@ -5,13 +5,12 @@
 ///
 /// | branch        | channel   |
 /// |---------------|-----------|
-/// | `stable`      | `stable`  |
+/// | `release`     | `stable`  |
+/// | `dev`         | `dev`     |
 /// | `staging`     | `staging` |
-/// | `nightly`     | `nightly` |
 /// | anything else | `nightly` |
 ///
-/// Defaults to `nightly` so that local developer builds — which never pass the
-/// define — behave like an internal build.
+/// Defaults to `dev` so local developer builds use the Astoria-dev data root.
 ///
 /// The channel no longer decides whether developer mode is on — that is off by
 /// default everywhere and is unlocked through the version-badge easter egg in
@@ -19,7 +18,7 @@
 /// and the build-watermark default.
 const buildChannel = String.fromEnvironment(
   'BUILD_CHANNEL',
-  defaultValue: 'nightly',
+  defaultValue: 'dev',
 );
 
 /// Whether this is a production (`stable`) build.
@@ -37,3 +36,8 @@ const isStableChannel = buildChannel == 'stable';
 /// `stable` deliberately keeps the bare `Glaze` name so existing installs are
 /// not orphaned by this split.
 const glazeDataFolderName = isStableChannel ? 'Glaze' : 'Glaze-$buildChannel';
+
+/// Astoria desktop data and cloud namespaces. Local builds use the dev channel.
+const astoriaDataFolderName = isStableChannel
+    ? 'Astoria'
+    : 'Astoria-$buildChannel';

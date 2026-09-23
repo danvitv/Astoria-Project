@@ -13,7 +13,7 @@ class DropboxAdapter implements CloudAdapter {
   static const _contentBase = 'https://content.dropboxapi.com/2';
   static const _deleteBatchPolls = 30;
 
-  // Dropbox hands the app its own App folder as the API root, so the Glaze root
+  // Dropbox hands the app its own App folder as the API root, so the app root
   // itself collapses to '' — that is why paths are stripped rather than used
   // as-is. The name of that App folder comes from the Dropbox app registration,
   // not from us, so it cannot carry the channel.
@@ -28,7 +28,7 @@ class DropboxAdapter implements CloudAdapter {
   // Sub-folder names reserved by the *other* channels. Only reachable from
   // stable, whose wipe is the one operation that touches the App folder root.
   static const _foreignChannelFolders = isStableChannel
-      ? {'staging', 'nightly'}
+      ? {'dev', 'staging', 'nightly'}
       : <String>{};
 
   final DropboxAuth _auth;
@@ -43,8 +43,8 @@ class DropboxAdapter implements CloudAdapter {
 
   DropboxAdapter(this._auth);
 
-  /// Canonical Glaze path (`/Glaze-nightly/characters/x.json`) to the
-  /// App-folder-relative path Dropbox expects (`/nightly/characters/x.json`).
+  /// Canonical cloud path (`/Astoria-dev/characters/x.json`) to the
+  /// App-folder-relative path Dropbox expects (`/dev/characters/x.json`).
   String _stripPrefix(String path) {
     if (path.startsWith(cloudBase)) {
       return '$_channelSubfolder${path.substring(cloudBase.length)}';
@@ -55,7 +55,7 @@ class DropboxAdapter implements CloudAdapter {
   /// Inverse of [_stripPrefix] for paths coming back from the API.
   ///
   /// Drops the channel sub-folder so the rest of the sync layer keeps seeing
-  /// listings relative to the Glaze root — the invariant
+  /// listings relative to the app root — the invariant
   /// [normalizeCloudSyncPath] relies on to line manifest entries up against
   /// `list_folder` results. Without this, every entry would look missing on a
   /// non-stable channel and sync would re-upload the whole library each run.

@@ -192,16 +192,16 @@ class SyncManifest {
 
 String entryKey(String type, String id) => '$type:$id';
 
-/// Name of the Glaze root folder in the cloud provider.
+/// Name of the Astoria root folder in the cloud provider.
 ///
-/// Reuses [glazeDataFolderName] so the cloud tree is named exactly like the
-/// desktop data folder: `Glaze` on stable, `Glaze-staging` / `Glaze-nightly`
+/// Uses [astoriaDataFolderName] so the cloud tree matches the Windows data
+/// folder: `Astoria` on stable and `Astoria-dev` for local builds.
 /// elsewhere. Keeping the channels apart matters as soon as two of them are
 /// installed side by side and pointed at the same cloud account — otherwise
 /// they overwrite each other's entities through a shared manifest.
-const String cloudRootFolderName = glazeDataFolderName;
+const String cloudRootFolderName = astoriaDataFolderName;
 
-/// Root of the Glaze tree in the cloud provider, as an absolute path.
+/// Root of the Astoria tree in the cloud provider, as an absolute path.
 ///
 /// Every cloud path in the sync layer is built from this, so the channel split
 /// is a single-constant change for Google Drive. Dropbox needs one extra step

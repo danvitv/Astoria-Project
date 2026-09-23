@@ -51,6 +51,13 @@ class ThemePresetStorage implements SyncThemePresetStore, ThemePresetStore {
   /// survive a reload.
   List<ThemePreset> _withBuiltins(List<ThemePreset> presets) {
     final result = List<ThemePreset>.from(presets);
+    final oldDefaultIndex = result.indexWhere((p) => p.id == 'default');
+    // Replace only the exact, unedited Glaze built-in. A customized Default
+    // theme (or any imported theme) keeps its user's colors and effects.
+    if (oldDefaultIndex != -1 &&
+        result[oldDefaultIndex] == _glazeDefaultPreset) {
+      result[oldDefaultIndex] = _defaultPreset;
+    }
     if (!result.any((p) => p.id == 'default')) {
       result.insert(0, _defaultPreset);
     }
@@ -609,10 +616,26 @@ class ThemePresetStorage implements SyncThemePresetStore, ThemePresetStore {
   Future<void> putAll(List<ThemePreset> presets) => saveAll(presets);
 }
 
-final _defaultPreset = ThemePreset(
+final _glazeDefaultPreset = ThemePreset(
   id: 'default',
   name: 'Default',
   accentColor: '#7996CE',
+  bgDim: 0.15,
+  elementOpacity: 0.8,
+  elementBlur: 12,
+  chatLayout: 'default',
+  borderWidth: 1,
+  borderOpacity: 0.1,
+  noiseOpacity: 0.03,
+  noiseIntensity: 0.8,
+  bgNoiseOpacity: 0.03,
+  bgNoiseIntensity: 0.4,
+);
+
+final _defaultPreset = ThemePreset(
+  id: 'default',
+  name: 'Default',
+  accentColor: '#B77F96',
   bgDim: 0.15,
   elementOpacity: 0.8,
   elementBlur: 12,
@@ -633,7 +656,7 @@ final _defaultPreset = ThemePreset(
 final _materialYouPreset = ThemePreset(
   id: kMaterialYouPresetId,
   name: 'Material You',
-  accentColor: '#7996CE',
+  accentColor: '#B77F96',
   bgDim: 0.15,
   elementOpacity: 0.8,
   elementBlur: 12,

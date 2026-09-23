@@ -8,6 +8,7 @@ import 'core/app_runtime.dart';
 import 'core/debug/perf_debug.dart';
 import 'core/platform/desktop_window.dart';
 import 'core/services/dev_mode_flag_migration.dart';
+import 'core/services/windows_data_migration.dart';
 import 'core/services/windows_preferences_migration.dart';
 
 final appRestartKey = GlobalKey();
@@ -17,7 +18,19 @@ Future<void> main() async {
   AppRuntime.markStarted();
   PerfDebug.installFrameLoggerIfEnabled();
   try {
-    await migrateLegacyWindowsPreferences();
+    await migrateAstoriaWindowsData();
+  } catch (error, stackTrace) {
+    FlutterError.reportError(
+      FlutterErrorDetails(
+        exception: error,
+        stack: stackTrace,
+        library: 'startup',
+        context: ErrorDescription('Windows data migration failed'),
+      ),
+    );
+  }
+  try {
+    await migrateAstoriaWindowsPreferences();
   } catch (error, stackTrace) {
     FlutterError.reportError(
       FlutterErrorDetails(

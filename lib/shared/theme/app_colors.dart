@@ -27,15 +27,15 @@ class GlazeColors extends ThemeExtension<GlazeColors> {
   });
 
   static const dark = GlazeColors(
-    accent: Color(0xFF7996CE),
-    userBubble: Color(0xFF7996CE),
-    charBubble: Color(0xFF1E1E1E),
+    accent: Color(0xFFB77F96),
+    userBubble: Color(0xFFB77F96),
+    charBubble: Color(0xFF34252B),
   );
 
   static const light = GlazeColors(
-    accent: Color(0xFF7996CE),
-    userBubble: Color(0xFF7996CE),
-    charBubble: Color(0xFFEEEEF0),
+    accent: Color(0xFFB77F96),
+    userBubble: Color(0xFFB77F96),
+    charBubble: Color(0xFFEDE1DF),
   );
 
   // Defaults matching Glaze JS: italic = gray (#888)
@@ -68,12 +68,19 @@ class GlazeColors extends ThemeExtension<GlazeColors> {
   static GlazeColors fromPreset(ThemePreset preset, {required bool isDark}) {
     final base = isDark ? dark : light;
     final accent = preset.accent;
-    final uiColor = preset.uiColorParsed ??
-        (isDark ? _vueUiBg : _deriveUiColor(accent, isDark));
+    final uiColor =
+        preset.uiColorParsed ??
+        (preset.id == 'default'
+            ? (isDark ? const Color(0xFF2B2025) : const Color(0xFFF5EBE8))
+            : (isDark ? _vueUiBg : _deriveUiColor(accent, isDark)));
     final effectiveBg = uiColor;
 
     final userBubble = preset.userBubbleParsed ?? accent;
-    final charBubbleRaw = preset.charBubbleParsed ?? base.charBubble;
+    final charBubbleRaw =
+        preset.charBubbleParsed ??
+        (preset.id == 'default'
+            ? base.charBubble
+            : (isDark ? const Color(0xFF1E1E1E) : const Color(0xFFEEEEF0)));
     final charBubble = _distinctBubble(charBubbleRaw, effectiveBg, isDark);
 
     // Auto (null) text colors are judged against the bubble *as it actually
@@ -84,9 +91,17 @@ class GlazeColors extends ThemeExtension<GlazeColors> {
     // with near-black text that blended into it.
     final op = preset.elementOpacity.clamp(0.0, 1.0);
     final userBubbleVisible = _visibleBubble(
-        userBubble, preset.userBubbleGradientParsed, op, effectiveBg);
+      userBubble,
+      preset.userBubbleGradientParsed,
+      op,
+      effectiveBg,
+    );
     final charBubbleVisible = _visibleBubble(
-        charBubble, preset.charBubbleGradientParsed, op, effectiveBg);
+      charBubble,
+      preset.charBubbleGradientParsed,
+      op,
+      effectiveBg,
+    );
 
     return base.copyWith(
       accent: accent,
@@ -122,7 +137,8 @@ class GlazeColors extends ThemeExtension<GlazeColors> {
   }
 
   static Color _distinctBubble(Color bubble, Color bg, bool isDark) {
-    final diff = ((bubble.r * 255 - bg.r * 255).abs()).round() +
+    final diff =
+        ((bubble.r * 255 - bg.r * 255).abs()).round() +
         ((bubble.g * 255 - bg.g * 255).abs()).round() +
         ((bubble.b * 255 - bg.b * 255).abs()).round();
     if (diff < 60) {
@@ -213,7 +229,8 @@ class GlazeColors extends ThemeExtension<GlazeColors> {
 }
 
 extension GlazeColorsX on BuildContext {
-  GlazeColors get colors => Theme.of(this).extension<GlazeColors>() ?? GlazeColors.dark;
+  GlazeColors get colors =>
+      Theme.of(this).extension<GlazeColors>() ?? GlazeColors.dark;
   ColorScheme get cs => Theme.of(this).colorScheme;
 
   /// Fill behind an input box — a text field, or a selector styled to match

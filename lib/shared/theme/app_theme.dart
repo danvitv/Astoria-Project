@@ -57,8 +57,14 @@ ColorScheme _buildColorScheme(ThemePreset preset, {required bool isDark}) {
   final accent = preset.accent;
   final uiColor =
       preset.uiColorParsed ??
-      (isDark ? _vueUiBg : _deriveUiColor(accent, isDark));
-  final bgColor = preset.bgColorParsed ?? (isDark ? _vueAppBg : uiColor);
+      (preset.id == 'default'
+          ? (isDark ? const Color(0xFF2B2025) : const Color(0xFFF5EBE8))
+          : (isDark ? _vueUiBg : _deriveUiColor(accent, isDark)));
+  final bgColor =
+      preset.bgColorParsed ??
+      (preset.id == 'default'
+          ? (isDark ? const Color(0xFF1D171B) : const Color(0xFFFAF4F1))
+          : (isDark ? _vueAppBg : uiColor));
   final onBg = contrastFor(uiColor);
   final onBgVariant = contrastFor(uiColor, secondary: true);
   final surfaceHigh = uiColor;
@@ -70,7 +76,9 @@ ColorScheme _buildColorScheme(ThemePreset preset, {required bool isDark}) {
       ? const Color(0xFF1A1A1B)
       : const Color(0xFFE1E3E6);
 
-  const defaultSecondary = Color(0xFF828282);
+  final defaultSecondary = preset.id == 'default'
+      ? (isDark ? const Color(0xFFBDA9AA) : const Color(0xFF716269))
+      : const Color(0xFF828282);
   return ColorScheme(
     brightness: isDark ? Brightness.dark : Brightness.light,
     primary: accent,
@@ -103,7 +111,7 @@ ColorScheme _buildColorScheme(ThemePreset preset, {required bool isDark}) {
 
 /// Seed used by the "Material You" theme when the system does not provide a
 /// dynamic palette (non-Android platforms, older Android).
-const _materialYouFallbackSeed = Color(0xFF7996CE);
+const _materialYouFallbackSeed = Color(0xFF713B51);
 
 /// Resolve the Material 3 [ColorScheme] for the built-in "Material You" theme.
 /// On Android [dynamicScheme] is the system palette; everywhere else (or when

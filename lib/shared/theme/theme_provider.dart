@@ -15,9 +15,15 @@ class ThemeSettings {
 
   const ThemeSettings({
     this.mode = ThemeMode.dark,
-    this.accentColor = const Color(0xFF7996CE),
-    this.activePreset = const ThemePreset(id: 'default', name: 'Default'),
-    this.presets = const [ThemePreset(id: 'default', name: 'Default')],
+    this.accentColor = const Color(0xFFB77F96),
+    this.activePreset = const ThemePreset(
+      id: 'default',
+      name: 'Default',
+      accentColor: '#B77F96',
+    ),
+    this.presets = const [
+      ThemePreset(id: 'default', name: 'Default', accentColor: '#B77F96'),
+    ],
     this.ignoreCustomFont = false,
   });
 

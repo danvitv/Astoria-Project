@@ -20,7 +20,7 @@ String oauthCodeFromRedirect(
   if (params.containsKey('code')) {
     // The desktop flow sends a `state` exactly as the mobile one does and
     // never looked at what came back, so any page that reached the loopback
-    // port while it was open could hand Glaze an authorization code — binding
+    // port while it was open could hand the app an authorization code — binding
     // the reader's app to whichever account issued it.
     final mismatch = oauthStateMismatchMessage(expectedState, params['state']);
     if (mismatch != null) throw StateError(mismatch);
@@ -36,20 +36,20 @@ String oauthCodeFromRedirect(
 
 class OAuthLocalServer {
   static const _successHtml = '''<!DOCTYPE html>
-<html><head><title>Glaze — Connected</title></head>
+<html><head><title>Astoria — Connected</title></head>
 <body style="background:#1A1A2E;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif">
 <div style="text-align:center">
 <h1>Connected!</h1>
-<p>You can close this tab and return to Glaze.</p>
+<p>You can close this tab and return to Astoria.</p>
 </div></body></html>''';
 
   static const _errorHtml = '''<!DOCTYPE html>
-<html><head><title>Glaze — Error</title></head>
+<html><head><title>Astoria — Error</title></head>
 <body style="background:#1A1A2E;color:#ff6b6b;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif">
 <div style="text-align:center">
 <h1>Authentication Failed</h1>
 <p id="err"></p>
-<p>You can close this tab and return to Glaze.</p>
+<p>You can close this tab and return to Astoria.</p>
 </div></body></html>''';
 
   static Future<({String code, String redirectUri})> authenticate(

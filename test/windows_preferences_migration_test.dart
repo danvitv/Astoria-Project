@@ -80,4 +80,56 @@ void main() {
       expect(jsonDecode(await current.readAsString()), {'theme': 'current'});
     },
   );
+
+  test(
+    'Astoria imports missing settings but keeps its own edits and drops old OAuth tokens',
+    () async {
+      final old = File(
+        p.join(appData.path, 'com.glaze', 'Glaze', 'shared_preferences.json'),
+      );
+      final astoria = File(
+        p.join(
+          appData.path,
+          'Astoria Project',
+          'Astoria',
+          'shared_preferences.json',
+        ),
+      );
+      await old.parent.create(recursive: true);
+      await astoria.parent.create(recursive: true);
+      await old.writeAsString(
+        jsonEncode({
+          'flutter.theme_presets': 'custom',
+          'flutter.gz_sync_tokens': 'old-client',
+          'flutter.gz_sync_auto': true,
+          'flutter.gz_sync_manifest_v2': 'old-cloud-manifest',
+          'flutter.gz_sync_deleted_entries': 'old-cloud-deletions',
+          'flutter.volume': 10,
+        }),
+      );
+      await astoria.writeAsString(jsonEncode({'flutter.volume': 20}));
+
+      await migrateAstoriaWindowsPreferences(
+        environment: {'APPDATA': appData.path},
+      );
+
+      expect(jsonDecode(await astoria.readAsString()), {
+        'flutter.volume': 20,
+        'flutter.theme_presets': 'custom',
+      });
+      expect(
+        jsonDecode(await old.readAsString()),
+        containsPair('flutter.volume', 10),
+      );
+      await old.writeAsString(jsonEncode({'flutter.theme_presets': 'changed'}));
+      await migrateAstoriaWindowsPreferences(
+        environment: {'APPDATA': appData.path},
+      );
+      expect(
+        (jsonDecode(await astoria.readAsString())
+            as Map)['flutter.theme_presets'],
+        'custom',
+      );
+    },
+  );
 }

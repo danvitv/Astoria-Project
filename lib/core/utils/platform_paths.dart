@@ -6,7 +6,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../constants/build_channel.dart';
 
-/// Cached Glaze data root, populated on the first [getAppDataDir] call (which
+/// Cached app data root, populated on the first [getAppDataDir] call (which
 /// happens at startup via ImageStorageService.create / AppDatabase open).
 /// Used by [resolveGlazeFilePath] so widgets can rebase stale absolute paths
 /// without an async lookup.
@@ -56,7 +56,7 @@ String? resolveGlazeFilePath(String? path) {
   // Desktop channels use sibling roots. Match all of them so a copied DB can
   // move in either direction: stable <-> staging <-> nightly.
   final match = RegExp(
-    r'/(?:Glaze|Glaze-staging|Glaze-nightly)/',
+    r'/(?:Astoria(?:-dev|-staging|-nightly)?|Glaze(?:-staging|-nightly)?)/',
     caseSensitive: false,
   ).allMatches(normalized).lastOrNull;
   if (match != null) {
@@ -95,7 +95,7 @@ String relativeGlazeFilePath(String path) {
   // installed build channel: the data-root name still tells us where it sat,
   // and [resolveGlazeFilePath] rebases that suffix onto the current root.
   final match = RegExp(
-    r'/(?:Glaze|Glaze-staging|Glaze-nightly)/',
+    r'/(?:Astoria(?:-dev|-staging|-nightly)?|Glaze(?:-staging|-nightly)?)/',
     caseSensitive: false,
   ).allMatches(normalized).lastOrNull;
   if (match != null) {
@@ -131,7 +131,7 @@ String? resolveGlazeThumbnailPath(String? avatarPath) {
 String _desktopDataDir() {
   if (Platform.isWindows) {
     final appData = Platform.environment['APPDATA']!;
-    return p.join(appData, glazeDataFolderName);
+    return p.join(appData, astoriaDataFolderName);
   } else if (Platform.isLinux) {
     final xdg =
         Platform.environment['XDG_DATA_HOME'] ??

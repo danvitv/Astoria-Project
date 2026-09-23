@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:glaze_flutter/shared/theme/theme_preset_storage.dart';
+import 'package:glaze_flutter/shared/theme/theme_preset.dart';
 
 void main() {
   late ThemePresetStorage storage;
@@ -11,6 +12,26 @@ void main() {
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     storage = ThemePresetStorage(await SharedPreferences.getInstance());
+  });
+
+  test('upgrades only the untouched Glaze default theme', () async {
+    const oldDefault = ThemePreset(
+      id: 'default',
+      name: 'Default',
+      bgDim: 0.15,
+      noiseOpacity: 0.03,
+      noiseIntensity: 0.8,
+      bgNoiseOpacity: 0.03,
+      bgNoiseIntensity: 0.4,
+    );
+    await storage.saveAll([oldDefault]);
+
+    final upgraded = (await storage.loadAll()).first;
+    expect(upgraded.accentColor, '#B77F96');
+
+    await storage.saveAll([oldDefault.copyWith(accentColor: '#123456')]);
+    final custom = (await storage.loadAll()).first;
+    expect(custom.accentColor, '#123456');
   });
 
   test('imports a SillyTavern theme', () async {

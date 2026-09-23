@@ -86,7 +86,7 @@ jobs:
 
           case "$BUILD_BRANCH" in
             release|stable) BUILD_CHANNEL=stable ;;
-            dev)     BUILD_CHANNEL=nightly ;;
+            dev)     BUILD_CHANNEL=dev ;;
             staging) BUILD_CHANNEL=staging ;;
             *)       BUILD_CHANNEL=nightly ;;
           esac

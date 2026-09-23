@@ -359,10 +359,13 @@ class _FadeBranchContainerState extends State<FadeBranchContainer>
       ignoring: !isCurrent || animating,
       child: Offstage(
         offstage: offstage,
-        child: TickerMode(
-          enabled: involved,
-          child: Opacity(opacity: opacity, child: child),
-        ),
+        // Riverpod pauses subscriptions under a disabled TickerMode. Toggling
+        // it here during a shell/overlay rebuild resumes subscriptions while
+        // their ProviderScope ancestor is still building, which can schedule
+        // a refresh on that ancestor and trip Flutter's build assertion.
+        // Offstage already skips layout/painting and the pointer guard keeps
+        // inactive branches inert; keep their subscriptions active instead.
+        child: Opacity(opacity: opacity, child: child),
       ),
     );
   }
