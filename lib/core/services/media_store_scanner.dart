@@ -1,9 +1,9 @@
 import 'package:flutter/services.dart';
 
 /// Channel to [MediaScannerConnection] on the Android side.
-const _channel = MethodChannel('app.glaze.flutter/media_store');
+const _channel = MethodChannel('app.astoria.flutter/media_store');
 
-/// Tells Android's media database about a file Glaze just wrote into public
+/// Tells Android's media database about a file Astoria just wrote into public
 /// Downloads.
 ///
 /// The system file picker reaches the same folder two ways and only one of them

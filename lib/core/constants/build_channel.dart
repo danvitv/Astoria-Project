@@ -24,20 +24,8 @@ const buildChannel = String.fromEnvironment(
 /// Whether this is a production (`stable`) build.
 const isStableChannel = buildChannel == 'stable';
 
-/// Name of the Glaze data folder on desktop (`%APPDATA%\<name>` on Windows,
-/// `~/.local/share/<name>` on Linux, `~/Library/Application Support/<name>` on
-/// macOS).
-///
-/// Android and iOS get their separation from the per-channel applicationId /
-/// bundle identifier — each package already owns its own sandbox, so the folder
-/// inside it stays plain `Glaze`. Desktop builds have no such packaging, so the
-/// channel has to be part of the path or two installs would share one database.
-///
-/// `stable` deliberately keeps the bare `Glaze` name so existing installs are
-/// not orphaned by this split.
-const glazeDataFolderName = isStableChannel ? 'Glaze' : 'Glaze-$buildChannel';
-
 /// Astoria desktop data and cloud namespaces. Local builds use the dev channel.
+/// Mobile app IDs already isolate channels, so their sandbox folder is Astoria.
 const astoriaDataFolderName = isStableChannel
     ? 'Astoria'
     : 'Astoria-$buildChannel';

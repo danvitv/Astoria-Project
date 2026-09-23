@@ -4,8 +4,8 @@ import UIKit
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private let backgroundAudio = BackgroundAudioManager()
-  private let systemSettingsChannelName = "app.glaze.flutter/system_settings"
-  private let powerSaveEventsChannelName = "app.glaze.flutter/power_save_events"
+  private let systemSettingsChannelName = "app.astoria.flutter/system_settings"
+  private let powerSaveEventsChannelName = "app.astoria.flutter/power_save_events"
   private let powerSaveStreamHandler = PowerSaveStreamHandler()
 
   override func application(
@@ -56,7 +56,7 @@ import UIKit
 
     guard let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "GlazeBackgroundAudio") else { return }
     let channel = FlutterMethodChannel(
-      name: "com.hydall.glaze/background_audio",
+      name: "com.danvitv.astoria/background_audio",
       binaryMessenger: registrar.messenger()
     )
     channel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in

@@ -1,10 +1,11 @@
-# Glaze
+# Astoria
 
-Native LLM frontend for AI roleplay. Flutter rewrite of the original Vue + Capacitor
-app, which is archived on the `legacy-vue` branch.
+Native LLM frontend for AI roleplay. This private standalone repository retains
+the original Glaze commit history; the public catalog and future downloads live
+in `danvitv/Astoria-Project-Release`.
 **Stack:** Flutter 3.44 + Riverpod 3 + Drift (SQLite) + GoRouter. **Language:** Dart only. **License:** AGPL-3.0.
 
-Architecture: `docs/ARCHITECTURE.md`. Workflow (git, PRs, Trello): `docs/WORKFLOW.md`.
+Architecture: `docs/ARCHITECTURE.md`. Git and build workflow: `docs/WORKFLOW.md`.
 
 ## Answering
 
@@ -151,28 +152,28 @@ flutter analyze 2>&1 | Tee-Object -FilePath analyze_full.txt -Encoding UTF8; Get
 
 ### Runtime data location
 
-- The SQLite database is `glaze.db` under the data root returned by
+- The SQLite database is `astoria.db` under the data root returned by
   `getAppDataDir()` in `lib/core/utils/platform_paths.dart`; do not assume it is
   inside the repository.
 - On Windows, use these canonical environment-relative paths directly. Agents
   should not search the codebase merely to rediscover them:
-  - local development, feature branches, and nightly: `%APPDATA%\Glaze-nightly\glaze.db`
-  - staging: `%APPDATA%\Glaze-staging\glaze.db`
-  - stable: `%APPDATA%\Glaze\glaze.db`
+  - local development and `dev`: `%APPDATA%\Astoria-dev\astoria.db`
+  - staging (if built): `%APPDATA%\Astoria-staging\astoria.db`
+  - release / stable: `%APPDATA%\Astoria\astoria.db`
   In PowerShell, resolve `%APPDATA%` through `$env:APPDATA`; never hard-code a
   user's profile directory.
-- Desktop data roots are build-channel-specific: stable uses `Glaze`, while
-  staging/nightly use `Glaze-<channel>`. `buildChannel` defaults to `nightly`
-  when no `BUILD_CHANNEL` dart define is supplied, so local development and
-  feature-branch runs normally use the nightly data root. See
-  `lib/core/constants/build_channel.dart`.
+- Windows data roots are build-channel-specific: stable uses `Astoria`, and
+  dev uses `Astoria-dev`. `buildChannel` defaults to `dev` when no
+  `BUILD_CHANNEL` define is supplied. macOS/Linux use the same Astoria naming
+  under their platform application-data home; see `lib/core/utils/platform_paths.dart`.
+  Windows imports old Glaze data once; see `docs/ASTORIA_WINDOWS_DEV.md`.
 - Android and iOS separate channels by application/bundle ID and keep the
-  inner data folder named `Glaze`.
+  inner data folder named `Astoria`.
 
 ### Preset storage and code
 
 Regular roleplay presets and Studio presets are separate domains even though
-both are stored in the same `glaze.db` database. Their IDs may overlap; never
+both are stored in the same `astoria.db` database. Their IDs may overlap; never
 read or write one through the other domain's table or repository.
 
 | Domain | Drift table | Repository | Main code directories |
@@ -217,12 +218,15 @@ When editing files matching a pattern below, READ the corresponding rule file FI
 
 ## Workflow
 
-- Branch (`feat/xxx`) off `nightly`, push to `origin`, open a PR — see `docs/WORKFLOW.md` for branching, Trello, and cleanup checklists.
-- **Feature branches are always based on `nightly`** — `stable` is the default branch, so a fresh clone starts there; check the base first, and `git rebase origin/nightly` a branch that was cut from the wrong one before opening the PR.
-- Open PRs only against upstream repository `hydall/Glaze` (base: `hydall/Glaze:nightly`), not against fork repos.
-- PR title and body are **in English**, and the body lists the changes as bullets (one bullet per change, `##` headings when a PR carries several independent fixes) plus how it was verified. Full rules: `docs/WORKFLOW.md` § PR title and body.
-- PRs are squash-merged and gated on CI (`.github/workflows/ci.yml` — `flutter analyze` + `flutter test` + the WebView render suite in `test/webview_js`); a red check blocks the merge.
-- Release branches are `nightly` → `staging` → `stable`, one per build channel; features enter at `nightly` and are promoted by merge. Channel semantics: `docs/RELEASE_CHANNELS.md`.
+- `origin` is the private standalone `danvitv/Astoria-Project`; `dev` is its
+  default branch. Work on `dev` when the maintainer requests it; use feature
+  branches from `dev` for isolated changes. PRs, if used, target this private
+  repository's `dev`, never Glaze. See `docs/WORKFLOW.md`.
+- `release` is reserved for tested builds; it is not created/published yet.
+  Public downloads require the rights and release-process work tracked in
+  `docs/ASTORIA_LICENSE_AUDIT.md`. Channel semantics: `docs/RELEASE_CHANNELS.md`.
+- PR CI (`.github/workflows/ci.yml`) runs analyzer, tests and WebView render
+  checks; direct `dev` pushes should be checked locally before pushing.
 - Run `dart run build_runner build` after changing any freezed/drift model.
 - Single responsibility: split a class before it grows past ~200-250 lines (thin orchestrators, fat specialists, constructor injection). Details: `docs/CODE_STYLE.md`.
 
@@ -235,7 +239,8 @@ When editing files matching a pattern below, READ the corresponding rule file FI
 - Mutate state directly — use immutable patterns with freezed
 - Forget `ref.watch` select for streaming UI (causes full rebuild per chunk)
 - Build a screen or sheet on bare Material (`TabBar`, `Card`, `OutlinedButton`, `Chip`, `SnackBar`, `AlertDialog`…) when `lib/shared/widgets/` has the Glaze equivalent — check `docs/UI_KIT.md` first
-- Commit directly to `nightly`, `staging` or `stable` — always use a feature branch
+- Push code or repository history to a Glaze remote or the public
+  `Astoria-Project-Release` repository
 - Bypass `_requireCapability` in the JS bridge — every `glaze.*` method must enforce the matching capability (default-deny)
 - Run user JS in a same-origin iframe — panel/sandbox scripts go in `sandbox="allow-scripts"` (no `allow-same-origin`)
 - Read-modify-write a `ChatSession` / `Character` from outside the dedicated atomic repo methods (chat/character variable scopes)

@@ -29,7 +29,7 @@ Future<FileExportResult> exportChatAsJsonl({
     'character_name': character.name,
     'create_date': _formatSTDate(DateTime.now()),
     'chat_metadata': {
-      'exported_from': 'Glaze',
+      'exported_from': 'Astoria',
       'import_date': DateTime.now().millisecondsSinceEpoch,
     },
   };

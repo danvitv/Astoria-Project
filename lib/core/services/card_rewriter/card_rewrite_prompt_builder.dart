@@ -29,7 +29,7 @@ abstract final class CardRewriterPromptBuilder {
         .join(', ');
     final buffer = StringBuffer()
       ..writeln(
-        'You are the Glaze card rewriter. Propose small anchored scalar patches '
+        'You are the Astoria card rewriter. Propose small anchored scalar patches '
         'for the character card below.',
       )
       ..writeln()
@@ -287,7 +287,7 @@ abstract final class CardRewriterPromptBuilder {
   }
 
   static String buildLorebookEvolution({required String instruction}) {
-    return '''You are the Glaze lorebook rewriter. The shared read-only context below contains the character card, recent chat, Ledger facts, and exact lorebook entries actually injected into that chat.
+    return '''You are the Astoria lorebook rewriter. The shared read-only context below contains the character card, recent chat, Ledger facts, and exact lorebook entries actually injected into that chat.
 
 # Writable targets
 Only the supplied lorebookId/entryId pairs are writable. Do not create, delete, move, rename, or change keys/settings. Do not output card patches. The shared context includes the current card and the card writer's proposed operations. Avoid only card-lorebook duplication: do not patch an entry with a fact already represented in the current card or proposed card operations. Chat history and Ledger are evidence, not alternate durable targets; do not omit a supported lorebook patch merely because Ledger already records the fact.
@@ -319,7 +319,7 @@ $instruction''';
 
     final buffer = StringBuffer()
       ..writeln(
-        'You are the Glaze card rewriter. Propose anchored scalar patches for '
+        'You are the Astoria card rewriter. Propose anchored scalar patches for '
         'exactly one field of the character card below.',
       )
       ..writeln()

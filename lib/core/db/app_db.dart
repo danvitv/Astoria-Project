@@ -155,7 +155,7 @@ LazyDatabase _openConnection() {
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
-    final file = File(p.join(dbFolder, 'glaze.db'));
+    final file = File(p.join(dbFolder, 'astoria.db'));
     return NativeDatabase.createInBackground(file);
   });
 }

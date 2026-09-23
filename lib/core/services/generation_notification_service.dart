@@ -96,10 +96,10 @@ class GenerationNotificationService {
   static final GenerationNotificationService instance =
       GenerationNotificationService._();
 
-  static const _generationChannelId = 'glaze_generation';
+  static const _generationChannelId = 'astoria_generation';
   static const _generationChannelName = 'Generation';
   static const _iosAudioChannel = MethodChannel(
-    'com.hydall.glaze/background_audio',
+    'com.danvitv.astoria/background_audio',
   );
 
   MessageNotificationPresenter _presenter = MessageNotificationPresenter();
@@ -187,7 +187,6 @@ class GenerationNotificationService {
           allowWifiLock: true,
         ),
       );
-
     } catch (e, st) {
       debugPrint('NOTIF: foreground task init failed: $e\n$st');
     }
@@ -303,7 +302,7 @@ class GenerationNotificationService {
   /// The main pipeline keeps its original hold through awaited post-gen phases.
   Future<PostGenerationForegroundLease> acquirePostGenerationLease() async {
     final acquired = await _acquireForeground(
-      notificationTitle: 'Glaze',
+      notificationTitle: 'Astoria',
       notificationText: 'Processing response...',
     );
     return PostGenerationForegroundLease._(this, acquired);
@@ -325,7 +324,7 @@ class GenerationNotificationService {
 
   Future<void> onSyncStarted() async {
     await _acquireForeground(
-      notificationTitle: 'Glaze',
+      notificationTitle: 'Astoria',
       notificationText: 'Syncing with cloud...',
     );
   }
@@ -412,7 +411,8 @@ class GenerationNotificationService {
   /// Whether this platform asks the user before it will post notifications —
   /// i.e. whether onboarding has anything to offer on the subject.
   bool get notificationsNeedPermission =>
-      _presenter.isSupported && MessageNotificationPresenter.promptsForPermission;
+      _presenter.isSupported &&
+      MessageNotificationPresenter.promptsForPermission;
 
   /// Shows the OS permission dialog. Called from the onboarding slide that
   /// explains what notifications are for — never at startup (see
@@ -453,7 +453,7 @@ class GenerationNotificationService {
             notificationTitle: notificationTitle,
             notificationText: notificationText,
             notificationIcon: const NotificationIcon(
-              metaDataName: 'com.hydall.glaze.ic_generation',
+              metaDataName: 'com.danvitv.astoria.ic_generation',
             ),
             callback: _foregroundTaskCallback,
           );

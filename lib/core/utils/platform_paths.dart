@@ -17,7 +17,7 @@ String? get cachedAppDataDir => _cachedAppDataDir;
 Future<String> getAppDataDir() async {
   if (Platform.isAndroid || Platform.isIOS) {
     final dir = await getApplicationDocumentsDirectory();
-    final base = p.join(dir.path, 'Glaze');
+    final base = p.join(dir.path, 'Astoria');
     _cachedAppDataDir = base;
     return base;
   }
@@ -32,7 +32,7 @@ Future<String> getAppDataDir() async {
 /// absolute paths persisted by an older build (e.g.
 /// `.../Application/<OLD_UUID>/Documents/Glaze/avatars/x.png`) stop existing
 /// even though the files survive under the *new* container. This rebases any
-/// absolute path that lives under a `Glaze` data root onto the current
+/// absolute path under an Astoria or legacy Glaze data root onto the current
 /// [cachedAppDataDir]. Relative paths are joined onto the current base. When no
 /// base is cached yet (very early startup) the input is returned unchanged.
 String? resolveGlazeFilePath(String? path) {
@@ -70,7 +70,7 @@ String? resolveGlazeFilePath(String? path) {
   return path;
 }
 
-/// [path] spelled relative to the Glaze data root when it lives inside it.
+/// [path] spelled relative to the app data root when it lives inside it.
 ///
 /// The inverse of [resolveGlazeFilePath], and the spelling every image path is
 /// stored in: a relative path survives the data root moving under it — a new
@@ -136,13 +136,13 @@ String _desktopDataDir() {
     final xdg =
         Platform.environment['XDG_DATA_HOME'] ??
         p.join(Platform.environment['HOME']!, '.local', 'share');
-    return p.join(xdg, glazeDataFolderName);
+    return p.join(xdg, astoriaDataFolderName);
   } else if (Platform.isMacOS) {
     return p.join(
       Platform.environment['HOME']!,
       'Library',
       'Application Support',
-      glazeDataFolderName,
+      astoriaDataFolderName,
     );
   }
   throw UnsupportedError('Platform not supported yet');

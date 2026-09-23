@@ -5,14 +5,14 @@ import 'package:flutter/services.dart';
 
 class SystemSettings {
   static const MethodChannel _channel = MethodChannel(
-    'app.glaze.flutter/system_settings',
+    'app.astoria.flutter/system_settings',
   );
 
   /// Pushes one bool per change of the OS power-save mode. Separate from the
   /// method channel because a poll cannot see the moment the phone flips —
   /// which is the whole point of following it.
   static const EventChannel _powerSaveEvents = EventChannel(
-    'app.glaze.flutter/power_save_events',
+    'app.astoria.flutter/power_save_events',
   );
 
   /// Whether this platform has a per-app notification screen to open. Only the
@@ -22,7 +22,7 @@ class SystemSettings {
   static bool get canOpenNotificationSettings =>
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
-  /// Opens the OS notification settings for Glaze. Swallows a missing host
+  /// Opens the OS notification settings for Astoria. Swallows a missing host
   /// implementation: a settings row must never throw into the void.
   static Future<void> openNotificationSettings() async {
     if (!canOpenNotificationSettings) return;

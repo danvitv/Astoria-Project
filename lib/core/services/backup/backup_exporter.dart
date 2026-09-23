@@ -91,7 +91,7 @@ class BackupExporter {
   Future<String> export() async {
     final now = DateTime.now();
     final filename =
-        'Glaze_backup_${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
+        'Astoria_backup_${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
         '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}.glz';
 
     final tempFile = File('${Directory.systemTemp.path}/$filename');

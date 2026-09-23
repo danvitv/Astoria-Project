@@ -97,7 +97,7 @@ class FileExportService {
     return file.path;
   }
 
-  /// Public Downloads/Glaze path on Android; null if unavailable.
+  /// Public Downloads/Astoria path on Android; null if unavailable.
   ///
   /// `getDownloadsDirectory()` returns the app-scoped
   /// `Android/data/<package>/files/Downloads` path, not the public Downloads
@@ -109,9 +109,9 @@ class FileExportService {
   /// database, and the system file picker's "Downloads" shortcut lists the
   /// database rather than the directory — hence the
   /// [registerWithMediaStore] call after every write below.
-  static Future<Directory?> _androidGlazeDir(String subfolder) async {
+  static Future<Directory?> _androidAstoriaDir(String subfolder) async {
     try {
-      final dir = Directory('/storage/emulated/0/Download/Glaze/$subfolder');
+      final dir = Directory('/storage/emulated/0/Download/Astoria/$subfolder');
       if (!await dir.exists()) {
         await dir.create(recursive: true);
       }
@@ -122,8 +122,11 @@ class FileExportService {
   }
 
   static Future<String> _saveToDownloads(
-      String data, String filename, String subfolder) async {
-    final dir = await _androidGlazeDir(subfolder);
+    String data,
+    String filename,
+    String subfolder,
+  ) async {
+    final dir = await _androidAstoriaDir(subfolder);
     if (dir != null) {
       try {
         final file = File('${dir.path}/$filename');
@@ -136,8 +139,11 @@ class FileExportService {
   }
 
   static Future<String> _saveBytesToDownloads(
-      List<int> bytes, String filename, String subfolder) async {
-    final dir = await _androidGlazeDir(subfolder);
+    List<int> bytes,
+    String filename,
+    String subfolder,
+  ) async {
+    final dir = await _androidAstoriaDir(subfolder);
     if (dir != null) {
       try {
         final file = File('${dir.path}/$filename');
@@ -150,9 +156,14 @@ class FileExportService {
   }
 
   static Future<String> _saveToMacDownloads(
-      String data, String filename, String subfolder) async {
+    String data,
+    String filename,
+    String subfolder,
+  ) async {
     final downloads = await getDownloadsDirectory();
-    final dir = Directory('${downloads?.path ?? '~/Downloads'}/Glaze/$subfolder');
+    final dir = Directory(
+      '${downloads?.path ?? '~/Downloads'}/Astoria/$subfolder',
+    );
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
@@ -162,9 +173,14 @@ class FileExportService {
   }
 
   static Future<String> _saveBytesToMacDownloads(
-      List<int> bytes, String filename, String subfolder) async {
+    List<int> bytes,
+    String filename,
+    String subfolder,
+  ) async {
     final downloads = await getDownloadsDirectory();
-    final dir = Directory('${downloads?.path ?? '~/Downloads'}/Glaze/$subfolder');
+    final dir = Directory(
+      '${downloads?.path ?? '~/Downloads'}/Astoria/$subfolder',
+    );
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
@@ -183,8 +199,7 @@ class FileExportService {
     return file.path;
   }
 
-  static Future<String> _shareBytes(
-      List<int> bytes, String filename) async {
+  static Future<String> _shareBytes(List<int> bytes, String filename) async {
     final tempDir = await getTemporaryDirectory();
     final file = File('${tempDir.path}/$filename');
     await file.writeAsBytes(bytes);
@@ -210,8 +225,11 @@ class FileExportService {
   }
 
   static Future<String> _copyToDownloads(
-      String sourcePath, String filename, String subfolder) async {
-    final dir = await _androidGlazeDir(subfolder);
+    String sourcePath,
+    String filename,
+    String subfolder,
+  ) async {
+    final dir = await _androidAstoriaDir(subfolder);
     if (dir != null) {
       try {
         final destPath = '${dir.path}/$filename';
@@ -224,9 +242,14 @@ class FileExportService {
   }
 
   static Future<String> _copyToMacDownloads(
-      String sourcePath, String filename, String subfolder) async {
+    String sourcePath,
+    String filename,
+    String subfolder,
+  ) async {
     final downloads = await getDownloadsDirectory();
-    final dir = Directory('${downloads?.path ?? '~/Downloads'}/Glaze/$subfolder');
+    final dir = Directory(
+      '${downloads?.path ?? '~/Downloads'}/Astoria/$subfolder',
+    );
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
@@ -237,7 +260,10 @@ class FileExportService {
 
   static Future<String> _shareFile(String sourcePath, String filename) async {
     await SharePlus.instance.share(
-      ShareParams(files: [XFile(sourcePath)], sharePositionOrigin: _shareOrigin),
+      ShareParams(
+        files: [XFile(sourcePath)],
+        sharePositionOrigin: _shareOrigin,
+      ),
     );
     return sourcePath;
   }

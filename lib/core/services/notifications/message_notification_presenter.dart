@@ -48,7 +48,7 @@ class MessageNotificationPresenter {
   MessageNotificationPresenter({FlutterLocalNotificationsPlugin? plugin})
     : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
 
-  static const channelId = 'glaze_message';
+  static const channelId = 'astoria_message';
   static const channelName = 'New Messages';
   static const channelDescription = 'Notifications for new chat messages';
 
@@ -85,11 +85,11 @@ class MessageNotificationPresenter {
   // identifies the COM activation callback. Both are per-install identities, so
   // they carry the build channel — a Nightly toast must not activate Stable.
   static const _windowsAppName = isStableChannel
-      ? 'Glaze'
-      : 'Glaze ($buildChannel)';
+      ? 'Astoria'
+      : 'Astoria ($buildChannel)';
   static const _windowsAppUserModelId = isStableChannel
-      ? 'Hydall.Glaze'
-      : 'Hydall.Glaze.$buildChannel';
+      ? 'Danvitv.Astoria'
+      : 'Danvitv.Astoria.$buildChannel';
   static const _windowsGuid = '9b1e6a54-3d27-4c8f-2b71-5e0a4d9c8f36';
 
   final FlutterLocalNotificationsPlugin _plugin;

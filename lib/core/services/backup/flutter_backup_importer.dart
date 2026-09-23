@@ -79,7 +79,7 @@ class FlutterBackupImporter extends BackupHelpers {
     final manifestEntry = archive.files.firstWhere(
       (f) => f.isFile && f.name == 'manifest.json',
       orElse: () => throw const FormatException(
-        'Glaze backup is missing manifest.json — not a v2 backup',
+        'Backup is missing manifest.json — not a v2 backup',
       ),
     );
     final manifestJson =
@@ -92,12 +92,12 @@ class FlutterBackupImporter extends BackupHelpers {
     // have those JSONL files, leaving the tables empty after import (fine).
     if (schemaVersion < 2) {
       throw const FormatException(
-        'Glaze backup schema is too old. Please re-export from the source app.',
+        'Backup schema is too old. Please re-export from the source app.',
       );
     }
     if (schemaVersion > _maxSchemaVersion) {
       throw const FormatException(
-        'Glaze backup was created by a newer app version.',
+        'Backup was created by a newer app version.',
       );
     }
 

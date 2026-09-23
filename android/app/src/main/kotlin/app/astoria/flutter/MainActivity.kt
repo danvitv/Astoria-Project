@@ -1,4 +1,4 @@
-package app.glaze.flutter
+package app.astoria.flutter
 
 import android.Manifest
 import android.app.WallpaperManager
@@ -33,7 +33,7 @@ class MainActivity : FlutterActivity() {
 
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
-            "app.glaze.flutter/system_settings"
+            "app.astoria.flutter/system_settings"
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "openNotificationSettings" -> {
@@ -47,12 +47,12 @@ class MainActivity : FlutterActivity() {
 
         EventChannel(
             flutterEngine.dartExecutor.binaryMessenger,
-            "app.glaze.flutter/power_save_events"
+            "app.astoria.flutter/power_save_events"
         ).setStreamHandler(powerSaveStreamHandler())
 
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
-            "app.glaze.flutter/media_store"
+            "app.astoria.flutter/media_store"
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "scanFile" -> scanFile(call.argument<String>("path"), result)
@@ -62,7 +62,7 @@ class MainActivity : FlutterActivity() {
 
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
-            "app.glaze.flutter/wallpaper"
+            "app.astoria.flutter/wallpaper"
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getWallpaper" -> result.success(readWallpaperBytesIfPermitted())
@@ -111,10 +111,10 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /// Puts a file Glaze wrote into public Downloads in front of the media
+    /// Puts a file Astoria wrote into public Downloads in front of the media
     /// scanner, so it lands in MediaStore.
     ///
-    /// The system file picker reaches the Glaze folder two ways: from the
+    /// The system file picker reaches the Astoria folder two ways: from the
     /// device root, through `ExternalStorageProvider`, which walks the real
     /// directory and sees every file; and through the "Downloads" shortcut,
     /// through `DownloadsProvider`, which lists MediaStore rows. A file created

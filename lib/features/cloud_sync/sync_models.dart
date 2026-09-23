@@ -268,7 +268,7 @@ String cloudPath(String type, String id) {
 /// Canonical path for comparing manifest entry paths with cloud list_folder results.
 /// Dropbox app-folder listings omit the [cloudBase] prefix; GDrive uses full
 /// paths. (`DropboxAdapter` strips its own channel sub-folder before returning
-/// listings, so both providers reach this function Glaze-root-relative.)
+/// listings, so both providers reach this function cloud-root-relative.)
 String normalizeCloudSyncPath(String path) {
   var p = path.trim();
   if (p.isEmpty) return p;

@@ -1,15 +1,20 @@
+import 'dart:io';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
 import 'app.dart';
 import 'core/app_runtime.dart';
 import 'core/debug/perf_debug.dart';
 import 'core/platform/desktop_window.dart';
+import 'core/services/astoria_data_migration.dart';
 import 'core/services/dev_mode_flag_migration.dart';
 import 'core/services/windows_data_migration.dart';
 import 'core/services/windows_preferences_migration.dart';
+import 'core/utils/platform_paths.dart';
 
 final appRestartKey = GlobalKey();
 
@@ -28,6 +33,28 @@ Future<void> main() async {
         context: ErrorDescription('Windows data migration failed'),
       ),
     );
+    rethrow;
+  }
+  try {
+    if (Platform.isAndroid || Platform.isIOS) {
+      final dataRoot = await getAppDataDir();
+      await migrateAstoriaData(
+        dataRoot: dataRoot,
+        legacyDataRoot: p.join(p.dirname(dataRoot), 'Glaze'),
+      );
+    } else {
+      await migrateAstoriaData();
+    }
+  } catch (error, stackTrace) {
+    FlutterError.reportError(
+      FlutterErrorDetails(
+        exception: error,
+        stack: stackTrace,
+        library: 'startup',
+        context: ErrorDescription('Astoria data migration failed'),
+      ),
+    );
+    rethrow;
   }
   try {
     await migrateAstoriaWindowsPreferences();

@@ -94,7 +94,7 @@ fun verifyCiKeystore(ksFile: File, storePassword: String, keyAlias: String) {
 }
 
 android {
-    namespace = "app.glaze.flutter"
+    namespace = "app.astoria.flutter"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
