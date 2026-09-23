@@ -33,7 +33,7 @@ on:
       post_to_telegram:
         description: 'Post build to Telegram'
         required: false
-        default: true
+        default: false
         type: boolean
       notify_people:
         # NOTE: GitHub's workflow_dispatch form cannot show/hide an input based
@@ -55,7 +55,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # ── shared metadata ────────────────────────────────────────────────────────
@@ -84,14 +84,15 @@ jobs:
           # Branch names may contain "/" or spaces which are unsafe in file
           # names, so build a sanitised slug for the artifact file name.
           SAFE_BRANCH=$(echo "$BUILD_BRANCH" | sed 's#[/ ]#-#g')
-          FILE_SLUG="G-$(date -u '+%d%m%Y-%H%M')-$SAFE_BRANCH"
+          FILE_SLUG="Astoria-$(date -u '+%d%m%Y-%H%M')-$SAFE_BRANCH"
 
           # Release channel drives the in-app dev-tooling defaults (developer
           # mode + build watermark) via --dart-define=BUILD_CHANNEL. Only the
           # two release branches get a non-nightly channel; every other branch
           # builds as nightly, i.e. with dev tooling on.
           case "$BUILD_BRANCH" in
-            stable)  BUILD_CHANNEL=stable  ;;
+            release|stable) BUILD_CHANNEL=stable ;;
+            dev)     BUILD_CHANNEL=nightly ;;
             staging) BUILD_CHANNEL=staging ;;
             *)       BUILD_CHANNEL=nightly ;;
           esac
@@ -220,7 +221,7 @@ jobs:
             echo "If the keystore itself was lost, generate a new one (this changes the APK signature, so existing"
             echo "installs have to be reinstalled) and update all four ANDROID_* secrets to match:"
             echo '  keytool -genkeypair -v -keystore upload-key.keystore -storetype PKCS12 -alias <ANDROID_KEY_ALIAS> \'
-            echo '    -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Glaze"'
+            echo '    -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Astoria"'
             exit 1
           fi
           for required in KEYSTORE_PASSWORD KEY_ALIAS; do
@@ -309,16 +310,16 @@ jobs:
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-APK
+          name: Astoria-release-APK
           path: "build/app/outputs/flutter-apk/${{ needs.metadata.outputs.file_slug }}*.apk"
 
       - name: Upload debug symbols
-        # Deliberately not named `Glaze-release-*`: the notify job collects the
+        # Deliberately not named `Astoria-release-*`: the notify job collects the
         # artifacts to post by that pattern, and the symbols are for this run's
         # record, not for the chat.
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-debug-symbols-android
+          name: Astoria-debug-symbols-android
           path: build/symbols
           if-no-files-found: warn
 
@@ -401,7 +402,7 @@ jobs:
       - name: Upload Windows
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-Windows
+          name: Astoria-release-Windows
           path: "${{ needs.metadata.outputs.file_slug }}-windows.zip"
 
   # ── ios ────────────────────────────────────────────────────────────────────
@@ -480,9 +481,9 @@ jobs:
         run: |
           set -euo pipefail
           case "$BUILD_CHANNEL" in
-            stable)  SUFFIX="";         NAME="Glaze" ;;
-            staging) SUFFIX=".staging"; NAME="Glaze Staging" ;;
-            *)       SUFFIX=".nightly"; NAME="Glaze Nightly" ;;
+            stable)  SUFFIX="";         NAME="Astoria" ;;
+            staging) SUFFIX=".staging"; NAME="Astoria Staging" ;;
+            *)       SUFFIX=".nightly"; NAME="Astoria Nightly" ;;
           esac
           printf 'BUNDLE_ID_SUFFIX = %s\nAPP_DISPLAY_NAME = %s\n' \
             "$SUFFIX" "$NAME" > ios/Flutter/Channel.xcconfig
@@ -527,7 +528,7 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-iOS
+          name: Astoria-release-iOS
           path: "${{ needs.metadata.outputs.file_slug }}.ipa"
 
   # ── linux ──────────────────────────────────────────────────────────────────
@@ -658,25 +659,25 @@ jobs:
       - name: Upload DEB artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-DEB
+          name: Astoria-release-DEB
           path: "build/linux/deb/${{ needs.metadata.outputs.file_slug }}-linux.deb"
 
       - name: Upload Pacman artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-Pacman
+          name: Astoria-release-Pacman
           path: "build/linux/arch/${{ needs.metadata.outputs.file_slug }}-linux.pkg.tar.zst"
 
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-AppImage
+          name: Astoria-release-AppImage
           path: "build/linux/appimage/${{ needs.metadata.outputs.file_slug }}-linux.AppImage"
 
       - name: Upload tar.zst artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-TarZst
+          name: Astoria-release-TarZst
           path: "build/linux/tarzst/${{ needs.metadata.outputs.file_slug }}-linux.tar.zst"
 
   # ── telegram notify ────────────────────────────────────────────────────────
@@ -689,16 +690,8 @@ jobs:
     # An unselected platform leaves its build job "skipped", which would block a
     # plain success() gate, so the results are checked explicitly instead: no
     # failure among the needs, and at least one platform actually built.
-    if: >-
-      ${{ !cancelled() &&
-      !contains(needs.*.result, 'failure') &&
-      !contains(needs.*.result, 'cancelled') &&
-      (github.event.inputs.build_android == 'true' ||
-       github.event.inputs.build_windows == 'true' ||
-       github.event.inputs.build_ios == 'true' ||
-       github.event.inputs.build_linux == 'true') &&
-      (github.event.inputs.post_to_telegram == 'true' ||
-       github.event.inputs.dm_developers == 'true') }}
+    # No delivery destinations have been configured for the Astoria repository.
+    if: ${{ false }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -709,7 +702,7 @@ jobs:
         # platform toggles alone decide what gets posted.
         uses: actions/download-artifact@v4
         with:
-          pattern: Glaze-release-*
+          pattern: Astoria-release-*
           merge-multiple: true
           path: artifacts/
 

@@ -22,8 +22,8 @@ import 'openai_chat_transport.dart';
 /// are OpenAI-compatible.
 class OpenRouterChatTransport implements ChatTransport {
   static const String baseUrl = 'https://openrouter.ai/api/v1/chat/completions';
-  static const String referer = 'https://github.com/hydall/Glaze';
-  static const String title = 'Glaze';
+  static const String referer = 'https://github.com/danvitv';
+  static const String title = 'Astoria';
 
   /// Cache depth used when the user enables `cacheControlTtl`.
   static const int _cacheDepth = 2;

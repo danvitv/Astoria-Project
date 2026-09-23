@@ -26,7 +26,6 @@ import 'features/settings/app_settings_provider.dart';
 import 'shared/widgets/desktop_popup.dart';
 import 'shared/theme/theme_font_provider.dart';
 import 'core/services/onboarding_service.dart';
-import 'core/services/update_check_coordinator.dart';
 import 'features/cloud_sync/sync_provider.dart';
 import 'features/cloud_sync/sync_models.dart';
 
@@ -77,7 +76,6 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
   final List<ProviderSubscription> _warmSubs = [];
   late bool _startupReady;
   bool _startupHooksAttached = false;
-  AutomaticUpdateCheckController? _updateChecks;
 
   @override
   void initState() {
@@ -151,7 +149,6 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _navSub?.cancel();
-    _updateChecks?.dispose();
     for (final sub in _warmSubs) {
       sub.close();
     }
@@ -163,14 +160,11 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
     if (!_startupReady) return;
     GenerationNotificationService.instance.updateLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
-      _updateChecks?.resume();
       unawaited(ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
       final service = ref.read(syncServiceProvider).value;
       if (service != null && service.status != SyncStatus.syncing) {
         ref.read(syncStatusProvider.notifier).state = service.status;
       }
-    } else {
-      _updateChecks?.pause();
     }
   }
 
@@ -237,10 +231,6 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
     unawaited(
       ref.read(sessionLorebookEmbeddingWorkerProvider).recoverAndDrain(),
     );
-    _updateChecks = AutomaticUpdateCheckController(
-      check: (presentedUpdateIds) =>
-          checkAndShowUpdateOnStartup(presentedUpdateIds: presentedUpdateIds),
-    )..start();
   }
 
   void _listenNotificationNavigation() {
@@ -365,7 +355,7 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
     required ColorScheme? darkScheme,
   }) {
     return MaterialApp.router(
-      title: 'Glaze',
+      title: 'Astoria',
       // Stretch overscroll without an offscreen layer, so glass surfaces
       // inside scroll views keep their backdrop blur during the stretch.
       scrollBehavior: const GlazeScrollBehavior(),

@@ -2,9 +2,7 @@ import 'package:collection/collection.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../shared/shell/desktop/desktop_layout_provider.dart';
 import '../../shared/shell/desktop/desktop_glossary_popup.dart';
@@ -31,13 +29,10 @@ import '../presets/preset_connections_sheet.dart';
 import '../presets/preset_list_provider.dart';
 import '../../core/state/lorebook_provider.dart';
 import '../../shared/widgets/glaze_toast.dart';
-import '../settings/app_settings_provider.dart';
 import 'menu_actions.dart';
 import 'search/menu_search_entry.dart';
 import 'search/menu_search_index.dart';
 import 'search/menu_search_results.dart';
-import 'update_dialog.dart';
-import '../../core/services/update_check_service.dart';
 
 class MenuScreen extends ConsumerStatefulWidget {
   const MenuScreen({super.key});
@@ -160,7 +155,7 @@ class _MenuScreenState extends ConsumerState<MenuScreen> with ShellHeaderMixin {
     }
 
     final sent = await service.sendTestNotification(
-      'Glaze',
+      'Astoria',
       'menu_notifications_test'.tr(),
     );
     if (!mounted) return;
@@ -184,13 +179,6 @@ class _MenuScreenState extends ConsumerState<MenuScreen> with ShellHeaderMixin {
     }
   }
 
-  Future<void> _openLink(String url) async {
-    final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
-  }
-
   /// Animates the menu list back to the top (guarded against a detached /
   /// multiply attached controller).
   void _scrollToTop() {
@@ -211,7 +199,6 @@ class _MenuScreenState extends ConsumerState<MenuScreen> with ShellHeaderMixin {
     final topPad = DetachedShellHost.of(context)
         ? 0.0
         : MediaQuery.of(context).padding.top + 66.0;
-    final lang = ref.watch(appSettingsProvider).value?.language ?? 'en';
 
     // Re-tap on the active Menu navbar tab → drop out of search, then scroll to
     // top (sub-routes are already popped by the shell's
@@ -442,50 +429,6 @@ class _MenuScreenState extends ConsumerState<MenuScreen> with ShellHeaderMixin {
                           ),
                         ),
                       ),
-                      MenuItem(
-                        icon: Icons.system_update_alt_rounded,
-                        label: 'menu_test_update_dialog'.tr(),
-                        onTap: () => showUpdateDialog(
-                          context,
-                          UpdateInfo(
-                            source: UpdateSource.ciBuild,
-                            dismissId:
-                                'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
-                            label: '#123',
-                            createdAt: DateTime.now().toUtc(),
-                            url: 'https://github.com/hydall/Glaze/actions',
-                            notes: const [
-                              'folders ux/ui',
-                              'fix random character button',
-                              'Fix extblock image generation races',
-                              'tools screen expansion, chat list fix',
-                              'Update Lucy pick card',
-                            ],
-                            totalNotes: 13,
-                          ),
-                        ),
-                      ),
-                      MenuItem(
-                        icon: Icons.new_releases_outlined,
-                        label: 'menu_test_update_dialog_release'.tr(),
-                        onTap: () => showUpdateDialog(
-                          context,
-                          UpdateInfo(
-                            source: UpdateSource.release,
-                            dismissId: 'v0.8.0',
-                            label: 'v0.8.0',
-                            createdAt: DateTime.now().toUtc(),
-                            url:
-                                'https://github.com/hydall/Glaze/releases/latest',
-                            notes: const [
-                              'Memory book rework',
-                              'Cloud sync conflict resolution',
-                              'Studio agent presets',
-                            ],
-                            totalNotes: 3,
-                          ),
-                        ),
-                      ),
                     ],
                   ),
                 MenuGroup(
@@ -515,32 +458,6 @@ class _MenuScreenState extends ConsumerState<MenuScreen> with ShellHeaderMixin {
                         }
                       },
                     ),
-                    if (lang == 'en')
-                      MenuItem(
-                        iconWidget: SvgPicture.asset(
-                          'assets/logos/discord.svg',
-                          colorFilter: const ColorFilter.mode(
-                            Color(0xFF5865F2),
-                            BlendMode.srcIn,
-                          ),
-                        ),
-                        label: 'about_discord'.tr(),
-                        subtitle: 'about_join_community'.tr(),
-                        onTap: () => _openLink('https://discord.gg/jnGhd7p6Ht'),
-                      )
-                    else
-                      MenuItem(
-                        iconWidget: SvgPicture.asset(
-                          'assets/logos/telegram.svg',
-                          colorFilter: const ColorFilter.mode(
-                            Color(0xFF2AABEE),
-                            BlendMode.srcIn,
-                          ),
-                        ),
-                        label: 'about_telegram'.tr(),
-                        subtitle: 'about_join_community'.tr(),
-                        onTap: () => _openLink('https://t.me/glazeapp'),
-                      ),
                     MenuItem(
                       icon: Icons.replay_rounded,
                       label: 'onboarding_replay'.tr(),

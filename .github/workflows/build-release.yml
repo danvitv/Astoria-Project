@@ -1,4 +1,4 @@
-name: Build Release (Publish)
+name: Build Release (Artifacts only)
 
 on:
   workflow_dispatch:
@@ -39,7 +39,7 @@ on:
       post_to_telegram:
         description: 'Post build to Telegram'
         required: false
-        default: true
+        default: false
         type: boolean
       notify_people:
         description: 'Mention people in Telegram (only if posting is enabled)'
@@ -53,7 +53,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # ── shared metadata ────────────────────────────────────────────────────────
@@ -82,10 +82,11 @@ jobs:
           BUILD_BRANCH="${{ github.ref_name }}"
 
           SAFE_BRANCH=$(echo "$BUILD_BRANCH" | sed 's#[/ ]#-#g')
-          FILE_SLUG="G-$(date -u '+%d%m%Y-%H%M')-$SAFE_BRANCH"
+          FILE_SLUG="Astoria-$(date -u '+%d%m%Y-%H%M')-$SAFE_BRANCH"
 
           case "$BUILD_BRANCH" in
-            stable)  BUILD_CHANNEL=stable  ;;
+            release|stable) BUILD_CHANNEL=stable ;;
+            dev)     BUILD_CHANNEL=nightly ;;
             staging) BUILD_CHANNEL=staging ;;
             *)       BUILD_CHANNEL=nightly ;;
           esac
@@ -219,7 +220,7 @@ jobs:
             echo "If the keystore itself was lost, generate a new one (this changes the APK signature, so existing"
             echo "installs have to be reinstalled) and update all four ANDROID_* secrets to match:"
             echo '  keytool -genkeypair -v -keystore upload-key.keystore -storetype PKCS12 -alias <ANDROID_KEY_ALIAS> \'
-            echo '    -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Glaze"'
+            echo '    -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Astoria"'
             exit 1
           fi
           for required in KEYSTORE_PASSWORD KEY_ALIAS; do
@@ -299,7 +300,7 @@ jobs:
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-APK
+          name: Astoria-release-APK
           path: "build/app/outputs/flutter-apk/${{ needs.metadata.outputs.tag_name }}*.apk"
 
   # ── windows ────────────────────────────────────────────────────────────────
@@ -380,7 +381,7 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-Windows
+          name: Astoria-release-Windows
           path: "${{ needs.metadata.outputs.tag_name }}-windows.zip"
 
   # ── ios ────────────────────────────────────────────────────────────────────
@@ -459,9 +460,9 @@ jobs:
         run: |
           set -euo pipefail
           case "$BUILD_CHANNEL" in
-            stable)  SUFFIX="";         NAME="Glaze" ;;
-            staging) SUFFIX=".staging"; NAME="Glaze Staging" ;;
-            *)       SUFFIX=".nightly"; NAME="Glaze Nightly" ;;
+            stable)  SUFFIX="";         NAME="Astoria" ;;
+            staging) SUFFIX=".staging"; NAME="Astoria Staging" ;;
+            *)       SUFFIX=".nightly"; NAME="Astoria Nightly" ;;
           esac
           printf 'BUNDLE_ID_SUFFIX = %s\nAPP_DISPLAY_NAME = %s\n' \
             "$SUFFIX" "$NAME" > ios/Flutter/Channel.xcconfig
@@ -490,7 +491,7 @@ jobs:
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-iOS
+          name: Astoria-release-iOS
           path: "${{ needs.metadata.outputs.tag_name }}.ipa"
 
   # ── linux ──────────────────────────────────────────────────────────────────
@@ -620,25 +621,25 @@ jobs:
       - name: Upload DEB artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-DEB
+          name: Astoria-release-DEB
           path: "build/linux/deb/${{ needs.metadata.outputs.tag_name }}-linux.deb"
 
       - name: Upload Pacman artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-Pacman
+          name: Astoria-release-Pacman
           path: "build/linux/arch/${{ needs.metadata.outputs.tag_name }}-linux.pkg.tar.zst"
 
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-AppImage
+          name: Astoria-release-AppImage
           path: "build/linux/appimage/${{ needs.metadata.outputs.tag_name }}-linux.AppImage"
 
       - name: Upload tar.zst artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Glaze-release-TarZst
+          name: Astoria-release-TarZst
           path: "build/linux/tarzst/${{ needs.metadata.outputs.tag_name }}-linux.tar.zst"
 
   # ── github release ─────────────────────────────────────────────────────────
@@ -648,14 +649,8 @@ jobs:
     # An unselected platform leaves its build job "skipped", which would block
     # the implicit success() gate, so the results are checked explicitly: no
     # failure among the needs, and at least one platform actually built.
-    if: >-
-      ${{ !cancelled() &&
-      !contains(needs.*.result, 'failure') &&
-      !contains(needs.*.result, 'cancelled') &&
-      (github.event.inputs.build_android == 'true' ||
-       github.event.inputs.build_windows == 'true' ||
-       github.event.inputs.build_ios == 'true' ||
-       github.event.inputs.build_linux == 'true') }}
+    # Public releases require the separate release repository and rights review.
+    if: ${{ false }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -667,7 +662,7 @@ jobs:
         # platform toggles alone decide which assets the release carries.
         uses: actions/download-artifact@v4
         with:
-          pattern: Glaze-release-*
+          pattern: Astoria-release-*
           merge-multiple: true
           path: release-assets/
 
@@ -709,13 +704,7 @@ jobs:
   notify:
     needs: [metadata, build-android, build-windows, build-ios, build-linux, release]
     runs-on: ubuntu-latest
-    if: >-
-      ${{ !cancelled() &&
-      !contains(needs.*.result, 'failure') &&
-      !contains(needs.*.result, 'cancelled') &&
-      needs.release.result == 'success' &&
-      (github.event.inputs.post_to_telegram == 'true' ||
-       github.event.inputs.dm_developers == 'true') }}
+    if: ${{ false }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -724,7 +713,7 @@ jobs:
       - name: Download built artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: Glaze-release-*
+          pattern: Astoria-release-*
           merge-multiple: true
           path: artifacts/
 

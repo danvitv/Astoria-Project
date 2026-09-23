@@ -38,10 +38,10 @@ the licence of the existing Glaze code or a clearance for a proprietary release.
   its copyright and licence notice with distributed builds.
 - Provider logos remain in the app. Their use and applicable branding policies
   should be reviewed for the new name; they were not removed in this audit.
-- Picks are downloaded at runtime from `hydall/Glaze` via
+- Picks are downloaded at runtime from the public
+  `danvitv/Astoria-Project-Release` catalog via
   `lib/features/picks/picks_provider.dart`, rather than bundled as app assets.
-  Migrate the feed and review any hosted third-party cards before announcing
-  an independent Astoria service.
+  Review any hosted third-party cards before announcing the catalog broadly.
 
 ## Dependencies and release packaging
 
@@ -54,7 +54,10 @@ the licence of the existing Glaze code or a clearance for a proprietary release.
 - Check the exact dependency graph and shipped native libraries separately for
   each target platform/build. Bundle the applicable third-party licence and
   attribution texts with the binaries; recheck after dependency updates.
-- The current `LICENSE`, about screen, translations, README and build workflows
-  still describe/publish Glaze under AGPL. Do not switch these labels to
-  proprietary or distribute closed binaries until the rights grant, remaining
-  provenance review, rebrand, third-party notices and release pipeline are done.
+- The current `LICENSE`, about screen and translations still describe the
+  project's AGPL status. Build workflows now produce Astoria-named artifacts,
+  but public release publishing and Telegram delivery are disabled until their
+  destinations and corresponding-source/licensing obligations are resolved.
+  Do not switch licence labels to proprietary or distribute closed binaries
+  until the rights grant, remaining provenance review, third-party notices and
+  release pipeline are done.

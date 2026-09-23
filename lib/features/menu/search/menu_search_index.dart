@@ -311,13 +311,6 @@ List<MenuSearchEntry> _menuEntries() {
       open: (context) => context.push('/menu/about'),
     ),
     MenuSearchEntry(
-      title: 'update_section_header'.tr(),
-      breadcrumb: [...more, 'menu_about'.tr()],
-      icon: Icons.system_update_alt_rounded,
-      keywords: const ['update', 'обновление'],
-      open: (context) => context.push('/menu/about'),
-    ),
-    MenuSearchEntry(
       title: 'about_hall_of_fame'.tr(),
       breadcrumb: [...more, 'menu_about'.tr()],
       icon: Icons.emoji_events_outlined,

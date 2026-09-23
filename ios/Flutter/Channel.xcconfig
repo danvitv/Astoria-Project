@@ -11,4 +11,4 @@
 // in lib/core/constants/build_channel.dart, which is also `nightly`.
 
 BUNDLE_ID_SUFFIX = .nightly
-APP_DISPLAY_NAME = Glaze Nightly
+APP_DISPLAY_NAME = Astoria Nightly

@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.glaze" "\0"
-            VALUE "FileDescription", "Glaze" "\0"
+            VALUE "CompanyName", "Astoria Project" "\0"
+            VALUE "FileDescription", "Astoria" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "Glaze" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.glaze. All rights reserved." "\0"
-            VALUE "OriginalFilename", "Glaze.exe" "\0"
-            VALUE "ProductName", "Glaze" "\0"
+            VALUE "InternalName", "Astoria" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Astoria Project contributors." "\0"
+            VALUE "OriginalFilename", "Astoria.exe" "\0"
+            VALUE "ProductName", "Astoria" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

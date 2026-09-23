@@ -76,9 +76,7 @@ class CommitComparison {
 
   /// The range could not be resolved — a force-push, an unknown SHA, a failed
   /// request.
-  const CommitComparison.unresolved()
-    : status = '',
-      commits = const [];
+  const CommitComparison.unresolved() : status = '', commits = const [];
 
   /// `ahead`, `behind`, `identical`, `diverged`, or empty when unresolved.
   /// `ahead` means the *head* is ahead of the base.
@@ -118,11 +116,11 @@ class UpdateCheckResult {
 ///   the release workflow *on the branch this build came from*. Compared by
 ///   commit SHA, because consecutive CI builds share a version number.
 ///
-/// The repo is public, so the REST API is reachable unauthenticated (60 req/h
-/// per IP — ample for an occasional check). No token is sent.
+/// Currently disconnected from the app until the public Astoria release feed
+/// is configured. No token is sent.
 class UpdateCheckService {
-  static const _owner = 'hydall';
-  static const _repo = 'Glaze';
+  static const _owner = 'danvitv';
+  static const _repo = 'Astoria-Project-Release';
   static const _workflowFile = 'build-branch.yml';
 
   /// Cap on notes shown in the dialog — matches the release bot's `head -10`.
@@ -159,7 +157,7 @@ class UpdateCheckService {
                 'Accept': 'application/vnd.github+json',
                 'X-GitHub-Api-Version': '2022-11-28',
                 // GitHub rejects requests without a User-Agent.
-                'User-Agent': 'Glaze-UpdateCheck',
+                'User-Agent': 'Astoria-UpdateCheck',
               },
               // We branch on status codes ourselves; never throw on 4xx/5xx.
               validateStatus: (_) => true,

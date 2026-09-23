@@ -4,7 +4,7 @@ set -e
 # Change to the root of the project
 cd "$(dirname "$0")/.."
 
-APP_NAME="glaze-flutter"
+APP_NAME="astoria"
 # Extract version from pubspec.yaml (e.g. 0.7.0)
 VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //g' | cut -d '+' -f 1 | tr -d '\r')
 ARCH=$(uname -m)
@@ -28,7 +28,12 @@ fi
 echo "Running flutter build linux --release $@"
 flutter build linux --release "$@"
 
-BUNDLE_DIR="build/linux/x64/release/bundle"
+case "$ARCH" in
+    x86_64)  FLUTTER_ARCH=x64 ;;
+    aarch64) FLUTTER_ARCH=arm64 ;;
+    *)       FLUTTER_ARCH="$ARCH" ;;
+esac
+BUNDLE_DIR="build/linux/$FLUTTER_ARCH/release/bundle"
 
 if [ ! -d "$BUNDLE_DIR" ]; then
     echo "Error: Build directory '$BUNDLE_DIR' not found. Did the build fail?"
@@ -46,22 +51,22 @@ if command -v dpkg-deb &> /dev/null; then
     mkdir -p "$DEB_DIR/DEBIAN"
 
     # Copy bundle contents
-    cp -r $BUNDLE_DIR/* "$DEB_DIR/opt/$APP_NAME/"
+    cp -r "$BUNDLE_DIR/"* "$DEB_DIR/opt/$APP_NAME/"
     
     # Create symlink for the executable
-    ln -sf "/opt/$APP_NAME/glaze_flutter" "$DEB_DIR/usr/bin/$APP_NAME"
+    ln -sf "/opt/$APP_NAME/Astoria" "$DEB_DIR/usr/bin/$APP_NAME"
 
     # Copy icon
-    if [ -f "assets/logos/glaze.png" ]; then
-        cp assets/logos/glaze.png "$DEB_DIR/usr/share/icons/hicolor/512x512/apps/$APP_NAME.png"
+    if [ -f "assets/logos/astoria.png" ]; then
+        cp assets/logos/astoria.png "$DEB_DIR/usr/share/icons/hicolor/512x512/apps/$APP_NAME.png"
     else
-        echo "Warning: assets/logos/glaze.png not found, skipping icon."
+        echo "Warning: assets/logos/astoria.png not found, skipping icon."
     fi
 
     # Create .desktop file
     cat <<EOF > "$DEB_DIR/usr/share/applications/$APP_NAME.desktop"
 [Desktop Entry]
-Name=Glaze
+Name=Astoria
 Comment=Native LLM frontend for AI roleplay
 Exec=$APP_NAME
 Icon=$APP_NAME
@@ -75,9 +80,9 @@ EOF
 Package: $APP_NAME
 Version: $VERSION
 Architecture: $DEB_ARCH
-Maintainer: Glaze Developers
+Maintainer: Astoria Project
 Description: AI chat client
- Glaze is a Native LLM frontend for AI roleplay.
+ Astoria is a native LLM frontend for AI roleplay.
 EOF
 
     # Build the package. Guarded by an if so a dpkg-deb failure doesn't trip
@@ -105,8 +110,8 @@ pkgname=$APP_NAME-bin
 pkgver=$VERSION
 pkgrel=1
 pkgdesc="Native LLM frontend for AI roleplay (Flutter)"
-arch=('x86_64')
-url="https://github.com/hydall/Glaze"
+arch=('$ARCH')
+url="https://github.com/danvitv"
 license=('AGPL3')
 depends=('gtk3' 'glib2' 'sqlite3')
 options=('!strip' '!emptydirs')
@@ -118,20 +123,20 @@ package() {
     mkdir -p "\$pkgdir/usr/share/icons/hicolor/512x512/apps"
 
     # Copy from the flutter release bundle
-    cp -r "\$srcdir/../../x64/release/bundle/"* "\$pkgdir/opt/$APP_NAME/"
+    cp -r "\$srcdir/../../$FLUTTER_ARCH/release/bundle/"* "\$pkgdir/opt/$APP_NAME/"
     
     # Symlink binary
-    ln -s "/opt/$APP_NAME/glaze_flutter" "\$pkgdir/usr/bin/$APP_NAME"
+    ln -s "/opt/$APP_NAME/Astoria" "\$pkgdir/usr/bin/$APP_NAME"
     
     # Copy icon
-    if [ -f "\$srcdir/../../../../assets/logos/glaze.png" ]; then
-        cp "\$srcdir/../../../../assets/logos/glaze.png" "\$pkgdir/usr/share/icons/hicolor/512x512/apps/$APP_NAME.png"
+    if [ -f "\$srcdir/../../../../assets/logos/astoria.png" ]; then
+        cp "\$srcdir/../../../../assets/logos/astoria.png" "\$pkgdir/usr/share/icons/hicolor/512x512/apps/$APP_NAME.png"
     fi
 
     # Create desktop file
     cat <<DESKTOP > "\$pkgdir/usr/share/applications/$APP_NAME.desktop"
 [Desktop Entry]
-Name=Glaze
+Name=Astoria
 Comment=Native LLM frontend for AI roleplay
 Exec=$APP_NAME
 Icon=$APP_NAME
@@ -175,7 +180,7 @@ mkdir -p "$APPIMAGE_DIR"
 # the other packages ship so all formats stay in sync.
 cat <<DESKTOP > "$APPIMAGE_DIR/$APP_NAME.desktop"
 [Desktop Entry]
-Name=Glaze
+Name=Astoria
 Comment=Native LLM frontend for AI roleplay
 Exec=$APP_NAME
 Icon=$APP_NAME
@@ -183,7 +188,7 @@ Terminal=false
 Type=Application
 Categories=Utility;Chat;Network;
 DESKTOP
-cp assets/logos/glaze.png "$APPIMAGE_DIR/$APP_NAME.png"
+cp assets/logos/astoria.png "$APPIMAGE_DIR/$APP_NAME.png"
 
 APPIMAGE_TOOL=""
 if [ -n "${APPIMAGE_LINUXDEPLOY:-}" ]; then
@@ -214,10 +219,8 @@ if [ -n "$APPIMAGE_TOOL" ]; then
     rm -rf "$APPDIR"
     mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/512x512/apps"
     cp -r "$BUNDLE_DIR"/* "$APPDIR/usr/bin/"
-    if [ -f "$APPDIR/usr/bin/glaze_flutter" ]; then
-        mv "$APPDIR/usr/bin/glaze_flutter" "$APPDIR/usr/bin/$APP_NAME"
-    elif [ -f "$APPDIR/usr/bin/Glaze" ]; then
-        mv "$APPDIR/usr/bin/Glaze" "$APPDIR/usr/bin/$APP_NAME"
+    if [ -f "$APPDIR/usr/bin/Astoria" ]; then
+        mv "$APPDIR/usr/bin/Astoria" "$APPDIR/usr/bin/$APP_NAME"
     fi
     cp "$APPIMAGE_DIR/$APP_NAME.desktop" "$APPDIR/usr/share/applications/"
     cp "$APPIMAGE_DIR/$APP_NAME.png" "$APPDIR/usr/share/icons/hicolor/512x512/apps/"
@@ -229,12 +232,12 @@ if [ -n "$APPIMAGE_TOOL" ]; then
     if "$APPIMAGE_TOOL" --appdir "$APPDIR" --desktop-file "$APPDIR/usr/share/applications/$APP_NAME.desktop" \
         --icon-file "$APPDIR/usr/share/icons/hicolor/512x512/apps/$APP_NAME.png" \
         --output appimage; then
-        # linuxdeploy writes Glaze-<ARCH>.AppImage next to the AppDir; normalise
+        # linuxdeploy writes Astoria-<ARCH>.AppImage next to the AppDir; normalise
         # the name to match the other package artifacts.
-        APPIMAGE_OUT=$(ls "$APPIMAGE_DIR"/Glaze-*.AppImage 2>/dev/null | head -1)
+        APPIMAGE_OUT=$(ls "$APPIMAGE_DIR"/Astoria-*.AppImage 2>/dev/null | head -1)
         if [ -n "$APPIMAGE_OUT" ]; then
-            mv "$APPIMAGE_OUT" "$APPIMAGE_DIR/Glaze-${VERSION}-${ARCH}.AppImage"
-            echo "AppImage created at $APPIMAGE_DIR/Glaze-${VERSION}-${ARCH}.AppImage"
+            mv "$APPIMAGE_OUT" "$APPIMAGE_DIR/Astoria-${VERSION}-${ARCH}.AppImage"
+            echo "AppImage created at $APPIMAGE_DIR/Astoria-${VERSION}-${ARCH}.AppImage"
         else
             echo "::warning::linuxdeploy reported success but no AppImage was found in $APPIMAGE_DIR."
         fi
@@ -252,11 +255,11 @@ fi
 if command -v tar &> /dev/null && tar --help | grep -q zstd 2>/dev/null; then
     echo "Building .tar.zst archive..."
     TARZST_DIR="build/linux/tarzst"
-    mkdir -p "$TARZST_DIR/glaze-${VERSION}"
-    cp -r "$BUNDLE_DIR"/* "$TARZST_DIR/glaze-${VERSION}/"
-    tar --zstd -cf "$TARZST_DIR/glaze-${VERSION}-linux-${ARCH}.tar.zst" -C "$TARZST_DIR" "glaze-${VERSION}"
-    rm -rf "$TARZST_DIR/glaze-${VERSION}"
-    echo "Tar.zst created at $TARZST_DIR/glaze-${VERSION}-linux-${ARCH}.tar.zst"
+    mkdir -p "$TARZST_DIR/astoria-${VERSION}"
+    cp -r "$BUNDLE_DIR"/* "$TARZST_DIR/astoria-${VERSION}/"
+    tar --zstd -cf "$TARZST_DIR/astoria-${VERSION}-linux-${ARCH}.tar.zst" -C "$TARZST_DIR" "astoria-${VERSION}"
+    rm -rf "$TARZST_DIR/astoria-${VERSION}"
+    echo "Tar.zst created at $TARZST_DIR/astoria-${VERSION}-linux-${ARCH}.tar.zst"
 else
     echo "::warning::tar with zstd support not found — no .tar.zst archive was produced."
 fi

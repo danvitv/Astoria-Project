@@ -1,7 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
-
-import 'glaze_logo.dart';
 
 class AppLaunchSplash extends StatefulWidget {
   final bool isReady;
@@ -49,7 +46,6 @@ class _AppLaunchSplashState extends State<AppLaunchSplash>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final background = theme.scaffoldBackgroundColor;
-    final accent = theme.colorScheme.primary;
 
     return AnimatedBuilder(
       animation: _controller,
@@ -96,10 +92,7 @@ class _AppLaunchSplashState extends State<AppLaunchSplash>
             children: [
               // Painted at full opacity immediately so first layout + image
               // decodes happen during the hold, hidden behind the cover below.
-              IgnorePointer(
-                ignoring: coverOpacity > 0.02,
-                child: widget.child,
-              ),
+              IgnorePointer(ignoring: coverOpacity > 0.02, child: widget.child),
               // Opaque cover: hides the settling child, then fades to reveal it.
               if (coverOpacity > 0)
                 Positioned.fill(
@@ -119,13 +112,12 @@ class _AppLaunchSplashState extends State<AppLaunchSplash>
                       child: Center(
                         child: Transform.scale(
                           scale: logoScale,
-                          child: SvgPicture.string(
-                            glazeFilledLogoSvg,
-                            width: 176,
-                            height: 176,
-                            colorFilter: ColorFilter.mode(
-                              accent,
-                              BlendMode.srcIn,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(34),
+                            child: Image.asset(
+                              'assets/logos/astoria.png',
+                              width: 176,
+                              height: 176,
                             ),
                           ),
                         ),

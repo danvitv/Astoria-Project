@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:palette_generator/palette_generator.dart';
@@ -21,7 +20,6 @@ import '../../../core/utils/platform_paths.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/widgets/card_tag_chips.dart';
 import '../../../shared/widgets/colored_markdown.dart';
-import '../../../shared/widgets/glaze_logo.dart';
 
 /// Opens the randomizing character-discovery overlay.
 ///
@@ -1112,7 +1110,7 @@ class HoloCard extends StatelessWidget {
               ),
             ),
 
-          // Top badge: the filled Glaze logo, tinted with the card's accent.
+          // Top badge: the Astoria monogram.
           Positioned(
             top: 22,
             right: 22,
@@ -1308,11 +1306,11 @@ class _EdgeTint extends StatelessWidget {
   }
 }
 
-/// The corner logo, tinted with the accent colour pulled from *this card's*
-/// portrait (vibrant → dominant), so every card lights the badge in its own
-/// hue. Falls back to [fallback] until the palette resolves (or when the card
-/// has no image). Extraction runs once per mount; the enclosing [HoloCard] is
-/// keyed by character id, so switching cards re-extracts for the new portrait.
+/// The monogram's frame uses the accent colour pulled from *this card's*
+/// portrait (vibrant → dominant). Falls back to [fallback] until the palette
+/// resolves (or when the card has no image). Extraction runs once per mount;
+/// the enclosing [HoloCard] is keyed by character id, so switching cards
+/// re-extracts for the new portrait.
 class _TopBadge extends StatefulWidget {
   final String? imagePath;
   final Color fallback;
@@ -1368,10 +1366,7 @@ class _TopBadgeState extends State<_TopBadge> {
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.55),
         shape: BoxShape.circle,
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.4),
-          width: 2,
-        ),
+        border: Border.all(color: tint.withValues(alpha: 0.7), width: 2),
         boxShadow: const [
           BoxShadow(
             color: Color(0x66000000),
@@ -1381,12 +1376,8 @@ class _TopBadgeState extends State<_TopBadge> {
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.all(9),
-        child: SvgPicture.string(
-          glazeFilledLogoSvg,
-          fit: BoxFit.contain,
-          colorFilter: ColorFilter.mode(tint, BlendMode.srcIn),
-        ),
+        padding: const EdgeInsets.all(4),
+        child: ClipOval(child: Image.asset('assets/logos/astoria.png')),
       ),
     );
   }

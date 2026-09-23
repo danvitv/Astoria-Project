@@ -27,9 +27,9 @@ val channelApplicationIdSuffix = when (buildChannel) {
 
 // Launcher label, so three icons on the home screen are told apart.
 val channelAppLabel = when (buildChannel) {
-    "stable" -> "Glaze"
-    "staging" -> "Glaze Staging"
-    else -> "Glaze Nightly"
+    "stable" -> "Astoria"
+    "staging" -> "Astoria Staging"
+    else -> "Astoria Nightly"
 }
 
 // CI signing: the keystore is passed in as base64 through KEYSTORE_BASE64.
