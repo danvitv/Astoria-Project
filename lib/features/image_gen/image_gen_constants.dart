@@ -376,7 +376,8 @@ class NovelAIConstants {
     'nai-diffusion-4-full': 'no text, best quality, very aesthetic, absurdres',
     'nai-diffusion-4-curated-preview':
         'rating:general, best quality, very aesthetic, absurdres',
-    'nai-diffusion-3': 'best quality, amazing quality, very aesthetic, absurdres',
+    'nai-diffusion-3':
+        'best quality, amazing quality, very aesthetic, absurdres',
     'nai-diffusion-furry-3': '{best quality}, {amazing quality}',
   };
 
@@ -688,22 +689,14 @@ class A1111Constants {
 
 /// ComfyUI (`/prompt` → `/history/{id}` → `/view`).
 ///
-/// Ported from SillyTavern's stable-diffusion extension
-/// (`public/scripts/extensions/stable-diffusion/index.js`,
-/// `src/endpoints/stable-diffusion.js` and `default/content/Default_Comfy_Workflow.json`).
-///
 /// ComfyUI has no fixed request shape: the user supplies an API-format workflow
 /// whose string tokens (`%prompt%`, `%steps%`, `%scale%`, …) are substituted per
-/// request. The shipped [defaultWorkflow] is SillyTavern's default text-to-image
-/// graph, so the settings work out of the box against a stock ComfyUI install.
+/// request. The built-in [defaultWorkflow] uses standard ComfyUI nodes to
+/// generate one text-to-image result with the selected checkpoint.
 class ComfyUiConstants {
   static const String defaultEndpoint = 'http://127.0.0.1:8188';
 
-  /// SillyTavern's `defaultNegative` — used as the negative-prompt hint.
-  static const String defaultNegativePrompt =
-      'lowres, bad anatomy, bad hands, text, error, cropped, worst quality, '
-      'low quality, normal quality, jpeg artifacts, signature, watermark, '
-      'username, blurry';
+  static const String defaultNegativePrompt = '';
 
   static const String defaultSampler = 'DDIM';
   static const String defaultScheduler = 'normal';
@@ -733,66 +726,18 @@ class ComfyUiConstants {
     'height',
   ];
 
-  /// `Default_Comfy_Workflow.json` from the SillyTavern repository.
+  /// A minimal text-to-image graph assembled from ComfyUI's standard nodes.
+  /// CLIPSetLastLayer applies the configured clip-skip value to both prompts.
   static const String defaultWorkflow = r'''
 {
-    "3": {
-        "class_type": "KSampler",
-        "inputs": {
-            "cfg": "%scale%",
-            "denoise": 1,
-            "latent_image": ["5", 0],
-            "model": ["4", 0],
-            "negative": ["7", 0],
-            "positive": ["6", 0],
-            "sampler_name": "%sampler%",
-            "scheduler": "%scheduler%",
-            "seed": "%seed%",
-            "steps": "%steps%"
-        }
-    },
-    "4": {
-        "class_type": "CheckpointLoaderSimple",
-        "inputs": {
-            "ckpt_name": "%model%"
-        }
-    },
-    "5": {
-        "class_type": "EmptyLatentImage",
-        "inputs": {
-            "batch_size": 1,
-            "height": "%height%",
-            "width": "%width%"
-        }
-    },
-    "6": {
-        "class_type": "CLIPTextEncode",
-        "inputs": {
-            "clip": ["4", 1],
-            "text": "%prompt%"
-        }
-    },
-    "7": {
-        "class_type": "CLIPTextEncode",
-        "inputs": {
-            "clip": ["4", 1],
-            "text": "%negative_prompt%"
-        }
-    },
-    "8": {
-        "class_type": "VAEDecode",
-        "inputs": {
-            "samples": ["3", 0],
-            "vae": ["4", 2]
-        }
-    },
-    "9": {
-        "class_type": "SaveImage",
-        "inputs": {
-            "filename_prefix": "Glaze",
-            "images": ["8", 0]
-        }
-    }
+  "10": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "%model%"}},
+  "11": {"class_type": "CLIPSetLastLayer", "inputs": {"clip": ["10", 1], "stop_at_clip_layer": "%clip_skip%"}},
+  "12": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["11", 0], "text": "%prompt%"}},
+  "13": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["11", 0], "text": "%negative_prompt%"}},
+  "14": {"class_type": "EmptyLatentImage", "inputs": {"width": "%width%", "height": "%height%", "batch_size": 1}},
+  "15": {"class_type": "KSampler", "inputs": {"model": ["10", 0], "positive": ["12", 0], "negative": ["13", 0], "latent_image": ["14", 0], "seed": "%seed%", "steps": "%steps%", "cfg": "%scale%", "sampler_name": "%sampler%", "scheduler": "%scheduler%", "denoise": "%denoise%"}},
+  "16": {"class_type": "VAEDecode", "inputs": {"samples": ["15", 0], "vae": ["10", 2]}},
+  "17": {"class_type": "SaveImage", "inputs": {"images": ["16", 0], "filename_prefix": "Astoria"}}
 }
 ''';
 }

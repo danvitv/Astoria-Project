@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/llm/tokenizer.dart';
 import '../../core/models/preset.dart';
 import '../../core/models/preset_folder.dart';
-import '../../core/services/featured_presets.dart';
 import '../../core/services/preset_defaults.dart';
 import '../../core/state/db_provider.dart';
 import '../../core/utils/id_generator.dart';
@@ -222,10 +221,6 @@ class PresetEditorBodyState extends ConsumerState<PresetEditorBody> {
   late final String _currentId = widget.preset?.id ?? generateId();
   late final int _createdAt =
       widget.preset?.createdAt ?? currentTimestampSeconds();
-
-  /// Bundled featured presets ship with a fixed author and cover image — both
-  /// are read-only here. Cloning one produces a normal, fully editable preset.
-  bool get _isFeatured => isFeaturedPreset(widget.preset?.id);
 
   @override
   void initState() {
@@ -489,7 +484,7 @@ class PresetEditorBodyState extends ConsumerState<PresetEditorBody> {
 
     return PresetDashboardCard(
       coverImage: cover,
-      onCoverTap: _isFeatured ? null : _pickImage,
+      onCoverTap: _pickImage,
       title: displayName,
       subtitle: _author.isNotEmpty ? 'by $_author' : null,
       onTitleTap: _showRenameDialog,
@@ -979,8 +974,6 @@ class PresetEditorBodyState extends ConsumerState<PresetEditorBody> {
   /// (so it gets a thumbnail). The preset keeps a *relative*, version-suffixed
   /// path — see `preset_image_paths.dart` for why both matter to cloud sync.
   Future<void> _pickImage() async {
-    if (_isFeatured) return;
-
     final path = await pickPresetCover(ref, _currentId);
     if (path == null || !mounted) return;
 
@@ -993,7 +986,6 @@ class PresetEditorBodyState extends ConsumerState<PresetEditorBody> {
   }
 
   void _removeImage() {
-    if (_isFeatured) return;
     final previous = _imagePath;
     setState(() => _imagePath = null);
     _scheduleSave();
@@ -1032,7 +1024,6 @@ class PresetEditorBodyState extends ConsumerState<PresetEditorBody> {
   void _showOptionsMenu() {
     showPresetOptions(
       context,
-      isFeatured: _isFeatured,
       hasImage: _imagePath != null && _imagePath!.isNotEmpty,
       canDelete: widget.preset != null,
       onRename: _showRenameDialog,
@@ -1477,7 +1468,11 @@ class _GuidedGenerationBlockEditor extends StatelessWidget {
   final PresetBlock block;
   final String generationPrompt;
   final String impersonationPrompt;
-  final void Function(PresetBlock block, String generation, String impersonation)
+  final void Function(
+    PresetBlock block,
+    String generation,
+    String impersonation,
+  )
   onSave;
 
   const _GuidedGenerationBlockEditor({
@@ -1568,11 +1563,7 @@ class _GuidedGenerationBlockEditor extends StatelessWidget {
           final blockJson = Map<String, dynamic>.from(values)
             ..remove(_generationKey)
             ..remove(_impersonationKey);
-          onSave(
-            PresetBlock.fromJson(blockJson),
-            generation,
-            impersonation,
-          );
+          onSave(PresetBlock.fromJson(blockJson), generation, impersonation);
         },
       ),
     );

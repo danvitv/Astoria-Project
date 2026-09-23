@@ -11,9 +11,8 @@ name: CI (PR checks)
 on:
   pull_request:
     branches:
-      - nightly
-      - staging
-      - stable
+      - dev
+      - release
   workflow_dispatch:
 
 # A new push to the PR branch makes the in-flight run pointless.

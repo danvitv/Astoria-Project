@@ -239,7 +239,6 @@ lib/
 │   │   │   ├── durable_writer_call_runner.dart
 │   │   │   └── writer_context_consolidator.dart
 │   │   ├── preset_defaults.dart      # Ensures mandatory blocks exist in imported presets
-│   │   ├── preset_seeder.dart        # Seeds built-in "Glaze Default" preset on first launch
 │   │   ├── png_text_extractor.dart   # Reads tEXt chunks from PNG byte stream
 │   │   ├── chat_import_export.dart   # Import/export individual chat sessions as JSONL
 │   │   ├── file_export_service.dart  # Platform-aware file export (file_selector / share)

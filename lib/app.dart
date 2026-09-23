@@ -20,7 +20,6 @@ import 'core/state/character_provider.dart';
 import 'core/state/db_provider.dart';
 import 'core/state/lorebook_provider.dart';
 import 'core/state/lorebook_embedding_provider.dart';
-import 'core/services/preset_seeder.dart';
 import 'features/chat_history/chat_history_provider.dart';
 import 'features/settings/api_list_provider.dart';
 import 'features/settings/app_settings_provider.dart';
@@ -92,7 +91,6 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
     _initInBackground(loadLorebookActivations(ref), 'lorebook activations');
     _initInBackground(loadLorebookSettings(ref), 'lorebook settings');
     _initInBackground(loadAgentOpsTab(ref), 'agent ops tab');
-    _initInBackground(seedFeaturedPresets(ref), 'featured preset seeding');
     final notificationForTesting = widget.notificationForTesting;
     if (notificationForTesting != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {

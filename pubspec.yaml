@@ -64,7 +64,6 @@ flutter:
   assets:
     - assets/logos/
     - assets/logos/providers/
-    - assets/presets/
     - assets/hydall.jpg
     - assets/danvitv.png
     - assets/chat_webview/

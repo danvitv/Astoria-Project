@@ -303,10 +303,10 @@ void main() {
                 'pid-1': {
                   'status': {'status_str': 'success'},
                   'outputs': {
-                    '9': {
+                    '17': {
                       'images': [
                         {
-                          'filename': 'Glaze_00001_.png',
+                          'filename': 'Astoria_00001_.png',
                           'subfolder': '',
                           'type': 'output',
                         },
@@ -343,27 +343,36 @@ void main() {
 
         expect(routes, ['POST /prompt', 'GET /history/pid-1', 'GET /view']);
         expect(image, utf8.encode('png'));
-        expect(viewUri!.queryParameters['filename'], 'Glaze_00001_.png');
+        expect(viewUri!.queryParameters['filename'], 'Astoria_00001_.png');
         expect(viewUri!.queryParameters['type'], 'output');
 
         final workflow = promptBody!['prompt'] as Map<String, dynamic>;
-        final sampler = (workflow['3'] as Map)['inputs'] as Map;
+        final sampler = (workflow['15'] as Map)['inputs'] as Map;
         expect(sampler['steps'], 28);
         expect(sampler['cfg'], 6.5);
         expect(sampler['sampler_name'], 'euler');
         expect(sampler['scheduler'], 'karras');
         expect(sampler['seed'], 42);
         expect(
-          ((workflow['4'] as Map)['inputs'] as Map)['ckpt_name'],
+          ((workflow['10'] as Map)['inputs'] as Map)['ckpt_name'],
           'anythingXL.safetensors',
         );
-        expect(((workflow['5'] as Map)['inputs'] as Map)['width'], 832);
-        expect(((workflow['5'] as Map)['inputs'] as Map)['height'], 1216);
+        expect(((workflow['14'] as Map)['inputs'] as Map)['width'], 832);
+        expect(((workflow['14'] as Map)['inputs'] as Map)['height'], 1216);
         expect(
-          ((workflow['6'] as Map)['inputs'] as Map)['text'],
+          ((workflow['11'] as Map)['inputs'] as Map)['stop_at_clip_layer'],
+          -1,
+        );
+        expect(sampler['denoise'], 1);
+        expect(
+          ((workflow['12'] as Map)['inputs'] as Map)['text'],
           'masterpiece, a cat',
         );
-        expect(((workflow['7'] as Map)['inputs'] as Map)['text'], 'lowres');
+        expect(((workflow['13'] as Map)['inputs'] as Map)['text'], 'lowres');
+        expect(
+          ((workflow['17'] as Map)['inputs'] as Map)['filename_prefix'],
+          'Astoria',
+        );
       },
     );
 

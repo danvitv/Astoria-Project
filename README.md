@@ -33,7 +33,7 @@ Glaze is a local, user-friendly AI roleplay chat client. It works with any OpenA
 
 ## 🤝 Basic SillyTavern Compatibility
 
-- **Presets** — All JSON presets from SillyTavern are compatible with Glaze. Several popular presets come preinstalled.
+- **Presets** — All JSON presets from SillyTavern are compatible with Glaze. Import your own presets to get started.
 - **Advanced Macro System** — Basic macro support is available (full SillyTavern compatibility is in progress). Variables (setvars/getvars), random choices, dice rolls, and character/user data substitution are fully supported.
 - **Character Card Compatibility** — Import and export character cards in SillyTavern V2 format (JSON and PNG).
 - **Lorebooks (World Info)** — Full support for lorebooks to enhance your roleplay experience.

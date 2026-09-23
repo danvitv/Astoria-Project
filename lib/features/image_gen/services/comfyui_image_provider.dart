@@ -94,9 +94,8 @@ class ComfyUiImageProvider {
 
   /// Substitutes the workflow's `%token%` literals and parses the result.
   ///
-  /// Each token is replaced where SillyTavern replaces it — the quoted
-  /// `"%token%"` form — with the JSON encoding of the value, so a numeric
-  /// placeholder lands as a number and a string one stays quoted.
+  /// Each quoted `"%token%"` is replaced with its JSON-encoded value, so
+  /// numeric placeholders become numbers and string placeholders stay strings.
   static Map<String, dynamic> buildWorkflow(
     ComfyUiImageSettings settings, {
     required String prompt,

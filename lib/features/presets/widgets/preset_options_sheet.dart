@@ -12,9 +12,6 @@ import '../../../shared/widgets/glaze_bottom_sheet.dart';
 /// state, the list writes straight through to the repository.
 void showPresetOptions(
   BuildContext context, {
-  /// Bundled featured presets ship with a fixed author and cover image — both
-  /// are read-only. Cloning one produces a normal, fully editable preset.
-  required bool isFeatured,
   required bool hasImage,
   required bool canDelete,
   required VoidCallback onRename,
@@ -50,21 +47,17 @@ void showPresetOptions(
         label: 'action_rename'.tr(),
         onTap: () => run(onRename),
       ),
-      // Author and cover image are part of a bundled featured preset — the
-      // user edits them on a clone, not on the original.
-      if (!isFeatured)
-        BottomSheetItem(
-          icon: Icons.person_outline,
-          label: 'action_set_author'.tr(),
-          onTap: () => run(onSetAuthor),
-        ),
-      if (!isFeatured)
-        BottomSheetItem(
-          icon: Icons.image_outlined,
-          label: 'change_image'.tr(),
-          onTap: () => run(onPickImage),
-        ),
-      if (!isFeatured && hasImage)
+      BottomSheetItem(
+        icon: Icons.person_outline,
+        label: 'action_set_author'.tr(),
+        onTap: () => run(onSetAuthor),
+      ),
+      BottomSheetItem(
+        icon: Icons.image_outlined,
+        label: 'change_image'.tr(),
+        onTap: () => run(onPickImage),
+      ),
+      if (hasImage)
         BottomSheetItem(
           icon: Icons.hide_image_outlined,
           label: 'action_remove_image'.tr(),
