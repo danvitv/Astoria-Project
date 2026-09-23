@@ -25,16 +25,20 @@ Create `.env` in the project root from `.env.example` (the file is ignored by
 Git). Fill in the providers you want to use:
 
 - `DROPBOX_APP_KEY`: App key of a Dropbox app with **App folder** access and
-  offline/refresh-token authorization; enable the file read/write permissions
-  needed for sync. A separate Dropbox app gives Astoria its own App folder.
+  offline/refresh-token authorization. In its App Console, register the exact
+  redirect URI `http://localhost:43178`, enable **Allow public clients** (PKCE),
+  and grant `files.content.read`, `files.content.write`, `files.metadata.read`,
+  and `account_info.read`. A separate Dropbox app gives Astoria its own App
+  folder. If another process is using port 43178, close it before connecting.
 - `GDRIVE_CLIENT_ID`: OAuth client ID of a **Desktop app** in your Google Cloud
   project. Enable the Google Drive API and configure the OAuth consent screen
   for the `drive.file` scope; add your account as a test user if the app is in
   testing mode.
 
-Both Windows flows use PKCE and an ephemeral `http://localhost:<port>` callback
-through the system browser. A desktop app does not keep an OAuth client secret
-confidential; `DROPBOX_APP_SECRET` and `GDRIVE_CLIENT_SECRET` are not needed for
-this setup. A new OAuth client requires reconnecting from the sync screen.
+Both Windows flows use PKCE through the system browser. Dropbox listens on the
+registered port 43178; Google Drive still uses an ephemeral localhost port. A
+desktop app does not keep an OAuth client secret confidential;
+`DROPBOX_APP_SECRET` and `GDRIVE_CLIENT_SECRET` are not needed for this setup.
+A new OAuth client requires reconnecting from the sync screen.
 Astoria's Google Drive sync root is `Astoria-dev`; Dropbox uses the `dev`
 subfolder of the app's App folder. Do not commit `.env` or OAuth tokens.

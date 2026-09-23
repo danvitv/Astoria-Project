@@ -3,6 +3,10 @@ import 'dart:io';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class SyncConfig {
+  // Dropbox requires an exact registered localhost redirect, including port.
+  // Google Drive desktop clients can continue to use an OS-assigned port.
+  static const dropboxDesktopPort = 43178;
+
   static String? _dropboxAppKey;
   static String? _dropboxAppSecret;
   static String? _gdriveClientId;

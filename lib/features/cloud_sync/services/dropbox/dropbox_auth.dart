@@ -111,6 +111,7 @@ class DropboxAuth {
       '$_authBase?response_type=code&client_id=$appKey&redirect_uri=http://localhost'
       '&code_challenge=$codeChallenge&code_challenge_method=S256&state=$state'
       '&token_access_type=offline',
+      port: SyncConfig.dropboxDesktopPort,
     );
     await _handleCodeExchange(result.code, result.redirectUri);
   }

@@ -56,15 +56,17 @@ class OAuthLocalServer {
     String authUrl, {
     String successPattern = 'code=',
     Duration timeout = const Duration(minutes: 5),
+    int port = 0,
+    Future<bool> Function(Uri)? launchBrowser,
   }) async {
     // Read from the request being made rather than passed in alongside it, so
     // it cannot drift away from what the provider was actually asked.
     final expectedState = Uri.parse(authUrl).queryParameters['state'];
 
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final port = server.port;
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+    final boundPort = server.port;
 
-    final redirectUri = 'http://localhost:$port';
+    final redirectUri = 'http://localhost:$boundPort';
     final url = authUrl.replaceAll(
       RegExp(r'redirect_uri=[^&]+'),
       'redirect_uri=${Uri.encodeComponent(redirectUri)}',
@@ -98,7 +100,9 @@ class OAuthLocalServer {
       await server.close(force: true);
     });
 
-    final launched = await launchUrl(Uri.parse(url));
+    final launched = await (launchBrowser != null
+        ? launchBrowser(Uri.parse(url))
+        : launchUrl(Uri.parse(url)));
     if (!launched) {
       await server.close(force: true);
       throw Exception('Could not launch browser for OAuth');

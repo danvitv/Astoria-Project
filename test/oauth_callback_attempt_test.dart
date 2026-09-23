@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/services/deep_link_service.dart';
 import 'package:glaze_flutter/core/services/oauth_state.dart';
 import 'package:glaze_flutter/features/cloud_sync/services/oauth_local_server.dart';
+import 'package:glaze_flutter/features/cloud_sync/sync_config.dart';
 
 /// A redirect back into the app, the shape Dropbox sends on Android.
 Uri _dropboxCallback({required String code, String? state}) => Uri.parse(
@@ -230,6 +232,43 @@ void main() {
   });
 
   group('the desktop loopback redirect', () {
+    test(
+      'uses the requested port and returns its redirect for token exchange',
+      () async {
+        final probe = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final port = probe.port;
+        await probe.close();
+
+        final result = await OAuthLocalServer.authenticate(
+          'https://example.com/oauth2/authorize?redirect_uri=http://localhost&state=S',
+          port: port,
+          timeout: const Duration(seconds: 5),
+          launchBrowser: (url) async {
+            final redirect = Uri.parse(url.queryParameters['redirect_uri']!);
+            expect(redirect.toString(), 'http://localhost:$port');
+            final client = HttpClient();
+            try {
+              final request = await client.getUrl(
+                redirect.replace(
+                  queryParameters: {'code': 'abc', 'state': 'S'},
+                ),
+              );
+              final response = await request.close();
+              expect(response.statusCode, HttpStatus.ok);
+              await response.drain<void>();
+            } finally {
+              client.close();
+            }
+            return true;
+          },
+        );
+
+        expect(result.code, 'abc');
+        expect(result.redirectUri, 'http://localhost:$port');
+        expect(SyncConfig.dropboxDesktopPort, 43178);
+      },
+    );
+
     test('a matching state yields the code', () {
       expect(
         oauthCodeFromRedirect({
