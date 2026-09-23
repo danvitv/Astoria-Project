@@ -24,14 +24,29 @@ void main() {
       bgNoiseOpacity: 0.03,
       bgNoiseIntensity: 0.4,
     );
-    await storage.saveAll([oldDefault]);
+    await storage.saveAll([oldDefault.copyWith(accentColor: '#7996ce')]);
 
     final upgraded = (await storage.loadAll()).first;
     expect(upgraded.accentColor, '#B77F96');
 
+    // This is how the old Windows preferences serialized the stock preset.
+    final oldJson = oldDefault.copyWith(accentColor: '#7996ce').toJson()
+      ..['bgDim'] = 0.0
+      ..['bgOpacity'] = 0.85;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('theme_presets', jsonEncode([oldJson]));
+    expect((await storage.loadAll()).first.accentColor, '#B77F96');
+
     await storage.saveAll([oldDefault.copyWith(accentColor: '#123456')]);
     final custom = (await storage.loadAll()).first;
     expect(custom.accentColor, '#123456');
+
+    await storage.saveAll([
+      oldDefault.copyWith(accentColor: '#7996ce', uiFontWeight: 600),
+    ]);
+    final customizedDefault = (await storage.loadAll()).first;
+    expect(customizedDefault.accentColor, '#7996ce');
+    expect(customizedDefault.uiFontWeight, 600);
   });
 
   test('imports a SillyTavern theme', () async {

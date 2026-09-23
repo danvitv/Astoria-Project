@@ -55,7 +55,7 @@ class ThemePresetStorage implements SyncThemePresetStore, ThemePresetStore {
     // Replace only the exact, unedited Glaze built-in. A customized Default
     // theme (or any imported theme) keeps its user's colors and effects.
     if (oldDefaultIndex != -1 &&
-        result[oldDefaultIndex] == _glazeDefaultPreset) {
+        _isUnmodifiedGlazeDefault(result[oldDefaultIndex])) {
       result[oldDefaultIndex] = _defaultPreset;
     }
     if (!result.any((p) => p.id == 'default')) {
@@ -614,6 +614,15 @@ class ThemePresetStorage implements SyncThemePresetStore, ThemePresetStore {
 
   @override
   Future<void> putAll(List<ThemePreset> presets) => saveAll(presets);
+}
+
+bool _isUnmodifiedGlazeDefault(ThemePreset preset) {
+  // Old exports may use lowercase hex and bgOpacity: 0.85, whose migration to
+  // bgDim yields 0.15000000000000002 rather than exactly 0.15.
+  return preset.accentColor.toUpperCase() == '#7996CE' &&
+      (preset.bgDim - _glazeDefaultPreset.bgDim).abs() < 1e-9 &&
+      preset.copyWith(accentColor: '#7996CE', bgDim: 0.15) ==
+          _glazeDefaultPreset;
 }
 
 final _glazeDefaultPreset = ThemePreset(
