@@ -25,6 +25,7 @@ app.*.map.json
 # ===========================
 **/android/**/gradle-wrapper.jar
 **/android/.gradle/
+/android/.kotlin/
 **/android/captures/
 **/android/gradlew
 **/android/gradlew.bat
@@ -70,6 +71,7 @@ app.*.map.json
 **/ios/Flutter/flutter_export_environment.sh
 **/ios/ServiceDefinitions.json
 **/ios/Runner/GeneratedPluginRegistrant.*
+/ios/Runner/Configs/Env.xcconfig
 
 # macOS
 **/macos/Flutter/GeneratedPluginRegistrant.swift

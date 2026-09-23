@@ -94,8 +94,13 @@ class DropboxAuth {
         final code = callbackUri.queryParameters['code'];
         final returnedState = callbackUri.queryParameters['state'];
         if (code == null) {
+          final reason =
+              callbackUri.queryParameters['error_description'] ??
+              callbackUri.queryParameters['error'];
           throw StateError(
-            'No authorization code in callback (uri=$callbackUri)',
+            reason == null
+                ? 'No authorization code in Dropbox callback'
+                : 'Dropbox authorization failed: $reason',
           );
         }
         final mismatch = oauthStateMismatchMessage(state, returnedState);

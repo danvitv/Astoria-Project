@@ -149,8 +149,10 @@ jobs:
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
           DROPBOX_APP_KEY_STAGING: ${{ secrets.DROPBOX_APP_KEY_STAGING }}
           DROPBOX_APP_KEY_NIGHTLY: ${{ secrets.DROPBOX_APP_KEY_NIGHTLY }}
-          DROPBOX_REDIRECT_NATIVE: ${{ secrets.DROPBOX_REDIRECT_NATIVE }}
+          DROPBOX_APP_KEY_DEV: ${{ secrets.DROPBOX_APP_KEY_DEV }}
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_ANDROID_SERVER_CLIENT_ID: ${{ secrets.GDRIVE_ANDROID_SERVER_CLIENT_ID }}
+          GDRIVE_IOS_CLIENT_ID: ${{ secrets.GDRIVE_IOS_CLIENT_ID }}
         run: |
           set -euo pipefail
           # A channel can be given its own Dropbox app, which gets it its own
@@ -161,13 +163,14 @@ jobs:
           case "$BUILD_CHANNEL" in
             stable)  CHANNEL_DROPBOX_KEY="" ;;
             staging) CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_STAGING" ;;
+            dev)     CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_DEV" ;;
             *)       CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_NIGHTLY" ;;
           esac
           {
             echo "DROPBOX_APP_KEY=${CHANNEL_DROPBOX_KEY:-$DROPBOX_APP_KEY}"
-            echo "DROPBOX_REDIRECT_NATIVE=$DROPBOX_REDIRECT_NATIVE"
             echo "GDRIVE_CLIENT_ID=$GDRIVE_CLIENT_ID"
-            echo "GDRIVE_REDIRECT_NATIVE=com.hydall.glaze://oauth/gdrive"
+            echo "GDRIVE_ANDROID_SERVER_CLIENT_ID=$GDRIVE_ANDROID_SERVER_CLIENT_ID"
+            echo "GDRIVE_IOS_CLIENT_ID=$GDRIVE_IOS_CLIENT_ID"
           } >> .env
 
       - name: Set up Java 21
@@ -340,8 +343,10 @@ jobs:
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
           DROPBOX_APP_KEY_STAGING: ${{ secrets.DROPBOX_APP_KEY_STAGING }}
           DROPBOX_APP_KEY_NIGHTLY: ${{ secrets.DROPBOX_APP_KEY_NIGHTLY }}
-          DROPBOX_REDIRECT_NATIVE: ${{ secrets.DROPBOX_REDIRECT_NATIVE }}
+          DROPBOX_APP_KEY_DEV: ${{ secrets.DROPBOX_APP_KEY_DEV }}
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_ANDROID_SERVER_CLIENT_ID: ${{ secrets.GDRIVE_ANDROID_SERVER_CLIENT_ID }}
+          GDRIVE_IOS_CLIENT_ID: ${{ secrets.GDRIVE_IOS_CLIENT_ID }}
         run: |
           set -euo pipefail
           # A channel can be given its own Dropbox app, which gets it its own
@@ -352,13 +357,14 @@ jobs:
           case "$BUILD_CHANNEL" in
             stable)  CHANNEL_DROPBOX_KEY="" ;;
             staging) CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_STAGING" ;;
+            dev)     CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_DEV" ;;
             *)       CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_NIGHTLY" ;;
           esac
           {
             echo "DROPBOX_APP_KEY=${CHANNEL_DROPBOX_KEY:-$DROPBOX_APP_KEY}"
-            echo "DROPBOX_REDIRECT_NATIVE=$DROPBOX_REDIRECT_NATIVE"
             echo "GDRIVE_CLIENT_ID=$GDRIVE_CLIENT_ID"
-            echo "GDRIVE_REDIRECT_NATIVE=com.hydall.glaze://oauth/gdrive"
+            echo "GDRIVE_ANDROID_SERVER_CLIENT_ID=$GDRIVE_ANDROID_SERVER_CLIENT_ID"
+            echo "GDRIVE_IOS_CLIENT_ID=$GDRIVE_IOS_CLIENT_ID"
           } >> .env
 
       - name: Install Flutter
@@ -421,8 +427,10 @@ jobs:
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
           DROPBOX_APP_KEY_STAGING: ${{ secrets.DROPBOX_APP_KEY_STAGING }}
           DROPBOX_APP_KEY_NIGHTLY: ${{ secrets.DROPBOX_APP_KEY_NIGHTLY }}
-          DROPBOX_REDIRECT_NATIVE: ${{ secrets.DROPBOX_REDIRECT_NATIVE }}
+          DROPBOX_APP_KEY_DEV: ${{ secrets.DROPBOX_APP_KEY_DEV }}
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_ANDROID_SERVER_CLIENT_ID: ${{ secrets.GDRIVE_ANDROID_SERVER_CLIENT_ID }}
+          GDRIVE_IOS_CLIENT_ID: ${{ secrets.GDRIVE_IOS_CLIENT_ID }}
         run: |
           set -euo pipefail
           # A channel can be given its own Dropbox app, which gets it its own
@@ -433,13 +441,14 @@ jobs:
           case "$BUILD_CHANNEL" in
             stable)  CHANNEL_DROPBOX_KEY="" ;;
             staging) CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_STAGING" ;;
+            dev)     CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_DEV" ;;
             *)       CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_NIGHTLY" ;;
           esac
           {
             echo "DROPBOX_APP_KEY=${CHANNEL_DROPBOX_KEY:-$DROPBOX_APP_KEY}"
-            echo "DROPBOX_REDIRECT_NATIVE=$DROPBOX_REDIRECT_NATIVE"
             echo "GDRIVE_CLIENT_ID=$GDRIVE_CLIENT_ID"
-            echo "GDRIVE_REDIRECT_NATIVE=com.hydall.glaze://oauth/gdrive"
+            echo "GDRIVE_ANDROID_SERVER_CLIENT_ID=$GDRIVE_ANDROID_SERVER_CLIENT_ID"
+            echo "GDRIVE_IOS_CLIENT_ID=$GDRIVE_IOS_CLIENT_ID"
           } >> .env
 
       - name: Install Flutter
@@ -483,11 +492,15 @@ jobs:
           case "$BUILD_CHANNEL" in
             stable)  SUFFIX="";         NAME="Astoria" ;;
             staging) SUFFIX=".staging"; NAME="Astoria Staging" ;;
+            dev)     SUFFIX=".dev"; NAME="Astoria Dev" ;;
             *)       SUFFIX=".nightly"; NAME="Astoria Nightly" ;;
           esac
           printf 'BUNDLE_ID_SUFFIX = %s\nAPP_DISPLAY_NAME = %s\n' \
             "$SUFFIX" "$NAME" > ios/Flutter/Channel.xcconfig
           cat ios/Flutter/Channel.xcconfig
+
+      - name: Configure iOS OAuth callback schemes
+        run: bash ios/Runner/generate_env_xcconfig.sh
 
       # === Reverted iOS IPA creation (the version that produced working sideload builds before PR 96) ===
       # We are reverting the "flutter build ipa" change introduced in 195b260 because it regressed the build
@@ -547,20 +560,23 @@ jobs:
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
           DROPBOX_APP_KEY_STAGING: ${{ secrets.DROPBOX_APP_KEY_STAGING }}
           DROPBOX_APP_KEY_NIGHTLY: ${{ secrets.DROPBOX_APP_KEY_NIGHTLY }}
-          DROPBOX_REDIRECT_NATIVE: ${{ secrets.DROPBOX_REDIRECT_NATIVE }}
+          DROPBOX_APP_KEY_DEV: ${{ secrets.DROPBOX_APP_KEY_DEV }}
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_ANDROID_SERVER_CLIENT_ID: ${{ secrets.GDRIVE_ANDROID_SERVER_CLIENT_ID }}
+          GDRIVE_IOS_CLIENT_ID: ${{ secrets.GDRIVE_IOS_CLIENT_ID }}
         run: |
           set -euo pipefail
           case "$BUILD_CHANNEL" in
             stable)  CHANNEL_DROPBOX_KEY="" ;;
             staging) CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_STAGING" ;;
+            dev)     CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_DEV" ;;
             *)       CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_NIGHTLY" ;;
           esac
           {
             echo "DROPBOX_APP_KEY=${CHANNEL_DROPBOX_KEY:-$DROPBOX_APP_KEY}"
-            echo "DROPBOX_REDIRECT_NATIVE=$DROPBOX_REDIRECT_NATIVE"
             echo "GDRIVE_CLIENT_ID=$GDRIVE_CLIENT_ID"
-            echo "GDRIVE_REDIRECT_NATIVE=com.hydall.glaze://oauth/gdrive"
+            echo "GDRIVE_ANDROID_SERVER_CLIENT_ID=$GDRIVE_ANDROID_SERVER_CLIENT_ID"
+            echo "GDRIVE_IOS_CLIENT_ID=$GDRIVE_IOS_CLIENT_ID"
           } >> .env
 
       - name: Install Linux dependencies

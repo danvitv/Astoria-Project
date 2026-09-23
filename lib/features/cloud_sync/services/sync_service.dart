@@ -208,6 +208,8 @@ class SyncService {
       _gdriveAuth.loadTokens(tokens);
     }
 
+    await _gdriveAuth.restoreNativeSession();
+
     _accountInfo = await _adapter.getAccountInfo();
   }
 

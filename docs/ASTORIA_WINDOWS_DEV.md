@@ -19,26 +19,55 @@ take precedence. Old OAuth tokens, sync manifests, and automatic sync state
 are not imported: the new cloud namespace requires a fresh connection.
 Mobile app data locations are unaffected by this Windows migration.
 
-## Configure cloud sync for a local Windows build
+## Configure cloud sync (Windows, Android, iOS)
 
 Create `.env` in the project root from `.env.example` (the file is ignored by
 Git). Fill in the providers you want to use:
 
 - `DROPBOX_APP_KEY`: App key of a Dropbox app with **App folder** access and
   offline/refresh-token authorization. In its App Console, register the exact
-  redirect URI `http://localhost:43178`, enable **Allow public clients** (PKCE),
+  `http://localhost:43178` (desktop). Mobile uses Dropbox's own SDK-style
+  callback `db-<APP_KEY>://2/token` (register it in the App Console if the
+  console permits custom redirects); enable **Allow public clients** (PKCE),
   and grant `files.content.read`, `files.content.write`, `files.metadata.read`,
   and `account_info.read`. A separate Dropbox app gives Astoria its own App
   folder. If another process is using port 43178, close it before connecting.
-- `GDRIVE_CLIENT_ID`: OAuth client ID of a **Desktop app** in your Google Cloud
-  project. Enable the Google Drive API and configure the OAuth consent screen
-  for the `drive.file` scope; add your account as a test user if the app is in
-  testing mode.
+- Enable the Google Drive API; configure Google Auth Platform consent with
+  `drive.file`, and add your account as test user if the app is in Testing.
+- `GDRIVE_CLIENT_ID`: OAuth client ID of a **Desktop app** for Windows (also
+  used by the desktop loopback flow on Linux). No manually registered Google
+  localhost redirect is required for a Desktop client.
+- `GDRIVE_ANDROID_SERVER_CLIENT_ID`: a **Web application** OAuth client ID
+  used as `serverClientId` by Google Sign-In for Android. Create **Android**
+  OAuth clients in the same project for each installed package and signing
+  certificate SHA-1: `app.astoria.flutter.dev` for local dev,
+  `app.astoria.flutter` for stable (also `.staging` if built). Register both
+  the debug SHA-1 (`keytool -list -v -alias androiddebugkey -keystore
+  ~/.android/debug.keystore`, default password `android`) and the release
+  signing SHA-1 as separate clients when those certificates differ.
+- `GDRIVE_IOS_CLIENT_ID`: an **iOS** OAuth client ID for the actual bundle ID:
+  `com.danvitv.astoria.dev` for local dev, `com.danvitv.astoria` for stable
+  (also `.staging` if built). Each distinct bundle ID needs its own iOS client
+  ID in its build's `.env`. Run `bash ios/Runner/generate_env_xcconfig.sh`
+  **before** `flutter build ios` or opening Xcode; it generates the Dropbox and
+  reversed Google URL schemes in the ignored local
+  `ios/Runner/Configs/Env.xcconfig` from `.env`.
 
-Both Windows flows use PKCE through the system browser. Dropbox listens on the
-registered port 43178; Google Drive still uses an ephemeral localhost port. A
-desktop app does not keep an OAuth client secret confidential;
-`DROPBOX_APP_SECRET` and `GDRIVE_CLIENT_SECRET` are not needed for this setup.
+Windows uses PKCE through the system browser. Dropbox listens on registered
+port 43178; Google uses an ephemeral localhost port. On Android/iOS Google
+uses the platform sign-in SDK, then authorizes `drive.file` on Connect; the SDK
+restores authorization at startup without requesting fresh consent. Dropbox
+uses the system browser with PKCE and an app-key-specific callback scheme.
+Client secrets cannot be kept confidential in a shipped app;
+`DROPBOX_APP_SECRET` and `GDRIVE_CLIENT_SECRET` are not needed.
 A new OAuth client requires reconnecting from the sync screen.
 Astoria's Google Drive sync root is `Astoria-dev`; Dropbox uses the `dev`
 subfolder of the app's App folder. Do not commit `.env` or OAuth tokens.
+
+For CI, set the corresponding GitHub Actions secrets `DROPBOX_APP_KEY`,
+`DROPBOX_APP_KEY_DEV` if dev has a separate Dropbox app,
+`GDRIVE_CLIENT_ID`, `GDRIVE_ANDROID_SERVER_CLIENT_ID`, and
+`GDRIVE_IOS_CLIENT_ID`. Mobile package/bundle IDs and signing SHA-1 must match
+the credentials used for **that build channel**. A build with no credentials
+can run, but those providers cannot be connected. On Windows we cannot verify
+an iOS build or actual mobile OAuth without a Mac/device and these credentials.

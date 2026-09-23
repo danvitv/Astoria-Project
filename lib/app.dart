@@ -28,6 +28,7 @@ import 'shared/theme/theme_font_provider.dart';
 import 'core/services/onboarding_service.dart';
 import 'features/cloud_sync/sync_provider.dart';
 import 'features/cloud_sync/sync_models.dart';
+import 'features/cloud_sync/sync_config.dart';
 
 import 'shared/theme/app_theme.dart';
 import 'shared/theme/theme_preset.dart';
@@ -175,6 +176,10 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
         ref.read(ledgerReconciliationLeaseRepoProvider).clearProcessOrphans,
       );
       await _runStartupStep('dotenv', () => dotenv.load(fileName: '.env'));
+      // Resolve the app-key-specific Dropbox scheme before consuming a link
+      // that launched the app from a closed state.
+      await _runStartupStep('sync configuration', SyncConfig.load);
+      await _runStartupStep('deep links', DeepLinkService.instance.init);
       await _runStartupStep('tokenizer', preloadO200kBase);
       await _runStartupStep('prompt worker', PromptWorker.ensureInitialized);
       await _runStartupStep(
@@ -185,7 +190,6 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
         'generation notifications',
         GenerationNotificationService.instance.init,
       );
-      await _runStartupStep('deep links', DeepLinkService.instance.init);
     } catch (error, stackTrace) {
       FlutterError.reportError(
         FlutterErrorDetails(

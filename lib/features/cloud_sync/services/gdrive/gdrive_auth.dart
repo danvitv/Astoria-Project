@@ -4,11 +4,9 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 
-import '../../../../core/services/deep_link_service.dart';
-import '../../../../core/services/oauth_state.dart';
 import '../oauth_local_server.dart';
 import '../../sync_config.dart';
 
@@ -31,14 +29,26 @@ class GDriveAuth {
   int? _expiresAt;
   String? _folderId;
   String? _codeVerifier;
+  GoogleSignInAccount? _nativeAccount;
+  bool _restoreNativeAccount = false;
+  static Future<void>? _nativeInitialization;
+
+  static bool get _isMobile => Platform.isAndroid || Platform.isIOS;
 
   String? get accessToken => _accessToken;
   String? get folderId => _folderId;
-  bool get isConnected => _accessToken != null && _refreshToken != null;
+  bool get isConnected => _isMobile
+      ? _nativeAccount != null
+      : _accessToken != null && _refreshToken != null;
 
   void loadTokens(Map<String, dynamic>? tokens) {
     final gd = tokens?['gdrive'] as Map<String, dynamic>?;
     if (gd == null) return;
+    if (_isMobile) {
+      _restoreNativeAccount = gd['native_connected'] == true;
+      _folderId = gd['folderId'] as String?;
+      return;
+    }
     _accessToken = gd['access_token'] as String?;
     _refreshToken = gd['refresh_token'] as String?;
     _expiresAt = gd['expires_at'] as int?;
@@ -46,6 +56,13 @@ class GDriveAuth {
   }
 
   Map<String, dynamic>? saveTokens() {
+    if (_isMobile) {
+      return _nativeAccount == null
+          ? null
+          : {
+              'gdrive': {'native_connected': true, 'folderId': _folderId},
+            };
+    }
     if (_accessToken == null) return null;
     return {
       'gdrive': {
@@ -57,7 +74,56 @@ class GDriveAuth {
     };
   }
 
+  Future<void> restoreNativeSession() async {
+    if (!_isMobile ||
+        !_restoreNativeAccount ||
+        !SyncConfig.canStartSyncAuth('gdrive')) {
+      return;
+    }
+    try {
+      await _initializeNative();
+      final account = await GoogleSignIn.instance
+          .attemptLightweightAuthentication();
+      if (account != null &&
+          await account.authorizationClient.authorizationForScopes([_scope]) !=
+              null) {
+        _nativeAccount = account;
+      }
+    } catch (_) {
+      // A revoked grant or unavailable Play Services needs an explicit reconnect.
+    }
+  }
+
+  Future<void> _initializeNative() {
+    final initialization = _nativeInitialization ??= GoogleSignIn.instance
+        .initialize(
+          clientId: Platform.isIOS ? SyncConfig.gdriveIosClientId : null,
+          serverClientId: Platform.isAndroid
+              ? SyncConfig.gdriveAndroidServerClientId
+              : null,
+        );
+    return initialization.catchError((Object error, StackTrace trace) {
+      if (identical(_nativeInitialization, initialization)) {
+        _nativeInitialization = null;
+      }
+      Error.throwWithStackTrace(error, trace);
+    });
+  }
+
   Future<void> connect() async {
+    if (_isMobile) {
+      if (!SyncConfig.canStartSyncAuth('gdrive')) {
+        throw StateError('Google Drive mobile OAuth client not configured');
+      }
+      await _initializeNative();
+      final account =
+          _nativeAccount ?? await GoogleSignIn.instance.authenticate();
+      // Request Drive access only here, in response to Connect being tapped.
+      // Never prompt during app initialization or an automatic background sync.
+      await account.authorizationClient.authorizeScopes([_scope]);
+      _nativeAccount = account;
+      return;
+    }
     final clientId = SyncConfig.gdriveClientId;
     if (clientId == null || clientId.isEmpty) {
       throw StateError('GDrive Client ID not configured');
@@ -66,32 +132,6 @@ class GDriveAuth {
     _codeVerifier = _generateRandomString(128);
     final codeChallenge = _sha256Base64Url(_codeVerifier!);
     final state = _generateRandomString(32);
-
-    if (Platform.isAndroid || Platform.isIOS) {
-      final redirectUri = SyncConfig.gdriveRedirectNative;
-      final authUrl =
-          '$_authBase?response_type=code&client_id=$clientId&redirect_uri=${Uri.encodeComponent(redirectUri)}'
-          '&scope=${Uri.encodeComponent(_scope)}&code_challenge=$codeChallenge&code_challenge_method=S256&state=$state'
-          '&access_type=offline&prompt=consent';
-      final deepLinkService = DeepLinkService.instance;
-      deepLinkService.beginOAuth('gdrive', state);
-      try {
-        await launchUrl(
-          Uri.parse(authUrl),
-          mode: LaunchMode.externalApplication,
-        );
-        final callbackUri = await deepLinkService.awaitOAuthCallback('gdrive');
-        final code = callbackUri.queryParameters['code'];
-        final returnedState = callbackUri.queryParameters['state'];
-        if (code == null) throw StateError('No authorization code in callback');
-        final mismatch = oauthStateMismatchMessage(state, returnedState);
-        if (mismatch != null) throw StateError(mismatch);
-        await _handleCodeExchange(code, redirectUri);
-        return;
-      } finally {
-        deepLinkService.endOAuth('gdrive', state);
-      }
-    }
 
     final result = await OAuthLocalServer.authenticate(
       '$_authBase?response_type=code&client_id=$clientId&redirect_uri=http://localhost'
@@ -125,6 +165,18 @@ class GDriveAuth {
   }
 
   Future<String> getValidToken() async {
+    if (_isMobile) {
+      final account = _nativeAccount;
+      if (account == null) throw StateError('Not authenticated');
+      final authorization = await account.authorizationClient
+          .authorizationForScopes([_scope]);
+      if (authorization == null) {
+        throw StateError(
+          'Google Drive permission expired; reconnect to Google Drive',
+        );
+      }
+      return authorization.accessToken;
+    }
     if (_accessToken == null) throw StateError('Not authenticated');
     if (_expiresAt != null &&
         DateTime.now().millisecondsSinceEpoch >= _expiresAt!) {
@@ -166,6 +218,16 @@ class GDriveAuth {
   }
 
   Future<Map<String, dynamic>?> getAccountInfo() async {
+    if (_isMobile) {
+      final account = _nativeAccount;
+      return account == null
+          ? null
+          : {
+              'id': account.id,
+              'email': account.email,
+              'name': account.displayName,
+            };
+    }
     try {
       final token = await getValidToken();
       final response = await _dio.get<Map<String, dynamic>>(
@@ -179,6 +241,13 @@ class GDriveAuth {
   }
 
   Future<void> disconnect() async {
+    if (_isMobile) {
+      if (_nativeAccount != null) await GoogleSignIn.instance.disconnect();
+      _nativeAccount = null;
+      _restoreNativeAccount = false;
+      _folderId = null;
+      return;
+    }
     if (_accessToken != null) {
       try {
         await _dio.post<void>(

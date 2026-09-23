@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:glaze_flutter/core/services/deep_link_service.dart';
 import 'package:glaze_flutter/core/services/oauth_state.dart';
 import 'package:glaze_flutter/features/cloud_sync/services/oauth_local_server.dart';
@@ -9,7 +10,7 @@ import 'package:glaze_flutter/features/cloud_sync/sync_config.dart';
 
 /// A redirect back into the app, the shape Dropbox sends on Android.
 Uri _dropboxCallback({required String code, String? state}) => Uri.parse(
-  'com.hydall.glaze://oauth/dropbox?code=$code${state == null ? '' : '&state=$state'}',
+  'db-appkey://2/token?code=$code${state == null ? '' : '&state=$state'}',
 );
 
 const _short = Duration(milliseconds: 50);
@@ -18,6 +19,10 @@ void main() {
   final service = DeepLinkService.instance;
 
   setUp(service.resetForTest);
+  setUp(() async {
+    dotenv.loadFromString(envString: 'DROPBOX_APP_KEY=appkey');
+    await SyncConfig.load();
+  });
   tearDown(service.resetForTest);
 
   group('an OAuth callback belongs to one attempt', () {
@@ -164,7 +169,7 @@ void main() {
         final callback = service.awaitOAuthCallback('dropbox', timeout: _short);
 
         service.handleDeepLink(
-          Uri.parse('com.hydall.glaze://oauth/dropbox?error=access_denied'),
+          Uri.parse('db-appkey://2/token?error=access_denied'),
         );
 
         expect((await callback).queryParameters['error'], 'access_denied');
@@ -195,36 +200,37 @@ void main() {
   });
 
   group('routing', () {
-    test('the legacy db- scheme reaches Dropbox', () async {
+    test('the Dropbox app-key scheme reaches Dropbox', () async {
       service.beginOAuth('dropbox', 'S');
       final callback = service.awaitOAuthCallback('dropbox', timeout: _short);
 
-      service.handleDeepLink(Uri.parse('db-appkey://auth?code=c&state=S'));
+      service.handleDeepLink(Uri.parse('db-appkey://2/token?code=c&state=S'));
 
       expect((await callback).queryParameters['code'], 'c');
     });
 
-    test('the iOS reversed-client-id redirect reaches Drive', () async {
-      // `com.googleusercontent.apps.123:/oauth2redirect` — one slash, so the
-      // host is empty and only the scheme identifies it.
-      service.beginOAuth('gdrive', 'S');
-      final callback = service.awaitOAuthCallback('gdrive', timeout: _short);
+    test(
+      'unrelated reversed-client-id callbacks cannot reach Dropbox',
+      () async {
+        service.beginOAuth('dropbox', 'S');
+        final callback = service.awaitOAuthCallback('dropbox', timeout: _short);
 
-      service.handleDeepLink(
-        Uri.parse(
-          'com.googleusercontent.apps.123:/oauth2redirect?code=c&state=S',
-        ),
-      );
+        service.handleDeepLink(
+          Uri.parse(
+            'com.googleusercontent.apps.123:/oauth2redirect?code=c&state=S',
+          ),
+        );
 
-      expect((await callback).queryParameters['code'], 'c');
-    });
+        await expectLater(callback, throwsA(isA<TimeoutException>()));
+      },
+    );
 
     test('providers do not answer for each other', () async {
       service.beginOAuth('dropbox', 'S');
       final callback = service.awaitOAuthCallback('dropbox', timeout: _short);
 
       service.handleDeepLink(
-        Uri.parse('com.hydall.glaze://oauth/gdrive?code=c&state=S'),
+        Uri.parse('db-another-app://2/token?code=c&state=S'),
       );
 
       await expectLater(callback, throwsA(isA<TimeoutException>()));

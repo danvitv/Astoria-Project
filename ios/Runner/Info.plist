@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Glaze</string>
+	<string>Astoria</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -28,11 +28,11 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>com.hydall.glaze</string>
+			<string>Astoria OAuth callbacks</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.hydall.glaze</string>
 				<string>$(DROPBOX_URL_SCHEME)</string>
+				<string>$(GDRIVE_IOS_URL_SCHEME)</string>
 			</array>
 		</dict>
 	</array>
@@ -69,7 +69,7 @@
 		<string>processing</string>
 	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Glaze needs access to your photo library to import character card images.</string>
+	<string>Astoria needs access to your photo library to import character card images.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- The chat WebView is served from a loopback HTTP server

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../features/cloud_sync/sync_config.dart';
+
 /// One OAuth authorization in flight, and the `state` that identifies it.
 ///
 /// The state is what makes an attempt addressable. Without it a callback is
@@ -54,22 +56,18 @@ class DeepLinkService {
   /// platform channel; in the app it is only ever called by [init]'s stream.
   @visibleForTesting
   void handleDeepLink(Uri uri) {
-    debugPrint('DeepLinkService: received $uri');
     final provider = _providerFor(uri);
     if (provider != null) _deliverOAuth(provider, uri);
   }
 
   String? _providerFor(Uri uri) {
-    if (uri.host == 'oauth') return uri.path.replaceFirst('/', '');
-    if (uri.scheme.startsWith('db-') && uri.host == 'auth') return 'dropbox';
-    // Both halves are load-bearing. Android and desktop get
-    // `com.hydall.glaze://oauth/gdrive`, caught above; iOS is handed a reversed
-    // client id with a *single* slash — `com.googleusercontent.apps.123:/…` —
-    // which parses to an empty host, so matching on the host alone never saw
-    // it. (Untestable end to end while the shipped Drive client is revoked.)
-    if (uri.host.contains('googleusercontent') ||
-        uri.scheme.contains('googleusercontent')) {
-      return 'gdrive';
+    final appKey = SyncConfig.dropboxAppKey;
+    if (appKey != null &&
+        appKey.isNotEmpty &&
+        uri.scheme == 'db-$appKey' &&
+        uri.host == '2' &&
+        uri.path == '/token') {
+      return 'dropbox';
     }
     return null;
   }
@@ -91,10 +89,7 @@ class DeepLinkService {
         // Dropping it is the whole fix — handing it over resolved the live
         // attempt with someone else's state, and every retry failed the same
         // way until the process died and took the map with it.
-        debugPrint(
-          'DeepLinkService: dropped a $provider callback from another '
-          'attempt (state=$returnedState)',
-        );
+        debugPrint('DeepLinkService: dropped a stale $provider callback');
         return;
       }
       // Completed, not removed. The callback can land in the window between

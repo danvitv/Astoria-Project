@@ -10,18 +10,19 @@ plugins {
 // Release channel this APK is built for. CI exports it as an environment
 // variable holding the same value it passes to Dart through
 // --dart-define=BUILD_CHANNEL; a local build, which sets neither, falls back to
-// "nightly" exactly like lib/core/constants/build_channel.dart does.
+// "dev" exactly like lib/core/constants/build_channel.dart does.
 val buildChannel: String =
     System.getenv("BUILD_CHANNEL")?.takeIf { it.isNotBlank() }?.trim()?.lowercase()
-        ?: "nightly"
+        ?: "dev"
 
-// Every channel gets its own applicationId so stable / staging / nightly can be
+// Every channel gets its own applicationId so stable / staging / dev can be
 // installed next to each other on one device. All three are still signed with
 // the same CI keystore — Android refuses to co-install packages that share an
 // applicationId, not ones that share a signing certificate.
 val channelApplicationIdSuffix = when (buildChannel) {
     "stable" -> ""
     "staging" -> ".staging"
+    "dev" -> ".dev"
     else -> ".nightly"
 }
 
@@ -29,6 +30,7 @@ val channelApplicationIdSuffix = when (buildChannel) {
 val channelAppLabel = when (buildChannel) {
     "stable" -> "Astoria"
     "staging" -> "Astoria Staging"
+    "dev" -> "Astoria Dev"
     else -> "Astoria Nightly"
 }
 
@@ -124,8 +126,13 @@ android {
     }
 
     defaultConfig {
-        applicationId = "app.glaze.flutter$channelApplicationIdSuffix"
+        applicationId = "app.astoria.flutter$channelApplicationIdSuffix"
         manifestPlaceholders["appLabel"] = channelAppLabel
+        val dropboxKey = rootProject.file("../.env").takeIf { it.exists() }
+            ?.readLines()?.firstOrNull { it.startsWith("DROPBOX_APP_KEY=") }
+            ?.substringAfter('=')?.trim()?.trim('"', '\'')
+            ?.takeIf { it.matches(Regex("[A-Za-z0-9_-]+")) }
+        manifestPlaceholders["dropboxUrlScheme"] = "db-${dropboxKey ?: "unknown"}"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
