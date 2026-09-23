@@ -12,12 +12,18 @@ import '../theme/app_colors.dart';
 /// is marked the same way wherever it shows up.
 class VariationChip extends StatelessWidget {
   final String name;
+  final bool onImage;
 
   /// Caps the pill so a long variation name cannot push the row's real content
   /// out of view; the name itself ellipsizes inside it.
   final double maxWidth;
 
-  const VariationChip({super.key, required this.name, this.maxWidth = 110});
+  const VariationChip({
+    super.key,
+    required this.name,
+    this.maxWidth = 110,
+    this.onImage = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -25,7 +31,12 @@ class VariationChip extends StatelessWidget {
       constraints: BoxConstraints(maxWidth: maxWidth),
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
       decoration: BoxDecoration(
-        color: context.cs.primary.withValues(alpha: 0.14),
+        color: onImage
+            ? Color.alphaBlend(
+                context.cs.primary.withValues(alpha: 0.14),
+                Colors.black.withValues(alpha: 0.35),
+              )
+            : context.cs.primary.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Text(

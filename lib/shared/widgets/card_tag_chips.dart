@@ -8,8 +8,14 @@ import '../theme/app_colors.dart';
 class CardTagChips extends StatelessWidget {
   final List<String> tags;
   final int? max;
+  final bool onImage;
 
-  const CardTagChips({super.key, required this.tags, this.max});
+  const CardTagChips({
+    super.key,
+    required this.tags,
+    this.max,
+    this.onImage = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -43,7 +49,9 @@ class CardTagChips extends StatelessWidget {
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
           decoration: BoxDecoration(
-            color: bg,
+            color: onImage
+                ? Color.alphaBlend(bg, Colors.black.withValues(alpha: 0.35))
+                : bg,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: border),
           ),

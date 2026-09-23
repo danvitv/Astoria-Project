@@ -776,7 +776,11 @@ class _CardInfo extends StatelessWidget {
             GestureDetector(
               onTap: onVariationTap,
               behavior: HitTestBehavior.opaque,
-              child: VariationChip(name: variationLabel!, maxWidth: 140),
+              child: VariationChip(
+                name: variationLabel!,
+                maxWidth: 140,
+                onImage: true,
+              ),
             ),
             const SizedBox(height: 4),
           ],
@@ -826,7 +830,7 @@ class _CardInfo extends StatelessWidget {
           ],
           if (character.tags.isNotEmpty) ...[
             const SizedBox(height: 8),
-            CardTagChips(tags: character.tags, max: 4),
+            CardTagChips(tags: character.tags, max: 4, onImage: true),
           ],
         ],
       ),
