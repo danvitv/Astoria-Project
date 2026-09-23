@@ -27,5 +27,6 @@ if [ -f "$ENV_FILE" ]; then
   fi
 fi
 
+mkdir -p "$(dirname "$XCCONFIG")"
 printf 'DROPBOX_URL_SCHEME = %s\nGDRIVE_IOS_URL_SCHEME = %s\n' \
   "$DROPBOX_SCHEME" "$GDRIVE_IOS_SCHEME" > "$XCCONFIG"
