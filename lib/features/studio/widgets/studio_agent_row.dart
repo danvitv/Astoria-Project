@@ -20,13 +20,8 @@ class StudioAgentRow extends StatelessWidget {
   final bool enabled;
   final ValueChanged<bool> onToggle;
 
-  /// The controller's reasoning mode (`normal` | `think-replacement`).
-  final String reasoningMode;
-
-  /// Set for pre-generation controllers to let the author pick how the agent
-  /// feeds the final generator. Null hides the dropdown (final and
-  /// post-processing agents have no selectable mode).
-  final ValueChanged<String>? onReasoningModeChanged;
+  /// The Think lane is selected by the section dropdown, not a second switch.
+  final bool showToggle;
 
   /// Last row of its section — drops the bottom rule.
   final bool isLast;
@@ -36,8 +31,7 @@ class StudioAgentRow extends StatelessWidget {
     required this.spec,
     required this.enabled,
     required this.onToggle,
-    this.reasoningMode = 'normal',
-    this.onReasoningModeChanged,
+    this.showToggle = true,
     this.isLast = false,
   });
 
@@ -98,63 +92,34 @@ class StudioAgentRow extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              if (onReasoningModeChanged != null)
+              if (showToggle)
                 Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      value: reasoningMode,
-                      isDense: true,
-                      borderRadius: BorderRadius.circular(8),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: context.cs.onSurface,
-                      ),
-                      items: [
-                        DropdownMenuItem(
-                          value: 'normal',
-                          child: Text('studio_reasoning_mode_normal'.tr()),
-                        ),
-                        DropdownMenuItem(
-                          value: 'think-replacement',
-                          child: Text('studio_reasoning_mode_think'.tr()),
-                        ),
-                      ],
-                      onChanged: (next) {
-                        if (next != null && next != reasoningMode) {
-                          onReasoningModeChanged!(next);
-                        }
-                      },
-                    ),
-                  ),
-                ),
-              Padding(
-                padding: const EdgeInsets.only(right: 12),
-                // An always-on agent gets a padlock, not a dead switch: a
-                // greyed-out toggle reads as "you turned this off".
-                child: spec.lockedOn
-                    ? Tooltip(
-                        message: 'studio_agent_always_on'.tr(),
-                        child: SizedBox(
-                          width: 40,
-                          height: 40,
-                          child: Icon(
-                            Icons.lock_outline,
-                            size: 18,
-                            color: context.cs.onSurfaceVariant,
+                  padding: const EdgeInsets.only(right: 12),
+                  // An always-on agent gets a padlock, not a dead switch: a
+                  // greyed-out toggle reads as "you turned this off".
+                  child: spec.lockedOn
+                      ? Tooltip(
+                          message: 'studio_agent_always_on'.tr(),
+                          child: SizedBox(
+                            width: 40,
+                            height: 40,
+                            child: Icon(
+                              Icons.lock_outline,
+                              size: 18,
+                              color: context.cs.onSurfaceVariant,
+                            ),
+                          ),
+                        )
+                      : Transform.scale(
+                          scale: 0.8,
+                          alignment: Alignment.centerRight,
+                          child: Switch(
+                            value: enabled,
+                            onChanged: onToggle,
+                            activeThumbColor: context.cs.primary,
                           ),
                         ),
-                      )
-                    : Transform.scale(
-                        scale: 0.8,
-                        alignment: Alignment.centerRight,
-                        child: Switch(
-                          value: enabled,
-                          onChanged: onToggle,
-                          activeThumbColor: context.cs.primary,
-                        ),
-                      ),
-              ),
+                ),
             ],
           ),
         ),

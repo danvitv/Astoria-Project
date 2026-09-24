@@ -6,9 +6,11 @@ import '../../../core/models/card_rewriter_settings.dart';
 import '../../../core/models/ledger_prompt_injection_mode.dart';
 import '../../../core/models/ledger_prompt_injection_policy.dart';
 import '../../../core/models/studio_config.dart';
+import '../../../core/models/studio_pregen_mode.dart';
 import '../../../core/models/studio_preset_block_groups.dart';
 import '../../../core/models/studio_preset_block_reorder.dart';
 import '../../../shared/theme/app_colors.dart';
+import '../../../shared/widgets/list_controls.dart';
 import '../studio_injection_points.dart';
 import '../studio_preset_stats.dart';
 import 'studio_agent_row.dart';
@@ -52,7 +54,7 @@ class StudioBlockSectionList extends StatefulWidget {
   onMoveToGroup;
   final void Function(String blockId, String injectionPoint) onMoveToSection;
   final void Function(String specId, bool enabled) onToggleAgent;
-  final void Function(String specId, String mode) onAgentReasoningModeChanged;
+  final ValueChanged<StudioPregenMode> onPregenModeChanged;
   final ValueChanged<LedgerPromptInjectionMode> onLedgerPromptInjectionChanged;
 
   /// The Card Rewriter settings of the preset being edited, already resolved
@@ -75,7 +77,7 @@ class StudioBlockSectionList extends StatefulWidget {
     required this.onMoveToGroup,
     required this.onMoveToSection,
     required this.onToggleAgent,
-    required this.onAgentReasoningModeChanged,
+    required this.onPregenModeChanged,
     required this.onLedgerPromptInjectionChanged,
     required this.cardRewriter,
     required this.onCardRewriterChanged,
@@ -131,7 +133,13 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
                 .where((b) => b.id != _kCleanerAuditBlockId)
                 .toList();
 
+      final useThink =
+          studioPregenMode(widget.preset) == StudioPregenMode.thinkReplacement;
       for (final spec in studioAgentsForInjectionPoint(point)) {
+        if (point == 'pregen' &&
+            (useThink ? spec.id != 'think' : spec.id == 'think')) {
+          continue;
+        }
         rows.add(_StudioListRow.agent(point, spec));
         if (point == 'ledger' && spec.id == 'ledger') {
           rows.add(_StudioListRow.ledgerPromptInjection(point));
@@ -225,6 +233,35 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
           child: StudioBlockSectionHeader(
             label: row.label!,
             count: row.count,
+            trailing: row.point == 'pregen'
+                ? GlazeDropdownChip(
+                    label:
+                        studioPregenMode(widget.preset) == StudioPregenMode.normal
+                        ? 'studio_reasoning_mode_normal'.tr()
+                        : 'studio_reasoning_mode_think'.tr(),
+                    onTap: () => showGlazePickerSheet(
+                      context,
+                      title: row.label!,
+                      items: [
+                        GlazePickerItem(
+                          label: 'studio_reasoning_mode_normal'.tr(),
+                          isActive: studioPregenMode(widget.preset) ==
+                              StudioPregenMode.normal,
+                          value: StudioPregenMode.normal,
+                        ),
+                        GlazePickerItem(
+                          label: 'studio_reasoning_mode_think'.tr(),
+                          isActive: studioPregenMode(widget.preset) ==
+                              StudioPregenMode.thinkReplacement,
+                          value: StudioPregenMode.thinkReplacement,
+                        ),
+                      ],
+                      onSelect: (value) => widget.onPregenModeChanged(
+                        value as StudioPregenMode,
+                      ),
+                    ),
+                  )
+                : null,
             expanded: row.expanded,
             onToggle: row.onToggle!,
             isFirst: i == 0,
@@ -236,16 +273,12 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
     // section header draws one, and the "Add Block" row closes the card.
     final isLast = i == rows.length - 1 || rows[i + 1].isHeader;
     if (row.spec case final spec?) {
-      final isPreGen = !spec.isFinal && spec.phase != 'post_processing';
       return StudioAgentRow(
         key: ValueKey('studio_agent_${row.point}_${spec.id}'),
         spec: spec,
         enabled: studioAgentEnabled(widget.preset, spec),
         onToggle: (v) => widget.onToggleAgent(spec.id, v),
-        reasoningMode: studioAgentReasoningMode(widget.preset, spec),
-        onReasoningModeChanged: isPreGen
-            ? (mode) => widget.onAgentReasoningModeChanged(spec.id, mode)
-            : null,
+        showToggle: spec.id != 'think',
         isLast: isLast,
       );
     }

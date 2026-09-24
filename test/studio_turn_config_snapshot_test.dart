@@ -14,6 +14,7 @@ import 'package:glaze_flutter/core/models/ledger_settings.dart';
 import 'package:glaze_flutter/core/models/pipeline_settings.dart';
 import 'package:glaze_flutter/core/models/studio_agent_settings.dart';
 import 'package:glaze_flutter/core/models/studio_config.dart';
+import 'package:glaze_flutter/core/models/studio_pregen_mode.dart';
 import 'package:glaze_flutter/core/models/ledger_prompt_injection_mode.dart';
 import 'package:glaze_flutter/core/models/ledger_prompt_injection_policy.dart';
 import 'package:glaze_flutter/core/state/active_studio_preset_provider.dart';
@@ -151,6 +152,50 @@ void main() {
       );
     },
   );
+
+  test('turn runs only the selected pre-generation controller set', () async {
+    const source = StudioPreset(
+      id: 'preset',
+      agentEnabled: {'continuity': true, 'agency': false, 'think': false},
+      agents: [
+        StudioAgent(id: 'continuity', controllerId: 'continuity', order: 0),
+        StudioAgent(id: 'agency', controllerId: 'agency', order: 1),
+        StudioAgent(id: 'final', controllerId: 'final', order: 8),
+      ],
+    );
+    var selected = source;
+    final resolver = StudioTurnConfigResolver(
+      readPipelineSettings: () => const PipelineSettings(),
+      readStudioFeatureEnabled: () => true,
+      loadApiConfigs: () async {},
+      readApiConfigs: () => const [],
+      readActiveApiConfig: () => null,
+      loadActivePresetId: () async => 'preset',
+      loadPreset: (_) async => selected,
+      loadDefaultPreset: () async => null,
+    );
+
+    final normal = (await resolver.resolve('session')).preset!.agents;
+    expect(normal.map((a) => a.controllerId), ['continuity', 'final']);
+
+    selected = applyStudioPregenMode(source, StudioPregenMode.thinkReplacement);
+    final think = (await resolver.resolve('session')).preset!.agents;
+    expect(think.map((a) => a.controllerId), ['final', 'think']);
+    expect(think.last.reasoningMode, 'think-replacement');
+
+    selected = applyStudioPregenMode(selected, StudioPregenMode.normal);
+    final restored = (await resolver.resolve('session')).preset!.agents;
+    expect(restored.map((a) => a.controllerId), ['continuity', 'final']);
+
+    selected = source.copyWith(
+      agents: [
+        source.agents.first.copyWith(reasoningMode: 'think-replacement'),
+        ...source.agents.skip(1),
+      ],
+    );
+    final legacy = (await resolver.resolve('session')).preset!.agents;
+    expect(legacy.first.reasoningMode, 'normal');
+  });
 
   test(
     'active preset change does not alter a captured turn snapshot',

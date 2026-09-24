@@ -1,6 +1,7 @@
 import '../../core/llm/studio_controller_ontology.dart';
 import '../../core/llm/tokenizer.dart';
 import '../../core/models/studio_config.dart';
+import '../../core/models/studio_pregen_mode.dart';
 
 /// Shared, presentation-only estimates for an agentic (Studio) preset. Used by
 /// both the preset list card and the Studio preset editor so their stat plaques
@@ -47,19 +48,10 @@ int studioPresetRequestCount(StudioPreset preset) {
 /// carries no explicit toggle, and locked-on agents are always on.
 bool studioAgentEnabled(StudioPreset preset, StudioControllerSpec spec) {
   if (spec.lockedOn) return true;
+  final useThink = studioPregenMode(preset) == StudioPregenMode.thinkReplacement;
+  if (spec.id == 'think') return useThink;
+  if (useThink && spec.phase == 'pre_generation') return false;
   return preset.agentEnabled[spec.id] ?? true;
-}
-
-/// The reasoning mode of the agent backing [spec] (`normal` |
-/// `think-replacement`), falling back to `normal` when the preset carries no
-/// matching agent.
-String studioAgentReasoningMode(StudioPreset preset, StudioControllerSpec spec) {
-  for (final agent in preset.agents) {
-    if (agent.specId == spec.id || agent.controllerId == spec.id) {
-      return agent.reasoningMode;
-    }
-  }
-  return 'normal';
 }
 
 /// Number of enabled agents (controllers + final + post-processing).
