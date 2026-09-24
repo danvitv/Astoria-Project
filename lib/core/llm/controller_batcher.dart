@@ -87,6 +87,7 @@ class ControllerBatchResult {
   final String agentId;
   final String agentName;
   final String text;
+  final String nativeReasoning;
   final String status; // 'ok' | 'failed'
   final String? error;
 
@@ -94,6 +95,7 @@ class ControllerBatchResult {
     required this.agentId,
     required this.agentName,
     required this.text,
+    this.nativeReasoning = '',
     required this.status,
     this.error,
   });
@@ -143,6 +145,7 @@ class ControllerBatcher {
   /// never batched? (Phase 5.2). Returns true when the agent's name matches
   /// one of [_individualNamePatterns].
   bool shouldRunIndividually(StudioAgent agent) {
+    if (agent.reasoningMode == 'think-replacement') return true;
     final lower = agent.name.toLowerCase();
     for (final pattern in _individualNamePatterns) {
       if (lower.contains(pattern)) return true;

@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../db/app_db.dart';
 import '../../db/repositories/session_lorebook_embedding_job_repo.dart';
+import '../../llm/vector_math.dart';
 import '../../llm/transport/endpoint_normalizer.dart';
 import '../../models/studio_agent_codec.dart';
 import '../../models/studio_preset_codec.dart';
@@ -462,12 +463,20 @@ class FlutterBackupImporter extends BackupHelpers {
     final args = <dynamic>[];
     for (final c in columns) {
       final v = row[c];
-      args.add(v is List || v is Map ? jsonEncode(v) : v);
+      args.add(_columnValue(tableName, c, v));
     }
     return (
       'INSERT OR REPLACE INTO $tableName ($quotedColumns) VALUES ($placeholders)',
       args,
     );
+  }
+
+  dynamic _columnValue(String tableName, String column, dynamic value) {
+    if (tableName == 'embeddings' && column == 'vectors_blob') {
+      final bytes = vectorBytesFromJson(value);
+      if (bytes != null) return bytes;
+    }
+    return value is List || value is Map ? jsonEncode(value) : value;
   }
 
   Future<void> _rebuildSessionLorebookEmbeddingQueue() async {
@@ -549,12 +558,7 @@ class FlutterBackupImporter extends BackupHelpers {
                   'INSERT OR REPLACE INTO $tableName ($quotedColumns) VALUES ($placeholders)';
               final args = <dynamic>[];
               for (final c in columns) {
-                final v = r[c];
-                if (v is List || v is Map) {
-                  args.add(jsonEncode(v));
-                } else {
-                  args.add(v);
-                }
+                args.add(_columnValue(tableName, c, r[c]));
               }
               batch.customStatement(sql, args);
             }

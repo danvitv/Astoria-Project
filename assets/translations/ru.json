@@ -2592,6 +2592,8 @@
   "studio_slot_no_api": "Нет подключения API для этого слота",
   "studio_agent_always_on": "Всегда включён",
   "studio_blocks_title": "Промпт-блоки",
+  "studio_reasoning_mode_normal": "Обычный",
+  "studio_reasoning_mode_think": "Think-замена",
   "studio_reasoning_tags": "Теги рассуждений",
   "studio_reasoning_tags_desc": "Переопределяет пару тегов рассуждений для пайплайна этого пресета. Оставьте пустым, чтобы использовать теги из API-подключения.",
   "studio_fact_checker": "Fact Checker",

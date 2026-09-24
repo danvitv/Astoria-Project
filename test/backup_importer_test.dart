@@ -10,6 +10,8 @@ import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:glaze_flutter/core/db/app_db.dart';
+import 'package:glaze_flutter/core/db/repositories/embedding_repo.dart';
+import 'package:glaze_flutter/core/llm/vector_math.dart';
 import 'package:glaze_flutter/core/services/backup/backup_cancel.dart';
 import 'package:glaze_flutter/core/services/backup/flutter_backup_importer.dart';
 import 'package:glaze_flutter/core/services/backup/js_api_config_importer.dart';
@@ -1120,6 +1122,57 @@ void main() {
         );
 
       await importArchive(archive);
+    });
+
+    test('restores JSONL embedding byte arrays as SQLite blobs', () async {
+      final encoded = vectorListToBytes(const [[0.5, -0.25]]);
+      final archive = buildGlzArchive();
+      archive.addFile(
+        ArchiveFile.bytes(
+          'tables/embeddings.jsonl',
+          utf8.encode('${jsonEncode({
+            'entry_id': 'from-zip',
+            'source_type': 'lorebook_entry',
+            'source_id': 'book',
+            'vectors_blob': encoded,
+          })}\n'),
+        ),
+      );
+
+      await importArchive(archive);
+
+      final type = await db.customSelect(
+        "SELECT typeof(vectors_blob) AS type FROM embeddings WHERE entry_id = 'from-zip'",
+      ).getSingle();
+      expect(type.read<String>('type'), 'blob');
+      final repo = EmbeddingRepo(db);
+      expect(repo.decodeVectors((await repo.getByEntryId('from-zip'))!), [
+        const [0.5, -0.25],
+      ]);
+    });
+
+    test('restores legacy JSON embedding byte arrays as SQLite blobs', () async {
+      await FlutterBackupImporter(db, imageStorage).importFromLegacyJson({
+        'tables': {
+          'embeddings': [
+            {
+              'entry_id': 'from-json',
+              'source_type': 'lorebook_entry',
+              'source_id': 'book',
+              'vectors_blob': vectorListToBytes(const [[0.5, -0.25]]).toList(),
+            },
+          ],
+        },
+      });
+
+      final type = await db.customSelect(
+        "SELECT typeof(vectors_blob) AS type FROM embeddings WHERE entry_id = 'from-json'",
+      ).getSingle();
+      expect(type.read<String>('type'), 'blob');
+      final repo = EmbeddingRepo(db);
+      expect(repo.decodeVectors((await repo.getByEntryId('from-json'))!), [
+        const [0.5, -0.25],
+      ]);
     });
 
     test('restores all supported types from preferences.json', () async {

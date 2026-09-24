@@ -241,6 +241,11 @@ abstract class StudioAgent with _$StudioAgent {
     /// can produce an edited/rewritten version. The final generator (last
     /// enabled agent with `phase: 'pre_generation'`) always runs.
     @Default('pre_generation') String phase,
+
+    /// The dedicated Think controller produces a `<thinking>` block seeded
+    /// into the final generator. Other lanes produce ordinary briefs; the
+    /// resolver ignores legacy per-agent replacement settings on those lanes.
+    @Default('normal') String reasoningMode,
   }) = _StudioAgent;
 
   factory StudioAgent.fromJson(Map<String, dynamic> json) =>

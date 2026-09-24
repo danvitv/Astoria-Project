@@ -103,11 +103,13 @@ class ControllerPhaseRunner {
     required String presetId,
     required GenerationContextInputs inputs,
     required StudioContext context,
+    StudioContext? finalContext,
     required ApiConfig apiConfig,
     required String sessionId,
     required CancelToken token,
     StudioPreset? studioPreset,
     StudioTurnConfigSnapshot? turnConfig,
+    void Function(String text)? onThinkingUpdate,
   }) async {
     if (token.isCancelled) {
       return const PreGenPhaseResult(status: 'aborted');
@@ -128,6 +130,12 @@ class ControllerPhaseRunner {
 
       final split = StudioActivationGate.splitAgentsByPhase(agents);
       if (split.finalAgent == null) {
+        if (agents.any((agent) => agent.reasoningMode == 'think-replacement')) {
+          return const PreGenPhaseResult(
+            status: 'error',
+            error: 'Studio Think mode requires an enabled Main Writer agent.',
+          );
+        }
         return const PreGenPhaseResult(status: 'disabled');
       }
       final sceneKey = _briefCache.sceneCacheKeyFromInputs(inputs);
@@ -215,6 +223,8 @@ class ControllerPhaseRunner {
         runIndividual: (agent) => _executor.runIndividualTracker(
           agent: agent,
           trackerContextOverride: trackerContextOverride,
+          finalAgent: split.finalAgent,
+          finalContext: finalContext,
           config: config,
           studioPreset: effectivePreset,
           context: context,
@@ -223,6 +233,9 @@ class ControllerPhaseRunner {
           cancelToken: token,
           apiConfigId: effectivePreset.cheapApiConfigId,
           turnConfig: turnConfig,
+          onIntermediateUpdate: agent.reasoningMode == 'think-replacement'
+              ? onThinkingUpdate
+              : null,
         ),
       );
       if (token.isCancelled) return const PreGenPhaseResult(status: 'aborted');
@@ -248,19 +261,27 @@ class ControllerPhaseRunner {
         final agent = dueTrackers.firstWhere(
           (candidate) => candidate.id == result.agentId,
         );
+        final isThink = agent.reasoningMode == 'think-replacement';
         final brief = StudioStageBrief(
           agentId: result.agentId,
           agentName: result.agentName,
           brief: result.status == 'ok'
-              ? _briefParser.sanitizeIntermediateAgentOutput(agent, result.text)
+              ? (isThink
+                    ? result.text
+                    : _briefParser.sanitizeIntermediateAgentOutput(
+                        agent,
+                        result.text,
+                      ))
               : result.text,
           status: result.status,
           error: result.error,
+          nativeReasoning: isThink ? result.nativeReasoning : '',
           refreshPolicy: probe?.policy ?? 'turn',
           cacheKey: _briefCache.isCacheablePolicy(probe?.policy ?? 'turn')
               ? probe?.cacheKey
               : null,
           cacheHit: false,
+          isThinkReplacement: isThink,
         );
         _briefCache.persistCacheIfCacheable(
           agent: agent,

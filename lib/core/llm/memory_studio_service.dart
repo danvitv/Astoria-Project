@@ -20,6 +20,9 @@ import 'studio_message_builder.dart';
 import 'studio_prompt_text.dart';
 import 'studio_stage_brief.dart';
 import 'studio_turn_config_snapshot.dart';
+import 'studio/studio_context_preparer.dart';
+import 'studio/studio_history_limiter.dart';
+import 'studio/studio_stream_interceptor.dart';
 import 'controller_batcher.dart';
 import 'studio/controller_phase_runner.dart';
 import 'studio/controller_result_mapper.dart';
@@ -95,6 +98,7 @@ class MemoryStudioService {
     StudioTurnConfigSnapshot? turnConfig,
     CancelToken? cancelToken,
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
+    void Function(String text)? onThinkingUpdate,
     void Function()? onFinalStart,
     Future<void> Function()? beforeFinalSend,
     void Function(List<Map<String, dynamic>> messages)? onFinalMessagesBuilt,
@@ -114,10 +118,12 @@ class MemoryStudioService {
       studioPreset: turnConfig?.preset,
       inputs: inputs,
       context: trackerContext,
+      finalContext: finalContext,
       apiConfig: apiConfig,
       sessionId: sessionId,
       token: token,
       turnConfig: turnConfig,
+      onThinkingUpdate: onThinkingUpdate,
     );
     if (phaseResult.status != 'ok') {
       return StudioPipelineResult(
@@ -131,6 +137,29 @@ class MemoryStudioService {
     final split = phaseResult.split!;
     final studioPreset = phaseResult.studioPreset!;
     final finalAgent = split.finalAgent!;
+    StudioStageBrief? thinkingBrief;
+    for (final brief in briefs) {
+      if (brief.isThinkReplacement && brief.brief.trim().isNotEmpty) {
+        thinkingBrief = brief;
+        break;
+      }
+    }
+    if (split.preGenTrackers.any(
+          (agent) => agent.reasoningMode == 'think-replacement',
+        ) &&
+        thinkingBrief == null) {
+      return StudioPipelineResult(
+        status: 'error',
+        response: '',
+        stageBriefs: briefs,
+        error: 'Think controller returned no reasoning for the Main Writer.',
+      );
+    }
+    final completedThinking = thinkingBrief == null
+        ? null
+        : StudioAgentExecutor.normalizeThinkingPrefill(thinkingBrief.brief);
+    final normalBriefs =
+        briefs.where((brief) => !brief.isThinkReplacement).toList();
     onFinalStart?.call();
     final agentResult = await _executor.runFinalGenerator(
       agent: finalAgent,
@@ -138,10 +167,12 @@ class MemoryStudioService {
       apiConfig: apiConfig,
       config: config,
       studioPreset: studioPreset,
-      priorBriefs: briefs,
+      priorBriefs: normalBriefs,
       sessionId: sessionId,
       cancelToken: token,
       apiConfigId: studioPreset.expensiveApiConfigId,
+      reasoningPrefill: completedThinking,
+      controllerNativeReasoning: thinkingBrief?.nativeReasoning,
       onFinalResponseUpdate: onFinalResponseUpdate,
       beforeSend: beforeFinalSend,
       onMessagesBuilt: onFinalMessagesBuilt,
@@ -185,7 +216,8 @@ class MemoryStudioService {
       }
       if (result.status == 'ok' && result.brief.trim().isNotEmpty) {
         mainResponse = result.brief.trim();
-        mainReasoning = '';
+        // Keep the reasoning that produced this turn, including the writer's
+        // initial draft, even when a later tracker rewrites the visible prose.
       }
     }
     return StudioPipelineResult(
@@ -219,6 +251,36 @@ class MemoryStudioService {
     if (token.isCancelled) {
       return const StudioPipelineResult(status: 'aborted', response: '');
     }
+    final preset = turnConfig?.preset;
+    StudioContext? thinkContext;
+    if (preset != null &&
+        preset.agents.any(
+          (agent) => agent.enabled && agent.reasoningMode == 'think-replacement',
+        )) {
+      final settings = turnConfig!.pipelineSettings.studioAgent;
+      final finalContextSize = settings.studioFinalContextSize > 0
+          ? settings.studioFinalContextSize
+          : preset.maxFinalHistoryMessages;
+      final visibleIds =
+          StudioStreamInterceptor.computeStudioFinalVisibleMessageIds(
+            inputs.history,
+            finalContextSize,
+            reasoningHistoryCount: settings.studioFinalReasoningHistoryCount,
+            excludeReasoningFromContextBudget:
+                settings.studioFinalExcludeReasoningFromContextBudget,
+            historyWindowStartMessageId:
+                inputs.sessionVars[StudioHistoryLimiter.historyWindowStartVar],
+          );
+      thinkContext = const StudioContextPreparer().prepare(
+        inputs: inputs,
+        visibleMessageIds: visibleIds,
+        ledgerPromptInjectionPolicy: turnConfig.ledgerPromptInjectionPolicy,
+        consumerPath: 'studio-final-recovery',
+        reasoningTagStartOverride: preset.runtime.reasoningTagStart,
+        reasoningTagEndOverride: preset.runtime.reasoningTagEnd,
+        studioPreset: preset,
+      );
+    }
     final phaseResult = await _phaseRunner.run(
       config: config,
       presetId:
@@ -227,6 +289,7 @@ class MemoryStudioService {
       studioPreset: turnConfig?.preset,
       inputs: inputs,
       context: context,
+      finalContext: thinkContext ?? context,
       apiConfig: apiConfig,
       sessionId: sessionId,
       token: token,

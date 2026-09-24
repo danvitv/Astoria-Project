@@ -28,12 +28,12 @@ void main() {
       expect(presetCoverImage(const Preset(id: 'p1', name: 'P')), isNull);
     });
 
-    test('a removed bundled cover falls back to no cover', () {
+    test('a bundled cover resolves as an asset', () {
       const asset = 'assets/presets/renri.jpg';
       final cover = presetCoverImage(
         const Preset(id: 'clone', name: 'P', imagePath: asset),
       );
-      expect(cover, isNull);
+      expect(cover, isA<AssetImage>());
     });
 
     test('a stored cover that exists on disk resolves to a file image', () {
@@ -65,7 +65,7 @@ void main() {
       expect(cover, isNull);
     });
 
-    test('a missing user cover on an old featured preset has no fallback', () {
+    test('a missing user cover on a featured preset uses bundled art', () {
       final cover = presetCoverImage(
         Preset(
           id: 'default_shino',
@@ -73,7 +73,7 @@ void main() {
           imagePath: '${tempDir.path}/never_written.png',
         ),
       );
-      expect(cover, isNull);
+      expect(cover, isA<AssetImage>());
     });
   });
 

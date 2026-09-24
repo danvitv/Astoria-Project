@@ -12,7 +12,8 @@ on:
   pull_request:
     branches:
       - dev
-      - release
+      - main
+      - master
   workflow_dispatch:
 
 # A new push to the PR branch makes the in-flight run pointless.

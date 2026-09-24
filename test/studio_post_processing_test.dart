@@ -107,6 +107,18 @@ void main() {
       expect(split.finalAgent, isNull);
     });
 
+    test('a lone Think controller never becomes the Main Writer', () {
+      final split = MemoryStudioService.splitAgentsByPhase(const [
+        StudioAgent(
+          id: 'think',
+          controllerId: 'think',
+          reasoningMode: 'think-replacement',
+        ),
+      ]);
+      expect(split.finalAgent, isNull);
+      expect(split.preGenTrackers.map((agent) => agent.id), ['think']);
+    });
+
     test('all pre-gen: last pre-gen = generator, rest = pre-gen trackers', () {
       // The classic 2-phase layout: 3 pre-gen trackers + 1 generator.
       final agents = [

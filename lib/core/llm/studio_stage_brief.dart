@@ -15,6 +15,16 @@ class StudioStageBrief {
   final String? cacheKey;
   final bool cacheHit;
 
+  /// True when this brief is a `think-replacement` controller's raw
+  /// `<thinking>` block. Such a brief is seeded as the final generator's
+  /// reasoning rather than injected as an ordinary brief, and must not be
+  /// sanitized down to a compact controller summary.
+  final bool isThinkReplacement;
+
+  /// Provider-native reasoning from the Think controller, when available.
+  /// Kept separate from [brief], the visible block seeded into the writer.
+  final String nativeReasoning;
+
   const StudioStageBrief({
     required this.agentId,
     required this.agentName,
@@ -24,6 +34,8 @@ class StudioStageBrief {
     this.refreshPolicy = 'turn',
     this.cacheKey,
     this.cacheHit = false,
+    this.isThinkReplacement = false,
+    this.nativeReasoning = '',
   });
 
   StudioStageBrief copyWithCacheMetadata({
@@ -40,6 +52,8 @@ class StudioStageBrief {
       refreshPolicy: refreshPolicy,
       cacheKey: cacheKey,
       cacheHit: cacheHit,
+      isThinkReplacement: isThinkReplacement,
+      nativeReasoning: nativeReasoning,
     );
   }
 }

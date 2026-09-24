@@ -82,6 +82,8 @@ class StudioAgentExecutor {
     StudioTurnConfigSnapshot? turnConfig,
     // 0 = the agent spec's own context size.
     int trackerContextOverride = 0,
+    StudioAgent? finalAgent,
+    StudioContext? finalContext,
     void Function(String text)? onIntermediateUpdate,
   }) async {
     if (_briefParser.isMetaPolicyAgent(agent)) {
@@ -92,15 +94,34 @@ class StudioAgentExecutor {
       );
     }
     try {
-      final messages = _messageBuilder.buildAgentMessages(
-        agent: agent,
-        context: context,
-        config: config,
-        studioPreset: studioPreset,
-        priorBriefs: const [],
-        isFinalResponse: false,
-        trackerContextOverride: trackerContextOverride,
-      );
+      final isThink = agent.reasoningMode == 'think-replacement';
+      final settings = turnConfig?.pipelineSettings ?? _readPipelineSettings();
+      if (isThink && (finalAgent == null || finalContext == null)) {
+        throw StateError('Think controller requires the Main Writer context.');
+      }
+      final messages = isThink
+          ? _messageBuilder.buildThinkControllerMessages(
+              agent: agent,
+              finalAgent: finalAgent!,
+              context: finalContext!,
+              config: config,
+              studioPreset: studioPreset,
+              finalContextOverride: settings.studioAgent.studioFinalContextSize,
+              reasoningHistoryCount:
+                  settings.studioAgent.studioFinalReasoningHistoryCount,
+              excludeReasoningFromContextBudget: settings
+                  .studioAgent
+                  .studioFinalExcludeReasoningFromContextBudget,
+            )
+          : _messageBuilder.buildAgentMessages(
+              agent: agent,
+              context: context,
+              config: config,
+              studioPreset: studioPreset,
+              priorBriefs: const [],
+              isFinalResponse: false,
+              trackerContextOverride: trackerContextOverride,
+            );
       final result = await _runner.runAgent(
         agent: agent,
         messages: messages,
@@ -117,7 +138,15 @@ class StudioAgentExecutor {
       return StudioStageBrief(
         agentId: agent.id,
         agentName: agent.name,
-        brief: _briefParser.sanitizeIntermediateAgentOutput(agent, result.text),
+        brief: isThink
+            ? (result.text.trim().isNotEmpty ? result.text : result.reasoning)
+            : _briefParser.sanitizeIntermediateAgentOutput(agent, result.text),
+        isThinkReplacement: isThink,
+        // When the provider emits reasoning only, that reasoning becomes the
+        // seeded <thinking> block. Do not store a duplicate native layer.
+        nativeReasoning: isThink && result.text.trim().isNotEmpty
+            ? result.reasoning
+            : '',
       );
     } on AgentRunFailedException catch (error) {
       return StudioStageBrief(
@@ -226,9 +255,15 @@ class StudioAgentExecutor {
     String? apiConfigId,
     StudioTurnConfigSnapshot? turnConfig,
     int trackerContextOverride = 0,
+    StudioAgent? finalAgent,
+    StudioContext? finalContext,
+    void Function(String text)? onIntermediateUpdate,
   }) async {
     String? lastError;
-    for (var attempt = 1; attempt <= 3; attempt++) {
+    // A Think pass is a full-context, paid generation. Never silently resend
+    // the same large request if it fails or yields an empty response.
+    final maxAttempts = agent.reasoningMode == 'think-replacement' ? 1 : 3;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       if (cancelToken.isCancelled) {
         return ControllerBatchResult.failed(
           agentId: agent.id,
@@ -248,13 +283,16 @@ class StudioAgentExecutor {
           apiConfigId: apiConfigId,
           turnConfig: turnConfig,
           trackerContextOverride: trackerContextOverride,
-          onIntermediateUpdate: null,
+          finalAgent: finalAgent,
+          finalContext: finalContext,
+          onIntermediateUpdate: onIntermediateUpdate,
         );
         if (brief.status == 'ok' && brief.brief.trim().isNotEmpty) {
           return ControllerBatchResult(
             agentId: agent.id,
             agentName: agent.name,
             text: brief.brief,
+            nativeReasoning: brief.nativeReasoning,
             status: brief.status,
             error: brief.error,
           );
@@ -267,7 +305,7 @@ class StudioAgentExecutor {
     return ControllerBatchResult.failed(
       agentId: agent.id,
       agentName: agent.name,
-      reason: lastError ?? 'tracker failed after 2 retries',
+      reason: lastError ?? 'tracker returned no response',
     );
   }
 
@@ -282,6 +320,8 @@ class StudioAgentExecutor {
     required CancelToken cancelToken,
     String? apiConfigId,
     StudioTurnConfigSnapshot? turnConfig,
+    String? reasoningPrefill,
+    String? controllerNativeReasoning,
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
     void Function(List<Map<String, dynamic>> messages)? onMessagesBuilt,
     Future<void> Function()? beforeSend,
@@ -290,8 +330,6 @@ class StudioAgentExecutor {
     final settings = turnConfig?.pipelineSettings ?? _readPipelineSettings();
     final emittedLorebookClassifications = <String>{};
     final responseJsonSchema = <String, dynamic>{};
-    final twoPassPrefills = <String>[];
-    final controllerTwoPassPrefills = <String>[];
     final messages = _messageBuilder.buildAgentMessages(
       agent: agent,
       context: context,
@@ -306,48 +344,30 @@ class StudioAgentExecutor {
           settings.studioAgent.studioFinalExcludeReasoningFromContextBudget,
       emittedLorebookClassifications: emittedLorebookClassifications,
       responseJsonSchema: responseJsonSchema,
-      twoPassPrefills: twoPassPrefills,
-      controllerTwoPassPrefills: controllerTwoPassPrefills,
     );
     onLorebookClassificationsBuilt?.call(emittedLorebookClassifications);
+    if (reasoningPrefill != null && reasoningPrefill.trim().isNotEmpty) {
+      return _runSeededFinalGenerator(
+        agent: agent,
+        context: context,
+        apiConfig: apiConfig,
+        config: config,
+        studioPreset: studioPreset,
+        priorBriefs: priorBriefs,
+        sessionId: sessionId,
+        cancelToken: cancelToken,
+        apiConfigId: apiConfigId,
+        turnConfig: turnConfig,
+        baseMessages: messages,
+        thinking: normalizeThinkingPrefill(reasoningPrefill),
+        controllerNativeReasoning: controllerNativeReasoning,
+        responseJsonSchema: responseJsonSchema,
+        onMessagesBuilt: onMessagesBuilt,
+        beforeSend: beforeSend,
+        onFinalResponseUpdate: onFinalResponseUpdate,
+      );
+    }
     onMessagesBuilt?.call(messages);
-    if (controllerTwoPassPrefills.isNotEmpty) {
-      return _runTwoPassGenerator(
-        agent: agent,
-        context: context,
-        apiConfig: apiConfig,
-        config: config,
-        studioPreset: studioPreset,
-        priorBriefs: priorBriefs,
-        sessionId: sessionId,
-        cancelToken: cancelToken,
-        apiConfigId: apiConfigId,
-        turnConfig: turnConfig,
-        baseMessages: messages,
-        beforeSend: beforeSend,
-        prefill: controllerTwoPassPrefills.single,
-        firstPassApiConfigId: studioPreset.cheapApiConfigId,
-        onFinalResponseUpdate: onFinalResponseUpdate,
-      );
-    }
-    if (twoPassPrefills.isNotEmpty) {
-      return _runTwoPassGenerator(
-        agent: agent,
-        context: context,
-        apiConfig: apiConfig,
-        config: config,
-        studioPreset: studioPreset,
-        priorBriefs: priorBriefs,
-        sessionId: sessionId,
-        cancelToken: cancelToken,
-        apiConfigId: apiConfigId,
-        turnConfig: turnConfig,
-        baseMessages: messages,
-        beforeSend: beforeSend,
-        prefill: twoPassPrefills.single,
-        onFinalResponseUpdate: onFinalResponseUpdate,
-      );
-    }
     return _runner.runAgent(
       agent: agent,
       messages: messages,
@@ -367,12 +387,11 @@ class StudioAgentExecutor {
     );
   }
 
-  /// Two-pass prefill: pass 1 produces an internal `<thinking>` block as plain
-  /// text, then pass 2 seeds it as a prior assistant turn and asks for visible
-  /// prose only. The legacy `two-pass` style runs both calls through the final
-  /// slot. The experimental `controller-two-pass` style runs pass 1 through
-  /// the controller slot and normalizes its output to one `<thinking>` block.
-  Future<AgentRunResult> _runTwoPassGenerator({
+  /// Seeds a prior assistant `<thinking>` turn into the final generator's
+  /// request, followed by a user instruction to write visible prose only.
+  /// This is textual message history, not provider-native thinking or a
+  /// trailing assistant prefill; the final model may still reason internally.
+  Future<AgentRunResult> _runSeededFinalGenerator({
     required StudioAgent agent,
     required StudioContext context,
     required ApiConfig apiConfig,
@@ -384,61 +403,23 @@ class StudioAgentExecutor {
     String? apiConfigId,
     StudioTurnConfigSnapshot? turnConfig,
     required List<Map<String, dynamic>> baseMessages,
-    required String prefill,
-    String? firstPassApiConfigId,
+    required String thinking,
+    String? controllerNativeReasoning,
+    required Map<String, dynamic> responseJsonSchema,
+    void Function(List<Map<String, dynamic>> messages)? onMessagesBuilt,
     Future<void> Function()? beforeSend,
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
   }) async {
-    final thinkingInstruction =
-        'Produce your internal reasoning for the upcoming reply. Use the '
-        'section structure of the template below, but fill every section with '
-        'content grounded in the current scene — do not copy it verbatim. '
-        'Output ONLY the block between <thinking> and </thinking>, nothing '
-        'else. Every space inside that block must be the Hangul Filler '
-        "character 'ㅤ' (U+3164), never a regular space — one regular space "
-        'anywhere is a hard failure.\n\n<template>\n$prefill\n</template>';
-    final thinkingMessages = <Map<String, dynamic>>[
-      ...baseMessages,
-      {'role': 'user', 'content': thinkingInstruction},
-    ];
-    final usesController = firstPassApiConfigId != null;
-    final thinking = await _runner.runAgent(
-      agent: agent,
-      messages: thinkingMessages,
-      beforeSend: beforeSend,
-      apiConfig: apiConfig,
-      sessionId: sessionId,
-      isFinalResponse: !usesController,
-      cancelToken: cancelToken,
-      apiConfigId: firstPassApiConfigId ?? apiConfigId,
-      turnConfig: turnConfig,
-      charName: context.macroContext.charName,
-      userName: context.macroContext.userName,
-    );
-    var thinkingText =
-        (thinking.reasoning.trim().isNotEmpty
-                ? thinking.reasoning
-                : thinking.text)
-            .trim();
-    if (usesController && thinkingText.isNotEmpty) {
-      thinkingText = normalizeThinkingPrefill(thinkingText);
-    }
-    if (thinkingText.isEmpty) {
-      return const AgentRunResult(text: '', reasoning: '');
-    }
-
-    final nudge = usesController
-        ? 'The <thinking> block above is the completed internal analysis for '
-              'this turn. Use it directly. Do not repeat, redo, extend, or '
-              'output any audit or reasoning. Write only the final response.'
-        : 'The reasoning above is your internal analysis for this turn. Now '
-              'write your final response. Do not open a new <thinking> block — '
-              'output the reply only.';
+    final nudge =
+        'The <thinking> block above is the completed internal analysis for '
+        'this turn. Use it directly. Do not repeat, redo, extend, or output '
+        'any audit or reasoning. Write only the final response.';
     final answerMessages = <Map<String, dynamic>>[
       ...baseMessages,
-      {'role': 'assistant', 'content': thinkingText},
+      {'role': 'assistant', 'content': thinking},
       {'role': 'user', 'content': nudge},
     ];
+    onMessagesBuilt?.call(answerMessages);
     final answer = await _runner.runAgent(
       agent: agent,
       messages: answerMessages,
@@ -451,14 +432,25 @@ class StudioAgentExecutor {
       turnConfig: turnConfig,
       charName: context.macroContext.charName,
       userName: context.macroContext.userName,
-      onFinalResponseUpdate: onFinalResponseUpdate,
+      responseJsonSchema: responseJsonSchema.isEmpty
+          ? null
+          : responseJsonSchema,
+      onFinalResponseUpdate: onFinalResponseUpdate == null
+          ? null
+          : (text, reasoning) => onFinalResponseUpdate(
+              text,
+              combineThinkingReasoning(
+                thinking,
+                reasoning,
+                controllerReasoning: controllerNativeReasoning,
+              ),
+            ),
     );
-    final secondReasoning = answer.reasoning.trim();
-    final combinedReasoning = [
-      thinkingText,
-      if (secondReasoning.isNotEmpty && secondReasoning != thinkingText)
-        secondReasoning,
-    ].join('\n\n---\n\n');
+    final combinedReasoning = combineThinkingReasoning(
+      thinking,
+      answer.reasoning,
+      controllerReasoning: controllerNativeReasoning,
+    );
     return AgentRunResult(
       text: answer.text,
       reasoning: combinedReasoning,
@@ -481,5 +473,21 @@ class StudioAgentExecutor {
       }
     }
     return '<thinking>\n$body\n</thinking>';
+  }
+
+  static String combineThinkingReasoning(
+    String thinking,
+    String? reasoning, {
+    String? controllerReasoning,
+  }) {
+    final firstReasoning = controllerReasoning?.trim() ?? '';
+    final secondReasoning = reasoning?.trim() ?? '';
+    return [
+      if (firstReasoning.isNotEmpty)
+        'Think controller (native reasoning):\n$firstReasoning',
+      thinking,
+      if (secondReasoning.isNotEmpty && secondReasoning != thinking)
+        'Main Writer (native reasoning):\n$secondReasoning',
+    ].join('\n\n---\n\n');
   }
 }

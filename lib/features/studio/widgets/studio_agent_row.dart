@@ -20,6 +20,9 @@ class StudioAgentRow extends StatelessWidget {
   final bool enabled;
   final ValueChanged<bool> onToggle;
 
+  /// The Think lane is selected by the section dropdown, not a second switch.
+  final bool showToggle;
+
   /// Last row of its section — drops the bottom rule.
   final bool isLast;
 
@@ -28,6 +31,7 @@ class StudioAgentRow extends StatelessWidget {
     required this.spec,
     required this.enabled,
     required this.onToggle,
+    this.showToggle = true,
     this.isLast = false,
   });
 
@@ -88,33 +92,34 @@ class StudioAgentRow extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              Padding(
-                padding: const EdgeInsets.only(right: 12),
-                // An always-on agent gets a padlock, not a dead switch: a
-                // greyed-out toggle reads as "you turned this off".
-                child: spec.lockedOn
-                    ? Tooltip(
-                        message: 'studio_agent_always_on'.tr(),
-                        child: SizedBox(
-                          width: 40,
-                          height: 40,
-                          child: Icon(
-                            Icons.lock_outline,
-                            size: 18,
-                            color: context.cs.onSurfaceVariant,
+              if (showToggle)
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  // An always-on agent gets a padlock, not a dead switch: a
+                  // greyed-out toggle reads as "you turned this off".
+                  child: spec.lockedOn
+                      ? Tooltip(
+                          message: 'studio_agent_always_on'.tr(),
+                          child: SizedBox(
+                            width: 40,
+                            height: 40,
+                            child: Icon(
+                              Icons.lock_outline,
+                              size: 18,
+                              color: context.cs.onSurfaceVariant,
+                            ),
+                          ),
+                        )
+                      : Transform.scale(
+                          scale: 0.8,
+                          alignment: Alignment.centerRight,
+                          child: Switch(
+                            value: enabled,
+                            onChanged: onToggle,
+                            activeThumbColor: context.cs.primary,
                           ),
                         ),
-                      )
-                    : Transform.scale(
-                        scale: 0.8,
-                        alignment: Alignment.centerRight,
-                        child: Switch(
-                          value: enabled,
-                          onChanged: onToggle,
-                          activeThumbColor: context.cs.primary,
-                        ),
-                      ),
-              ),
+                ),
             ],
           ),
         ),

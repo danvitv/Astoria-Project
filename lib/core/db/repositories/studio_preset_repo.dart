@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 
 import '../../application/sync_repo_interfaces.dart';
+import '../../llm/studio_controller_ontology.dart';
 import '../../models/studio_config.dart';
 import '../../models/studio_agent_codec.dart';
 import '../../models/studio_preset_block_migration.dart';
@@ -76,13 +77,34 @@ class StudioPresetRepo implements SyncStudioPresetStore {
     final existing = await (db.select(
       db.studioPresetRows,
     )..where((t) => t.presetId.equals(normalized.id))).getSingleOrNull();
-    final storedBlocks = existing == null
-        ? const <StudioPresetBlock>[]
-        : _rowToModel(existing).blocks;
-    final safeNormalized =
-        (normalized.blocks.isEmpty && storedBlocks.isNotEmpty)
-        ? normalized.copyWith(blocks: storedBlocks)
-        : normalized;
+    final storedPreset = existing == null ? null : _rowToModel(existing);
+    // A metadata-only save can omit agents. Keep the existing roster rather
+    // than deleting the locked Main Writer along with every other controller.
+    final safeAgents = normalized.agents.isEmpty && storedPreset != null
+        ? storedPreset.agents
+        : normalized.agents;
+    // The Main Writer is locked on. Never persist a partial agent list that
+    // silently replaces it with the Think controller (or another tracker).
+    final hasFinal = safeAgents.any(
+      (agent) => StudioControllerOntology.specForAgent(agent)?.isFinal ?? false,
+    );
+    final hadFinal = storedPreset != null &&
+        storedPreset.agents.any(
+          (agent) => StudioControllerOntology.specForAgent(agent)?.isFinal ?? false,
+        );
+    final hasThink = safeAgents.any(
+      (agent) => StudioControllerOntology.specForAgent(agent)?.id == 'think',
+    );
+    if (!hasFinal && (hadFinal || hasThink)) {
+      throw StateError('Cannot save a Studio preset without its Main Writer.');
+    }
+    final storedBlocks = storedPreset?.blocks ?? const <StudioPresetBlock>[];
+    final safeNormalized = normalized.copyWith(
+      agents: safeAgents,
+      blocks: normalized.blocks.isEmpty && storedBlocks.isNotEmpty
+          ? storedBlocks
+          : normalized.blocks,
+    );
     await db
         .into(db.studioPresetRows)
         .insertOnConflictUpdate(

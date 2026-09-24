@@ -919,11 +919,16 @@ ORDER BY updated_at DESC
               : (kind == 'cleaned' && parentSwipeId != null
                     ? agentSwipes[parentSwipeId].studioOutputs
                     : const <Map<String, dynamic>>[]);
+          final effectiveReasoning =
+              reasoning ??
+              (kind == 'cleaned' && parentSwipeId != null
+                  ? agentSwipes[parentSwipeId].reasoning
+                  : null);
 
           final appendedSwipe = AgentSwipe(
             content: content,
             kind: kind,
-            reasoning: reasoning,
+            reasoning: effectiveReasoning,
             genTime: genTime,
             tokens: tokens,
             time: kind == 'cleaned' && parentSwipeId != null

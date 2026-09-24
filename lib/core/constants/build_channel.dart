@@ -3,12 +3,10 @@
 /// Injected by the CI workflow (`--dart-define=BUILD_CHANNEL=<name>`), which
 /// derives it from the branch being built:
 ///
-/// | branch        | channel   |
-/// |---------------|-----------|
-/// | `release`     | `stable`  |
-/// | `dev`         | `dev`     |
-/// | `staging`     | `staging` |
-/// | anything else | `nightly` |
+/// | branch                   | channel  |
+/// |--------------------------|----------|
+/// | `main` / `master`        | `stable` |
+/// | `dev` / working branches | `dev`    |
 ///
 /// Defaults to `dev` so local developer builds use the Astoria-dev data root.
 ///

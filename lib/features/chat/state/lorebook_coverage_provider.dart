@@ -43,6 +43,13 @@ final lorebookCoverageProvider = FutureProvider.autoDispose
       final session = ref.read(chatProvider(charId)).value?.session;
       if (session == null) return CoverageResult.empty;
 
+      // A coverage subscription can start while _ChatBody is building. Reading
+      // embedding/character providers here may flush pending Riverpod updates
+      // and mark the ProviderScope dirty in the middle of that Flutter frame.
+      // Defer those reads until the frame has finished.
+      await Future<void>.delayed(Duration.zero);
+      if (!ref.mounted) return CoverageResult.empty;
+
       final character = ref.read(characterByIdProvider(charId));
 
       final nonHidden = session.messages.where((m) => !m.isHidden).toList();

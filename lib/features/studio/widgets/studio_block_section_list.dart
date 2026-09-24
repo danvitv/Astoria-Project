@@ -6,9 +6,11 @@ import '../../../core/models/card_rewriter_settings.dart';
 import '../../../core/models/ledger_prompt_injection_mode.dart';
 import '../../../core/models/ledger_prompt_injection_policy.dart';
 import '../../../core/models/studio_config.dart';
+import '../../../core/models/studio_pregen_mode.dart';
 import '../../../core/models/studio_preset_block_groups.dart';
 import '../../../core/models/studio_preset_block_reorder.dart';
 import '../../../shared/theme/app_colors.dart';
+import '../../../shared/widgets/list_controls.dart';
 import '../studio_injection_points.dart';
 import '../studio_preset_stats.dart';
 import 'studio_agent_row.dart';
@@ -52,6 +54,7 @@ class StudioBlockSectionList extends StatefulWidget {
   onMoveToGroup;
   final void Function(String blockId, String injectionPoint) onMoveToSection;
   final void Function(String specId, bool enabled) onToggleAgent;
+  final ValueChanged<StudioPregenMode> onPregenModeChanged;
   final ValueChanged<LedgerPromptInjectionMode> onLedgerPromptInjectionChanged;
 
   /// The Card Rewriter settings of the preset being edited, already resolved
@@ -74,6 +77,7 @@ class StudioBlockSectionList extends StatefulWidget {
     required this.onMoveToGroup,
     required this.onMoveToSection,
     required this.onToggleAgent,
+    required this.onPregenModeChanged,
     required this.onLedgerPromptInjectionChanged,
     required this.cardRewriter,
     required this.onCardRewriterChanged,
@@ -101,15 +105,40 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
   /// sections emit only their header.
   List<_StudioListRow> _rows() {
     final rows = <_StudioListRow>[];
+    final useThink =
+        studioPregenMode(widget.preset) == StudioPregenMode.thinkReplacement;
+    final visiblePregenSpecs = studioAgentsForInjectionPoint('pregen')
+        .where((spec) => useThink ? spec.id == 'think' : spec.id != 'think')
+        .toList();
+    final visibleAgentIds = {for (final spec in visiblePregenSpecs) spec.id};
+    final knownAgentIds = {
+      for (final spec in studioAgentsForInjectionPoint('pregen')) spec.id,
+    };
     for (final (point, label) in widget.sections) {
       final allSectionBlocks =
           widget.preset.blocks.where((b) => b.injectionPoint == point).toList()
             ..sort((a, b) => a.order.compareTo(b.order));
+      // Only an unknown target belongs in the fallback section. Prompts for
+      // the inactive controller set return when its mode is selected again.
+      final sectionBlocks = point == 'specificAgent'
+          ? allSectionBlocks
+                .where((b) => !knownAgentIds.contains(b.targetAgentId))
+                .toList()
+          : allSectionBlocks;
+      if (point == 'specificAgent' && sectionBlocks.isEmpty) continue;
+      final count = point == 'pregen'
+          ? sectionBlocks.length +
+                widget.preset.blocks.where(
+                  (b) =>
+                      b.injectionPoint == 'specificAgent' &&
+                      visibleAgentIds.contains(b.targetAgentId),
+                ).length
+          : sectionBlocks.length;
       rows.add(
         _StudioListRow.header(
           point,
           label: label,
-          count: allSectionBlocks.length,
+          count: count,
           expanded: _isExpanded(point),
           onToggle: () => _toggle(point),
         ),
@@ -123,14 +152,28 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
                 .where((b) => b.id == _kCleanerAuditBlockId)
                 .firstOrNull
           : null;
-      final sectionBlocks = factChecker == null
-          ? allSectionBlocks
-          : allSectionBlocks
+      final groupedBlocks = factChecker == null
+          ? sectionBlocks
+          : sectionBlocks
                 .where((b) => b.id != _kCleanerAuditBlockId)
                 .toList();
 
       for (final spec in studioAgentsForInjectionPoint(point)) {
+        if (point == 'pregen' &&
+            (useThink ? spec.id != 'think' : spec.id == 'think')) {
+          continue;
+        }
         rows.add(_StudioListRow.agent(point, spec));
+        if (point == 'pregen') {
+          final addressed = widget.preset.blocks.where(
+            (b) =>
+                b.injectionPoint == 'specificAgent' &&
+                b.targetAgentId == spec.id,
+          );
+          for (final entry in groupStudioPresetBlocks(addressed.toList())) {
+            rows.add(_StudioListRow.block(point, entry));
+          }
+        }
         if (point == 'ledger' && spec.id == 'ledger') {
           rows.add(_StudioListRow.ledgerPromptInjection(point));
           // Card Rewriter has no blocks of its own, so it is not a section: it
@@ -151,8 +194,8 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
       if (factChecker != null) {
         rows.add(_StudioListRow.factChecker(point, factChecker));
       }
-      final entries = groupStudioPresetBlocks(sectionBlocks);
-      if (entries.isEmpty) {
+      final entries = groupStudioPresetBlocks(groupedBlocks);
+      if (entries.isEmpty && count == 0 && point != 'pregen') {
         rows.add(_StudioListRow.placeholder(point));
         continue;
       }
@@ -176,18 +219,37 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
     // Walk the reordered list and hand each row the section it now sits under.
     // A row dropped above the very first header belongs to that first section.
     var current = widget.sections.first.$1;
+    String? currentAgentId;
     final placements = <StudioPresetRowPlacement>[];
     for (final row in moved) {
       if (row.isHeader) {
         current = row.point;
+        currentAgentId = null;
+        continue;
+      }
+      if (row.spec != null && current == 'pregen') {
+        currentAgentId = row.spec!.id;
         continue;
       }
       final entry = row.entry;
       if (entry == null) {
         continue; // agent, settings, fact checker or placeholder
       }
+      // A row visually nested under a pre-gen agent is still addressed to
+      // that agent at runtime, not to the shared pre-gen injection point.
+      final originallyAddressed = studioPresetEntryBlocks(entry).every(
+        (block) => block.injectionPoint == 'specificAgent',
+      );
       placements.add(
-        StudioPresetRowPlacement(entry: entry, injectionPoint: current),
+        StudioPresetRowPlacement(
+          entry: entry,
+          injectionPoint: current == 'pregen' && originallyAddressed
+              ? 'specificAgent'
+              : current,
+          targetAgentId: current == 'pregen' && originallyAddressed
+              ? currentAgentId
+              : null,
+        ),
       );
     }
     widget.onReorder(placements);
@@ -223,6 +285,35 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
           child: StudioBlockSectionHeader(
             label: row.label!,
             count: row.count,
+            trailing: row.point == 'pregen'
+                ? GlazeDropdownChip(
+                    label:
+                        studioPregenMode(widget.preset) == StudioPregenMode.normal
+                        ? 'studio_reasoning_mode_normal'.tr()
+                        : 'studio_reasoning_mode_think'.tr(),
+                    onTap: () => showGlazePickerSheet(
+                      context,
+                      title: row.label!,
+                      items: [
+                        GlazePickerItem(
+                          label: 'studio_reasoning_mode_normal'.tr(),
+                          isActive: studioPregenMode(widget.preset) ==
+                              StudioPregenMode.normal,
+                          value: StudioPregenMode.normal,
+                        ),
+                        GlazePickerItem(
+                          label: 'studio_reasoning_mode_think'.tr(),
+                          isActive: studioPregenMode(widget.preset) ==
+                              StudioPregenMode.thinkReplacement,
+                          value: StudioPregenMode.thinkReplacement,
+                        ),
+                      ],
+                      onSelect: (value) => widget.onPregenModeChanged(
+                        value as StudioPregenMode,
+                      ),
+                    ),
+                  )
+                : null,
             expanded: row.expanded,
             onToggle: row.onToggle!,
             isFirst: i == 0,
@@ -239,6 +330,7 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
         spec: spec,
         enabled: studioAgentEnabled(widget.preset, spec),
         onToggle: (v) => widget.onToggleAgent(spec.id, v),
+        showToggle: spec.id != 'think',
         isLast: isLast,
       );
     }

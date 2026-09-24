@@ -468,7 +468,7 @@ void main() {
     final result = await fixture
         .service((_, prompt) async {
           calls++;
-          if (prompt.contains('Glaze lorebook rewriter')) {
+          if (prompt.contains('Astoria lorebook rewriter')) {
             lorebookPrompt = prompt;
             return _ok(fixture.lorebookBatchOutput);
           }
@@ -524,7 +524,7 @@ void main() {
     String? lorebookPrompt;
     final result = await fixture
         .service((_, prompt) async {
-          if (prompt.contains('Glaze lorebook rewriter')) {
+          if (prompt.contains('Astoria lorebook rewriter')) {
             lorebookPrompt = prompt;
             return _ok(
               jsonEncode({
@@ -592,7 +592,7 @@ void main() {
       var lorebookCalls = 0;
       var lorebookFails = true;
       final service = fixture.service((_, prompt) async {
-        if (prompt.contains('Glaze lorebook rewriter')) {
+        if (prompt.contains('Astoria lorebook rewriter')) {
           lorebookCalls++;
           return lorebookFails
               ? const AuxCallOutcome(status: AgentOperationStatus.httpError)
@@ -626,7 +626,7 @@ void main() {
     await _seedManifest(fixture.db, 'a2', content);
     String? lorebookPrompt;
     final service = fixture.service((token, prompt) async {
-      if (prompt.contains('Glaze lorebook rewriter')) {
+      if (prompt.contains('Astoria lorebook rewriter')) {
         lorebookPrompt = prompt;
         return _ok(fixture.lorebookBatchOutput);
       }

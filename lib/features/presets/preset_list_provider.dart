@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/preset.dart';
+import '../../core/services/featured_presets.dart';
 import '../../core/services/preset_image_paths.dart';
 import '../../core/state/db_provider.dart';
 import '../../core/state/shared_prefs_provider.dart';
@@ -45,7 +46,9 @@ class PresetListNotifier extends AsyncNotifier<List<Preset>> {
     final copy = preset.copyWith(
       id: newId,
       name: '${preset.name} (copy)',
-      imagePath: await _copyCoverForClone(preset.imagePath, newId),
+      imagePath:
+          await _copyCoverForClone(preset.imagePath, newId) ??
+          featuredPresetImageAsset(preset.id),
       createdAt: currentTimestampSeconds(),
     );
     await ref.read(presetRepoProvider).put(copy);
@@ -61,7 +64,7 @@ class PresetListNotifier extends AsyncNotifier<List<Preset>> {
   Future<String?> _copyCoverForClone(String? sourcePath, String newId) async {
     if (sourcePath == null || sourcePath.isEmpty) return null;
     if (isPresetAssetImage(sourcePath)) {
-      return sourcePath.startsWith('assets/presets/') ? null : sourcePath;
+      return sourcePath;
     }
     try {
       final storage = await ref.read(imageStorageProvider.future);

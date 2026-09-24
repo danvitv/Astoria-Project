@@ -9,6 +9,7 @@ import '../../core/models/ledger_prompt_injection_policy.dart';
 import '../../core/models/card_rewriter_settings.dart';
 import '../../core/models/preset_folder.dart';
 import '../../core/models/studio_config.dart';
+import '../../core/models/studio_pregen_mode.dart';
 import '../../core/models/studio_preset_block_groups.dart';
 import '../../core/models/studio_preset_block_reorder.dart';
 import '../../core/models/studio_pipeline_overrides.dart';
@@ -204,6 +205,12 @@ class StudioPresetEditorBodyState
     final preset = _preset;
     if (preset == null) return;
     await _persistNow(applyStudioAgentToggle(preset, specId, value));
+  }
+
+  Future<void> _setPregenMode(StudioPregenMode mode) async {
+    final preset = _preset;
+    if (preset == null) return;
+    await _persistNow(applyStudioPregenMode(preset, mode));
   }
 
   /// The Card Rewriter lane is configured per preset, so an edit is written
@@ -752,6 +759,7 @@ class StudioPresetEditorBodyState
       onMoveToGroup: _moveBlockToGroup,
       onMoveToSection: _moveBlockToSection,
       onToggleAgent: _toggleAgent,
+      onPregenModeChanged: (mode) => unawaited(_setPregenMode(mode)),
       onLedgerPromptInjectionChanged: (mode) =>
           unawaited(_setLedgerPromptInjection(mode)),
       // Resolved here rather than in the row: the lane falls back to the

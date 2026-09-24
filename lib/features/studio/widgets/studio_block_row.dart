@@ -298,6 +298,7 @@ class StudioBlockRow extends StatelessWidget {
 class StudioBlockSectionHeader extends StatelessWidget {
   final String label;
   final int count;
+  final Widget? trailing;
 
   /// Whether the section's rows are currently shown.
   final bool expanded;
@@ -315,6 +316,7 @@ class StudioBlockSectionHeader extends StatelessWidget {
     required this.count,
     required this.expanded,
     required this.onToggle,
+    this.trailing,
     this.isFirst = false,
   });
 
@@ -348,6 +350,10 @@ class StudioBlockSectionHeader extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
+              if (trailing case final widget?) ...[
+                widget,
+                const SizedBox(width: 8),
+              ],
               Text(
                 '$count',
                 style: TextStyle(

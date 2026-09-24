@@ -85,10 +85,8 @@ jobs:
           FILE_SLUG="Astoria-$(date -u '+%d%m%Y-%H%M')-$SAFE_BRANCH"
 
           case "$BUILD_BRANCH" in
-            release|stable) BUILD_CHANNEL=stable ;;
-            dev)     BUILD_CHANNEL=dev ;;
-            staging) BUILD_CHANNEL=staging ;;
-            *)       BUILD_CHANNEL=nightly ;;
+            main|master) BUILD_CHANNEL=stable ;;
+            *)           BUILD_CHANNEL=dev ;;
           esac
 
           TAG_NAME="${{ github.event.inputs.tag_name }}"
@@ -146,8 +144,6 @@ jobs:
         env:
           BUILD_CHANNEL: ${{ needs.metadata.outputs.build_channel }}
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-          DROPBOX_APP_KEY_STAGING: ${{ secrets.DROPBOX_APP_KEY_STAGING }}
-          DROPBOX_APP_KEY_NIGHTLY: ${{ secrets.DROPBOX_APP_KEY_NIGHTLY }}
           DROPBOX_APP_KEY_DEV: ${{ secrets.DROPBOX_APP_KEY_DEV }}
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_ANDROID_SERVER_CLIENT_ID: ${{ secrets.GDRIVE_ANDROID_SERVER_CLIENT_ID }}
@@ -160,10 +156,8 @@ jobs:
           # apart by a sub-folder inside that one App folder instead — see
           # _channelSubfolder in dropbox_adapter.dart. Both layouts work.
           case "$BUILD_CHANNEL" in
-            stable)  CHANNEL_DROPBOX_KEY="" ;;
-            staging) CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_STAGING" ;;
-            dev)     CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_DEV" ;;
-            *)       CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_NIGHTLY" ;;
+            stable) CHANNEL_DROPBOX_KEY="" ;;
+            dev)    CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_DEV" ;;
           esac
           {
             echo "DROPBOX_APP_KEY=${CHANNEL_DROPBOX_KEY:-$DROPBOX_APP_KEY}"
@@ -321,8 +315,6 @@ jobs:
         env:
           BUILD_CHANNEL: ${{ needs.metadata.outputs.build_channel }}
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-          DROPBOX_APP_KEY_STAGING: ${{ secrets.DROPBOX_APP_KEY_STAGING }}
-          DROPBOX_APP_KEY_NIGHTLY: ${{ secrets.DROPBOX_APP_KEY_NIGHTLY }}
           DROPBOX_APP_KEY_DEV: ${{ secrets.DROPBOX_APP_KEY_DEV }}
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_ANDROID_SERVER_CLIENT_ID: ${{ secrets.GDRIVE_ANDROID_SERVER_CLIENT_ID }}
@@ -335,10 +327,8 @@ jobs:
           # apart by a sub-folder inside that one App folder instead — see
           # _channelSubfolder in dropbox_adapter.dart. Both layouts work.
           case "$BUILD_CHANNEL" in
-            stable)  CHANNEL_DROPBOX_KEY="" ;;
-            staging) CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_STAGING" ;;
-            dev)     CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_DEV" ;;
-            *)       CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_NIGHTLY" ;;
+            stable) CHANNEL_DROPBOX_KEY="" ;;
+            dev)    CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_DEV" ;;
           esac
           {
             echo "DROPBOX_APP_KEY=${CHANNEL_DROPBOX_KEY:-$DROPBOX_APP_KEY}"
@@ -404,15 +394,11 @@ jobs:
         env:
           BUILD_CHANNEL: ${{ needs.metadata.outputs.build_channel }}
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-          DROPBOX_APP_KEY_STAGING: ${{ secrets.DROPBOX_APP_KEY_STAGING }}
-          DROPBOX_APP_KEY_NIGHTLY: ${{ secrets.DROPBOX_APP_KEY_NIGHTLY }}
           DROPBOX_APP_KEY_DEV: ${{ secrets.DROPBOX_APP_KEY_DEV }}
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_ANDROID_SERVER_CLIENT_ID: ${{ secrets.GDRIVE_ANDROID_SERVER_CLIENT_ID }}
           GDRIVE_IOS_CLIENT_ID: ${{ secrets.GDRIVE_IOS_CLIENT_ID }}
           GDRIVE_IOS_CLIENT_ID_RELEASE: ${{ secrets.GDRIVE_IOS_CLIENT_ID_RELEASE }}
-          GDRIVE_IOS_CLIENT_ID_STAGING: ${{ secrets.GDRIVE_IOS_CLIENT_ID_STAGING }}
-          GDRIVE_IOS_CLIENT_ID_NIGHTLY: ${{ secrets.GDRIVE_IOS_CLIENT_ID_NIGHTLY }}
         run: |
           set -euo pipefail
           # A channel can be given its own Dropbox app, which gets it its own
@@ -421,16 +407,12 @@ jobs:
           # apart by a sub-folder inside that one App folder instead — see
           # _channelSubfolder in dropbox_adapter.dart. Both layouts work.
           case "$BUILD_CHANNEL" in
-            stable)  CHANNEL_DROPBOX_KEY="" ;;
-            staging) CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_STAGING" ;;
-            dev)     CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_DEV" ;;
-            *)       CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_NIGHTLY" ;;
+            stable) CHANNEL_DROPBOX_KEY="" ;;
+            dev)    CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_DEV" ;;
           esac
           case "$BUILD_CHANNEL" in
-            stable)  IOS_CLIENT_ID="$GDRIVE_IOS_CLIENT_ID_RELEASE" ;;
-            staging) IOS_CLIENT_ID="$GDRIVE_IOS_CLIENT_ID_STAGING" ;;
-            dev)     IOS_CLIENT_ID="$GDRIVE_IOS_CLIENT_ID" ;;
-            *)       IOS_CLIENT_ID="$GDRIVE_IOS_CLIENT_ID_NIGHTLY" ;;
+            stable) IOS_CLIENT_ID="$GDRIVE_IOS_CLIENT_ID_RELEASE" ;;
+            dev)    IOS_CLIENT_ID="$GDRIVE_IOS_CLIENT_ID" ;;
           esac
           if [ -z "$IOS_CLIENT_ID" ]; then
             echo "::error::Missing Google iOS OAuth client ID for $BUILD_CHANNEL (check this channel's GDRIVE_IOS_CLIENT_ID secret)."
@@ -475,17 +457,14 @@ jobs:
 
       - name: Configure iOS channel identity
         # Overwrites the checked-in defaults in ios/Flutter/Channel.xcconfig so
-        # the bundle identifier and the home-screen name match the channel being
-        # built and the three IPAs can live on one device.
+        # the bundle identifier and the home-screen name match the channel.
         env:
           BUILD_CHANNEL: ${{ needs.metadata.outputs.build_channel }}
         run: |
           set -euo pipefail
           case "$BUILD_CHANNEL" in
-            stable)  SUFFIX="";         NAME="Astoria" ;;
-            staging) SUFFIX=".staging"; NAME="Astoria Staging" ;;
-            dev)     SUFFIX=".dev"; NAME="Astoria Dev" ;;
-            *)       SUFFIX=".nightly"; NAME="Astoria Nightly" ;;
+            stable) SUFFIX="";     NAME="Astoria" ;;
+            dev)    SUFFIX=".dev"; NAME="Astoria Dev" ;;
           esac
           printf 'BUNDLE_ID_SUFFIX = %s\nAPP_DISPLAY_NAME = %s\n' \
             "$SUFFIX" "$NAME" > ios/Flutter/Channel.xcconfig
@@ -534,8 +513,6 @@ jobs:
         env:
           BUILD_CHANNEL: ${{ needs.metadata.outputs.build_channel }}
           DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
-          DROPBOX_APP_KEY_STAGING: ${{ secrets.DROPBOX_APP_KEY_STAGING }}
-          DROPBOX_APP_KEY_NIGHTLY: ${{ secrets.DROPBOX_APP_KEY_NIGHTLY }}
           DROPBOX_APP_KEY_DEV: ${{ secrets.DROPBOX_APP_KEY_DEV }}
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_ANDROID_SERVER_CLIENT_ID: ${{ secrets.GDRIVE_ANDROID_SERVER_CLIENT_ID }}
@@ -543,10 +520,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$BUILD_CHANNEL" in
-            stable)  CHANNEL_DROPBOX_KEY="" ;;
-            staging) CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_STAGING" ;;
-            dev)     CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_DEV" ;;
-            *)       CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_NIGHTLY" ;;
+            stable) CHANNEL_DROPBOX_KEY="" ;;
+            dev)    CHANNEL_DROPBOX_KEY="$DROPBOX_APP_KEY_DEV" ;;
           esac
           {
             echo "DROPBOX_APP_KEY=${CHANNEL_DROPBOX_KEY:-$DROPBOX_APP_KEY}"

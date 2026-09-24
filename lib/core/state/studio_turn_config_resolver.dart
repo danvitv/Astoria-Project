@@ -6,6 +6,7 @@ import '../llm/studio_turn_config_snapshot.dart';
 import '../models/api_config.dart';
 import '../models/pipeline_settings.dart';
 import '../models/studio_config.dart';
+import '../models/studio_pregen_mode.dart';
 import 'active_studio_preset_provider.dart';
 import 'db_provider.dart';
 
@@ -51,6 +52,8 @@ class StudioTurnConfigResolver {
     preset = (await loadPreset(presetId)) ?? (await loadDefaultPreset());
     if (preset != null) {
       final agentEnabled = preset.agentEnabled;
+      final useThink =
+          studioPregenMode(preset) == StudioPregenMode.thinkReplacement;
       final agents = preset.agents.map((agent) {
         final spec = StudioControllerOntology.specForAgent(agent);
         if (spec == null) return agent.copyWith(enabled: false);
@@ -62,9 +65,24 @@ class StudioTurnConfigResolver {
         if (agent.phase != spec.phase) {
           return agent.copyWith(enabled: false);
         }
-        return agentEnabled[spec.id] == false
-            ? agent.copyWith(enabled: false)
+        if (spec.id == 'think') {
+          return agent.copyWith(
+            enabled: useThink,
+            reasoningMode: 'think-replacement',
+          );
+        }
+        if (useThink && spec.phase == 'pre_generation') {
+          return agent.copyWith(enabled: false);
+        }
+        // Earlier editors exposed replacement mode on every agent. Only the
+        // dedicated Think lane may seed the final writer with reasoning.
+        final normalized = spec.phase == 'pre_generation' &&
+                agent.reasoningMode == 'think-replacement'
+            ? agent.copyWith(reasoningMode: 'normal')
             : agent;
+        return agentEnabled[spec.id] == false
+            ? normalized.copyWith(enabled: false)
+            : normalized;
       }).toList();
       final gated = agents.where((agent) => agent.enabled).toList()
         ..sort((a, b) => a.order.compareTo(b.order));

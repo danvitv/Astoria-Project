@@ -1,16 +1,15 @@
 # Astoria build channels
 
-The private source repository defaults to `dev`. `release` is reserved for a
-tested stable build and has not been created. Both manual build workflows
+The private source repository defaults to `dev`. `main` / `master` are reserved
+for tested stable builds and have not been created. Both manual build workflows
 derive `BUILD_CHANNEL` from the selected branch and pass it to Flutter and the
 native Android/iOS build steps:
 
 | Branch | Channel | Android applicationId | iOS bundle ID | Windows data folder | Drive root |
 |---|---|---|---|---|---|
 | `dev` | `dev` | `app.astoria.flutter.dev` | `com.danvitv.astoria.dev` | `Astoria-dev` | `Astoria-dev` |
-| `release` (future) | `stable` | `app.astoria.flutter` | `com.danvitv.astoria` | `Astoria` | `Astoria` |
-| `staging` (if built) | `staging` | `app.astoria.flutter.staging` | `com.danvitv.astoria.staging` | `Astoria-staging` | `Astoria-staging` |
-| other branch | `nightly` | `app.astoria.flutter.nightly` | `com.danvitv.astoria.nightly` | `Astoria-nightly` | `Astoria-nightly` |
+| feature / other working branch | `dev` | `app.astoria.flutter.dev` | `com.danvitv.astoria.dev` | `Astoria-dev` | `Astoria-dev` |
+| `main` / `master` (future) | `stable` | `app.astoria.flutter` | `com.danvitv.astoria` | `Astoria` | `Astoria` |
 
 A local Flutter build without `--dart-define=BUILD_CHANNEL=...` defaults to
 `dev`; Android Gradle and iOS `Channel.xcconfig` default to `dev` as well.
@@ -29,9 +28,9 @@ stored in SharedPreferences; the channel only supplies defaults.
 ## Cloud isolation and credentials
 
 Google Drive uses the channel-specific `Astoria` root shown above. Dropbox
-uses an App-folder-relative `/<channel>` subtree on non-stable builds; stable
-uses the App-folder root. Separate Dropbox app keys are optional, but a stable
-wipe must not delete the dev/staging/nightly subfolders. See
+uses an App-folder-relative `/dev` subtree on working builds; stable uses the
+App-folder root. Separate Dropbox app keys are optional; a stable wipe must
+not delete existing dev, staging or nightly subfolders. See
 `lib/features/cloud_sync/services/dropbox/dropbox_adapter.dart`.
 
 Desktop Google auth uses `GDRIVE_CLIENT_ID` (OAuth **Desktop app**).
@@ -43,9 +42,7 @@ bundle ID must match the build:
 | Channel | Actions secret for iOS OAuth client ID |
 |---|---|
 | `dev` | `GDRIVE_IOS_CLIENT_ID` (existing dev secret) |
-| `stable` (`release`) | `GDRIVE_IOS_CLIENT_ID_RELEASE` (create before building) |
-| `staging` | `GDRIVE_IOS_CLIENT_ID_STAGING` (only if built) |
-| `nightly` | `GDRIVE_IOS_CLIENT_ID_NIGHTLY` (only if built) |
+| `stable` (`main` / `master`) | `GDRIVE_IOS_CLIENT_ID_RELEASE` (create before building) |
 
 The iOS jobs of both manual workflows select the corresponding secret and
 generate the reversed Google URL scheme from it before building. If that

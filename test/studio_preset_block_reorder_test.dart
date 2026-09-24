@@ -80,6 +80,26 @@ void main() {
       expect(_idsInOrder(result), ['pre1', 'fin1', 'pre2']);
     });
 
+    test('re-targets an addressed prompt dropped under another controller', () {
+      final blocks = [
+        _block('thinking', injectionPoint: 'specificAgent')
+            .copyWith(targetAgentId: 'think'),
+      ];
+      final entry = groupStudioPresetBlocks(blocks).single;
+      final result = reorderStudioPresetBlocks(
+        all: blocks,
+        rows: [
+          StudioPresetRowPlacement(
+            entry: entry,
+            injectionPoint: 'specificAgent',
+            targetAgentId: 'continuity',
+          ),
+        ],
+      );
+      expect(result.single.injectionPoint, 'specificAgent');
+      expect(result.single.targetAgentId, 'continuity');
+    });
+
     test('leaves blocks no row claims in their slots', () {
       final blocks = [
         _block('pre1', order: 0),
