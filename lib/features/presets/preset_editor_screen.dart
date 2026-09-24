@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/llm/tokenizer.dart';
 import '../../core/models/preset.dart';
 import '../../core/models/preset_folder.dart';
+import '../../core/services/featured_presets.dart';
 import '../../core/services/preset_defaults.dart';
 import '../../core/state/db_provider.dart';
 import '../../core/utils/id_generator.dart';
@@ -221,6 +222,10 @@ class PresetEditorBodyState extends ConsumerState<PresetEditorBody> {
   late final String _currentId = widget.preset?.id ?? generateId();
   late final int _createdAt =
       widget.preset?.createdAt ?? currentTimestampSeconds();
+
+  /// A bundled featured preset keeps its shipped author and cover. Clones can
+  /// customize both.
+  bool get _isFeatured => isFeaturedPreset(widget.preset?.id);
 
   @override
   void initState() {
@@ -484,7 +489,7 @@ class PresetEditorBodyState extends ConsumerState<PresetEditorBody> {
 
     return PresetDashboardCard(
       coverImage: cover,
-      onCoverTap: _pickImage,
+      onCoverTap: _isFeatured ? null : _pickImage,
       title: displayName,
       subtitle: _author.isNotEmpty ? 'by $_author' : null,
       onTitleTap: _showRenameDialog,
@@ -974,6 +979,7 @@ class PresetEditorBodyState extends ConsumerState<PresetEditorBody> {
   /// (so it gets a thumbnail). The preset keeps a *relative*, version-suffixed
   /// path — see `preset_image_paths.dart` for why both matter to cloud sync.
   Future<void> _pickImage() async {
+    if (_isFeatured) return;
     final path = await pickPresetCover(ref, _currentId);
     if (path == null || !mounted) return;
 
@@ -986,6 +992,7 @@ class PresetEditorBodyState extends ConsumerState<PresetEditorBody> {
   }
 
   void _removeImage() {
+    if (_isFeatured) return;
     final previous = _imagePath;
     setState(() => _imagePath = null);
     _scheduleSave();
@@ -1024,6 +1031,7 @@ class PresetEditorBodyState extends ConsumerState<PresetEditorBody> {
   void _showOptionsMenu() {
     showPresetOptions(
       context,
+      isFeatured: _isFeatured,
       hasImage: _imagePath != null && _imagePath!.isNotEmpty,
       canDelete: widget.preset != null,
       onRename: _showRenameDialog,

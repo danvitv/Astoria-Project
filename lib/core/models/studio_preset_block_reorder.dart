@@ -8,10 +8,13 @@ import 'studio_preset_block_groups.dart';
 class StudioPresetRowPlacement {
   final StudioPresetBlockGroup entry;
   final String injectionPoint;
+  /// When an addressed row is dropped below a different pre-gen controller.
+  final String? targetAgentId;
 
   const StudioPresetRowPlacement({
     required this.entry,
     required this.injectionPoint,
+    this.targetAgentId,
   });
 }
 
@@ -48,11 +51,12 @@ List<StudioPresetBlock> reorderStudioPresetBlocks({
       // The grouper synthesizes a "Tense" header that has no stored block; it
       // owns no slot and must not enter the permutation.
       if (!existingIds.contains(block.id)) continue;
-      flattened.add(
-        block.injectionPoint == row.injectionPoint
-            ? block
-            : block.copyWith(injectionPoint: row.injectionPoint),
-      );
+      flattened.add(block.copyWith(
+        injectionPoint: row.injectionPoint,
+        targetAgentId: row.injectionPoint == 'specificAgent'
+            ? row.targetAgentId ?? block.targetAgentId
+            : block.targetAgentId,
+      ));
     }
   }
   final movedIds = {for (final block in flattened) block.id};

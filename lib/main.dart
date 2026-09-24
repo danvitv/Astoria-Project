@@ -12,6 +12,7 @@ import 'core/debug/perf_debug.dart';
 import 'core/platform/desktop_window.dart';
 import 'core/services/astoria_data_migration.dart';
 import 'core/services/dev_mode_flag_migration.dart';
+import 'core/services/preset_seeder.dart';
 import 'core/services/windows_data_migration.dart';
 import 'core/services/windows_preferences_migration.dart';
 import 'core/utils/platform_paths.dart';
@@ -79,6 +80,19 @@ Future<void> main() async {
         stack: stackTrace,
         library: 'startup',
         context: ErrorDescription('dev mode flag reset failed'),
+      ),
+    );
+  }
+  // Choose the bundled first-run preset before providers read the active id.
+  try {
+    await applyFirstRunPresetChoice();
+  } catch (error, stackTrace) {
+    FlutterError.reportError(
+      FlutterErrorDetails(
+        exception: error,
+        stack: stackTrace,
+        library: 'startup',
+        context: ErrorDescription('first-run preset choice failed'),
       ),
     );
   }

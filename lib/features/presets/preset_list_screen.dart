@@ -13,6 +13,7 @@ import '../../core/models/preset.dart';
 import '../../core/models/preset_folder.dart';
 import '../../core/models/studio_config.dart';
 import '../../core/models/studio_preset_codec.dart';
+import '../../core/services/featured_presets.dart';
 import '../../core/state/active_selection_provider.dart';
 import '../../core/state/db_provider.dart';
 import '../../core/state/active_studio_preset_provider.dart';
@@ -854,6 +855,7 @@ class _PresetListScreenState extends ConsumerState<PresetListScreen> {
     final notifier = ref.read(presetListProvider.notifier);
     showPresetOptions(
       context,
+      isFeatured: isFeaturedPreset(preset.id),
       hasImage: preset.imagePath != null && preset.imagePath!.isNotEmpty,
       canDelete: true,
       onSelect: () => _startSelection(preset.id, PresetKind.normal),

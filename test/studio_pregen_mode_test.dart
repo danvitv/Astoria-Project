@@ -89,6 +89,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const ValueKey('studio_agent_pregen_think')), findsNothing);
+    expect(find.byKey(const ValueKey('studio_section_empty_pregen')), findsNothing);
     expect(find.byType(GlazeDropdownChip), findsOneWidget);
     await tester.tap(find.byType(GlazeDropdownChip));
     await tester.pumpAndSettle();
@@ -101,6 +102,7 @@ void main() {
     );
     expect(find.byKey(const ValueKey('studio_agent_pregen_agency')), findsNothing);
     expect(find.byKey(const ValueKey('studio_agent_pregen_think')), findsOneWidget);
+    expect(find.byKey(const ValueKey('studio_section_empty_pregen')), findsNothing);
     expect(find.byType(Switch), findsNothing);
     expect(preset.agentEnabled['agency'], false);
     await tester.tap(find.byType(GlazeDropdownChip));
@@ -114,4 +116,127 @@ void main() {
     );
     expect(preset.agentEnabled['agency'], false);
   });
+
+  testWidgets(
+    'addressed prompt follows the active controller, not a separate section',
+    (tester) async {
+    late StateSetter rebuild;
+    var preset = ordinary.copyWith(blocks: const [
+      StudioPresetBlock(
+        id: 'think-prompt',
+        title: 'Think prompt',
+        injectionPoint: 'specificAgent',
+        targetAgentId: 'think',
+      ),
+      StudioPresetBlock(
+        id: 'continuity-prompt',
+        title: 'Continuity prompt',
+        injectionPoint: 'specificAgent',
+        targetAgentId: 'continuity',
+      ),
+    ]);
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                rebuild = setState;
+                return SingleChildScrollView(
+                  child: StudioBlockSectionList(
+                    preset: preset,
+                    sections: const [
+                      ('pregen', 'Pre-generation'),
+                      ('specificAgent', 'Specific agent'),
+                    ],
+                    onReorder: (_) {},
+                    onEdit: (_) {},
+                    onToggle: (_, _) {},
+                    onSelectExclusive: (_, _) {},
+                    onToggleGroup: (_, _) {},
+                    onDelete: (_) {},
+                    onDeleteGroup: (_) {},
+                    onMoveToGroup: (_, _) {},
+                    onMoveToSection: (_, _) {},
+                    onToggleAgent: (_, _) {},
+                    onPregenModeChanged: (mode) => setState(() {
+                      preset = applyStudioPregenMode(preset, mode);
+                    }),
+                    onLedgerPromptInjectionChanged: (_) {},
+                    cardRewriter: const CardRewriterSettings(),
+                    onCardRewriterChanged: (_) {},
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      find.byKey(const ValueKey('studio_block_continuity-prompt')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('studio_block_think-prompt')), findsNothing);
+    expect(find.byKey(const ValueKey('studio_section_specificAgent')), findsNothing);
+    await tester.tap(find.byType(GlazeDropdownChip));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('studio_reasoning_mode_think').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('studio_agent_pregen_think')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('studio_block_think-prompt')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('studio_block_continuity-prompt')),
+      findsNothing,
+    );
+    // Inactive prompts stay in the preset and reappear with their controller.
+    final thinkTop = tester
+        .getTopLeft(find.byKey(const ValueKey('studio_agent_pregen_think')))
+        .dy;
+    final promptTop = tester
+        .getTopLeft(find.byKey(const ValueKey('studio_block_think-prompt')))
+        .dy;
+    expect(promptTop, greaterThan(thinkTop));
+    expect(
+      find.byKey(const ValueKey('studio_section_specificAgent')),
+      findsNothing,
+    );
+    expect(preset.blocks.first.injectionPoint, 'specificAgent');
+    expect(preset.blocks.first.targetAgentId, 'think');
+
+    await tester.tap(find.byType(GlazeDropdownChip));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('studio_reasoning_mode_normal').last);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('studio_block_continuity-prompt')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('studio_block_think-prompt')), findsNothing);
+
+    await tester.tap(find.byType(GlazeDropdownChip));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('studio_reasoning_mode_think').last);
+    await tester.pumpAndSettle();
+
+    rebuild(() {
+      preset = preset.copyWith(blocks: [preset.blocks.first]);
+    });
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('studio_section_specificAgent')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('studio_section_empty_pregen')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('studio_block_think-prompt')), findsOneWidget);
+    },
+  );
 }

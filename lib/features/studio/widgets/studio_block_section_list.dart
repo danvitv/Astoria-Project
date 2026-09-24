@@ -105,15 +105,40 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
   /// sections emit only their header.
   List<_StudioListRow> _rows() {
     final rows = <_StudioListRow>[];
+    final useThink =
+        studioPregenMode(widget.preset) == StudioPregenMode.thinkReplacement;
+    final visiblePregenSpecs = studioAgentsForInjectionPoint('pregen')
+        .where((spec) => useThink ? spec.id == 'think' : spec.id != 'think')
+        .toList();
+    final visibleAgentIds = {for (final spec in visiblePregenSpecs) spec.id};
+    final knownAgentIds = {
+      for (final spec in studioAgentsForInjectionPoint('pregen')) spec.id,
+    };
     for (final (point, label) in widget.sections) {
       final allSectionBlocks =
           widget.preset.blocks.where((b) => b.injectionPoint == point).toList()
             ..sort((a, b) => a.order.compareTo(b.order));
+      // Only an unknown target belongs in the fallback section. Prompts for
+      // the inactive controller set return when its mode is selected again.
+      final sectionBlocks = point == 'specificAgent'
+          ? allSectionBlocks
+                .where((b) => !knownAgentIds.contains(b.targetAgentId))
+                .toList()
+          : allSectionBlocks;
+      if (point == 'specificAgent' && sectionBlocks.isEmpty) continue;
+      final count = point == 'pregen'
+          ? sectionBlocks.length +
+                widget.preset.blocks.where(
+                  (b) =>
+                      b.injectionPoint == 'specificAgent' &&
+                      visibleAgentIds.contains(b.targetAgentId),
+                ).length
+          : sectionBlocks.length;
       rows.add(
         _StudioListRow.header(
           point,
           label: label,
-          count: allSectionBlocks.length,
+          count: count,
           expanded: _isExpanded(point),
           onToggle: () => _toggle(point),
         ),
@@ -127,20 +152,28 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
                 .where((b) => b.id == _kCleanerAuditBlockId)
                 .firstOrNull
           : null;
-      final sectionBlocks = factChecker == null
-          ? allSectionBlocks
-          : allSectionBlocks
+      final groupedBlocks = factChecker == null
+          ? sectionBlocks
+          : sectionBlocks
                 .where((b) => b.id != _kCleanerAuditBlockId)
                 .toList();
 
-      final useThink =
-          studioPregenMode(widget.preset) == StudioPregenMode.thinkReplacement;
       for (final spec in studioAgentsForInjectionPoint(point)) {
         if (point == 'pregen' &&
             (useThink ? spec.id != 'think' : spec.id == 'think')) {
           continue;
         }
         rows.add(_StudioListRow.agent(point, spec));
+        if (point == 'pregen') {
+          final addressed = widget.preset.blocks.where(
+            (b) =>
+                b.injectionPoint == 'specificAgent' &&
+                b.targetAgentId == spec.id,
+          );
+          for (final entry in groupStudioPresetBlocks(addressed.toList())) {
+            rows.add(_StudioListRow.block(point, entry));
+          }
+        }
         if (point == 'ledger' && spec.id == 'ledger') {
           rows.add(_StudioListRow.ledgerPromptInjection(point));
           // Card Rewriter has no blocks of its own, so it is not a section: it
@@ -161,8 +194,8 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
       if (factChecker != null) {
         rows.add(_StudioListRow.factChecker(point, factChecker));
       }
-      final entries = groupStudioPresetBlocks(sectionBlocks);
-      if (entries.isEmpty) {
+      final entries = groupStudioPresetBlocks(groupedBlocks);
+      if (entries.isEmpty && count == 0 && point != 'pregen') {
         rows.add(_StudioListRow.placeholder(point));
         continue;
       }
@@ -186,18 +219,37 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
     // Walk the reordered list and hand each row the section it now sits under.
     // A row dropped above the very first header belongs to that first section.
     var current = widget.sections.first.$1;
+    String? currentAgentId;
     final placements = <StudioPresetRowPlacement>[];
     for (final row in moved) {
       if (row.isHeader) {
         current = row.point;
+        currentAgentId = null;
+        continue;
+      }
+      if (row.spec != null && current == 'pregen') {
+        currentAgentId = row.spec!.id;
         continue;
       }
       final entry = row.entry;
       if (entry == null) {
         continue; // agent, settings, fact checker or placeholder
       }
+      // A row visually nested under a pre-gen agent is still addressed to
+      // that agent at runtime, not to the shared pre-gen injection point.
+      final originallyAddressed = studioPresetEntryBlocks(entry).every(
+        (block) => block.injectionPoint == 'specificAgent',
+      );
       placements.add(
-        StudioPresetRowPlacement(entry: entry, injectionPoint: current),
+        StudioPresetRowPlacement(
+          entry: entry,
+          injectionPoint: current == 'pregen' && originallyAddressed
+              ? 'specificAgent'
+              : current,
+          targetAgentId: current == 'pregen' && originallyAddressed
+              ? currentAgentId
+              : null,
+        ),
       );
     }
     widget.onReorder(placements);
