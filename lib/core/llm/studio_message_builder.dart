@@ -53,8 +53,6 @@ class StudioMessageBuilder {
     bool excludeReasoningFromContextBudget = false,
     Set<String>? emittedLorebookClassifications,
     Map<String, dynamic>? responseJsonSchema,
-    List<String>? twoPassPrefills,
-    List<String>? controllerTwoPassPrefills,
   }) {
     final point = _blockExpander.injectionPointForRun(agent, isFinalResponse);
     final spec = StudioControllerOntology.specForAgent(agent);
@@ -371,11 +369,7 @@ class StudioMessageBuilder {
               )
               .trim();
           if (prefill.isNotEmpty) {
-            if (block.prefillStyle == 'controller-two-pass') {
-              controllerTwoPassPrefills?.add(prefill);
-            } else if (block.prefillStyle == 'two-pass') {
-              twoPassPrefills?.add(prefill);
-            } else if (block.prefillStyle == 'structured') {
+            if (block.prefillStyle == 'structured') {
               _setStructuredPrefillSchema(block.id, prefill, responseJsonSchema);
             } else {
               _addFunctionPrefillTail(messages, block.id, prefill);

@@ -2571,6 +2571,8 @@
   "studio_slot_no_api": "No API connection for this slot",
   "studio_agent_always_on": "Always on",
   "studio_blocks_title": "Prompt Blocks",
+  "studio_reasoning_mode_normal": "Normal",
+  "studio_reasoning_mode_think": "Think replacement",
   "studio_reasoning_tags": "Reasoning Tags",
   "studio_reasoning_tags_desc": "Override the reasoning tag pair used by this preset's pipeline. Leave empty to use the API connection's tags.",
   "studio_fact_checker": "Fact Checker",

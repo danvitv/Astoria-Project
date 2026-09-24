@@ -424,6 +424,12 @@ class StreamGenerationService {
           sessionId: session.id,
           turnConfig: turnConfig,
           cancelToken: cancelToken,
+          onThinkingUpdate: (text) {
+            if (_isAborted()) return;
+            latestStudioReasoning = text;
+            reportStudioStreamPhase('');
+            scheduleStudioStreamingUpdate();
+          },
           onFinalStart: () {
             if (_isAborted()) return;
             _phase(GenerationPhase.waiting);

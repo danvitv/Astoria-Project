@@ -161,6 +161,30 @@ class StudioControllerOntology {
       timeoutMs: 60000,
     ),
     StudioControllerSpec(
+      id: 'think',
+      name: 'Think / Reasoning Controller',
+      purpose:
+          'Produce the full pre-response reasoning for the turn as a single '
+          '<thinking> block, then hand it to the Main Writer as completed '
+          'analysis. Used when a preset opts into think-replacement: this '
+          'controller runs alone (outside the batch) and its output is seeded '
+          'back as the final generator\'s prior reasoning.',
+      outputContract:
+          'At chat time, output ONLY the block between <thinking> and '
+          '</thinking>, nothing else. Fill every section of the assigned '
+          'thinking template with content grounded in the current scene.',
+      laneOwns:
+          'the complete pre-response reasoning pass: scene analysis, character '
+          'intent, continuity, style decisions, and the final response plan.',
+      laneSkip:
+          'the visible RP prose itself — that is the Main Writer\'s job, '
+          'driven by this thinking block.',
+      refreshPolicy: 'turn',
+      temperature: 0.3,
+      maxTokens: 6000,
+      timeoutMs: 90000,
+    ),
+    StudioControllerSpec(
       id: 'final',
       name: 'Main Writer',
       purpose:
@@ -222,7 +246,7 @@ class StudioControllerOntology {
           name: spec.name,
           role: 'system',
           order: i,
-          enabled: spec.id != 'meta',
+          enabled: spec.id != 'meta' && spec.id != 'think',
           refreshPolicy: spec.refreshPolicy,
           phase: spec.phase,
           specId: spec.id,

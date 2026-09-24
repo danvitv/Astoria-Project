@@ -50,6 +50,18 @@ bool studioAgentEnabled(StudioPreset preset, StudioControllerSpec spec) {
   return preset.agentEnabled[spec.id] ?? true;
 }
 
+/// The reasoning mode of the agent backing [spec] (`normal` |
+/// `think-replacement`), falling back to `normal` when the preset carries no
+/// matching agent.
+String studioAgentReasoningMode(StudioPreset preset, StudioControllerSpec spec) {
+  for (final agent in preset.agents) {
+    if (agent.specId == spec.id || agent.controllerId == spec.id) {
+      return agent.reasoningMode;
+    }
+  }
+  return 'normal';
+}
+
 /// Number of enabled agents (controllers + final + post-processing).
 int studioPresetEnabledAgentCount(StudioPreset preset) {
   var count = 0;

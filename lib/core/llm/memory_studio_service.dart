@@ -95,6 +95,7 @@ class MemoryStudioService {
     StudioTurnConfigSnapshot? turnConfig,
     CancelToken? cancelToken,
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
+    void Function(String text)? onThinkingUpdate,
     void Function()? onFinalStart,
     Future<void> Function()? beforeFinalSend,
     void Function(List<Map<String, dynamic>> messages)? onFinalMessagesBuilt,
@@ -118,6 +119,7 @@ class MemoryStudioService {
       sessionId: sessionId,
       token: token,
       turnConfig: turnConfig,
+      onThinkingUpdate: onThinkingUpdate,
     );
     if (phaseResult.status != 'ok') {
       return StudioPipelineResult(
@@ -131,6 +133,15 @@ class MemoryStudioService {
     final split = phaseResult.split!;
     final studioPreset = phaseResult.studioPreset!;
     final finalAgent = split.finalAgent!;
+    StudioStageBrief? thinkingBrief;
+    for (final brief in briefs) {
+      if (brief.isThinkReplacement && brief.brief.trim().isNotEmpty) {
+        thinkingBrief = brief;
+        break;
+      }
+    }
+    final normalBriefs =
+        briefs.where((brief) => !brief.isThinkReplacement).toList();
     onFinalStart?.call();
     final agentResult = await _executor.runFinalGenerator(
       agent: finalAgent,
@@ -138,10 +149,11 @@ class MemoryStudioService {
       apiConfig: apiConfig,
       config: config,
       studioPreset: studioPreset,
-      priorBriefs: briefs,
+      priorBriefs: normalBriefs,
       sessionId: sessionId,
       cancelToken: token,
       apiConfigId: studioPreset.expensiveApiConfigId,
+      reasoningPrefill: thinkingBrief?.brief,
       onFinalResponseUpdate: onFinalResponseUpdate,
       beforeSend: beforeFinalSend,
       onMessagesBuilt: onFinalMessagesBuilt,

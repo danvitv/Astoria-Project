@@ -52,6 +52,7 @@ class StudioBlockSectionList extends StatefulWidget {
   onMoveToGroup;
   final void Function(String blockId, String injectionPoint) onMoveToSection;
   final void Function(String specId, bool enabled) onToggleAgent;
+  final void Function(String specId, String mode) onAgentReasoningModeChanged;
   final ValueChanged<LedgerPromptInjectionMode> onLedgerPromptInjectionChanged;
 
   /// The Card Rewriter settings of the preset being edited, already resolved
@@ -74,6 +75,7 @@ class StudioBlockSectionList extends StatefulWidget {
     required this.onMoveToGroup,
     required this.onMoveToSection,
     required this.onToggleAgent,
+    required this.onAgentReasoningModeChanged,
     required this.onLedgerPromptInjectionChanged,
     required this.cardRewriter,
     required this.onCardRewriterChanged,
@@ -234,11 +236,16 @@ class _StudioBlockSectionListState extends State<StudioBlockSectionList> {
     // section header draws one, and the "Add Block" row closes the card.
     final isLast = i == rows.length - 1 || rows[i + 1].isHeader;
     if (row.spec case final spec?) {
+      final isPreGen = !spec.isFinal && spec.phase != 'post_processing';
       return StudioAgentRow(
         key: ValueKey('studio_agent_${row.point}_${spec.id}'),
         spec: spec,
         enabled: studioAgentEnabled(widget.preset, spec),
         onToggle: (v) => widget.onToggleAgent(spec.id, v),
+        reasoningMode: studioAgentReasoningMode(widget.preset, spec),
+        onReasoningModeChanged: isPreGen
+            ? (mode) => widget.onAgentReasoningModeChanged(spec.id, mode)
+            : null,
         isLast: isLast,
       );
     }

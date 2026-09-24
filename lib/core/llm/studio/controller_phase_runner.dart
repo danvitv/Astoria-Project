@@ -108,6 +108,7 @@ class ControllerPhaseRunner {
     required CancelToken token,
     StudioPreset? studioPreset,
     StudioTurnConfigSnapshot? turnConfig,
+    void Function(String text)? onThinkingUpdate,
   }) async {
     if (token.isCancelled) {
       return const PreGenPhaseResult(status: 'aborted');
@@ -223,6 +224,9 @@ class ControllerPhaseRunner {
           cancelToken: token,
           apiConfigId: effectivePreset.cheapApiConfigId,
           turnConfig: turnConfig,
+          onIntermediateUpdate: agent.reasoningMode == 'think-replacement'
+              ? onThinkingUpdate
+              : null,
         ),
       );
       if (token.isCancelled) return const PreGenPhaseResult(status: 'aborted');
@@ -248,11 +252,17 @@ class ControllerPhaseRunner {
         final agent = dueTrackers.firstWhere(
           (candidate) => candidate.id == result.agentId,
         );
+        final isThink = agent.reasoningMode == 'think-replacement';
         final brief = StudioStageBrief(
           agentId: result.agentId,
           agentName: result.agentName,
           brief: result.status == 'ok'
-              ? _briefParser.sanitizeIntermediateAgentOutput(agent, result.text)
+              ? (isThink
+                    ? result.text
+                    : _briefParser.sanitizeIntermediateAgentOutput(
+                        agent,
+                        result.text,
+                      ))
               : result.text,
           status: result.status,
           error: result.error,
@@ -261,6 +271,7 @@ class ControllerPhaseRunner {
               ? probe?.cacheKey
               : null,
           cacheHit: false,
+          isThinkReplacement: isThink,
         );
         _briefCache.persistCacheIfCacheable(
           agent: agent,

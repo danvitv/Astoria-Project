@@ -20,6 +20,14 @@ class StudioAgentRow extends StatelessWidget {
   final bool enabled;
   final ValueChanged<bool> onToggle;
 
+  /// The controller's reasoning mode (`normal` | `think-replacement`).
+  final String reasoningMode;
+
+  /// Set for pre-generation controllers to let the author pick how the agent
+  /// feeds the final generator. Null hides the dropdown (final and
+  /// post-processing agents have no selectable mode).
+  final ValueChanged<String>? onReasoningModeChanged;
+
   /// Last row of its section — drops the bottom rule.
   final bool isLast;
 
@@ -28,6 +36,8 @@ class StudioAgentRow extends StatelessWidget {
     required this.spec,
     required this.enabled,
     required this.onToggle,
+    this.reasoningMode = 'normal',
+    this.onReasoningModeChanged,
     this.isLast = false,
   });
 
@@ -88,6 +98,36 @@ class StudioAgentRow extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
+              if (onReasoningModeChanged != null)
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: reasoningMode,
+                      isDense: true,
+                      borderRadius: BorderRadius.circular(8),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: context.cs.onSurface,
+                      ),
+                      items: [
+                        DropdownMenuItem(
+                          value: 'normal',
+                          child: Text('studio_reasoning_mode_normal'.tr()),
+                        ),
+                        DropdownMenuItem(
+                          value: 'think-replacement',
+                          child: Text('studio_reasoning_mode_think'.tr()),
+                        ),
+                      ],
+                      onChanged: (next) {
+                        if (next != null && next != reasoningMode) {
+                          onReasoningModeChanged!(next);
+                        }
+                      },
+                    ),
+                  ),
+                ),
               Padding(
                 padding: const EdgeInsets.only(right: 12),
                 // An always-on agent gets a padlock, not a dead switch: a
