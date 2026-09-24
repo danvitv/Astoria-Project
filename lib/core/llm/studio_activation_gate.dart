@@ -63,6 +63,16 @@ class StudioActivationGate {
           finalAgent: finalAgent,
         );
       }
+      // A Think controller is not a final writer. Legacy presets may fall
+      // back to the last pre-gen agent, but doing so here silently turns the
+      // first (reasoning) pass into the visible response.
+      if (preGen.any((a) => a.reasoningMode == 'think-replacement')) {
+        return AgentPhaseSplit(
+          preGenTrackers: preGen,
+          postGenTrackers: postGen,
+          finalAgent: null,
+        );
+      }
       // Fallback: last pre-gen agent = generator (migration compat).
       final finalAgent = preGen.last;
       final preGenTrackers = preGen.sublist(0, preGen.length - 1);

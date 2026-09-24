@@ -53,6 +53,38 @@ void main() {
     expect(restored?.name, preset.name);
   });
 
+  test('refuses to overwrite a Main Writer with a partial agent list', () async {
+    const original = StudioPreset(
+      id: 'think-preset',
+      agents: [
+        StudioAgent(id: 'final', controllerId: 'final'),
+        StudioAgent(id: 'think', controllerId: 'think'),
+      ],
+    );
+    await repo.upsert(original);
+
+    await expectLater(
+      repo.upsert(original.copyWith(agents: [original.agents.last])),
+      throwsStateError,
+    );
+    expect((await repo.getById(original.id))?.agents, original.agents);
+    await expectLater(
+      repo.upsert(const StudioPreset(
+        id: 'new-think-preset',
+        agents: [StudioAgent(id: 'think', controllerId: 'think')],
+      )),
+      throwsStateError,
+    );
+
+    await repo.upsert(const StudioPreset(
+      id: 'think-preset',
+      name: 'Renamed without editing controllers',
+    ));
+    final renamed = await repo.getById(original.id);
+    expect(renamed?.name, 'Renamed without editing controllers');
+    expect(renamed?.agents, original.agents);
+  });
+
   test('round-trips blocks in final, cleaner, and ledger sections', () async {
     const preset = StudioPreset(
       id: 'pipeline-sections',

@@ -35,6 +35,8 @@ class StudioBriefDeduper {
           refreshPolicy: brief.refreshPolicy,
           cacheKey: brief.cacheKey,
           cacheHit: brief.cacheHit,
+          isThinkReplacement: brief.isThinkReplacement,
+          nativeReasoning: brief.nativeReasoning,
         ),
       );
     }
@@ -117,6 +119,8 @@ class StudioBriefDeduper {
         refreshPolicy: brief.refreshPolicy,
         cacheKey: brief.cacheKey,
         cacheHit: brief.cacheHit,
+        isThinkReplacement: brief.isThinkReplacement,
+        nativeReasoning: brief.nativeReasoning,
       );
     }
     return StudioStageBrief(
@@ -128,6 +132,8 @@ class StudioBriefDeduper {
       refreshPolicy: brief.refreshPolicy,
       cacheKey: brief.cacheKey,
       cacheHit: brief.cacheHit,
+      isThinkReplacement: brief.isThinkReplacement,
+      nativeReasoning: brief.nativeReasoning,
     );
   }
 

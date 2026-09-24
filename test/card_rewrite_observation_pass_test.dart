@@ -107,7 +107,7 @@ void main() {
           .runOneBatch('session');
       expect(prompts, hasLength(2));
       expect(prompts.first, contains('observation journal keeper'));
-      expect(prompts.last, contains('Glaze card rewriter'));
+      expect(prompts.last, contains('Astoria card rewriter'));
       final active = await fixture.observationRepo.getActiveObservations(
         'session',
       );
@@ -557,7 +557,7 @@ void main() {
         hasLength(2),
       );
       expect(
-        prompts.where((value) => value.contains('Glaze card rewriter')),
+        prompts.where((value) => value.contains('Astoria card rewriter')),
         hasLength(1),
       );
       final collectors = await fixture.db
@@ -717,7 +717,7 @@ void main() {
           )
           .toList();
       final writer = prompts.singleWhere(
-        (prompt) => prompt.contains('Glaze card rewriter'),
+        (prompt) => prompt.contains('Astoria card rewriter'),
       );
       expect(consolidations.first, contains('long-0'));
       expect(consolidations.last, contains('long-38'));

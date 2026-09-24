@@ -103,6 +103,7 @@ class ControllerPhaseRunner {
     required String presetId,
     required GenerationContextInputs inputs,
     required StudioContext context,
+    StudioContext? finalContext,
     required ApiConfig apiConfig,
     required String sessionId,
     required CancelToken token,
@@ -129,6 +130,12 @@ class ControllerPhaseRunner {
 
       final split = StudioActivationGate.splitAgentsByPhase(agents);
       if (split.finalAgent == null) {
+        if (agents.any((agent) => agent.reasoningMode == 'think-replacement')) {
+          return const PreGenPhaseResult(
+            status: 'error',
+            error: 'Studio Think mode requires an enabled Main Writer agent.',
+          );
+        }
         return const PreGenPhaseResult(status: 'disabled');
       }
       final sceneKey = _briefCache.sceneCacheKeyFromInputs(inputs);
@@ -216,6 +223,8 @@ class ControllerPhaseRunner {
         runIndividual: (agent) => _executor.runIndividualTracker(
           agent: agent,
           trackerContextOverride: trackerContextOverride,
+          finalAgent: split.finalAgent,
+          finalContext: finalContext,
           config: config,
           studioPreset: effectivePreset,
           context: context,
@@ -266,6 +275,7 @@ class ControllerPhaseRunner {
               : result.text,
           status: result.status,
           error: result.error,
+          nativeReasoning: isThink ? result.nativeReasoning : '',
           refreshPolicy: probe?.policy ?? 'turn',
           cacheKey: _briefCache.isCacheablePolicy(probe?.policy ?? 'turn')
               ? probe?.cacheKey

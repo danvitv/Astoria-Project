@@ -29,9 +29,9 @@ class AgentStreamRunner {
   AgentStreamRunner(this._pickTransport);
 
   /// Run one agent's LLM stream. Returns the final accumulated
-  /// [AgentRunResult]. [isFinalResponse] = true → the generator; reasoning
-  /// is forwarded to the UI. [isFinalResponse] = false → a tracker;
-  /// reasoning is discarded.
+  /// [AgentRunResult]. [isFinalResponse] = true → the generator; reasoning is
+  /// forwarded to the UI. Ordinary trackers discard provider reasoning;
+  /// Think replacement retains it separately from its visible block.
   Future<AgentRunResult> run({
     required StudioAgent agent,
     required List<Map<String, dynamic>> messages,
@@ -63,7 +63,11 @@ class AgentStreamRunner {
     final effectiveTagEnd = (tagEnd?.isNotEmpty == true)
         ? tagEnd!
         : defaultTagEnd;
+    // Think replacement needs the full tagged reply as text: ordinary
+    // tracker reasoning is discarded, so splitting <thinking> would make a
+    // successful response appear empty and trigger a retry.
     final hasInlineTags =
+        agent.reasoningMode != 'think-replacement' &&
         effectiveTagStart.isNotEmpty && effectiveTagEnd.isNotEmpty;
 
     final accumulator = StreamAccumulator(
@@ -73,6 +77,23 @@ class AgentStreamRunner {
       headerModel: headerModel,
       headerInline: headerInline,
     );
+    final isThinkController = agent.reasoningMode == 'think-replacement';
+    String intermediateText() {
+      final visible = accumulator.text.trimLeft();
+      if (!isThinkController || accumulator.reasoning.isEmpty) return visible;
+      return [
+        'Think controller (native reasoning):\n${accumulator.reasoning}',
+        if (visible.isNotEmpty) visible,
+      ].join('\n\n---\n\n');
+    }
+    var lastIntermediateUpdate = '';
+    void reportIntermediateUpdate() {
+      if (onIntermediateUpdate == null) return;
+      final update = intermediateText();
+      if (update == lastIntermediateUpdate || update.isEmpty) return;
+      lastIntermediateUpdate = update;
+      onIntermediateUpdate(update);
+    }
 
     final request = buildRequest(
       agent: agent,
@@ -94,7 +115,9 @@ class AgentStreamRunner {
     void completeWithAccumulated(String reason) {
       if (completer.isCompleted) return;
       final text = accumulator.text.trim();
-      final reasoningText = isFinalResponse ? accumulator.reasoning : '';
+      final reasoningText = isFinalResponse || isThinkController
+          ? accumulator.reasoning
+          : '';
       completer.complete(AgentRunResult(text: text, reasoning: reasoningText));
     }
 
@@ -139,8 +162,9 @@ class AgentStreamRunner {
               effectiveText,
               accumulator.reasoning.isNotEmpty ? accumulator.reasoning : null,
             );
-          } else if (delta.isNotEmpty) {
-            onIntermediateUpdate?.call(effectiveText);
+          } else if (delta.isNotEmpty ||
+              (isThinkController && reasoningDelta?.isNotEmpty == true)) {
+            reportIntermediateUpdate();
           }
           if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
             if (!streamStarted) {
@@ -155,7 +179,7 @@ class AgentStreamRunner {
             accumulator.consumeDelta(text, reasoningDelta: finalReasoning);
           }
           final effectiveText = accumulator.text.trimLeft();
-          final effectiveReasoning = isFinalResponse
+          final effectiveReasoning = isFinalResponse || isThinkController
               ? (accumulator.reasoning.isNotEmpty
                     ? accumulator.reasoning
                     : finalReasoning?.trim().isNotEmpty == true
@@ -169,8 +193,9 @@ class AgentStreamRunner {
               onFinalResponseUpdate?.call(text.trimLeft(), effectiveReasoning);
             }
           } else {
-            if (effectiveText.isNotEmpty) {
-              onIntermediateUpdate?.call(effectiveText);
+            if (effectiveText.isNotEmpty ||
+                (isThinkController && effectiveReasoning?.isNotEmpty == true)) {
+              reportIntermediateUpdate();
             } else if (text.isNotEmpty) {
               onIntermediateUpdate?.call(text.trimLeft());
             }
@@ -182,7 +207,7 @@ class AgentStreamRunner {
             final finalText = accumulatedText.isNotEmpty
                 ? accumulatedText
                 : text.trim();
-            final reasoningText = isFinalResponse
+            final reasoningText = isFinalResponse || isThinkController
                 ? (accumulator.reasoning.isNotEmpty
                       ? accumulator.reasoning
                       : finalReasoning?.trim() ?? '')

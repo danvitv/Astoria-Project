@@ -87,6 +87,7 @@ class ControllerBatchResult {
   final String agentId;
   final String agentName;
   final String text;
+  final String nativeReasoning;
   final String status; // 'ok' | 'failed'
   final String? error;
 
@@ -94,6 +95,7 @@ class ControllerBatchResult {
     required this.agentId,
     required this.agentName,
     required this.text,
+    this.nativeReasoning = '',
     required this.status,
     this.error,
   });

@@ -21,6 +21,10 @@ class StudioStageBrief {
   /// sanitized down to a compact controller summary.
   final bool isThinkReplacement;
 
+  /// Provider-native reasoning from the Think controller, when available.
+  /// Kept separate from [brief], the visible block seeded into the writer.
+  final String nativeReasoning;
+
   const StudioStageBrief({
     required this.agentId,
     required this.agentName,
@@ -31,6 +35,7 @@ class StudioStageBrief {
     this.cacheKey,
     this.cacheHit = false,
     this.isThinkReplacement = false,
+    this.nativeReasoning = '',
   });
 
   StudioStageBrief copyWithCacheMetadata({
@@ -48,6 +53,7 @@ class StudioStageBrief {
       cacheKey: cacheKey,
       cacheHit: cacheHit,
       isThinkReplacement: isThinkReplacement,
+      nativeReasoning: nativeReasoning,
     );
   }
 }

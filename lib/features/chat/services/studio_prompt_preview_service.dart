@@ -326,6 +326,19 @@ final class StudioPromptPreviewService {
       );
     }
     for (final agent in grouping.individualAgents) {
+      if (agent.reasoningMode == 'think-replacement' &&
+          split.finalAgent == null) {
+        entries.add(
+          _unavailable(
+            id: 'controller:${agent.id}',
+            stage: StudioPromptPreviewStage.controller,
+            title: agent.name,
+            reason: StudioPromptPreviewUnavailableReason.configurationUnavailable,
+            agentId: agent.id,
+          ),
+        );
+        continue;
+      }
       final controllerConfig = await resolveAgentConfig(
         agent: agent,
         inputs: inputs,
@@ -333,15 +346,27 @@ final class StudioPromptPreviewService {
         isFinal: false,
         apiConfigId: preset.cheapApiConfigId,
       );
-      final messages = messageBuilder.buildAgentMessages(
-        agent: agent,
-        context: trackerContext,
-        config: config,
-        studioPreset: preset,
-        priorBriefs: const [],
-        isFinalResponse: false,
-        trackerContextOverride: settings.studioControllerContextSize,
-      );
+      final messages = agent.reasoningMode == 'think-replacement'
+          ? messageBuilder.buildThinkControllerMessages(
+              agent: agent,
+              finalAgent: split.finalAgent!,
+              context: finalContext,
+              config: config,
+              studioPreset: preset,
+              finalContextOverride: settings.studioFinalContextSize,
+              reasoningHistoryCount: settings.studioFinalReasoningHistoryCount,
+              excludeReasoningFromContextBudget:
+                  settings.studioFinalExcludeReasoningFromContextBudget,
+            )
+          : messageBuilder.buildAgentMessages(
+              agent: agent,
+              context: trackerContext,
+              config: config,
+              studioPreset: preset,
+              priorBriefs: const [],
+              isFinalResponse: false,
+              trackerContextOverride: settings.studioControllerContextSize,
+            );
       entries.add(
         _available(
           id: 'controller:${agent.id}',

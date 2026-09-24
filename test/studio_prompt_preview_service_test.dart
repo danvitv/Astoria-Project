@@ -224,6 +224,50 @@ void main() {
     expect(preview.formattedRawRequest, isNot(contains('top-secret')));
   });
 
+  test('Think preview includes final blocks before addressed template', () async {
+    const preset = StudioPreset(
+      id: 'preset',
+      agents: [
+        StudioAgent(
+          id: 'think-agent',
+          controllerId: 'think',
+          name: 'Individual Think',
+          reasoningMode: 'think-replacement',
+        ),
+        StudioAgent(id: 'final', controllerId: 'final', order: 1),
+      ],
+      blocks: [
+        StudioPresetBlock(
+          id: 'style',
+          content: 'Final preset context',
+          injectionPoint: 'final',
+        ),
+        StudioPresetBlock(
+          id: 'think-template',
+          content: 'Think template',
+          injectionPoint: 'specificAgent',
+          targetAgentId: 'think',
+        ),
+      ],
+    );
+
+    final catalog = await serviceFor(preset).load();
+    final controller = catalog.entries.singleWhere(
+      (entry) => entry.id == 'controller:think-agent',
+    );
+
+    expect(controller.isAvailable, isTrue);
+    expect(
+      controller.messages.map((message) => message['content']),
+      containsAllInOrder([
+        contains('Final preset context'),
+        contains('Think template'),
+        contains('Return only the completed <thinking>'),
+      ]),
+    );
+    expect(controller.rawRequest?['messageCount'], controller.messages.length);
+  });
+
   test(
     'final writer is unavailable when controller outputs are required',
     () async {

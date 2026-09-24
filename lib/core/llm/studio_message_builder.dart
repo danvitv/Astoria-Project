@@ -53,6 +53,8 @@ class StudioMessageBuilder {
     bool excludeReasoningFromContextBudget = false,
     Set<String>? emittedLorebookClassifications,
     Map<String, dynamic>? responseJsonSchema,
+    bool isThinkController = false,
+    bool isThinkingPass = false,
   }) {
     final point = _blockExpander.injectionPointForRun(agent, isFinalResponse);
     final spec = StudioControllerOntology.specForAgent(agent);
@@ -108,7 +110,7 @@ class StudioMessageBuilder {
     // Continue mode: the instruction belongs to the final writer only. The
     // controller agents analyse the scene; they never extend the reply, so
     // handing them "expand your latest message" would corrupt their briefs.
-    final continueInstruction = isFinalResponse
+    final continueInstruction = isFinalResponse && !isThinkingPass
         ? context.continueInstruction
         : null;
 
@@ -144,6 +146,7 @@ class StudioMessageBuilder {
     List<Map<String, dynamic>> emitHistory(List<PromptMessage> history) {
       final mergedHistory = _applyAppendToLastMessage(history, appendableEntries);
       if (isFinalResponse &&
+          !isThinkingPass &&
           (reasoningHistoryCount == -1 || reasoningHistoryCount > 0)) {
         return _historyWithReasoning(
           mergedHistory,
@@ -306,7 +309,7 @@ class StudioMessageBuilder {
                   )
                   .trim(),
             );
-          if (!isFinalResponse) {
+          if (!isFinalResponse && !isThinkController) {
             if (spec != null) {
               control
                 ..writeln()
@@ -314,12 +317,13 @@ class StudioMessageBuilder {
             }
           }
           if (isFinalResponse &&
+              !isThinkingPass &&
               (hasExplicitBriefMacros || priorBriefs.isNotEmpty)) {
             control
               ..writeln()
               ..writeln(_promptText.finalBriefUsageNote());
           }
-          if (isFinalResponse) {
+          if (isFinalResponse && !isThinkingPass) {
             final styleContract = _promptText.finalHardStyleContract(
               studioPreset,
             );
@@ -356,6 +360,10 @@ class StudioMessageBuilder {
           );
           break;
         case 'functionPrefill':
+          // Output-shaping scaffolding belongs to the final answer, not the
+          // controller's analysis request. In particular, synthetic tool
+          // history can be rejected by Gemini without a thought signature.
+          if (isThinkingPass) break;
           _recordLorebookMacroClassifications(
             block.content,
             emittedLorebookClassifications,
@@ -401,6 +409,60 @@ class StudioMessageBuilder {
       entries: _readStudioRegexes(),
       macroContext: context.macroContext,
     );
+  }
+
+  /// The Think controller audits the same active preset, context slots and
+  /// history window as the final writer. Its own addressed instructions come
+  /// last, so they can request a `<thinking>` block rather than visible prose.
+  List<Map<String, dynamic>> buildThinkControllerMessages({
+    required StudioAgent agent,
+    required StudioAgent finalAgent,
+    required StudioContext context,
+    required StudioConfig config,
+    required StudioPreset studioPreset,
+    required int finalContextOverride,
+    required int reasoningHistoryCount,
+    required bool excludeReasoningFromContextBudget,
+  }) {
+    final messages = buildAgentMessages(
+      agent: finalAgent,
+      context: context,
+      config: config,
+      studioPreset: studioPreset,
+      priorBriefs: const [],
+      isFinalResponse: true,
+      finalContextOverride: finalContextOverride,
+      reasoningHistoryCount: reasoningHistoryCount,
+      excludeReasoningFromContextBudget: excludeReasoningFromContextBudget,
+      isThinkingPass: true,
+    );
+    final thinkAgentId = StudioControllerOntology.specForAgent(agent)?.id;
+    if (thinkAgentId == null) {
+      throw StateError('Think controller has no Studio lane.');
+    }
+    final thinkBlocks = studioPreset.blocks.where(
+      (block) =>
+          block.injectionPoint == 'specificAgent' &&
+          block.targetAgentId == thinkAgentId,
+    );
+    messages.addAll(
+      buildAgentMessages(
+        agent: agent,
+        context: context,
+        config: config,
+        studioPreset: studioPreset.copyWith(blocks: thinkBlocks.toList()),
+        priorBriefs: const [],
+        isFinalResponse: false,
+        isThinkController: true,
+      ),
+    );
+    messages.add({
+      'role': 'user',
+      'content': 'Audit the scene using the complete preset and context above. '
+          'Return only the completed <thinking>...</thinking> block. '
+          'Do not write the final roleplay response.',
+    });
+    return messages;
   }
 
   void _recordLorebookSlotClassifications(

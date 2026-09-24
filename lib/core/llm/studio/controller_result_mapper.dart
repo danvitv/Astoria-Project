@@ -49,6 +49,8 @@ class StudioTrackerResultMapper {
           brief: sanitized,
           status: result.status,
           error: result.error,
+          isThinkReplacement: agent.reasoningMode == 'think-replacement',
+          nativeReasoning: result.nativeReasoning,
           refreshPolicy: probe?.policy ?? 'turn',
           cacheKey: _briefCache.isCacheablePolicy(probe?.policy ?? 'turn')
               ? probe?.cacheKey
@@ -63,7 +65,7 @@ class StudioTrackerResultMapper {
   /// Formats the user-facing error message for a failed tracker result.
   String trackerFailureMessage(ControllerBatchResult result) {
     final reason = result.error ?? 'missing or unparseable tracker result';
-    return 'Studio tracker "${result.agentName}" failed after 2 retries: '
+    return 'Studio tracker "${result.agentName}" failed: '
         '$reason. Please restart generation.';
   }
 }

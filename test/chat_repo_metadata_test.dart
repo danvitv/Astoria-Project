@@ -15,6 +15,45 @@ void main() {
 
   tearDown(() => db.close());
 
+  test('cleaned sub-swipe keeps the Think reasoning when selected', () async {
+    const thinking = '<thinking>Completed controller analysis</thinking>';
+    await repo.put(
+      const ChatSession(
+        id: 'thinking-session',
+        characterId: 'character',
+        sessionIndex: 0,
+        messages: [
+          ChatMessage(
+            id: 'assistant',
+            role: 'assistant',
+            content: 'Original reply',
+            reasoning: thinking,
+            agentSwipes: [
+              AgentSwipe(
+                content: 'Original reply',
+                kind: 'final',
+                reasoning: thinking,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    expect(
+      await repo.appendAgentSwipe(
+        sessionId: 'thinking-session',
+        messageId: 'assistant',
+        content: 'Rewritten reply',
+        kind: 'cleaned',
+      ),
+      isTrue,
+    );
+    final saved = (await repo.getById('thinking-session'))!.messages.single;
+    expect(saved.agentSwipes.last.reasoning, thinking);
+    expect(saved.swipesMeta.first['agentSwipes'], isNotNull);
+  });
+
   test(
     'all-session metadata is projected without changing its values',
     () async {

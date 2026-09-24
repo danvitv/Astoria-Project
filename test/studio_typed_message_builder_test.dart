@@ -1,5 +1,7 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:glaze_flutter/core/llm/agent_runner.dart';
 import 'package:glaze_flutter/core/llm/history_assembler.dart';
 import 'package:glaze_flutter/core/llm/macro_engine.dart';
 import 'package:glaze_flutter/core/llm/studio/studio_context.dart';
@@ -8,7 +10,86 @@ import 'package:glaze_flutter/core/llm/studio_agent_executor.dart';
 import 'package:glaze_flutter/core/llm/studio_brief_parser.dart';
 import 'package:glaze_flutter/core/llm/studio_message_builder.dart';
 import 'package:glaze_flutter/core/llm/studio_prompt_text.dart';
+import 'package:glaze_flutter/core/llm/studio/agent_config_resolver.dart';
+import 'package:glaze_flutter/core/llm/studio_turn_config_snapshot.dart';
+import 'package:glaze_flutter/core/models/api_config.dart';
+import 'package:glaze_flutter/core/models/pipeline_settings.dart';
 import 'package:glaze_flutter/core/models/studio_config.dart';
+
+class _CapturingAgentRunner extends AgentRunner {
+  _CapturingAgentRunner()
+      : super(
+          configResolver: AgentConfigResolver(
+            loadApiConfigs: () async => const [],
+            readActiveApiConfig: () => null,
+            readPipelineSettings: () => const PipelineSettings(),
+          ),
+          readPipelineSettings: () => const PipelineSettings(),
+        );
+
+  List<Map<String, dynamic>>? capturedMessages;
+  bool? capturedIsFinalResponse;
+  String text = 'Final prose';
+  String reasoning = '';
+
+  @override
+  Future<AgentRunResult> runAgent({
+    required StudioAgent agent,
+    required List<Map<String, dynamic>> messages,
+    required ApiConfig apiConfig,
+    required String sessionId,
+    required bool isFinalResponse,
+    CancelToken? cancelToken,
+    ResolvedAgentConfig? preResolvedConfig,
+    String? apiConfigId,
+    StudioTurnConfigSnapshot? turnConfig,
+    String? charName,
+    String? userName,
+    int? batchMaxTokens,
+    double? batchTemperature,
+    Map<String, dynamic>? responseJsonSchema,
+    void Function(String text, String? reasoning)? onFinalResponseUpdate,
+    void Function(String text)? onIntermediateUpdate,
+    Future<void> Function()? beforeSend,
+  }) async {
+    capturedMessages = messages;
+    capturedIsFinalResponse = isFinalResponse;
+    if (isFinalResponse) {
+      onFinalResponseUpdate?.call(text, reasoning);
+    } else {
+      onIntermediateUpdate?.call(text);
+    }
+    return AgentRunResult(text: text, reasoning: reasoning);
+  }
+}
+
+class _FailedThinkRunner extends _CapturingAgentRunner {
+  int calls = 0;
+
+  @override
+  Future<AgentRunResult> runAgent({
+    required StudioAgent agent,
+    required List<Map<String, dynamic>> messages,
+    required ApiConfig apiConfig,
+    required String sessionId,
+    required bool isFinalResponse,
+    CancelToken? cancelToken,
+    ResolvedAgentConfig? preResolvedConfig,
+    String? apiConfigId,
+    StudioTurnConfigSnapshot? turnConfig,
+    String? charName,
+    String? userName,
+    int? batchMaxTokens,
+    double? batchTemperature,
+    Map<String, dynamic>? responseJsonSchema,
+    void Function(String text, String? reasoning)? onFinalResponseUpdate,
+    void Function(String text)? onIntermediateUpdate,
+    Future<void> Function()? beforeSend,
+  }) async {
+    calls++;
+    return const AgentRunResult(text: '');
+  }
+}
 
 void main() {
   final builder = StudioMessageBuilder(
@@ -295,6 +376,338 @@ void main() {
       ),
       '<thinking>\nalready normalized\n</thinking>',
     );
+  });
+
+  test('final request contains the Think result as assistant history', () async {
+    final runner = _CapturingAgentRunner();
+    runner.reasoning = 'Additional writer reasoning';
+    final executor = StudioAgentExecutor(
+      runner,
+      builder,
+      StudioBriefParser((_) {}),
+      () => const PipelineSettings(),
+    );
+    List<Map<String, dynamic>>? inspectedMessages;
+    String? streamedReasoning;
+    final result = await executor.runFinalGenerator(
+      agent: const StudioAgent(id: 'final', controllerId: 'final'),
+      context: context,
+      apiConfig: const ApiConfig(
+        id: 'api',
+        endpoint: 'https://example.org',
+        model: 'model',
+      ),
+      config: config,
+      studioPreset: const StudioPreset(id: 'studio'),
+      priorBriefs: const [],
+      sessionId: 'session',
+      cancelToken: CancelToken(),
+      reasoningPrefill: '<audit>Completed analysis</audit>',
+      onMessagesBuilt: (messages) => inspectedMessages = messages,
+      onFinalResponseUpdate: (_, reasoning) => streamedReasoning = reasoning,
+    );
+
+    expect(runner.capturedMessages, inspectedMessages);
+    expect(runner.capturedMessages!.last, {
+      'role': 'user',
+      'content': contains('completed internal analysis'),
+    });
+    expect(runner.capturedMessages![runner.capturedMessages!.length - 2], {
+      'role': 'assistant',
+      'content': '<thinking>\nCompleted analysis\n</thinking>',
+    });
+    expect(result.reasoning, contains('<thinking>\nCompleted analysis\n</thinking>'));
+    expect(result.reasoning, contains('Additional writer reasoning'));
+    expect(streamedReasoning, result.reasoning);
+  });
+
+  test('Think reasoning survives when Main Writer emits no reasoning', () async {
+    final runner = _CapturingAgentRunner();
+    String? streamedReasoning;
+    final result = await StudioAgentExecutor(
+      runner,
+      builder,
+      StudioBriefParser((_) {}),
+      () => const PipelineSettings(),
+    ).runFinalGenerator(
+      agent: const StudioAgent(id: 'final', controllerId: 'final'),
+      context: context,
+      apiConfig: const ApiConfig(
+        id: 'api',
+        endpoint: 'https://example.org',
+        model: 'model',
+      ),
+      config: config,
+      studioPreset: const StudioPreset(id: 'studio'),
+      priorBriefs: const [],
+      sessionId: 'session',
+      cancelToken: CancelToken(),
+      reasoningPrefill: '<thinking>Only controller analysis</thinking>',
+      onFinalResponseUpdate: (_, reasoning) => streamedReasoning = reasoning,
+    );
+
+    expect(result.reasoning, '<thinking>\nOnly controller analysis\n</thinking>');
+    expect(streamedReasoning, result.reasoning);
+  });
+
+  test('all three received reasoning layers are saved but only text seeds final', () async {
+    final runner = _CapturingAgentRunner()..reasoning = 'Main Writer reasoning';
+    final result = await StudioAgentExecutor(
+      runner,
+      builder,
+      StudioBriefParser((_) {}),
+      () => const PipelineSettings(),
+    ).runFinalGenerator(
+      agent: const StudioAgent(id: 'final', controllerId: 'final'),
+      context: context,
+      apiConfig: const ApiConfig(id: 'api', endpoint: 'https://example.org', model: 'model'),
+      config: config,
+      studioPreset: const StudioPreset(id: 'studio'),
+      priorBriefs: const [],
+      sessionId: 'session',
+      cancelToken: CancelToken(),
+      reasoningPrefill: '<thinking>Completed audit</thinking>',
+      controllerNativeReasoning: 'Controller native reasoning',
+    );
+
+    expect(runner.capturedMessages![runner.capturedMessages!.length - 2]['content'],
+        '<thinking>\nCompleted audit\n</thinking>');
+    expect(runner.capturedMessages.toString(), isNot(contains('Controller native reasoning')));
+    expect(result.reasoning, contains('Controller native reasoning'));
+    expect(result.reasoning, contains('<thinking>\nCompleted audit\n</thinking>'));
+    expect(result.reasoning, contains('Main Writer reasoning'));
+  });
+
+  test('an empty Think response triggers only one controller request', () async {
+    final runner = _FailedThinkRunner();
+    final result = await StudioAgentExecutor(
+      runner,
+      builder,
+      StudioBriefParser((_) {}),
+      () => const PipelineSettings(),
+    ).runIndividualTracker(
+      agent: const StudioAgent(
+        id: 'think',
+        controllerId: 'think',
+        reasoningMode: 'think-replacement',
+      ),
+      finalAgent: const StudioAgent(id: 'final', controllerId: 'final'),
+      finalContext: context,
+      context: context,
+      apiConfig: const ApiConfig(id: 'api', endpoint: 'https://example.org', model: 'model'),
+      config: config,
+      studioPreset: const StudioPreset(id: 'studio'),
+      sessionId: 'session',
+      cancelToken: CancelToken(),
+    );
+
+    expect(runner.calls, 1);
+    expect(result.status, 'failed');
+    expect(result.error, contains('empty response'));
+  });
+
+  test('Think controller passes provider reasoning separately from its block', () async {
+    final runner = _CapturingAgentRunner()
+      ..text = '<thinking>Completed audit</thinking>'
+      ..reasoning = 'Controller native reasoning';
+    final updates = <String>[];
+    final result = await StudioAgentExecutor(
+      runner,
+      builder,
+      StudioBriefParser((_) {}),
+      () => const PipelineSettings(),
+    ).runIndividualTracker(
+      agent: const StudioAgent(
+        id: 'think',
+        controllerId: 'think',
+        reasoningMode: 'think-replacement',
+      ),
+      finalAgent: const StudioAgent(id: 'final', controllerId: 'final'),
+      finalContext: context,
+      context: context,
+      apiConfig: const ApiConfig(id: 'api', endpoint: 'https://example.org', model: 'model'),
+      config: config,
+      studioPreset: const StudioPreset(id: 'studio'),
+      sessionId: 'session',
+      cancelToken: CancelToken(),
+      onIntermediateUpdate: updates.add,
+    );
+
+    expect(result.status, 'ok');
+    expect(result.text, '<thinking>Completed audit</thinking>');
+    expect(result.nativeReasoning, 'Controller native reasoning');
+    expect(updates, ['<thinking>Completed audit</thinking>']);
+  });
+
+  test('reasoning-only Think response seeds the writer without a duplicate', () async {
+    final runner = _CapturingAgentRunner()
+      ..text = ''
+      ..reasoning = 'Completed audit in native reasoning';
+    final executor = StudioAgentExecutor(
+      runner,
+      builder,
+      StudioBriefParser((_) {}),
+      () => const PipelineSettings(),
+    );
+    final think = await executor.runIndividualTracker(
+      agent: const StudioAgent(
+        id: 'think',
+        controllerId: 'think',
+        reasoningMode: 'think-replacement',
+      ),
+      finalAgent: const StudioAgent(id: 'final', controllerId: 'final'),
+      finalContext: context,
+      context: context,
+      apiConfig: const ApiConfig(
+        id: 'api',
+        endpoint: 'https://example.org',
+        model: 'model',
+      ),
+      config: config,
+      studioPreset: const StudioPreset(id: 'studio'),
+      sessionId: 'session',
+      cancelToken: CancelToken(),
+    );
+
+    expect(think.status, 'ok');
+    expect(think.text, 'Completed audit in native reasoning');
+    expect(think.nativeReasoning, isEmpty);
+
+    runner.text = 'Final prose';
+    runner.reasoning = 'Writer native reasoning';
+    final answer = await executor.runFinalGenerator(
+      agent: const StudioAgent(id: 'final', controllerId: 'final'),
+      context: context,
+      apiConfig: const ApiConfig(
+        id: 'api',
+        endpoint: 'https://example.org',
+        model: 'model',
+      ),
+      config: config,
+      studioPreset: const StudioPreset(id: 'studio'),
+      priorBriefs: const [],
+      sessionId: 'session',
+      cancelToken: CancelToken(),
+      reasoningPrefill: think.text,
+      controllerNativeReasoning: think.nativeReasoning,
+    );
+
+    expect(runner.capturedMessages![runner.capturedMessages!.length - 2], {
+      'role': 'assistant',
+      'content': '<thinking>\nCompleted audit in native reasoning\n</thinking>',
+    });
+    expect(answer.reasoning, contains('Writer native reasoning'));
+    expect(
+      'Completed audit in native reasoning'.allMatches(answer.reasoning),
+      hasLength(1),
+    );
+  });
+
+  test('Think request receives active final preset and final context', () async {
+    final runner = _CapturingAgentRunner();
+    final executor = StudioAgentExecutor(
+      runner,
+      builder,
+      StudioBriefParser((_) {}),
+      () => const PipelineSettings(),
+    );
+    const preset = StudioPreset(
+      id: 'studio',
+      blocks: [
+        StudioPresetBlock(
+          id: 'style',
+          content: 'Final style contract',
+          injectionPoint: 'final',
+          order: 0,
+        ),
+        StudioPresetBlock(
+          id: 'card',
+          type: StudioBlockType.context,
+          contextSlot: StudioContextSlot.characterCard,
+          injectionPoint: 'final',
+          order: 1,
+        ),
+        StudioPresetBlock(
+          id: 'history',
+          type: StudioBlockType.history,
+          injectionPoint: 'final',
+          order: 2,
+        ),
+        StudioPresetBlock(
+          id: 'disabled',
+          content: 'Disabled final instruction',
+          injectionPoint: 'final',
+          enabled: false,
+          order: 3,
+        ),
+        StudioPresetBlock(
+          id: 'output-prefill',
+          mode: 'functionPrefill',
+          content: 'Final-answer-only synthetic tool tail',
+          injectionPoint: 'final',
+          order: 4,
+        ),
+        StudioPresetBlock(
+          id: 'think-template',
+          content: 'Audit according to the template',
+          injectionPoint: 'specificAgent',
+          targetAgentId: 'think',
+          role: 'assistant',
+          order: 5,
+        ),
+      ],
+    );
+    const trackerContext = StudioContext(
+      slots: {},
+      history: [],
+      sessionVars: {},
+      globalVars: {},
+      macroContext: MacroContext(
+        charName: 'Lucy',
+        charId: 'char',
+        sessionId: 'session',
+      ),
+      diagnostics: StudioContextDiagnostics(),
+    );
+    final result = await executor.runTracker(
+      agent: const StudioAgent(
+        id: 'think',
+        controllerId: 'think',
+        reasoningMode: 'think-replacement',
+      ),
+      finalAgent: const StudioAgent(id: 'final', controllerId: 'final'),
+      finalContext: context,
+      context: trackerContext,
+      apiConfig: const ApiConfig(
+        id: 'api',
+        endpoint: 'https://example.org',
+        model: 'model',
+      ),
+      config: config,
+      studioPreset: preset,
+      sessionId: 'session',
+      cancelToken: CancelToken(),
+    );
+
+    expect(runner.capturedIsFinalResponse, isFalse);
+    final contents = runner.capturedMessages!
+        .map((message) => message['content'])
+        .toList();
+    expect(contents, containsAllInOrder([
+      'Final style contract',
+      'Typed character card',
+      'First',
+      'Second',
+      'Audit according to the template',
+    ]));
+    expect(contents.join('\n'), isNot(contains('Disabled final instruction')));
+    expect(
+      contents.join('\n'),
+      isNot(contains('Final-answer-only synthetic tool tail')),
+    );
+    expect(runner.capturedMessages!.any((m) => m['role'] == 'tool'), isFalse);
+    expect(contents.last, contains('Return only the completed <thinking>'));
+    expect(result.isThinkReplacement, isTrue);
   });
 
   test('instruction blocks pass through author-set user/assistant roles', () {

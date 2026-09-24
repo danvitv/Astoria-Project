@@ -43,8 +43,8 @@ class AgentRunner {
   /// [AgentRunResult] carries the final accumulated text + reasoning.
   ///
   /// [isFinalResponse] = true → the generator (final agent). Reasoning is
-  /// forwarded to the UI. [isFinalResponse] = false → a tracker; reasoning
-  /// is discarded (trackers are JSON/plain-text producers).
+  /// forwarded to the UI. Ordinary trackers discard reasoning; the Think
+  /// controller retains it separately from its visible `<thinking>` block.
   ///
   /// Tracker failure handling: when [isFinalResponse] is false, any exception
   /// (timeout, transport, idle) is **caught and rethrown as

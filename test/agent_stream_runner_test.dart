@@ -14,12 +14,14 @@ class _FakeTransport implements ChatTransport {
     this.waitForCancellation = false,
     this.completedText = 'complete response',
     this.completedReasoning,
+    this.chunks = const [],
   });
 
   final Duration? delay;
   final bool waitForCancellation;
   final String completedText;
   final String? completedReasoning;
+  final List<(String, String?)> chunks;
   ChatTransportRequest? request;
   bool cancelled = false;
 
@@ -38,6 +40,9 @@ class _FakeTransport implements ChatTransport {
       return;
     }
     await Future<void>.delayed(delay!);
+    for (final (text, reasoning) in chunks) {
+      onUpdate?.call(text, reasoning);
+    }
     onComplete?.call(completedText, completedReasoning);
   }
 
@@ -217,6 +222,84 @@ void main() {
       expect(result.reasoning, 'step analysis');
     },
   );
+
+  test('Think tracker streams and retains native and visible thinking', () async {
+    final transport = _FakeTransport(
+      delay: Duration.zero,
+      completedText: '<thinking>audit complete</thinking>',
+      completedReasoning: 'native steps',
+      chunks: [
+        ('', 'native '),
+        ('', 'steps'),
+        ('<thinking>audit ', null),
+        ('complete</thinking>', null),
+      ],
+    );
+    final updates = <String>[];
+    final result = await AgentStreamRunner((_) => transport).run(
+      agent: const StudioAgent(
+        id: 'think',
+        controllerId: 'think',
+        reasoningMode: 'think-replacement',
+      ),
+      messages: const [{'role': 'user', 'content': 'audit'}],
+      resolved: const ResolvedAgentConfig(
+        endpoint: 'https://example.com',
+        apiKey: 'key',
+        model: 'model',
+        protocol: 'custom_chat_completion',
+        stream: true,
+        reasoningTagStart: '<thinking>',
+        reasoningTagEnd: '</thinking>',
+      ),
+      sessionId: 'session',
+      isFinalResponse: false,
+      cancelToken: CancelToken(),
+      timeoutMs: 100,
+      onIntermediateUpdate: updates.add,
+    );
+
+    expect(result.text, '<thinking>audit complete</thinking>');
+    expect(result.reasoning, 'native steps');
+    expect(updates.first, contains('native '));
+    expect(updates.last, contains('<thinking>audit complete</thinking>'));
+    expect(updates.last, contains('native steps'));
+    expect(updates.where((update) => update == updates.last), hasLength(1));
+  });
+
+  test('Think tracker returns a reasoning-only provider response', () async {
+    final transport = _FakeTransport(
+      delay: Duration.zero,
+      completedText: '',
+      completedReasoning: 'completed analysis',
+      chunks: [('', 'completed '), ('', 'analysis')],
+    );
+    final updates = <String>[];
+    final result = await AgentStreamRunner((_) => transport).run(
+      agent: const StudioAgent(
+        id: 'think',
+        controllerId: 'think',
+        reasoningMode: 'think-replacement',
+      ),
+      messages: const [{'role': 'user', 'content': 'audit'}],
+      resolved: const ResolvedAgentConfig(
+        endpoint: 'https://example.com',
+        apiKey: 'key',
+        model: 'model',
+        protocol: 'custom_chat_completion',
+        stream: true,
+      ),
+      sessionId: 'session',
+      isFinalResponse: false,
+      cancelToken: CancelToken(),
+      timeoutMs: 100,
+      onIntermediateUpdate: updates.add,
+    );
+
+    expect(result.text, isEmpty);
+    expect(result.reasoning, 'completed analysis');
+    expect(updates.last, contains('completed analysis'));
+  });
 
   test('timeout cancels the in-flight transport request', () async {
     final transport = _FakeTransport(waitForCancellation: true);
