@@ -186,6 +186,28 @@ void main() {
   });
 
   group('ChatWebViewSyncDispatcher', () {
+    test('reconciles generation starting during a slow first paint', () {
+      final bridge = _FakeBridge();
+      final dispatcher = ChatWebViewSyncDispatcher(
+        state: ChatWebViewSyncState(),
+      );
+      // The initializer painted with idle flags. No didUpdateWidget dispatch
+      // reached the page while it was waiting for the platform bridge.
+      final current = _fields(
+        isGenerating: true,
+        isSendPending: true,
+        messages: [_user('u1')],
+      );
+
+      dispatcher.reconcileGeneratingState(bridge: bridge, current: current);
+
+      expect(bridge.isGenerating, isTrue);
+      expect(bridge.isSendPendingInPage, isTrue);
+      expect(bridge.evalCalls.single, contains('setGenerating(true)'));
+      expect(bridge.evalCalls.single, contains('setSendPending(true)'));
+      expect(bridge.lastMessageIds, [null]);
+    });
+
     test(
       'restores an already-active normal generation after DOM reset',
       () async {

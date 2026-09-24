@@ -882,10 +882,16 @@ class UseVirtualScroll {
     _viewportOutsideRenderedBand() {
         if (this.items.length === 0) return false;
         if (this.renderEnd <= this.renderStart) return true;
-        const { top, bottom } = this._renderedBand();
-        const viewTop = this.container.scrollTop;
-        const viewBottom = viewTop + this.container.clientHeight;
-        return bottom <= viewTop || top >= viewBottom;
+        const first = this.items[this.renderStart]?.el;
+        const last = this.items[this.renderEnd - 1]?.el;
+        if (!first || !last || first.parentNode !== this.container ||
+            last.parentNode !== this.container) return true;
+        const view = this.container.getBoundingClientRect();
+        // The height cache holds guesses until observer measurements arrive.
+        // Comparing those guesses with scrollTop could claim the viewport is
+        // covered even when the real mounted rows were entirely elsewhere.
+        return last.getBoundingClientRect().bottom <= view.top ||
+            first.getBoundingClientRect().top >= view.bottom;
     }
 
     /* The window the current scroll position asks for. Derived from the height
@@ -993,7 +999,11 @@ class UseVirtualScroll {
             let changed = false;
             entries.forEach(entry => {
                 const idx = parseInt(entry.target.dataset.index);
-                if (isNaN(idx)) return;
+                // Observer callbacks queued before a full setMessages/remove
+                // still arrive after unobserve. Their old indices can trim the
+                // new window until every visible message disappears.
+                if (isNaN(idx) || this.items[idx]?.el !== entry.target ||
+                    entry.target.parentNode !== this.container) return;
                 if (entry.boundingClientRect.height > 0) {
                     this.cache.setHeight(idx, entry.boundingClientRect.height);
                 }
@@ -1013,7 +1023,8 @@ class UseVirtualScroll {
             if (!this.mounted) return;
             entries.forEach(entry => {
                 const idx = parseInt(entry.target.dataset.index);
-                if (isNaN(idx)) return;
+                if (isNaN(idx) || this.items[idx]?.el !== entry.target ||
+                    entry.target.parentNode !== this.container) return;
                 if (entry.isIntersecting) {
                     this.realVisibleIndices.add(idx);
                 } else {
@@ -1034,7 +1045,9 @@ class UseVirtualScroll {
                 for (const entry of entries) {
                     const idx = parseInt(entry.target.dataset.index);
                     const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
-                    if (isNaN(idx) || height <= 0) continue;
+                    if (isNaN(idx) || height <= 0 ||
+                        this.items[idx]?.el !== entry.target ||
+                        entry.target.parentNode !== this.container) continue;
                     const previous = this.cache.itemHeights.get(idx);
                     if (previous == null || Math.abs(previous - height) > 1) {
                         this.cache.setHeight(idx, height);

@@ -64,13 +64,10 @@ class _HeroCard extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(22),
-                    child: Image.asset(
-                      'assets/logos/astoria.png',
-                      width: 88,
-                      height: 88,
-                    ),
+                  Image.asset(
+                    'assets/logos/astoria.png',
+                    width: 88,
+                    height: 88,
                   ),
                   const SizedBox(height: 16),
                   Text(

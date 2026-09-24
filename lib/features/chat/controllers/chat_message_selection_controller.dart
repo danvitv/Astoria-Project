@@ -27,16 +27,18 @@ class ChatMessageSelectionController {
 
   /// Whether the current selection is allowed to be deleted.
   ///
-  /// Any selection is deletable, including a lone message in the middle of the
-  /// chat or a run that stops short of the end. Removing messages mid-history
-  /// also rolls back Studio trackers, MemoryBook entries and other state
-  /// derived from that point on, so the UI confirms the delete rather than
-  /// restricting which messages can be picked.
+  /// Only a contiguous suffix of the current chat may be deleted.
   bool canDeleteSelection(List<ChatMessage> messages) {
     if (selectedMessageIds.isEmpty || messages.isEmpty) return false;
-    return selectedMessageIds.any(
-      (id) => messages.any((message) => message.id == id),
+    final first = messages.indexWhere(
+      (message) => selectedMessageIds.contains(message.id),
     );
+    if (first < 0 || selectedMessageIds.length != messages.length - first) {
+      return false;
+    }
+    return messages
+        .skip(first)
+        .every((message) => selectedMessageIds.contains(message.id));
   }
 
   Future<void> hideSelected(
@@ -55,8 +57,8 @@ class ChatMessageSelectionController {
 
   /// Deletes every selected message and leaves selection mode.
   ///
-  /// Refuses only an empty selection. Any set of messages may go, including a
-  /// middle one; the caller owns the confirmation prompt.
+  /// Refuses a selection that is not a contiguous suffix, even if the toolbar
+  /// action is invoked directly. The caller owns the confirmation prompt.
   ///
   /// Deliberately not `async`: the indices are resolved and the selection is
   /// dropped synchronously, so a caller that rebuilds before awaiting the

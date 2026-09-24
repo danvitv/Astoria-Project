@@ -684,8 +684,14 @@ export class Bridge {
     // remember the current reading position so the batch replace below doesn't
     // yank the chat back to the top/bottom.
     const anchor = preserveScroll ? this.virtualList.captureAnchor() : null;
-    this._panelHost?.closeAll();
+    // A roster/regex refresh replaces every section. Carry the in-progress
+    // source draft across it; the provider still names the same active editor.
     const container = document.getElementById('chat-container') || document.body;
+    const editingSection = this.virtualList.items.find(item =>
+      item.el.classList.contains('editing'))?.el;
+    const editingId = editingSection?.dataset.messageId;
+    const editingText = editingSection?.querySelector('.edit-textarea')?.value;
+    this._panelHost?.closeAll();
     if (![...container.classList].some(c => c.startsWith('layout-'))) {
       container.classList.add('layout-default');
     }
@@ -707,6 +713,15 @@ export class Bridge {
     this.virtualList.setMessagesBatch(ids, elements);
     this._reattachStreamingPlaceholder(carriedPlaceholder);
     if (anchor) this.virtualList.restoreAnchor(anchor);
+    if (preserveScroll && editingId && this.virtualList.itemMap.has(editingId)) {
+      const newSection = this.virtualList.itemMap.get(editingId).el;
+      this._editController.startEdit(editingId, (pos) => {
+        if (pos !== undefined) this.virtualList.container.scrollTop = pos;
+        return this.virtualList.container.scrollTop;
+      }, newSection);
+      const textarea = newSection.querySelector('.edit-textarea');
+      if (textarea && editingText != null) textarea.value = editingText;
+    }
     this._hideLoadingScreen();
     this._imgGenTimer.ensureRunning();
     setTimeout(() => { this._suppressLoadMore = false; }, 1000);
@@ -813,7 +828,7 @@ export class Bridge {
   }
 
   _executeUpdateMessage(msg) {
-    const section = document.querySelector(`[data-message-id="${msg.id}"]`);
+    const section = this.virtualList.itemMap.get(msg.id)?.el;
     if (!section) {
       // Last line of defence for the virtual placeholder: while Flutter still
       // believes one is on screen, a node the list lost has to be re-created
@@ -845,14 +860,18 @@ export class Bridge {
     if (msg.isError !== undefined) section.classList.toggle('error', !!msg.isError);
 
     const isUser = section.classList.contains('user');
-    this.renderer.updateMessageContent(
-      section,
-      msg.text != null ? msg.text : (section.dataset.rawText || ''),
-      msg.reasoning ?? null,
-      isUser,
-      !!msg.isTyping,
-      animate,
-    );
+    // Keep the textarea (including unsaved input) while only the backing
+    // message changes. stopEdit rebuilds the body from the latest dataset.
+    if (!section.classList.contains('editing')) {
+      this.renderer.updateMessageContent(
+        section,
+        msg.text != null ? msg.text : (section.dataset.rawText || ''),
+        msg.reasoning ?? null,
+        isUser,
+        !!msg.isTyping,
+        animate,
+      );
+    }
     this._imgGenTimer.ensureRunning();
 
     if (msg.isHidden !== undefined) {
@@ -1518,14 +1537,15 @@ export class Bridge {
    * on the container is what keeps that reveal clear of the chrome (see
    * _applyBottomPadding). That only ever scrolls as far as the caret needs. */
   startEdit(messageId) {
+    const section = this.virtualList.itemMap.get(messageId)?.el;
     this._editController.startEdit(messageId, (pos) => {
       if (pos !== undefined) this.virtualList.container.scrollTop = pos;
       return this.virtualList.container.scrollTop;
-    });
+    }, section);
   }
 
   stopEdit(messageId) {
-    this._editController.stopEdit(messageId);
+    this._editController.stopEdit(messageId, this.virtualList.itemMap.get(messageId)?.el);
   }
 
   setBackgroundImage(url, blur) {

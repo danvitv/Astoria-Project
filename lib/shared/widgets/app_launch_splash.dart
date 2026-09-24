@@ -112,13 +112,10 @@ class _AppLaunchSplashState extends State<AppLaunchSplash>
                       child: Center(
                         child: Transform.scale(
                           scale: logoScale,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(34),
-                            child: Image.asset(
-                              'assets/logos/astoria.png',
-                              width: 176,
-                              height: 176,
-                            ),
+                          child: Image.asset(
+                            'assets/logos/astoria.png',
+                            width: 176,
+                            height: 176,
                           ),
                         ),
                       ),

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logos/astoria.png" width="256" alt="Astoria monogram">
+  <img src="assets/logos/astoria.png" width="256" alt="Astoria cat logo">
 </p>
 
 # Astoria Project

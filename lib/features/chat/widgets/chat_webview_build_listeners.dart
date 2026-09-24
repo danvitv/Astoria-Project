@@ -50,6 +50,7 @@ class ChatWebViewBuildListeners {
     required this.onSyncExtBlockPanels,
     required this.onReconcileActiveGeneration,
     required this.onDomReset,
+    required this.onRefreshMessages,
     this.isCurrentBridge,
   });
 
@@ -73,6 +74,7 @@ class ChatWebViewBuildListeners {
   final Future<void> Function(ChatBridgeController bridge)
   onReconcileActiveGeneration;
   final void Function() onDomReset;
+  final void Function(ChatBridgeController bridge) onRefreshMessages;
   final bool Function(ChatBridgeController bridge)? isCurrentBridge;
 
   /// Attach all `ref.listen` callbacks for the current build. Call
@@ -119,16 +121,7 @@ class ChatWebViewBuildListeners {
         // full re-render of every message. Preserve the current scroll position
         // so the chat stays put instead of jumping (see restoreAnchor in the
         // webview virtual list).
-        unawaited(() async {
-          onDomReset();
-          await b.setMessages(
-            messages,
-            visibleStartIndex: visibleStartIndex,
-            preserveScroll: true,
-          );
-          if (isCurrentBridge?.call(b) == false || !ready()) return;
-          await onReconcileActiveGeneration(b);
-        }());
+        onRefreshMessages(b);
       }
     });
   }
@@ -151,16 +144,7 @@ class ChatWebViewBuildListeners {
       // Same reasoning as the display-regex re-render above: every message map
       // is affected, so the batch is a full re-render that keeps the scroll
       // position.
-      unawaited(() async {
-        onDomReset();
-        await b.setMessages(
-          messages,
-          visibleStartIndex: visibleStartIndex,
-          preserveScroll: true,
-        );
-        if (isCurrentBridge?.call(b) == false || !ready()) return;
-        await onReconcileActiveGeneration(b);
-      }());
+      onRefreshMessages(b);
     });
   }
 

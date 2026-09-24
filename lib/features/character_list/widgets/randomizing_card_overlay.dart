@@ -680,7 +680,7 @@ class _RandomizingCardOverlayState extends State<RandomizingCardOverlay>
         return Color(int.parse('FF${col.replaceFirst('#', '')}', radix: 16));
       } catch (_) {}
     }
-    return const Color(0xFF7996CE);
+    return const Color(0xFFF5C400);
   }
 }
 
@@ -922,7 +922,7 @@ class HoloCard extends StatelessWidget {
         return Color(int.parse('FF${c.replaceFirst('#', '')}', radix: 16));
       } catch (_) {}
     }
-    return const Color(0xFF7996CE);
+    return const Color(0xFFF5C400);
   }
 
   /// Resolved portrait path (thumbnail preferred — smaller/faster to decode for
@@ -1110,7 +1110,7 @@ class HoloCard extends StatelessWidget {
               ),
             ),
 
-          // Top badge: the Astoria monogram.
+          // Top badge: the Astoria cat mark.
           Positioned(
             top: 22,
             right: 22,
@@ -1306,7 +1306,7 @@ class _EdgeTint extends StatelessWidget {
   }
 }
 
-/// The monogram's frame uses the accent colour pulled from *this card's*
+/// The cat mark's frame uses the accent colour pulled from *this card's*
 /// portrait (vibrant → dominant). Falls back to [fallback] until the palette
 /// resolves (or when the card has no image). Extraction runs once per mount;
 /// the enclosing [HoloCard] is keyed by character id, so switching cards
@@ -1377,7 +1377,7 @@ class _TopBadgeState extends State<_TopBadge> {
       ),
       child: Padding(
         padding: const EdgeInsets.all(4),
-        child: ClipOval(child: Image.asset('assets/logos/astoria.png')),
+        child: Image.asset('assets/logos/astoria.png'),
       ),
     );
   }

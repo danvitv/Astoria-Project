@@ -1,4 +1,4 @@
-"""Generate native app icons from assets/logos/astoria.png.
+"""Generate the in-app mark and native icons from the original cat sticker.
 
 Requires Pillow: python -m pip install Pillow
 Run from the repository root: python scripts/generate_astoria_icons.py
@@ -7,11 +7,13 @@ Run from the repository root: python scripts/generate_astoria_icons.py
 import json
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "assets/logos/astoria.png"
+SOURCE = ROOT / "assets/logos/astoria-sticker.png"
+APP_LOGO = ROOT / "assets/logos/astoria.png"
+CHARCOAL = (30, 30, 30)
 RESAMPLING = Image.Resampling.LANCZOS
 
 
@@ -20,16 +22,24 @@ def write_png(image: Image.Image, path: Path, size: int) -> None:
 
 
 def main() -> None:
-    image = Image.open(SOURCE).convert("RGB")
-    # The generated concept has pure white pixels outside its rounded frame.
-    # Native launchers apply their own masks, so make those corners burgundy.
-    image.putdata(
-        [
-            (83, 38, 53) if min(pixel) > 248 else pixel
-            for pixel in image.get_flattened_data()
-        ]
+    sticker = Image.open(SOURCE).convert("RGBA")
+    # Transparent artwork for the Flutter header/splash. Preserve the sticker's
+    # shape, with enough room for its whiskers on a square canvas.
+    square = Image.new("RGBA", (1024, 1024))
+    scale = min(916 / sticker.width, 916 / sticker.height)
+    thumb = sticker.resize(
+        (round(sticker.width * scale), round(sticker.height * scale)), RESAMPLING
     )
-    image.save(SOURCE, optimize=True)
+    square.alpha_composite(
+        thumb, ((1024 - thumb.width) // 2, (1024 - thumb.height) // 2)
+    )
+    square.save(APP_LOGO, optimize=True)
+
+    # iOS icons cannot have transparency. Use the cat's own charcoal for the
+    # backing so the transparent whisker gaps remain visible in every mask.
+    image = Image.new("RGBA", square.size, (*CHARCOAL, 255))
+    image.alpha_composite(square)
+    image = image.convert("RGB")
 
     android = ROOT / "android/app/src/main/res"
     for folder, size in {
@@ -43,20 +53,28 @@ def main() -> None:
         write_png(image, output / "ic_launcher.png", size)
         write_png(image, output / "ic_launcher_round.png", size)
 
-        # Adaptive icons are masked by Android: keep the monogram within the
-        # central safe area, with a matching burgundy background behind it.
-        background = Image.new("RGB", (size, size), (83, 38, 53))
-        inset = round(size * 0.16)
-        inner = image.resize((size - inset * 2, size - inset * 2), RESAMPLING)
-        background.paste(inner, (inset, inset))
-        background.save(output / "ic_launcher_foreground.png", optimize=True)
+        # The adaptive launcher masks the outer 1/6 on each side. Keep the
+        # whiskers inside its safe area and let the XML supply the background.
+        foreground = Image.new("RGBA", (size, size))
+        inner = square.resize((round(size * 0.7), round(size * 0.7)), RESAMPLING)
+        foreground.alpha_composite(
+            inner, ((size - inner.width) // 2, (size - inner.height) // 2)
+        )
+        foreground.save(output / "ic_launcher_foreground.png", optimize=True)
 
-    # Android 13 themed icons take their color from the OS. Use the bright
-    # monogram as a silhouette and scale it into the adaptive icon's safe area.
-    mask = image.convert("L").point(lambda light: 255 if light > 140 else 0)
-    monochrome = Image.new("RGBA", image.size, (255, 255, 255, 0))
-    mark = Image.new("RGBA", image.size, (255, 255, 255, 255))
-    monochrome.paste(mark, (0, 0), mask)
+    # A themed icon needs the facial features and white outline, not the solid
+    # dark head (which would become a featureless silhouette).
+    themed = square.resize((716, 716), RESAMPLING)
+    mask = ImageChops.darker(
+        themed.getchannel("R").point(lambda value: 255 if value > 120 else 0),
+        themed.getchannel("A"),
+    )
+    monochrome = Image.new("RGBA", square.size)
+    mark = Image.new("RGBA", themed.size, (255, 255, 255, 255))
+    mark.putalpha(mask)
+    monochrome.alpha_composite(
+        mark, ((1024 - themed.width) // 2, (1024 - themed.height) // 2)
+    )
     monochrome.save(android / "drawable-v24/ic_launcher_monochrome.png", optimize=True)
 
     ios = ROOT / "ios/Runner/Assets.xcassets/AppIcon.appiconset"

@@ -162,6 +162,11 @@ class ChatMessageService {
     if (validIndices.isEmpty) return null;
 
     final earliestDeletedIndex = validIndices.reduce((a, b) => a < b ? a : b);
+    // The menu and selection toolbar enforce this too, but other callers can
+    // reach the service directly. Never leave a hole in the chat history.
+    if (validIndices.length != session.messages.length - earliestDeletedIndex) {
+      return null;
+    }
     final invalidatedMessageIds = session.messages
         .skip(earliestDeletedIndex)
         .map((message) => message.id)
@@ -221,24 +226,42 @@ class ChatMessageService {
     final invalidatedMessageIds = plan.invalidatedMessageIds;
     var wakeLoreEmbeddingWorker = false;
 
-    // Select the rollback base by chat order. Snapshot timestamps have
-    // second-level precision and cannot reliably order adjacent turns.
-    TrackerSnapshot? fallbackSnapshot;
-    for (final message
-        in session.messages.take(plan.earliestDeletedIndex).toList().reversed) {
-      final candidate = await snapshotRepo.getByAnchor(
-        sessionId: session.id,
-        messageId: message.id,
-        swipeId: message.swipeId,
-        agentSwipeId: message.agentSwipeId,
-      );
-      if (candidate?.committed == true) {
-        fallbackSnapshot = candidate;
-        break;
-      }
-    }
-
     await chatRepo.transaction(() async {
+      // A reply can land between the optimistic plan and this transaction.
+      // Reject the stale plan before ANY derived state is rolled back; deleting
+      // its ids now would leave a hole ahead of the newly appended reply.
+      final current = await chatRepo.getById(session.id);
+      if (current == null ||
+          current.messages.length != session.messages.length ||
+          !Iterable<int>.generate(session.messages.length).every(
+            (i) =>
+                current.messages[i].id == session.messages[i].id &&
+                current.messages[i].swipeId == session.messages[i].swipeId &&
+                current.messages[i].agentSwipeId ==
+                    session.messages[i].agentSwipeId,
+          )) {
+        throw StateError('Chat changed while deleting its message suffix');
+      }
+      // Pick the rollback base in the same transaction as the row validation.
+      // A concurrent swipe changes the relevant snapshot without changing the
+      // message id; a pre-transaction lookup could restore the wrong ledger.
+      TrackerSnapshot? fallbackSnapshot;
+      for (final message
+          in current.messages
+              .take(plan.earliestDeletedIndex)
+              .toList()
+              .reversed) {
+        final candidate = await snapshotRepo.getByAnchor(
+          sessionId: session.id,
+          messageId: message.id,
+          swipeId: message.swipeId,
+          agentSwipeId: message.agentSwipeId,
+        );
+        if (candidate?.committed == true) {
+          fallbackSnapshot = candidate;
+          break;
+        }
+      }
       await _ref
           .read(cardEvolutionProposalRunRepoProvider)
           .cancelPendingForMessageMutationInTransaction(
@@ -323,38 +346,30 @@ class ChatMessageService {
 
   /// Applies [plan] to the durable row and returns the surviving messages.
   ///
-  /// The deletion is re-applied by message id against the row as it is *now*,
-  /// rather than writing the shortened list the plan carries. The plan was
-  /// computed on the frame of the tap, and the transaction around this can run
-  /// for a while on a long chat — long enough for a reply to finish streaming
-  /// into the row, or for a variation switch to commit. Writing the plan
-  /// wholesale wrote those back out again: the delete undid work it had nothing
-  /// to do with, and the row disagreed with the screen until the chat was
-  /// reopened.
+  /// The transaction verified the row still has the planned message order;
+  /// trim that suffix from the current durable row rather than replacing its
+  /// unrelated fields with the optimistic snapshot.
   ///
   /// The deleted count is read from the durable row for the same reason — two
   /// deletions in flight each add their own, instead of the later one
   /// overwriting the earlier one's total.
   ///
-  /// Messages written before ids existed carry an empty one and cannot be
-  /// addressed this way. When the plan holds any of those, the shortened list
-  /// is written as before: an index-based delete is only correct against the
-  /// snapshot it was computed from, so nothing is gained by being clever here.
+  /// Index-based trimming also handles legacy messages with empty ids, because
+  /// the transaction verified their positions against the planned snapshot.
   Future<List<ChatMessage>> _writeDeletion(
     ChatSession session,
     MessageDeletionPlan plan,
   ) async {
     final chatRepo = _ref.read(chatRepoProvider);
-    if (plan.deletedMessageIds.length != plan.deletedIndices.length) {
-      await chatRepo.put(plan.session);
-      return plan.session.messages;
-    }
     final durable = await chatRepo.mutateSession(
       sessionId: session.id,
       updatedAt: plan.session.updatedAt,
       mutate: (current) {
+        // The transaction checked the entire suffix, including legacy rows
+        // with empty ids. Drop by position so no concurrent prefix edits are
+        // overwritten by the optimistic snapshot.
         final remaining = current.messages
-            .where((message) => !plan.deletedMessageIds.contains(message.id))
+            .take(plan.earliestDeletedIndex)
             .toList();
         final vars = Map<String, String>.from(current.sessionVars)
           ..[ChatSessionX.deletedMessagesVarKey] =

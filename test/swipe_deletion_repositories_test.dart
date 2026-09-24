@@ -470,7 +470,10 @@ void main() {
       await seed('m1');
       await seed('m2');
 
-      await container.read(_messageServiceProvider).deleteMessage(session, 1);
+      await container.read(_messageServiceProvider).deleteMessages(session, {
+        1,
+        2,
+      });
 
       final remaining = await (db.select(
         db.lorebookUseManifests,

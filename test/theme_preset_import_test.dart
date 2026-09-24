@@ -1,10 +1,13 @@
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:glaze_flutter/shared/theme/theme_preset_storage.dart';
 import 'package:glaze_flutter/shared/theme/theme_preset.dart';
+import 'package:glaze_flutter/shared/theme/app_colors.dart';
+import 'package:glaze_flutter/shared/theme/app_theme.dart';
 
 void main() {
   late ThemePresetStorage storage;
@@ -18,6 +21,7 @@ void main() {
     const oldDefault = ThemePreset(
       id: 'default',
       name: 'Default',
+      accentColor: '#7996CE',
       bgDim: 0.15,
       noiseOpacity: 0.03,
       noiseIntensity: 0.8,
@@ -27,7 +31,7 @@ void main() {
     await storage.saveAll([oldDefault.copyWith(accentColor: '#7996ce')]);
 
     final upgraded = (await storage.loadAll()).first;
-    expect(upgraded.accentColor, '#B77F96');
+    expect(upgraded.accentColor, '#F5C400');
 
     // This is how the old Windows preferences serialized the stock preset.
     final oldJson = oldDefault.copyWith(accentColor: '#7996ce').toJson()
@@ -35,7 +39,10 @@ void main() {
       ..['bgOpacity'] = 0.85;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('theme_presets', jsonEncode([oldJson]));
-    expect((await storage.loadAll()).first.accentColor, '#B77F96');
+    expect((await storage.loadAll()).first.accentColor, '#F5C400');
+
+    await storage.saveAll([oldDefault.copyWith(accentColor: '#B77F96')]);
+    expect((await storage.loadAll()).first.accentColor, '#F5C400');
 
     await storage.saveAll([oldDefault.copyWith(accentColor: '#123456')]);
     final custom = (await storage.loadAll()).first;
@@ -47,6 +54,39 @@ void main() {
     final customizedDefault = (await storage.loadAll()).first;
     expect(customizedDefault.accentColor, '#7996ce');
     expect(customizedDefault.uiFontWeight, 600);
+  });
+
+  test('stock colors keep gold readable in both modes', () async {
+    final preset = (await storage.loadAll()).first;
+    expect(preset.accentColor, '#F5C400');
+    final dark = AppTheme.dark(preset);
+    final light = AppTheme.light(preset);
+    final darkChat = GlazeColors.fromPreset(preset, isDark: true);
+    final lightChat = GlazeColors.fromPreset(preset, isDark: false);
+    expect(dark.colorScheme.primary, const Color(0xFFF5C400));
+    expect(light.colorScheme.primary, const Color(0xFF8A6900));
+    expect(darkChat.userBubble, const Color(0xFFF5C400));
+    expect(lightChat.userBubble, const Color(0xFFF5C400));
+    expect(darkChat.userText, const Color(0xFF1A1A1B));
+    expect(lightChat.userText, const Color(0xFF1A1A1B));
+    expect(darkChat.userQuote, darkChat.accent);
+    expect(lightChat.userQuote, lightChat.accent);
+    expect(dark.colorScheme.surface, const Color(0xFF101010));
+    expect(dark.colorScheme.surfaceContainerHighest, const Color(0xFF313131));
+    final bubbleChat = GlazeColors.fromPreset(
+      preset.copyWith(chatLayout: 'bubble'),
+      isDark: true,
+    );
+    expect(bubbleChat.userQuote, bubbleChat.userText);
+    expect(light.colorScheme.primary, isNot(equals(dark.colorScheme.primary)));
+
+    final custom = preset.copyWith(
+      userBubbleColor: '#333333',
+      userTextColor: '#E1E3E6',
+    );
+    final customChat = GlazeColors.fromPreset(custom, isDark: true);
+    expect(customChat.userBubble, const Color(0xFF333333));
+    expect(customChat.userQuote, customChat.accent);
   });
 
   test('imports a SillyTavern theme', () async {

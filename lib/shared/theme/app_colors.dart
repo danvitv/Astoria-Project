@@ -27,15 +27,15 @@ class GlazeColors extends ThemeExtension<GlazeColors> {
   });
 
   static const dark = GlazeColors(
-    accent: Color(0xFFB77F96),
-    userBubble: Color(0xFFB77F96),
-    charBubble: Color(0xFF34252B),
+    accent: Color(0xFFF5C400),
+    userBubble: Color(0xFFF5C400),
+    charBubble: Color(0xFF303030),
   );
 
   static const light = GlazeColors(
-    accent: Color(0xFFB77F96),
-    userBubble: Color(0xFFB77F96),
-    charBubble: Color(0xFFEDE1DF),
+    accent: Color(0xFFF5C400),
+    userBubble: Color(0xFFF5C400),
+    charBubble: Color(0xFFE8E6DE),
   );
 
   // Defaults matching Glaze JS: italic = gray (#888)
@@ -47,7 +47,10 @@ class GlazeColors extends ThemeExtension<GlazeColors> {
   /// Build chat/bubble colors straight from a Material 3 [ColorScheme] (used by
   /// the built-in "Material You" theme). The accent and bubble colors track the
   /// dynamic palette; italics stay the neutral gray default.
-  static GlazeColors fromColorScheme(ColorScheme scheme) {
+  static GlazeColors fromColorScheme(
+    ColorScheme scheme, {
+    String chatLayout = 'default',
+  }) {
     final isDark = scheme.brightness == Brightness.dark;
     final charBubble = isDark
         ? scheme.surfaceContainerHigh
@@ -58,7 +61,7 @@ class GlazeColors extends ThemeExtension<GlazeColors> {
       charBubble: charBubble,
       userText: scheme.onPrimary,
       charText: scheme.onSurface,
-      userQuote: scheme.onPrimary,
+      userQuote: chatLayout == 'bubble' ? scheme.onPrimary : scheme.primary,
       charQuote: scheme.primary,
       userItalic: _defaultItalic,
       charItalic: _defaultItalic,
@@ -67,15 +70,20 @@ class GlazeColors extends ThemeExtension<GlazeColors> {
 
   static GlazeColors fromPreset(ThemePreset preset, {required bool isDark}) {
     final base = isDark ? dark : light;
-    final accent = preset.accent;
+    final accent =
+        !isDark &&
+            preset.id == 'default' &&
+            preset.accentColor.toUpperCase() == '#F5C400'
+        ? const Color(0xFF8A6900)
+        : preset.accent;
     final uiColor =
         preset.uiColorParsed ??
         (preset.id == 'default'
-            ? (isDark ? const Color(0xFF2B2025) : const Color(0xFFF5EBE8))
+            ? (isDark ? const Color(0xFF313131) : const Color(0xFFF2F0E9))
             : (isDark ? _vueUiBg : _deriveUiColor(accent, isDark)));
     final effectiveBg = uiColor;
 
-    final userBubble = preset.userBubbleParsed ?? accent;
+    final userBubble = preset.userBubbleParsed ?? preset.accent;
     final charBubbleRaw =
         preset.charBubbleParsed ??
         (preset.id == 'default'
@@ -87,7 +95,7 @@ class GlazeColors extends ThemeExtension<GlazeColors> {
     // paints*: the (possibly gradient) color composited over the chat
     // background at the theme's element opacity. Judging the raw opaque color
     // picked dark text for translucent mid-tone bubbles that render much darker
-    // on screen — e.g. the default blue user bubble in the dark theme ended up
+    // on screen — e.g. a blue user bubble in the dark theme ended up
     // with near-black text that blended into it.
     final op = preset.elementOpacity.clamp(0.0, 1.0);
     final userBubbleVisible = _visibleBubble(
@@ -102,15 +110,30 @@ class GlazeColors extends ThemeExtension<GlazeColors> {
       op,
       effectiveBg,
     );
+    final stockGoldBubble =
+        preset.id == 'default' &&
+        preset.accentColor.toUpperCase() == '#F5C400' &&
+        preset.userBubbleParsed == null &&
+        preset.userBubbleGradientParsed == null;
+    final userText = stockGoldBubble && preset.userTextParsed == null
+        ? _bestContrastFor(userBubbleVisible)
+        : _ensureContrast(preset.userTextParsed, userBubbleVisible);
 
     return base.copyWith(
       accent: accent,
       userBubble: userBubble,
       charBubble: charBubble,
-      userText: _ensureContrast(preset.userTextParsed, userBubbleVisible),
+      userText: userText,
       charText: _ensureContrast(preset.charTextParsed, charBubbleVisible),
-      // If preset sets a quote/italic color — use it; otherwise fall back to accent
-      userQuote: preset.userQuoteParsed ?? accent,
+      // On the stock gold bubble, gold quotes would be invisible. Other presets
+      // keep their existing accent default unless they set a quote color.
+      userQuote:
+          preset.userQuoteParsed ??
+           (stockGoldBubble &&
+                   preset.chatLayout == 'bubble' &&
+                   preset.userTextParsed == null
+               ? userText
+               : accent),
       charQuote: preset.charQuoteParsed ?? accent,
       userItalic: preset.userItalicParsed ?? _defaultItalic,
       charItalic: preset.charItalicParsed ?? _defaultItalic,
@@ -177,6 +200,12 @@ class GlazeColors extends ThemeExtension<GlazeColors> {
     return bg.computeLuminance() > 0.5
         ? const Color(0xFF1A1A1B)
         : const Color(0xFFE1E3E6);
+  }
+
+  static Color _bestContrastFor(Color bg) {
+    const dark = Color(0xFF1A1A1B);
+    const light = Color(0xFFE1E3E6);
+    return contrastRatio(dark, bg) >= contrastRatio(light, bg) ? dark : light;
   }
 
   static Color? _ensureContrast(Color? text, Color bg) {

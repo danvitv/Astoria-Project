@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../shared/widgets/glaze_bottom_sheet.dart';
 import '../chat_provider.dart';
+import '../bridge/chat_bridge_registry.dart';
 import '../editing_message_provider.dart';
 import 'message_delete_confirmation.dart';
 
@@ -67,8 +68,16 @@ void showMessageContextMenu({
                 state.isPostGenRunning) {
               return;
             }
-            ref.read(editingMessageIdProvider(charId).notifier).state =
-                messageId;
+            final editing = ref.read(editingMessageIdProvider(charId).notifier);
+            if (editing.state == messageId) {
+              // Re-entering a chat may retain the selected id even if the
+              // native page was rebuilt. Repeated Edit must still open it.
+              ref
+                  .read(chatBridgeRegistryProvider(charId))
+                  ?.startEdit(messageId);
+            } else {
+              editing.state = messageId;
+            }
           },
         ),
       if ((!isUser && isLast && !isGenerating) || isError)
@@ -145,7 +154,7 @@ void showMessageContextMenu({
                 .deleteActiveAgentSwipe(messageIndex);
           },
         ),
-      if (!isGenerating)
+      if (isLast && !isGenerating)
         BottomSheetItem(
           icon: Icons.delete,
           label: 'Delete',
@@ -160,6 +169,17 @@ void showMessageContextMenu({
               return;
             }
             if (!context.mounted) return;
+            final current = ref.read(chatProvider(charId)).value;
+            final messages = current?.session?.messages;
+            if (current?.session?.id != sessionId ||
+                messages == null ||
+                messageIndex != messages.length - 1 ||
+                messages[messageIndex].id != messageId ||
+                current!.isGenerating ||
+                current.isGeneratingImage ||
+                current.isPostGenRunning) {
+              return;
+            }
             await ref
                 .read(chatProvider(charId).notifier)
                 .deleteMessage(messageIndex);

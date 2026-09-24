@@ -118,8 +118,7 @@ class _FooterError extends StatelessWidget {
           GestureDetector(
             onTap: onRetry,
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
               decoration: BoxDecoration(
                 color: context.cs.primary,
                 borderRadius: BorderRadius.circular(12),
@@ -224,8 +223,10 @@ class _CommentCard extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 4),
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0x33FFC107),
                     borderRadius: BorderRadius.circular(6),
@@ -316,7 +317,7 @@ class _AvatarFallback extends StatelessWidget {
       height: size,
       alignment: Alignment.center,
       decoration: const BoxDecoration(
-        color: Color(0x147996CE),
+        color: Color(0x14F5C400),
         shape: BoxShape.circle,
       ),
       child: Text(

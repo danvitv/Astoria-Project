@@ -6,10 +6,8 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/debug/perf_debug.dart';
-import '../../../core/state/active_regex_provider.dart';
 import '../../../core/state/active_selection_provider.dart';
 import '../../../core/state/character_provider.dart';
-import '../../../core/state/persona_resolution.dart';
 import '../../personas/persona_list_provider.dart';
 import '../../../../shared/theme/theme_font_provider.dart';
 import '../../../../shared/theme/theme_preset.dart';
@@ -22,6 +20,7 @@ import '../../../shared/widgets/glaze_error_dialog.dart';
 import '../../extensions/services/panel_host_service.dart';
 import '../bridge/chat_bridge_registry.dart';
 import '../chat_provider.dart';
+import '../editing_message_provider.dart';
 import '../state/generation_phase_provider.dart';
 import 'chat_message_sync.dart';
 import 'chat_streaming_bridge_sync.dart';
@@ -470,8 +469,10 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
     final bridge = _bridge;
     if (bridge == null) return;
     final initSessionId = widget.sessionId;
-    final initMessages = List<ChatMessage>.of(widget.messages);
-    final initVisibleStartIndex = widget.visibleStartIndex;
+    final initCharId = widget.charId;
+    List<ChatMessage>? paintedMessages;
+    int? paintedVisibleStartIndex;
+    bool messagesPainting = false;
     _resetStreamingPresentationState();
     PerfDebug.chatWebViewInitAttempted();
     try {
@@ -537,6 +538,20 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
         },
         onSyncExtBlockPanels: _syncExtBlockPanels,
         applyTheme: _applyThemeToBridge,
+        latestMessages: () => widget.messages,
+        latestVisibleStartIndex: () => widget.visibleStartIndex,
+        latestGenerationState: () => (
+          isGenerating: widget.isGenerating,
+          isPostGenRunning: widget.isPostGenRunning,
+          isGeneratingImage: widget.isGeneratingImage,
+          isSendPending: widget.isSendPending,
+        ),
+        onContextPainting: () => _syncState.regexContextStale = false,
+        onMessagesPainting: (messages, startIndex) {
+          paintedMessages = messages;
+          paintedVisibleStartIndex = startIndex;
+          messagesPainting = true;
+        },
       ).run().timeout(_kWebViewInitTimeout);
       PerfDebug.chatWebViewInitCompleted();
     } on TimeoutException catch (e, st) {
@@ -550,6 +565,10 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
     }
 
     if (!mounted) return;
+    _syncDispatcher.reconcileGeneratingState(
+      bridge: bridge,
+      current: _fieldsFor(widget),
+    );
     await _reconcileActiveGenerationPresentation(bridge);
     // Init can take longer than the rebaseline window opened above, and the
     // list settles for a few more frames after it. Re-arm once everything is in
@@ -568,11 +587,12 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
     _deferredSwitchFrom = null;
     // Consumed here whichever branch runs below: the other two re-push every
     // message anyway, so the re-render this flag asks for happens regardless.
-    final regexContextStale = _syncState.regexContextStale;
+    final contextChangedDuringPaint = _syncState.regexContextStale;
     _syncState.regexContextStale = false;
     if (deferred != null) {
       unawaited(_applySessionSwitch(deferred, epoch: _sessionSwitchEpoch));
-    } else if (initSessionId != widget.sessionId) {
+    } else if (initSessionId != widget.sessionId ||
+        initCharId != widget.charId) {
       unawaited(_syncCurrentSessionToBridge());
     } else {
       // On Windows (no keep-alive), init can take several seconds. During
@@ -584,10 +604,21 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
       // running, after the initializer read the list it painted with. The
       // messages are in the DOM rewritten by the older list, and only a
       // re-render replaces them.
-      if (regexContextStale ||
-          initVisibleStartIndex != widget.visibleStartIndex ||
-          !chatMessageListsIdentical(initMessages, widget.messages)) {
-        unawaited(_resyncMessagesAfterInit());
+      if (contextChangedDuringPaint ||
+          paintedVisibleStartIndex != widget.visibleStartIndex ||
+          !chatMessageListsIdentical(
+            paintedMessages ?? const <ChatMessage>[],
+            widget.messages,
+          )) {
+        unawaited(
+          _resyncMessagesAfterInit(
+            paintedMessages ?? const <ChatMessage>[],
+            paintedVisibleStartIndex: paintedVisibleStartIndex,
+            forceRender: contextChangedDuringPaint,
+          ),
+        );
+      } else if (messagesPainting) {
+        unawaited(_restoreActiveEditor(bridge));
       }
     }
   }
@@ -723,26 +754,92 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
   /// current `widget.messages` to the bridge after init, ensuring no updates
   /// are missed. The message sync is diff-based: if nothing changed it is a
   /// no-op.
-  Future<void> _resyncMessagesAfterInit() async {
+  Future<void> _resyncMessagesAfterInit(
+    List<ChatMessage> paintedMessages, {
+    required int? paintedVisibleStartIndex,
+    bool forceRender = false,
+  }) async {
     final bridge = _bridge;
     if (bridge == null || !_ready || !mounted) return;
     // The dispatcher skips every update while `_ready` is false, so this
     // catch-up pass is the first thing to map messages after a slow init —
     // it has to carry the send window itself.
     bridge.isSendPending = widget.isSendPending;
-    await _bridgeOp(
-      _messageSync.sync(
-        bridge: bridge,
-        oldMsgs: const <ChatMessage>[],
-        newMsgs: widget.messages,
-        visibleStartIndex: widget.visibleStartIndex,
-        busy: widget.isGenerating || widget.isSendPending,
-        sessionSwitching: false,
-        onDomReset: _resetStreamingPresentationState,
-      ),
-      label: 'resyncMessagesAfterInit',
+    await _syncState.enqueueMessageMutation(() async {
+      if (!mounted ||
+          !identical(_bridge, bridge) ||
+          !_ready ||
+          _sessionSwitching) {
+        return;
+      }
+      final current = widget.messages;
+      if (forceRender || widget.visibleStartIndex != paintedVisibleStartIndex) {
+        _resetStreamingPresentationState();
+        await _bridgeOp(
+          bridge.setMessages(
+            current,
+            visibleStartIndex: widget.visibleStartIndex,
+            preserveScroll: true,
+          ),
+          label: 'resyncMessagesAfterInit',
+        );
+      } else {
+        await _bridgeOp(
+          _messageSync.sync(
+            bridge: bridge,
+            oldMsgs: paintedMessages,
+            newMsgs: current,
+            visibleStartIndex: widget.visibleStartIndex,
+            busy: widget.isGenerating || widget.isSendPending,
+            sessionSwitching: false,
+            onDomReset: _resetStreamingPresentationState,
+          ),
+          label: 'resyncMessagesAfterInit',
+        );
+      }
+      await _reconcileActiveGenerationPresentation(bridge, enqueue: false);
+      await _restoreActiveEditor(bridge);
+    });
+  }
+
+  Future<void> _restoreActiveEditor(ChatBridgeController bridge) async {
+    if (!mounted ||
+        !identical(_bridge, bridge) ||
+        !_ready ||
+        _sessionSwitching) {
+      return;
+    }
+    final id = ref.read(editingMessageIdProvider(widget.charId));
+    if (id != null && widget.messages.any((message) => message.id == id)) {
+      await bridge.startEdit(id);
+    }
+  }
+
+  void _refreshMessagesForContext(ChatBridgeController bridge) {
+    final charId = widget.charId;
+    final sessionId = widget.sessionId;
+    unawaited(
+      _syncState.enqueueMessageMutation(() async {
+        if (!mounted ||
+            !identical(_bridge, bridge) ||
+            !_ready ||
+            _sessionSwitching ||
+            widget.charId != charId ||
+            widget.sessionId != sessionId) {
+          return;
+        }
+        _resetStreamingPresentationState();
+        await _bridgeOp(
+          bridge.setMessages(
+            widget.messages,
+            visibleStartIndex: widget.visibleStartIndex,
+            preserveScroll: true,
+          ),
+          label: 'refreshMessagesForContext',
+        );
+        await _reconcileActiveGenerationPresentation(bridge, enqueue: false);
+      }),
     );
-    await _reconcileActiveGenerationPresentation(bridge);
   }
 
   void _bindBridgeCallbacks() {
@@ -1148,6 +1245,11 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
     if (!_ready &&
         (widget.charId != oldWidget.charId ||
             widget.sessionId != oldWidget.sessionId)) {
+      // Even before first paint, a session switch must cover the native view.
+      // Init can render the new message list with the old session's context
+      // before its deferred clearAll/setMessages pass completes.
+      _sessionSwitching = true;
+      _sessionSwitchEpoch++;
       _deferredSwitchFrom = oldWidget;
     }
     final result = _syncDispatcher.dispatch(
@@ -1357,6 +1459,7 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
       onSyncExtBlockPanels: _syncExtBlockPanels,
       onReconcileActiveGeneration: _reconcileActiveGenerationPresentation,
       onDomReset: _resetStreamingPresentationState,
+      onRefreshMessages: _refreshMessagesForContext,
       isCurrentBridge: (bridge) => identical(_bridge, bridge),
     ).attach();
 

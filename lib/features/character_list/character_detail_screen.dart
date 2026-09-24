@@ -56,8 +56,8 @@ import 'widgets/character_hiding_onboarding_sheet.dart';
 
 // ─── Colour tokens ─────────────────────────────────────────────────────────
 
-const _kAccentDim = Color(0x1F7996CE);
-const _kAccentBorder = Color(0x337996CE);
+const _kAccentDim = Color(0x1FF5C400);
+const _kAccentBorder = Color(0x33F5C400);
 const _kNsfw = Color(0xFFFF4444);
 const _kNsfwBg = Color(0x33FF4444);
 const _kNsfwBorder = Color(0x4DFF4444);
@@ -1416,7 +1416,7 @@ class _HeroPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: const Color(0x147996CE),
+      color: const Color(0x14F5C400),
       child: Center(
         child: Text(
           name.isNotEmpty ? name[0].toUpperCase() : '?',
@@ -2001,10 +2001,7 @@ class _AccordionHeader extends StatelessWidget {
             ),
             if (badge != null) ...[
               Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 7,
-                  vertical: 2,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                 decoration: BoxDecoration(
                   color: _kAccentDim,
                   borderRadius: BorderRadius.circular(8),
@@ -2080,11 +2077,7 @@ class _CollapsibleText extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         child: SelectableText(
           text,
-          style: const TextStyle(
-            fontSize: 13.5,
-            height: 1.55,
-            color: _kText75,
-          ),
+          style: const TextStyle(fontSize: 13.5, height: 1.55, color: _kText75),
         ),
       ),
     );

@@ -6,6 +6,12 @@ String _bridgeAsset(String name) =>
 
 String _extractBlockBody(String src, int fromIndex) {
   int start = src.indexOf('{', fromIndex);
+  // A method signature may contain a template literal in a default argument
+  // (e.g. `[data-message-id="${messageId}"]`). That interpolation is not the
+  // opening brace of the method body.
+  while (start > 0 && src[start - 1] == r'$') {
+    start = src.indexOf('{', start + 1);
+  }
   if (start == -1) return '';
   int depth = 0;
   for (int i = start; i < src.length; i++) {
@@ -198,12 +204,13 @@ void main() {
       },
     );
 
-    test('EditController stopEdit restores originalHtml from dataset', () {
+    test('EditController stopEdit re-renders the authoritative message', () {
       final idx = editControllerJs.indexOf('class EditController');
       final classBody = _extractBlockBody(editControllerJs, idx);
       final stopIdx = classBody.indexOf('stopEdit(messageId');
       final body = _extractBlockBody(classBody, stopIdx);
-      expect(body, contains('dataset.originalHtml'));
+      expect(body, contains('renderer.updateMessageContent'));
+      expect(body, contains('section.dataset.rawText'));
     });
 
     test('EditController stopEdit removes editing class', () {

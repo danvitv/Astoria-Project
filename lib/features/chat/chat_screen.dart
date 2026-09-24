@@ -5,7 +5,7 @@ import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show listEquals, setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -312,6 +312,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       imageBytes: bytes,
       blur: preset.bgBlur,
       dim: preset.bgDim,
+      showStockLogo: false,
     );
   }
 
@@ -328,6 +329,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final character = ref.watch(characterByIdProvider(charId));
     final title = character?.name ?? 'Chat';
     final session = chatState?.session;
+    ref.listen(chatProvider(charId), (previous, next) {
+      final oldSessionId = previous?.value?.session?.id;
+      final newSessionId = next.value?.session?.id;
+      if (oldSessionId != null &&
+          newSessionId != null &&
+          oldSessionId != newSessionId) {
+        ref.read(editingMessageIdProvider(charId).notifier).state = null;
+      }
+    });
     final customSessionName = session?.sessionVars['sessionName']?.trim();
     final sessionName = session != null
         ? (customSessionName != null && customSessionName.isNotEmpty
@@ -2335,15 +2345,35 @@ class _ChatBodyState extends ConsumerState<_ChatBody>
                                         if (mounted) setState(() {});
                                       },
                                       onDeleteSelected: () async {
+                                        final originalSessionId =
+                                            widget.state.session?.id;
+                                        final selectedIds = Set<String>.of(
+                                          _selectionCtrl.selectedMessageIds,
+                                        );
                                         if (!await confirmMessageDeletion(
                                           context,
                                           ref,
-                                          sessionId:
-                                              widget.state.session?.id,
+                                          sessionId: originalSessionId,
                                         )) {
                                           return;
                                         }
-                                        if (!mounted || !context.mounted) return;
+                                        if (!mounted || !context.mounted) {
+                                          return;
+                                        }
+                                        final current = ref
+                                            .read(chatProvider(widget.charId))
+                                            .value;
+                                        if (current?.session?.id !=
+                                                originalSessionId ||
+                                            !setEquals(
+                                              _selectionCtrl.selectedMessageIds,
+                                              selectedIds,
+                                            ) ||
+                                            !_selectionCtrl.canDeleteSelection(
+                                              current?.messages ?? const [],
+                                            )) {
+                                          return;
+                                        }
                                         // deleteSelected drops the selection
                                         // synchronously; rebuild before
                                         // awaiting so the toolbar closes with
@@ -2353,7 +2383,7 @@ class _ChatBodyState extends ConsumerState<_ChatBody>
                                             .deleteSelected(
                                               ref,
                                               widget.charId,
-                                              widget.state.messages,
+                                              current!.messages,
                                             );
                                         if (mounted) setState(() {});
                                         await pending;

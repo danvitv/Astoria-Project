@@ -42,19 +42,16 @@ void main() {
 
     final plan = container.read(_messageServiceProvider).planDeleteMessages(
       session,
-      {1, 3},
+      {3, 4},
     );
 
     expect(plan, isNotNull);
-    expect(plan!.session.messages.map((m) => m.id), ['m0', 'm2', 'm4']);
+    expect(plan!.session.messages.map((m) => m.id), ['m0', 'm1', 'm2']);
     expect(plan.session.deletedMessageCount, 2);
-    expect(plan.deletedIndices, unorderedEquals([1, 3]));
-    expect(plan.earliestDeletedIndex, 1);
+    expect(plan.deletedIndices, unorderedEquals([3, 4]));
+    expect(plan.earliestDeletedIndex, 3);
     // Everything from the earliest deletion on is causally invalidated.
-    expect(
-      plan.invalidatedMessageIds,
-      unorderedEquals(['m1', 'm2', 'm3', 'm4']),
-    );
+    expect(plan.invalidatedMessageIds, unorderedEquals(['m3', 'm4']));
 
     // Planning is pure: the row on disk is untouched until the commit runs.
     final persisted = await container.read(chatRepoProvider).getById('s1');
@@ -96,7 +93,7 @@ void main() {
     await container.read(chatRepoProvider).put(session);
 
     final service = container.read(_messageServiceProvider);
-    final plan = service.planDeleteMessages(session, {1, 3})!;
+    final plan = service.planDeleteMessages(session, {3, 4})!;
     final committed = await service.commitDeleteMessages(session, plan);
 
     // `commitDeleteMessages` ends in a re-read of the row it just wrote
@@ -109,11 +106,58 @@ void main() {
       plan.session.messages.map((m) => m.id),
     );
     final persisted = await container.read(chatRepoProvider).getById('s1');
-    expect(persisted?.messages.map((m) => m.id), ['m0', 'm2', 'm4']);
+    expect(persisted?.messages.map((m) => m.id), ['m0', 'm1', 'm2']);
     expect(persisted?.deletedMessageCount, 2);
   });
 
-  test('a reply that lands while the delete commits survives it', () async {
+  test(
+    'a reply that lands while the delete commits rejects the stale plan',
+    () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      final container = ProviderContainer(
+        overrides: [appDbProvider.overrideWithValue(db)],
+      );
+      addTearDown(() async {
+        container.dispose();
+        await db.close();
+      });
+
+      final session = _session(3);
+      final chatRepo = container.read(chatRepoProvider);
+      await chatRepo.put(session);
+
+      final service = container.read(_messageServiceProvider);
+      final plan = service.planDeleteMessages(session, {2})!;
+
+      // What the delete's own transaction is slow enough to race with on a long
+      // chat: a reply finishing its stream, landing on the durable row through
+      // the atomic append path while the plan is already in flight.
+      await chatRepo.mutateMessages(
+        sessionId: 's1',
+        updatedAt: 2,
+        mutate: (messages) => [
+          ...messages,
+          const ChatMessage(id: 'm-new', role: 'assistant', content: 'landed'),
+        ],
+      );
+
+      await expectLater(
+        service.commitDeleteMessages(session, plan),
+        throwsStateError,
+      );
+
+      final persisted = await chatRepo.getById('s1');
+      expect(
+        persisted?.messages.map((m) => m.id),
+        ['m0', 'm1', 'm2', 'm-new'],
+        reason:
+            'a stale suffix plan cannot delete a message ahead of a new reply',
+      );
+      expect(persisted?.deletedMessageCount, 0);
+    },
+  );
+
+  test('a changed surviving swipe rejects the old rollback base', () async {
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     final container = ProviderContainer(
       overrides: [appDbProvider.overrideWithValue(db)],
@@ -126,33 +170,62 @@ void main() {
     final session = _session(3);
     final chatRepo = container.read(chatRepoProvider);
     await chatRepo.put(session);
-
     final service = container.read(_messageServiceProvider);
-    final plan = service.planDeleteMessages(session, {1})!;
-
-    // What the delete's own transaction is slow enough to race with on a long
-    // chat: a reply finishing its stream, landing on the durable row through
-    // the atomic append path while the plan is already in flight.
+    final plan = service.planDeleteMessages(session, {2})!;
     await chatRepo.mutateMessages(
-      sessionId: 's1',
+      sessionId: session.id,
       updatedAt: 2,
       mutate: (messages) => [
-        ...messages,
-        const ChatMessage(id: 'm-new', role: 'assistant', content: 'landed'),
+        messages[0],
+        messages[1].copyWith(swipeId: 1),
+        messages[2],
       ],
     );
 
-    final committed = await service.commitDeleteMessages(session, plan);
-
-    final persisted = await chatRepo.getById('s1');
-    expect(
-      persisted?.messages.map((m) => m.id),
-      ['m0', 'm2', 'm-new'],
-      reason: 'the delete wrote its pre-computed list over the new message',
+    await expectLater(
+      service.commitDeleteMessages(session, plan),
+      throwsStateError,
     );
-    expect(committed.messages.map((m) => m.id), ['m0', 'm2', 'm-new']);
-    expect(persisted?.deletedMessageCount, 1);
+    final persisted = await chatRepo.getById(session.id);
+    expect(persisted?.messages.map((m) => m.id), ['m0', 'm1', 'm2']);
+    expect(persisted?.messages[1].swipeId, 1);
+    expect(persisted?.deletedMessageCount, 0);
   });
+
+  test(
+    'a concurrent prefix edit is retained in the committed result',
+    () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      final container = ProviderContainer(
+        overrides: [appDbProvider.overrideWithValue(db)],
+      );
+      addTearDown(() async {
+        container.dispose();
+        await db.close();
+      });
+
+      final session = _session(3);
+      final chatRepo = container.read(chatRepoProvider);
+      await chatRepo.put(session);
+      final service = container.read(_messageServiceProvider);
+      final plan = service.planDeleteMessages(session, {2})!;
+      await chatRepo.mutateMessages(
+        sessionId: session.id,
+        updatedAt: 2,
+        mutate: (messages) => [
+          messages[0].copyWith(content: 'updated prefix'),
+          ...messages.skip(1),
+        ],
+      );
+
+      final committed = await service.commitDeleteMessages(session, plan);
+      expect(committed.messages.map((m) => m.content), [
+        'updated prefix',
+        'message 1',
+      ]);
+      expect(committed.deletedMessageCount, 1);
+    },
+  );
 
   test('a message with no id is still deleted', () async {
     final db = AppDatabase.forTesting(NativeDatabase.memory());
@@ -165,25 +238,25 @@ void main() {
     });
 
     // Written before messages carried ids. Deleting by id cannot address it,
-    // so the commit falls back to writing the planned list.
+    // so the commit trims the validated durable suffix by position.
     const session = ChatSession(
       id: 's1',
       characterId: 'c1',
       sessionIndex: 0,
       messages: [
         ChatMessage(id: 'm0', role: 'user', content: 'first'),
+        ChatMessage(id: 'm1', role: 'user', content: 'second'),
         ChatMessage(id: '', role: 'assistant', content: 'legacy'),
-        ChatMessage(id: 'm2', role: 'user', content: 'third'),
       ],
     );
     await container.read(chatRepoProvider).put(session);
 
     final service = container.read(_messageServiceProvider);
-    final plan = service.planDeleteMessages(session, {1})!;
+    final plan = service.planDeleteMessages(session, {2})!;
     await service.commitDeleteMessages(session, plan);
 
     final persisted = await container.read(chatRepoProvider).getById('s1');
-    expect(persisted?.messages.map((m) => m.content), ['first', 'third']);
+    expect(persisted?.messages.map((m) => m.content), ['first', 'second']);
   });
 
   test(
@@ -250,7 +323,8 @@ void main() {
 
         final service = container.read(_messageServiceProvider);
         final plan = service.planDeleteMessages(session, {
-          testCase.deletedIndex,
+          for (var i = testCase.deletedIndex; i < session.messages.length; i++)
+            i,
         })!;
         await service.commitDeleteMessages(session, plan);
 

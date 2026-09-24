@@ -1,8 +1,11 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../shared/theme/theme_provider.dart';
 import '../../../shared/widgets/blurred_image.dart';
 
 /// The chat's own background — base colour, optional image, blur and dim.
@@ -16,7 +19,7 @@ import '../../../shared/widgets/blurred_image.dart';
 ///
 /// The two overlap over the column itself, but the upper copy is opaque, so
 /// the result is the same as painting it once.
-class ChatBackground extends StatelessWidget {
+class ChatBackground extends ConsumerWidget {
   /// One of `color`, `avatar`, `custom` or `inherit`.
   final String mode;
 
@@ -32,6 +35,10 @@ class ChatBackground extends StatelessWidget {
   final double blur;
   final double dim;
 
+  /// The full-width desktop gutter background stays plain; the logo is drawn
+  /// once in the chat column's own background.
+  final bool showStockLogo;
+
   const ChatBackground({
     super.key,
     required this.mode,
@@ -40,12 +47,26 @@ class ChatBackground extends StatelessWidget {
     required this.imageBytes,
     required this.blur,
     required this.dim,
+    this.showStockLogo = true,
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final preset = ref.watch(themeProvider).activePreset;
+    final isStockChat =
+        preset.id == 'default' &&
+        preset.accentColor.toUpperCase() == '#F5C400' &&
+        preset.bgColor == null &&
+        preset.uiColor == null &&
+        preset.bgImage == null &&
+        preset.chatBgImage == null &&
+        mode == 'inherit' &&
+        imageBytes == null;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final base = mode == 'color' && color != null
         ? color!
+        : isStockChat && isDark
+        ? const Color(0xFF1B1B1B)
         : Theme.of(context).colorScheme.surface;
 
     ImageProvider? image;
@@ -68,6 +89,23 @@ class ChatBackground extends StatelessWidget {
           BlurredImage(image: image, sigma: blur),
           if (dim > 0) ColoredBox(color: Colors.black.withValues(alpha: dim)),
         ],
+        if (isStockChat && showStockLogo)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: LayoutBuilder(
+                builder: (context, constraints) => Center(
+                  child: Opacity(
+                    opacity: isDark ? 0.045 : 0.055,
+                    child: Image.asset(
+                      'assets/logos/astoria.png',
+                      width: math.min(320, constraints.maxWidth * 0.48),
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }

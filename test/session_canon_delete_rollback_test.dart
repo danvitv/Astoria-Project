@@ -190,7 +190,7 @@ void main() {
         );
 
     final service = container.read(_serviceProvider);
-    final plan = service.planDeleteMessages(session, {2})!;
+    final plan = service.planDeleteMessages(session, {2, 3})!;
     await service.commitDeleteMessages(session, plan);
 
     final character = await container.read(characterRepoProvider).getById('c1');
@@ -332,7 +332,12 @@ void main() {
     final card = _card('current');
     await container.read(characterRepoProvider).put(card);
     await revision(card, 1, '');
-    final session = _session();
+    final session = _session().copyWith(
+      messages: [
+        ..._session().messages,
+        const ChatMessage(id: 'm3', role: 'user', content: 'after checkpoint'),
+      ],
+    );
     await container.read(chatRepoProvider).put(session);
     final checkpoints = container.read(sessionCanonCheckpointRepoProvider);
     final root = await checkpoints.appendRootInTransaction(
@@ -356,7 +361,7 @@ void main() {
     );
 
     final service = container.read(_serviceProvider);
-    final plan = service.planDeleteMessages(session, {0})!;
+    final plan = service.planDeleteMessages(session, {3})!;
     await service.commitDeleteMessages(session, plan);
 
     expect(await checkpoints.getForSession(session.id), hasLength(2));

@@ -5,9 +5,12 @@ export class EditController {
     this._sendToFlutter = sendToFlutter;
   }
 
-  startEdit(messageId, scrollTopFn) {
-    const section = document.querySelector(`[data-message-id="${messageId}"]`);
+  startEdit(messageId, scrollTopFn, section = document.querySelector(`[data-message-id="${messageId}"]`)) {
     if (!section) return;
+
+    // A re-attached Dart listener may repeat startEdit after the page is ready.
+    // Rebuilding an existing editor would erase unsaved text, so keep it intact.
+    if (section.classList.contains('editing') && section.querySelector('.edit-textarea')) return;
 
     // If the section is already in editing state (e.g. a rapid cancel
     // followed immediately by another startEdit, or Dart sent startEdit
@@ -211,8 +214,7 @@ export class EditController {
     scrollTopFn(scrollPos);
   }
 
-  stopEdit(messageId) {
-    const section = document.querySelector(`[data-message-id="${messageId}"]`);
+  stopEdit(messageId, section = document.querySelector(`[data-message-id="${messageId}"]`)) {
     if (!section) return;
     section.classList.remove('editing');
 

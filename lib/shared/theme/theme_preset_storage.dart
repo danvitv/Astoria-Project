@@ -52,10 +52,11 @@ class ThemePresetStorage implements SyncThemePresetStore, ThemePresetStore {
   List<ThemePreset> _withBuiltins(List<ThemePreset> presets) {
     final result = List<ThemePreset>.from(presets);
     final oldDefaultIndex = result.indexWhere((p) => p.id == 'default');
-    // Replace only the exact, unedited Glaze built-in. A customized Default
-    // theme (or any imported theme) keeps its user's colors and effects.
+    // Upgrade the exact, unedited previous built-in. Customized Default themes
+    // keep their user's colors and effects.
     if (oldDefaultIndex != -1 &&
-        _isUnmodifiedGlazeDefault(result[oldDefaultIndex])) {
+        (_isUnmodifiedGlazeDefault(result[oldDefaultIndex]) ||
+            _isUnmodifiedPreviousDefault(result[oldDefaultIndex]))) {
       result[oldDefaultIndex] = _defaultPreset;
     }
     if (!result.any((p) => p.id == 'default')) {
@@ -164,7 +165,7 @@ class ThemePresetStorage implements SyncThemePresetStore, ThemePresetStore {
     if (settings.isEmpty) {
       throw const FormatException('Moonlit Echoes theme has no settings');
     }
-    final accent = _cssColor(settings['customThemeColor']) ?? '#7996CE';
+    final accent = _cssColor(settings['customThemeColor']) ?? '#F5C400';
     final ui = _cssColor(settings['customTopBarColor']);
     final text = _cssColor(settings['customThemeColor2']);
     final userBubble = _cssColorWithAlpha(settings['customBgColor1']);
@@ -208,7 +209,7 @@ class ThemePresetStorage implements SyncThemePresetStore, ThemePresetStore {
       name: json['name'] as String,
       author: 'SillyTavern',
       themeMode: _guessThemeModeFromCss(json['blur_tint_color']),
-      accentColor: quote ?? border?.hex ?? '#7996CE',
+      accentColor: quote ?? border?.hex ?? '#F5C400',
       uiColor: ui?.hex,
       bgColor: _cssColor(json['chat_tint_color']),
       elementOpacity: ui?.alpha ?? 0.8,
@@ -347,7 +348,7 @@ class ThemePresetStorage implements SyncThemePresetStore, ThemePresetStore {
     final accent =
         _hexOrNull(userBubbleInt) ??
         _hexOrNull(_asInt(console['sendColor'])) ??
-        '#7996CE';
+        '#F5C400';
     final bgImage = _resolveBackgroundImage(
       background['image'] as String?,
       archive,
@@ -625,6 +626,9 @@ bool _isUnmodifiedGlazeDefault(ThemePreset preset) {
           _glazeDefaultPreset;
 }
 
+bool _isUnmodifiedPreviousDefault(ThemePreset preset) =>
+    preset == _previousDefaultPreset;
+
 final _glazeDefaultPreset = ThemePreset(
   id: 'default',
   name: 'Default',
@@ -641,7 +645,7 @@ final _glazeDefaultPreset = ThemePreset(
   bgNoiseIntensity: 0.4,
 );
 
-final _defaultPreset = ThemePreset(
+final _previousDefaultPreset = ThemePreset(
   id: 'default',
   name: 'Default',
   accentColor: '#B77F96',
@@ -657,6 +661,8 @@ final _defaultPreset = ThemePreset(
   bgNoiseIntensity: 0.4,
 );
 
+final _defaultPreset = _previousDefaultPreset.copyWith(accentColor: '#F5C400');
+
 /// Built-in "Material You" standard theme. Colors are resolved from the system
 /// dynamic palette (Android) or a seed fallback at theme-build time, so the
 /// stored `accentColor`/bubble fields here are only placeholders — they are
@@ -665,7 +671,7 @@ final _defaultPreset = ThemePreset(
 final _materialYouPreset = ThemePreset(
   id: kMaterialYouPresetId,
   name: 'Material You',
-  accentColor: '#B77F96',
+  accentColor: '#F5C400',
   bgDim: 0.15,
   elementOpacity: 0.8,
   elementBlur: 12,

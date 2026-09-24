@@ -368,13 +368,11 @@ class GlazeAppBar extends ConsumerWidget {
   }
 }
 
-/// The selected Astoria monogram in the shell header.
+/// Astoria's cat mark in the shell header.
 class _AstoriaLogo extends StatelessWidget {
   @override
-  Widget build(BuildContext context) => ClipRRect(
-    borderRadius: BorderRadius.circular(8),
-    child: Image.asset('assets/logos/astoria.png', width: 32, height: 32),
-  );
+  Widget build(BuildContext context) =>
+      Image.asset('assets/logos/astoria.png', width: 32, height: 32);
 }
 
 // ─── Shared ghost pill button ──────────────────────────────────────────────

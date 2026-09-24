@@ -5,10 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/models/chat_message.dart';
 import '../../../core/models/preset.dart';
-import '../../../core/state/active_regex_provider.dart';
 import '../../../core/state/active_selection_provider.dart';
 import '../../../core/state/character_provider.dart';
-import '../../../core/state/persona_resolution.dart';
 import '../../personas/persona_list_provider.dart';
 import '../bridge/chat_bridge_controller.dart';
 import '../bridge/chat_overlay_blur_region.dart';
@@ -127,6 +125,11 @@ class ChatWebViewInitializer {
     required this.onReady,
     required this.onSyncExtBlockPanels,
     required this.applyTheme,
+    this.latestMessages,
+    this.latestVisibleStartIndex,
+    this.latestGenerationState,
+    this.onMessagesPainting,
+    this.onContextPainting,
   });
 
   final WidgetRef ref;
@@ -135,6 +138,21 @@ class ChatWebViewInitializer {
   final VoidCallback onReady;
   final Future<void> Function() onSyncExtBlockPanels;
   final Future<void> Function() applyTheme;
+
+  /// Read at the first paint, after the asynchronous theme/asset setup. A chat
+  /// can receive messages while that setup is in flight.
+  final List<ChatMessage> Function()? latestMessages;
+  final int Function()? latestVisibleStartIndex;
+  final ({
+    bool isGenerating,
+    bool isPostGenRunning,
+    bool isGeneratingImage,
+    bool isSendPending,
+  })
+  Function()?
+  latestGenerationState;
+  final void Function(List<ChatMessage>, int)? onMessagesPainting;
+  final VoidCallback? onContextPainting;
 
   /// Run the full init sequence. [onReady] is called synchronously
   /// after the last `await` completes, before the ext-block sync.
@@ -150,8 +168,9 @@ class ChatWebViewInitializer {
     // `personaId` against this roster, and one that arrives late would render
     // the whole chat with letter avatars first.
     bridge.setPersonaRoster(ref.read(personaListProvider).value ?? const []);
+    final regexes = await _displayRegexes();
     bridge.setRegexContext(
-      await _displayRegexes(),
+      regexes,
       character,
       effectivePersona,
       sessionVars:
@@ -183,12 +202,6 @@ class ChatWebViewInitializer {
     );
     // Persona/char identity can resolve while theme and assets load above.
     await _setIdentity();
-    // Set bridge state before mapping messages below. The mapper carries the
-    // stream and post-gen flags independently to every message control.
-    bridge.isGenerating = input.isGenerating;
-    bridge.isPostGenRunning = input.isPostGenRunning;
-    bridge.isGeneratingImage = input.isGeneratingImage;
-    bridge.isSendPending = input.isSendPending;
     // Origin ("Created on" / "Branched on") marker for the first paint.
     bridge.chatOrigin = ChatBridgeController.originMarkerFor(
       ref.read(chatProvider(input.charId)).value?.session,
@@ -233,20 +246,34 @@ class ChatWebViewInitializer {
     await bridge.setGenerationPhase(
       generationPhaseLabel(ref.read(generationPhaseProvider(input.charId))),
     );
+    // Theme, assets and memory loading can outlive a new send. Use the live
+    // generation state for the first paint rather than the entry snapshot.
+    final generation =
+        latestGenerationState?.call() ??
+        (
+          isGenerating: input.isGenerating,
+          isPostGenRunning: input.isPostGenRunning,
+          isGeneratingImage: input.isGeneratingImage,
+          isSendPending: input.isSendPending,
+        );
+    bridge.isGenerating = generation.isGenerating;
+    bridge.isPostGenRunning = generation.isPostGenRunning;
+    bridge.isGeneratingImage = generation.isGeneratingImage;
+    bridge.isSendPending = generation.isSendPending;
     // Before the first paint, and before the retire below can read them: the
     // page starts the elapsed clock off these two, and a chat reopened mid-run
     // should find it already running rather than a bubble with no clock until
     // the next dispatch. `setSendPending` also has to be mirrored into
     // `isSendPendingInPage`, which is what the dispatcher level-reconciles
     // against — left at its default it would push the same value again.
-    bridge.isSendPendingInPage = input.isSendPending;
+    bridge.isSendPendingInPage = generation.isSendPending;
     await bridge.evalJs(
       'if (window.bridge) { '
-      'window.bridge.setGenerating(${input.isGenerating}); '
+      'window.bridge.setGenerating(${generation.isGenerating}); '
       // Guarded and last: a page from before this flag existed (a cached
       // asset, the legacy bridge snapshot) would throw here.
       'if (window.bridge.setSendPending) '
-      'window.bridge.setSendPending(${input.isSendPending}); '
+      'window.bridge.setSendPending(${generation.isSendPending}); '
       '}',
     );
     // The page is kept alive across chats, so it may still hold the typing
@@ -257,12 +284,37 @@ class ChatWebViewInitializer {
     // ago, and no later re-render of the same session takes it back down.
     // Retire it unless a run really is in flight; the page ignores the call
     // when it has already stopped believing in the bubble itself.
-    if (!input.isGenerating && !input.isSendPending) {
+    if (!generation.isGenerating && !generation.isSendPending) {
       await bridge.retireTypingPlaceholder();
     }
+    // Roster/scripts can finish loading while the theme and font are awaited.
+    // Re-read right before mapping so the first paint needs no delayed reset.
+    bridge.setPersonaRoster(ref.read(personaListProvider).value ?? const []);
+    final latestRegexes = ref.read(displayRegexesProvider).value ?? regexes;
+    onContextPainting?.call();
+    bridge.setRegexContext(
+      latestRegexes,
+      ref.read(characterByIdProvider(input.charId)),
+      ref.read(
+        effectivePersonaForChatProvider((
+          charId: input.charId,
+          sessionId: input.sessionId,
+        )),
+      ),
+      sessionVars:
+          ref.read(chatProvider(input.charId)).value?.session?.sessionVars ??
+          const {},
+      globalVars: ref.read(globalVarsProvider),
+    );
+    final paintedMessages = List<ChatMessage>.of(
+      latestMessages?.call() ?? input.messages,
+    );
+    final paintedStartIndex =
+        latestVisibleStartIndex?.call() ?? input.visibleStartIndex;
+    onMessagesPainting?.call(paintedMessages, paintedStartIndex);
     await bridge.setMessages(
-      input.messages,
-      visibleStartIndex: input.visibleStartIndex,
+      paintedMessages,
+      visibleStartIndex: paintedStartIndex,
     );
     if (input.bottomInset > 0) {
       await bridge.setBottomPadding(
@@ -293,8 +345,8 @@ class ChatWebViewInitializer {
     unawaited(
       bridge.evalJs(
         'if (window.bridge) { '
-        'window.bridge.setPostGenRunning(${input.isPostGenRunning}); '
-        'window.bridge.setImageGenerating(${input.isGeneratingImage}); '
+        'window.bridge.setPostGenRunning(${generation.isPostGenRunning}); '
+        'window.bridge.setImageGenerating(${generation.isGeneratingImage}); '
         '}',
       ),
     );

@@ -54,16 +54,23 @@ const _vueAppBg = Color(0xFF19191A); // --app-bg / --vk-header-bg
 const _vueUiBg = Color(0xFF1E1E1E); // --ui-bg-default-rgb: 30,30,30
 
 ColorScheme _buildColorScheme(ThemePreset preset, {required bool isDark}) {
-  final accent = preset.accent;
+  // Gold lettering on the light stock surface has too little contrast; keep
+  // the bright gold on the user bubble while using a dark gold for UI controls.
+  final accent =
+      !isDark &&
+          preset.id == 'default' &&
+          preset.accentColor.toUpperCase() == '#F5C400'
+      ? const Color(0xFF8A6900)
+      : preset.accent;
   final uiColor =
       preset.uiColorParsed ??
       (preset.id == 'default'
-          ? (isDark ? const Color(0xFF2B2025) : const Color(0xFFF5EBE8))
+          ? (isDark ? const Color(0xFF313131) : const Color(0xFFF2F0E9))
           : (isDark ? _vueUiBg : _deriveUiColor(accent, isDark)));
   final bgColor =
       preset.bgColorParsed ??
       (preset.id == 'default'
-          ? (isDark ? const Color(0xFF1D171B) : const Color(0xFFFAF4F1))
+          ? (isDark ? const Color(0xFF101010) : const Color(0xFFFAF9F5))
           : (isDark ? _vueAppBg : uiColor));
   final onBg = contrastFor(uiColor);
   final onBgVariant = contrastFor(uiColor, secondary: true);
@@ -77,7 +84,7 @@ ColorScheme _buildColorScheme(ThemePreset preset, {required bool isDark}) {
       : const Color(0xFFE1E3E6);
 
   final defaultSecondary = preset.id == 'default'
-      ? (isDark ? const Color(0xFFBDA9AA) : const Color(0xFF716269))
+      ? (isDark ? const Color(0xFFC8C6BB) : const Color(0xFF625F55))
       : const Color(0xFF828282);
   return ColorScheme(
     brightness: isDark ? Brightness.dark : Brightness.light,
@@ -91,11 +98,11 @@ ColorScheme _buildColorScheme(ThemePreset preset, {required bool isDark}) {
     onError: Colors.white,
     surface: bgColor,
     onSurface: onBg,
-    // Neutralize M3 surface tint so all surface roles stay free of accent blue.
+    // Neutralize M3 surface tint so all surface roles stay free of accent tint.
     surfaceTint: bgColor,
     // Explicitly pin every surface container role to uiColor — otherwise
     // ColorScheme derives them via surface + surfaceTint blending and
-    // sheets/dialogs end up accent-tinted (e.g. blue-tinted #14141C over #19191A).
+    // sheets/dialogs end up accent-tinted.
     surfaceDim: bgColor,
     surfaceBright: surfaceHigh,
     surfaceContainerLowest: bgColor,
@@ -111,7 +118,7 @@ ColorScheme _buildColorScheme(ThemePreset preset, {required bool isDark}) {
 
 /// Seed used by the "Material You" theme when the system does not provide a
 /// dynamic palette (non-Android platforms, older Android).
-const _materialYouFallbackSeed = Color(0xFF713B51);
+const _materialYouFallbackSeed = Color(0xFFF5C400);
 
 /// Resolve the Material 3 [ColorScheme] for the built-in "Material You" theme.
 /// On Android [dynamicScheme] is the system palette; everywhere else (or when
@@ -203,7 +210,10 @@ class AppTheme {
     final uiWeight = preset.uiFontWeightValue;
     final scaleFactor = preset.uiFontSize is num ? uiSize / 15.0 : 1.0;
     final glazeColors = isMaterialYou
-        ? GlazeColors.fromColorScheme(colorScheme)
+        ? GlazeColors.fromColorScheme(
+            colorScheme,
+            chatLayout: preset.chatLayout,
+          )
         : GlazeColors.fromPreset(preset, isDark: true);
     final btnBg = _ensureButtonContrast(
       colorScheme.primary,
@@ -372,7 +382,10 @@ class AppTheme {
     final uiWeight = preset.uiFontWeightValue;
     final scaleFactor = preset.uiFontSize is num ? uiSize / 15.0 : 1.0;
     final glazeColors = isMaterialYou
-        ? GlazeColors.fromColorScheme(colorScheme)
+        ? GlazeColors.fromColorScheme(
+            colorScheme,
+            chatLayout: preset.chatLayout,
+          )
         : GlazeColors.fromPreset(preset, isDark: false);
     final btnBg = _ensureButtonContrast(
       colorScheme.primary,

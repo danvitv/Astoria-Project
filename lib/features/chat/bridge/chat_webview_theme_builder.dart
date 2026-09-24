@@ -73,7 +73,7 @@ class ChatWebViewThemeBuilder {
     return {
       'bg-color': _colorHex(cs.surface),
       'text-color': _colorHex(cs.onSurface),
-      'ui-bg-rgb': _colorRgb(cs.surface),
+      'ui-bg-rgb': _colorRgb(cs.surfaceContainerHighest),
       'vk-blue-rgb': _colorRgb(primary),
       'primary-rgb': _colorRgb(primary),
       'user-bubble-color-rgb': _colorRgb(glaze.userBubble),
@@ -81,10 +81,16 @@ class ChatWebViewThemeBuilder {
       // Full bubble background: either a solid rgba (element-opacity applied) or
       // a 2-stop linear gradient. Always emitted so toggling gradient → solid
       // overwrites the previously-set CSS variable.
-      'user-bubble-bg':
-          _bubbleBg(input.userBubbleGradient, glaze.userBubble, opacity),
-      'char-bubble-bg':
-          _bubbleBg(input.charBubbleGradient, glaze.charBubble, opacity),
+      'user-bubble-bg': _bubbleBg(
+        input.userBubbleGradient,
+        glaze.userBubble,
+        opacity,
+      ),
+      'char-bubble-bg': _bubbleBg(
+        input.charBubbleGradient,
+        glaze.charBubble,
+        opacity,
+      ),
       'user-text-color': _colorHex(glaze.userText ?? cs.onSurface),
       'char-text-color': _colorHex(glaze.charText ?? cs.onSurface),
       'user-quote-color': _colorHex(glaze.userQuote ?? cs.primary),
@@ -92,6 +98,7 @@ class ChatWebViewThemeBuilder {
       'user-italic-color': _colorHex(glaze.userItalic ?? cs.primary),
       'char-italic-color': _colorHex(glaze.charItalic ?? cs.primary),
       'primary-color': _colorHex(primary),
+      'on-primary-color': _colorHex(cs.onPrimary),
       'error-color': _colorHex(cs.error),
       'element-opacity': input.elementOpacity
           .clamp(0.0, 1.0)

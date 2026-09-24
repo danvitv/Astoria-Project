@@ -33,7 +33,9 @@ void main() {
     // Reopening a chat whose run is *still* going must carry the bubble: it is
     // the node the reply is streaming into. The page cannot tell that bubble
     // from a leftover, so the guard is the whole of what keeps them apart.
-    final guard = after('if (!input.isGenerating && !input.isSendPending) {');
+    final guard = after(
+      'if (!generation.isGenerating && !generation.isSendPending) {',
+    );
     final retire = after('bridge.retireTypingPlaceholder()');
     expect(guard, lessThan(retire));
     expect(retire - guard, lessThan(120), reason: 'guard is not the retire\'s');

@@ -18,7 +18,7 @@ abstract class ThemePreset with _$ThemePreset {
     required String name,
     @Default('') String author,
     @Default('dark') String themeMode,
-    @Default('#7996CE') String accentColor,
+    @Default('#F5C400') String accentColor,
     @Default(0) double bgBlur,
     @Default(0.8) double elementOpacity,
     @Default(12) double elementBlur,
@@ -129,9 +129,21 @@ class BubbleGradient {
   String encode() => '${angle.round()}|${_hexOf(color1)}|${_hexOf(color2)}';
 
   static String _hexOf(Color c) {
-    final r = (c.r * 255).round().clamp(0, 255).toRadixString(16).padLeft(2, '0');
-    final g = (c.g * 255).round().clamp(0, 255).toRadixString(16).padLeft(2, '0');
-    final b = (c.b * 255).round().clamp(0, 255).toRadixString(16).padLeft(2, '0');
+    final r = (c.r * 255)
+        .round()
+        .clamp(0, 255)
+        .toRadixString(16)
+        .padLeft(2, '0');
+    final g = (c.g * 255)
+        .round()
+        .clamp(0, 255)
+        .toRadixString(16)
+        .padLeft(2, '0');
+    final b = (c.b * 255)
+        .round()
+        .clamp(0, 255)
+        .toRadixString(16)
+        .padLeft(2, '0');
     return '#$r$g$b'.toUpperCase();
   }
 }
@@ -199,7 +211,7 @@ Color _parseHex(String hex) {
   if (clean.length == 8) {
     return Color(int.parse(clean, radix: 16));
   }
-  return const Color(0xFF7996CE);
+  return const Color(0xFFF5C400);
 }
 
 Color? _parseNullableHex(String? hex) {

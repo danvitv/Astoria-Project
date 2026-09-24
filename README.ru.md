@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logos/astoria.png" width="256" alt="Вензель Astoria">
+  <img src="assets/logos/astoria.png" width="256" alt="Логотип Astoria — кошка">
 </p>
 
 # Astoria Project

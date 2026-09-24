@@ -182,13 +182,21 @@ class ChatMessageOpsController {
     // runs a multi-table transaction (knowledge rollback, memory, snapshots,
     // ledger, embedding index) plus a full session re-encode, which is long
     // enough on a big chat to read as an unresponsive Delete button.
-    _writes.beginPublication();
+    final token = _writes.beginPublication();
     ChatSessionService.updateCache(plan.session);
     _setState(AsyncData(current.copyWith(session: plan.session)));
     _invalidateHistory();
 
     try {
-      await _writes.run(() => svc.commitDeleteMessages(original, plan));
+      final durable = await _writes.run(
+        () => svc.commitDeleteMessages(original, plan),
+      );
+      if (!_ref.mounted || !_writes.isCurrentPublication(token)) return;
+      final after = _getState().value;
+      if (after != null && identical(after.session, plan.session)) {
+        ChatSessionService.updateCache(durable);
+        _setState(AsyncData(after.copyWith(session: durable)));
+      }
     } catch (e) {
       debugPrint('[ChatMessageOps] delete failed, restoring messages: $e');
       if (!_ref.mounted) return;
@@ -197,9 +205,19 @@ class ChatMessageOpsController {
       // session since — a newer edit/generation owns the state by then, and
       // restoring the pre-delete session would resurrect more than the failure.
       if (after != null && identical(after.session, plan.session)) {
-        ChatSessionService.updateCache(original);
-        _setState(AsyncData(after.copyWith(session: original)));
-        _invalidateHistory();
+        // Another writer can have appended a reply while this optimistic
+        // suffix deletion was waiting to commit. Restore the durable row, not
+        // the pre-delete snapshot that would silently drop that new reply.
+        final durable = await _ref.read(chatRepoProvider).getById(original.id);
+        if (!_ref.mounted) return;
+        final latest = _getState().value;
+        if (durable != null &&
+            latest != null &&
+            identical(latest.session, plan.session)) {
+          ChatSessionService.updateCache(durable);
+          _setState(AsyncData(latest.copyWith(session: durable)));
+          _invalidateHistory();
+        }
       }
       GlazeToast.showWithoutContext(
         'error_delete_message_failed'.tr(namedArgs: {'error': '$e'}),

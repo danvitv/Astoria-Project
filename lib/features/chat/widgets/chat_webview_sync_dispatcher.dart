@@ -543,6 +543,15 @@ class ChatWebViewSyncDispatcher {
   /// ready or during a session switch. A lost falling edge would otherwise
   /// leave JS activity stuck on; a lost rising edge can render an actionable
   /// Regenerate control while a response is running.
+  /// Catch state transitions skipped while the first page paint was in flight.
+  /// The initializer may have read the flags before its last platform await.
+  void reconcileGeneratingState({
+    required ChatBridgeController bridge,
+    required ChatWebViewWidgetFields current,
+  }) {
+    _maybeApplyGeneratingState(bridge: bridge, old: current, current: current);
+  }
+
   void _maybeApplyGeneratingState({
     required ChatBridgeController bridge,
     required ChatWebViewWidgetFields old,

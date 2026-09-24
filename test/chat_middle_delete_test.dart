@@ -32,26 +32,32 @@ void main() {
       expect(ctrl.canDeleteSelection(_messages(3)), isTrue);
     });
 
-    test('allows a lone message in the middle', () {
+    test('rejects a lone message in the middle', () {
       final ctrl = ChatMessageSelectionController()..updateSelection(['m1']);
-      expect(ctrl.canDeleteSelection(_messages(3)), isTrue);
+      expect(ctrl.canDeleteSelection(_messages(3)), isFalse);
     });
 
-    test('allows a selection with a gap after it', () {
+    test('rejects a selection with a gap after it', () {
       final ctrl = ChatMessageSelectionController()
         ..updateSelection(['m0', 'm2']);
-      expect(ctrl.canDeleteSelection(_messages(3)), isTrue);
+      expect(ctrl.canDeleteSelection(_messages(3)), isFalse);
     });
 
-    test('allows a run that stops short of the last message', () {
+    test('rejects a run that stops short of the last message', () {
       final ctrl = ChatMessageSelectionController()
         ..updateSelection(['m0', 'm1']);
-      expect(ctrl.canDeleteSelection(_messages(3)), isTrue);
+      expect(ctrl.canDeleteSelection(_messages(3)), isFalse);
     });
 
     test('rejects a selection of unknown ids', () {
       final ctrl = ChatMessageSelectionController()
         ..updateSelection(['missing']);
+      expect(ctrl.canDeleteSelection(_messages(3)), isFalse);
+    });
+
+    test('rejects a trailing run mixed with an unknown id', () {
+      final ctrl = ChatMessageSelectionController()
+        ..updateSelection(['m1', 'm2', 'missing']);
       expect(ctrl.canDeleteSelection(_messages(3)), isFalse);
     });
   });

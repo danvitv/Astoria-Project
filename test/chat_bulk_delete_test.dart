@@ -182,14 +182,14 @@ void main() {
 
       final updated = await container
           .read(_messageServiceProvider)
-          .deleteMessages(session, {for (var i = 0; i < 30; i++) i});
+          .deleteMessages(session, {for (var i = 9; i < 39; i++) i});
 
       expect(updated.messages.map((message) => message.id), [
-        for (var i = 30; i < 39; i++) 'm$i',
+        for (var i = 0; i < 9; i++) 'm$i',
       ]);
       final persisted = await container.read(chatRepoProvider).getById('s1');
       expect(persisted?.messages.map((message) => message.id), [
-        for (var i = 30; i < 39; i++) 'm$i',
+        for (var i = 0; i < 9; i++) 'm$i',
       ]);
       expect(
         await container.read(embeddingRepoProvider).getBySourceId('s1'),
@@ -230,11 +230,11 @@ void main() {
       final service = container.read(_messageServiceProvider);
 
       // Deleting two messages bumps the counter by two.
-      final afterFirst = await service.deleteMessages(session, {0, 3});
+      final afterFirst = await service.deleteMessages(session, {4, 5});
       expect(afterFirst.deletedMessageCount, 2);
 
       // A second delete accumulates on top of the first.
-      final afterSecond = await service.deleteMessages(afterFirst, {0});
+      final afterSecond = await service.deleteMessages(afterFirst, {3});
       expect(afterSecond.deletedMessageCount, 3);
 
       // Out-of-range indices delete nothing and leave the counter untouched.
@@ -248,7 +248,7 @@ void main() {
   );
 
   test(
-    'middle deletion invalidates causal suffix and rolls reconciliation back',
+    'suffix deletion invalidates causal state and rolls reconciliation back',
     () async {
       final db = AppDatabase.forTesting(NativeDatabase.memory());
       final container = ProviderContainer(
@@ -383,15 +383,9 @@ void main() {
 
       final updated = await container
           .read(_messageServiceProvider)
-          .deleteMessages(session, {2});
+          .deleteMessages(session, {for (var i = 2; i < 6; i++) i});
 
-      expect(updated.messages.map((message) => message.id), [
-        'm0',
-        'm1',
-        'm3',
-        'm4',
-        'm5',
-      ]);
+      expect(updated.messages.map((message) => message.id), ['m0', 'm1']);
       expect(
         (await snapshots.getBySessionId(
           sessionId,
@@ -431,48 +425,59 @@ void main() {
     },
   );
 
-  test('deleting a message drops the ExtBlocks generated for it and later', () async {
-    final db = AppDatabase.forTesting(NativeDatabase.memory());
-    final container = ProviderContainer(
-      overrides: [appDbProvider.overrideWithValue(db)],
-    );
-    addTearDown(() async {
-      container.dispose();
-      await db.close();
-    });
+  test(
+    'deleting a message drops the ExtBlocks generated for it and later',
+    () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      final container = ProviderContainer(
+        overrides: [appDbProvider.overrideWithValue(db)],
+      );
+      addTearDown(() async {
+        container.dispose();
+        await db.close();
+      });
 
-    final session = ChatSession(
-      id: 's1',
-      characterId: 'c1',
-      sessionIndex: 0,
-      messages: const [
-        ChatMessage(id: 'm0', role: 'user', content: 'hi', timestamp: 1),
-        ChatMessage(id: 'm1', role: 'assistant', content: 'reply', timestamp: 2),
-        ChatMessage(id: 'm2', role: 'user', content: 'next', timestamp: 3),
-      ],
-    );
-    await container.read(chatRepoProvider).put(session);
+      final session = ChatSession(
+        id: 's1',
+        characterId: 'c1',
+        sessionIndex: 0,
+        messages: const [
+          ChatMessage(id: 'm0', role: 'user', content: 'hi', timestamp: 1),
+          ChatMessage(
+            id: 'm1',
+            role: 'assistant',
+            content: 'reply',
+            timestamp: 2,
+          ),
+          ChatMessage(id: 'm2', role: 'user', content: 'next', timestamp: 3),
+        ],
+      );
+      await container.read(chatRepoProvider).put(session);
 
-    final blocks = container.read(infoBlocksRepoProvider);
-    Future<void> insertBlock(String id, String messageId) => blocks.insert(
-      InfoBlock(
-        id: id,
-        sessionId: 's1',
-        messageId: messageId,
-        blockId: 'cfg-status',
-        blockName: 'Status',
-        blockType: 'infoblock',
-        content: 'body',
-        createdAt: 100,
-      ),
-    );
-    await insertBlock('b0', 'm0');
-    await insertBlock('b1', 'm1');
-    await insertBlock('b2', 'm2');
+      final blocks = container.read(infoBlocksRepoProvider);
+      Future<void> insertBlock(String id, String messageId) => blocks.insert(
+        InfoBlock(
+          id: id,
+          sessionId: 's1',
+          messageId: messageId,
+          blockId: 'cfg-status',
+          blockName: 'Status',
+          blockType: 'infoblock',
+          content: 'body',
+          createdAt: 100,
+        ),
+      );
+      await insertBlock('b0', 'm0');
+      await insertBlock('b1', 'm1');
+      await insertBlock('b2', 'm2');
 
-    await container.read(_messageServiceProvider).deleteMessages(session, {1});
+      await container.read(_messageServiceProvider).deleteMessages(session, {
+        1,
+        2,
+      });
 
-    final surviving = await blocks.getBySessionId('s1');
-    expect(surviving.map((block) => block.id).toList(), ['b0']);
-  });
+      final surviving = await blocks.getBySessionId('s1');
+      expect(surviving.map((block) => block.id).toList(), ['b0']);
+    },
+  );
 }

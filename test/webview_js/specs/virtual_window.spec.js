@@ -189,3 +189,49 @@ test('emptying the chat does not leave the loading screen up', async ({ page }) 
   expect(await page.evaluate(() => !!document.getElementById('loading-screen'))).toBe(false);
   expect(await onScreenCount(page)).toBe(0);
 });
+
+test('a late full refresh keeps the edited draft and visible messages', async ({ page }) => {
+  await boot(page);
+  await openChat(page, 0, 60);
+  await page.evaluate(() => {
+    window.bridge.startEdit('m59');
+    document.querySelector('[data-message-id="m59"] .edit-textarea').value = 'unsaved draft';
+    window.bridge.setMessages(window.__slice(0, 60), true);
+  });
+  await page.waitForTimeout(400);
+  expect(await onScreenCount(page)).toBeGreaterThan(0);
+  expect(await page.locator('[data-message-id="m59"] .edit-textarea').inputValue()).toBe('unsaved draft');
+  await page.evaluate(() => window.bridge.startEdit('m59'));
+  expect(await page.locator('[data-message-id="m59"] .edit-textarea').inputValue()).toBe('unsaved draft');
+});
+
+test('a full refresh preserves an unsaved draft after its row was virtualized', async ({ page }) => {
+  await boot(page);
+  await openChat(page, 0, 120);
+  await page.evaluate(() => {
+    const bridge = window.bridge;
+    bridge.startEdit('m119');
+    bridge.virtualList.itemMap.get('m119').el.querySelector('.edit-textarea').value = 'offscreen draft';
+    bridge.virtualList.container.scrollTop = 0;
+  });
+  await page.waitForFunction(() => !document.querySelector('[data-message-id="m119"]'));
+  await page.evaluate(() => window.bridge.setMessages(window.__slice(0, 120), true));
+  expect(await onScreenCount(page)).toBeGreaterThan(0);
+  await page.evaluate(() => window.bridge.scrollToMessage('m119'));
+  await page.waitForFunction(() => !!document.querySelector('[data-message-id="m119"] .edit-textarea'));
+  expect(await page.locator('[data-message-id="m119"] .edit-textarea').inputValue()).toBe('offscreen draft');
+});
+
+test('an update to a message being edited leaves its unsaved text in place', async ({ page }) => {
+  await boot(page);
+  await openChat(page, 0, 5);
+  await page.evaluate(() => {
+    window.bridge.startEdit('m3');
+    document.querySelector('[data-message-id="m3"] .edit-textarea').value = 'my draft';
+    window.bridge.updateMessage(JSON.stringify({ ...window.__M('m3', 'user', 'external change') }));
+    window.bridge.flush();
+  });
+  expect(await page.locator('[data-message-id="m3"] .edit-textarea').inputValue()).toBe('my draft');
+  await page.evaluate(() => window.bridge.stopEdit('m3'));
+  await expect(page.locator('.message-section[data-message-id="m3"]')).toContainText('external change');
+});
