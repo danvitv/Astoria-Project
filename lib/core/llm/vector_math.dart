@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -147,27 +148,46 @@ Uint8List vectorToBytes(List<double> vector) {
 }
 
 List<List<double>> bytesToVectorList(Uint8List bytes) {
+  if (bytes.length < 4) return [];
   final data = ByteData.sublistView(bytes);
   var pos = 0;
+  final count = data.getUint32(pos, Endian.host);
+  pos += 4;
+  // Validate headers against the remaining bytes before allocating anything.
+  // A backup once restored JSON text ("[1,0,...]") into this BLOB column;
+  // treating its ASCII bytes as a count/dimension can request tens of GB.
+  if (count > (bytes.length - pos) ~/ 4) return [];
 
-  try {
-    final count = data.getUint32(pos, Endian.host);
+  final result = <List<double>>[];
+  for (int c = 0; c < count; c++) {
+    final dim = data.getUint32(pos, Endian.host);
     pos += 4;
-
-    final result = <List<double>>[];
-    for (int c = 0; c < count; c++) {
-      final dim = data.getUint32(pos, Endian.host);
-      pos += 4;
-      final vec = List<double>.filled(dim, 0);
-      for (int i = 0; i < dim; i++) {
-        vec[i] = data.getFloat64(pos, Endian.host);
-        pos += 8;
-      }
-      result.add(vec);
+    if (dim > (bytes.length - pos) ~/ 8) return [];
+    final vec = List<double>.filled(dim, 0);
+    for (int i = 0; i < dim; i++) {
+      vec[i] = data.getFloat64(pos, Endian.host);
+      pos += 8;
     }
-    return result;
-  } on RangeError catch (_) {
-    return [];
+    result.add(vec);
+  }
+  return pos == bytes.length ? result : [];
+}
+
+/// Backups encode a SQLite BLOB as a JSON array of bytes. Older imports bound
+/// that array as TEXT, so both new imports and already-restored rows need this.
+Uint8List? vectorBytesFromJson(Object? value) {
+  try {
+    final decoded = value is String ? jsonDecode(value) : value;
+    if (decoded is! List) return null;
+    final bytes = Uint8List(decoded.length);
+    for (var i = 0; i < decoded.length; i++) {
+      final byte = decoded[i];
+      if (byte is! int || byte < 0 || byte > 255) return null;
+      bytes[i] = byte;
+    }
+    return bytes;
+  } on FormatException {
+    return null;
   }
 }
 

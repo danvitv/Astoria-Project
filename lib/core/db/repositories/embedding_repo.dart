@@ -182,8 +182,19 @@ class EmbeddingRepo extends DatabaseAccessor<AppDatabase>
   }
 
   List<List<double>>? decodeVectors(EmbeddingRow row) {
-    if (row.vectorsBlob == null) return null;
-    return bytesToVectorList(row.vectorsBlob!);
+    final stored = row.vectorsBlob;
+    if (stored == null) return null;
+    // A previous backup import saved BLOB byte arrays as SQLite TEXT. Drift
+    // exposes those rows as UTF-8 bytes; decode the original vector payload.
+    final isJsonArray = stored.length > 2 &&
+        stored.first == 0x5b &&
+        stored.last == 0x5d &&
+        stored[1] >= 0x30 &&
+        stored[1] <= 0x39;
+    final bytes = isJsonArray
+        ? vectorBytesFromJson(utf8.decode(stored, allowMalformed: true))
+        : stored;
+    return bytes == null ? [] : bytesToVectorList(bytes);
   }
 
   bool hasUsableVectors(EmbeddingRow row) {

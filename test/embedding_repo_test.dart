@@ -1,9 +1,13 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:drift/drift.dart' show Variable;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/embedding_repo.dart';
+import 'package:glaze_flutter/core/llm/vector_math.dart';
 
 void main() {
   late AppDatabase db;
@@ -15,6 +19,37 @@ void main() {
   });
 
   tearDown(() => db.close());
+
+  test('reads vectors restored as JSON byte arrays in a TEXT column', () async {
+    final encoded = vectorListToBytes(const [[0.5, -0.25]]);
+    expect(bytesToVectorList(encoded), [const [0.5, -0.25]]);
+    await db.customStatement(
+      'INSERT INTO embeddings (entry_id, source_type, source_id, vectors_blob) '
+      'VALUES (?, ?, ?, ?)',
+      ['legacy', 'lorebook_entry', 'book', jsonEncode(encoded)],
+    );
+
+    final row = await repo.getByEntryId('legacy');
+    expect(row, isNotNull);
+    expect(row!.vectorsBlob?.take(4).toList(), [91, 49, 44, 48]);
+    expect(vectorBytesFromJson(utf8.decode(row.vectorsBlob!)), encoded);
+    expect(repo.decodeVectors(row), [const [0.5, -0.25]]);
+  });
+
+  test('rejects invalid vector headers before allocating vectors', () {
+    expect(
+      bytesToVectorList(Uint8List.fromList([255, 255, 255, 255, 255])),
+      isEmpty,
+    );
+    expect(
+      bytesToVectorList(Uint8List.fromList([1, 0, 0, 0, 255, 255, 255, 255])),
+      isEmpty,
+    );
+    expect(
+      bytesToVectorList(Uint8List.fromList(utf8.encode('[5,0,0,0]'))),
+      isEmpty,
+    );
+  });
 
   test('getBySource applies source type and source id predicates', () async {
     for (final row in [
