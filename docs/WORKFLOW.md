@@ -12,8 +12,8 @@ push Astoria work to `hydall/Glaze`, `danvitv/Glaze`, or the public
 | Branch | Build channel | Purpose |
 |---|---|---|
 | `dev` | `dev` | Default branch, current development and internal builds |
-| `release` | `stable` | Reserved for tested releases; not created yet |
-| `feat/*`, `fix/*` | `nightly` when built by CI | Optional isolated work based on `dev` |
+| `main` / `master` | `stable` | Production branch when created |
+| `feat/*`, `fix/*` | `dev` when built by CI | Optional isolated work based on `dev` |
 
 When asked to work directly on `dev`, verify the branch and push only to
 `origin/dev` after appropriate checks. Otherwise start an isolated branch from
@@ -23,13 +23,14 @@ history. Preserve authorship and existing history; do not force-push shared
 branches. Regenerate after editing a Freezed/Drift model with
 `dart run build_runner build`.
 
-`release` can be cut from a tested `dev` revision only when the maintainer
-requests it. Building from that branch alone does not publish a release. Follow
-`docs/ASTORIA_LICENSE_AUDIT.md` before distributing proprietary binaries.
+`main` or `master` can be cut from a tested `dev` revision only when the
+maintainer requests it. Building from that branch alone does not publish a
+release. Follow `docs/ASTORIA_LICENSE_AUDIT.md` before distributing proprietary
+binaries.
 
 ## Checks
 
-`.github/workflows/ci.yml` runs on PRs targeting `dev` or `release` (and may
+`.github/workflows/ci.yml` runs on PRs targeting `dev`, `main`, or `master` (and may
 also be triggered manually). It runs `flutter analyze` (only analyzer errors
 are fatal), the Flutter tests, the DB migration suite separately, the WebView
 render suite, and the bug-triage tests. Direct pushes to `dev` do **not**

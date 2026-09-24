@@ -158,7 +158,6 @@ flutter analyze 2>&1 | Tee-Object -FilePath analyze_full.txt -Encoding UTF8; Get
 - On Windows, use these canonical environment-relative paths directly. Agents
   should not search the codebase merely to rediscover them:
   - local development and `dev`: `%APPDATA%\Astoria-dev\astoria.db`
-  - staging (if built): `%APPDATA%\Astoria-staging\astoria.db`
   - release / stable: `%APPDATA%\Astoria\astoria.db`
   In PowerShell, resolve `%APPDATA%` through `$env:APPDATA`; never hard-code a
   user's profile directory.
@@ -222,7 +221,8 @@ When editing files matching a pattern below, READ the corresponding rule file FI
   default branch. Work on `dev` when the maintainer requests it; use feature
   branches from `dev` for isolated changes. PRs, if used, target this private
   repository's `dev`, never Glaze. See `docs/WORKFLOW.md`.
-- `release` is reserved for tested builds; it is not created/published yet.
+- `main` / `master` are reserved for tested stable builds; neither has been
+  created/published yet.
   Public downloads require the rights and release-process work tracked in
   `docs/ASTORIA_LICENSE_AUDIT.md`. Channel semantics: `docs/RELEASE_CHANNELS.md`.
 - PR CI (`.github/workflows/ci.yml`) runs analyzer, tests and WebView render

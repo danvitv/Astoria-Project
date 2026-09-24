@@ -38,8 +38,7 @@ from images import LoadedImage
 
 # The tree the agent is allowed to grep and read. Defaults to this checkout
 # (two levels up from tools/bug_triage/auditor.py); CI points AUDIT_REPO_ROOT at
-# a separate nightly checkout, so a scheduled run started from stable still
-# judges reports against current code rather than a months-old tree.
+# a separate dev checkout so dispatched runs judge reports against current code.
 REPO_ROOT = Path(
     os.environ.get("AUDIT_REPO_ROOT") or Path(__file__).resolve().parents[2]
 ).resolve()

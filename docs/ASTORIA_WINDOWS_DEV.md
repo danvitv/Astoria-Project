@@ -51,13 +51,13 @@ Git). Fill in the providers you want to use:
   used as `serverClientId` by Google Sign-In for Android. Create **Android**
   OAuth clients in the same project for each installed package and signing
   certificate SHA-1: `app.astoria.flutter.dev` for local dev,
-  `app.astoria.flutter` for stable (also `.staging` if built). Register both
+  `app.astoria.flutter` for stable. Register both
   the debug SHA-1 (`keytool -list -v -alias androiddebugkey -keystore
   ~/.android/debug.keystore`, default password `android`) and the release
   signing SHA-1 as separate clients when those certificates differ.
 - `GDRIVE_IOS_CLIENT_ID`: an **iOS** OAuth client ID for the actual bundle ID:
   `com.danvitv.astoria.dev` for local dev. For stable use a separate client
-  registered for `com.danvitv.astoria` (and another for `.staging` if built).
+  registered for `com.danvitv.astoria`.
   Each distinct bundle ID needs its own iOS client ID in its build's `.env`.
   Run `bash ios/Runner/generate_env_xcconfig.sh`
   **before** `flutter build ios` or opening Xcode; it generates the Dropbox and
@@ -78,10 +78,9 @@ subfolder of the app's App folder. Do not commit `.env` or OAuth tokens.
 For CI, set the corresponding GitHub Actions secrets `DROPBOX_APP_KEY`,
 `DROPBOX_APP_KEY_DEV` if dev has a separate Dropbox app,
 `GDRIVE_CLIENT_ID`, `GDRIVE_ANDROID_SERVER_CLIENT_ID`, and
-`GDRIVE_IOS_CLIENT_ID` for dev; before building release iOS also set
-`GDRIVE_IOS_CLIENT_ID_RELEASE` for `com.danvitv.astoria` (optional staging and
-nightly IDs are in `docs/RELEASE_CHANNELS.md`). Mobile package/bundle IDs and
-signing SHA-1 must match the credentials used for **that build channel**. A build
+`GDRIVE_IOS_CLIENT_ID` for dev; before building stable iOS also set
+`GDRIVE_IOS_CLIENT_ID_RELEASE` for `com.danvitv.astoria`. Mobile package/bundle
+IDs and signing SHA-1 must match the credentials used for **that build channel**. A build
 with no credentials can run, but those providers cannot be connected. On
 Windows we cannot verify an iOS build or actual mobile OAuth without a
 Mac/device and these credentials.
