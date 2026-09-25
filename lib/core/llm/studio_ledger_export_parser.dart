@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'json_repair.dart';
 import '../models/character_knowledge_fact.dart';
 import '../models/studio_ledger_export.dart';
+import 'game_time.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // StudioLedgerExportParser
@@ -95,6 +96,22 @@ enum LedgerParseFailure {
   bool get isRepairable => this == incompleteJson || this == malformedJson;
 }
 
+enum LedgerClockWriteMode { validateTurn, rejectAll }
+
+final class LedgerClockPolicy {
+  const LedgerClockPolicy.turn({required this.current, required this.evidence})
+    : mode = LedgerClockWriteMode.validateTurn;
+
+  const LedgerClockPolicy.reconciliation()
+    : mode = LedgerClockWriteMode.rejectAll,
+      current = const GameTimeState(),
+      evidence = '';
+
+  final LedgerClockWriteMode mode;
+  final GameTimeState current;
+  final String evidence;
+}
+
 /// Parses and validates the Studio Ledger LLM output.
 ///
 /// Stateless — all methods are pure functions over the raw LLM text.
@@ -107,7 +124,11 @@ class StudioLedgerExportParser {
   /// - Extracts the `<glaze_memory_export>…</glaze_memory_export>` JSON block.
   /// - Validates the export (see class-level docs).
   /// - Returns null export + rejectionReason when invalid.
-  LedgerParseResult parse(String rawOutput, {String focalUserName = ''}) {
+  LedgerParseResult parse(
+    String rawOutput, {
+    String focalUserName = '',
+    LedgerClockPolicy? clockPolicy,
+  }) {
     final visibleLedger = _extractBlock(rawOutput, 'studio_ledger');
     final exportBlock = _findBlock(rawOutput, 'glaze_memory_export');
     final exportRaw = exportBlock.content;
@@ -169,16 +190,58 @@ class StudioLedgerExportParser {
     // Validate ops.
     final validatedOps = <LedgerOp>[];
     final rejectedOps = <String>[];
+    var rejectedOnlyClockWritesByPolicy = false;
+    var genericClockRejection = false;
 
     for (final op in export.ops) {
       final reason = _validateOp(op, focalUserName: focalUserName);
       if (reason != null) {
+        if (_isClockKey(op.key)) genericClockRejection = true;
         // Keep the verb: the same key can be legal for `set` and illegal for
         // `append_unique`, so the key alone does not identify the mistake.
         rejectedOps.add('${op.op} ${op.key}: $reason');
         debugPrint('[StudioLedger] rejected op ${op.op} ${op.key}: $reason');
       } else {
         validatedOps.add(op);
+      }
+    }
+
+    if (clockPolicy != null) {
+      final clockOps = validatedOps.where((op) => _isClockKey(op.key)).toList();
+      final proposedDay = _proposedClockDay(clockOps, clockPolicy.current.day);
+      final proposedDate = _proposedClockDate(
+        clockOps,
+        clockPolicy.current.date,
+      );
+      final clockRejections = <String>[];
+      for (final op in clockOps) {
+        final reason = _validateClockOp(
+          op,
+          clockPolicy,
+          proposedDay: proposedDay,
+          proposedDate: proposedDate,
+        );
+        if (reason != null) {
+          clockRejections.add('${op.op} ${op.key}: $reason');
+        }
+      }
+      if (genericClockRejection || clockRejections.isNotEmpty) {
+        rejectedOnlyClockWritesByPolicy = clockOps.length == export.ops.length;
+        validatedOps.removeWhere((op) => _isClockKey(op.key));
+        rejectedOps
+          ..addAll(clockRejections)
+          ..addAll(
+            clockOps
+                .where(
+                  (op) => !clockRejections.any(
+                    (rejection) => rejection.startsWith('${op.op} ${op.key}:'),
+                  ),
+                )
+                .map(
+                  (op) =>
+                      '${op.op} ${op.key}: clock updates are applied atomically',
+                ),
+          );
       }
     }
 
@@ -196,7 +259,7 @@ class StudioLedgerExportParser {
 
     // Ignore completely empty exports.
     final isEmpty = validatedOps.isEmpty && validatedFacts.isEmpty;
-    if (isEmpty) {
+    if (isEmpty && !rejectedOnlyClockWritesByPolicy) {
       return LedgerParseResult(
         visibleLedger: visibleLedger,
         rejectionReason: rejectedOps.isNotEmpty
@@ -606,6 +669,191 @@ class StudioLedgerExportParser {
 
     return null;
   }
+
+  bool _isClockKey(String key) =>
+      key == GameTimeState.timeKey ||
+      key == GameTimeState.dateKey ||
+      key == GameTimeState.dayKey;
+
+  int? _proposedClockDay(List<LedgerOp> ops, int? currentDay) {
+    final dayOps = ops.where((op) => op.key == GameTimeState.dayKey).toList();
+    if (dayOps.length != 1 || dayOps.single.op == 'delete') return currentDay;
+    return int.tryParse(dayOps.single.value.trim());
+  }
+
+  String? _proposedClockDate(List<LedgerOp> ops, String? currentDate) {
+    final dateOps = ops.where((op) => op.key == GameTimeState.dateKey).toList();
+    if (dateOps.length != 1 || dateOps.single.op == 'delete') {
+      return currentDate;
+    }
+    return dateOps.single.value.trim();
+  }
+
+  String? _validateClockOp(
+    LedgerOp op,
+    LedgerClockPolicy policy, {
+    required int? proposedDay,
+    required String? proposedDate,
+  }) {
+    if (policy.mode == LedgerClockWriteMode.rejectAll) {
+      return 'reconciliation cannot rewrite the game clock';
+    }
+    if (policy.current.format() == null) {
+      return 'automatic clock updates require a complete current clock';
+    }
+    if (op.op == 'delete') return 'the game clock cannot be deleted';
+    if (op.key == GameTimeState.dateKey) {
+      final proposed = GameTimeState.parse(
+        time: policy.current.time ?? '',
+        date: op.value,
+        day: '${policy.current.day ?? ''}',
+      ).date;
+      if (proposed == null || proposed != op.value.trim()) {
+        return 'world:date must be canonical DD.MM.YYYY';
+      }
+      if (proposed != policy.current.date &&
+          !policy.evidence.contains(proposed) &&
+          !_hasSupportedRollover(
+            policy,
+            proposedDay: proposedDay,
+            proposedDate: proposedDate,
+          )) {
+        return 'world:date change needs the explicit numeric date in accepted text';
+      }
+      return null;
+    }
+    if (op.key == GameTimeState.dayKey) {
+      final proposed = int.tryParse(op.value.trim());
+      if (proposed == null || proposed < 0 || '$proposed' != op.value.trim()) {
+        return 'world:day must be a non-negative integer';
+      }
+      if (proposed != policy.current.day &&
+          !_hasExplicitRpDay(policy.evidence, proposed) &&
+          !_hasSupportedRollover(
+            policy,
+            proposedDay: proposedDay,
+            proposedDate: proposedDate,
+          )) {
+        return 'world:day change needs an explicit RP day in accepted text';
+      }
+      return null;
+    }
+
+    final proposed = GameTimeState.parse(
+      time: op.value,
+      date: policy.current.date ?? '',
+      day: '${policy.current.day ?? ''}',
+    ).time;
+    if (proposed == null || proposed != op.value.trim()) {
+      return 'world:time must be canonical 24-hour HH:MM';
+    }
+    final current = policy.current.time!;
+    final currentMinutes = _minutesOfDay(current);
+    final proposedMinutes = _minutesOfDay(proposed);
+    final currentDay = policy.current.day;
+    final dayDelta = currentDay == null || proposedDay == null
+        ? 0
+        : proposedDay - currentDay;
+    if (dayDelta < 0) {
+      return 'world:day cannot move backward';
+    }
+    final delta = proposedMinutes - currentMinutes + dayDelta * 24 * 60;
+    if (delta < 0) {
+      return 'world:time cannot move backward without an explicit day rollover';
+    }
+    if (delta <= 5) return null;
+    if (_hasExplicitAbsoluteTime(policy.evidence, proposed) ||
+        _hasSupportingDuration(policy.evidence, delta)) {
+      return null;
+    }
+    return 'clock advance over 5 minutes needs an explicit numeric time or duration';
+  }
+
+  int _minutesOfDay(String value) {
+    final parts = value.split(':');
+    return int.parse(parts[0]) * 60 + int.parse(parts[1]);
+  }
+
+  bool _hasSupportedRollover(
+    LedgerClockPolicy policy, {
+    required int? proposedDay,
+    required String? proposedDate,
+  }) {
+    final currentDay = policy.current.day;
+    final currentDate = _parseDate(policy.current.date);
+    final nextDate = _parseDate(proposedDate);
+    if (currentDay == null ||
+        proposedDay == null ||
+        currentDate == null ||
+        nextDate == null) {
+      return false;
+    }
+    final dayDelta = proposedDay - currentDay;
+    if (dayDelta <= 0 ||
+        nextDate != currentDate.add(Duration(days: dayDelta))) {
+      return false;
+    }
+    final timeOpEvidence = RegExp(
+      r'\d{1,2}:\d{2}',
+    ).allMatches(policy.evidence).isNotEmpty;
+    return timeOpEvidence || _hasAnyNumericDuration(policy.evidence);
+  }
+
+  DateTime? _parseDate(String? value) {
+    if (value == null) return null;
+    final parts = value.split('.');
+    if (parts.length != 3) return null;
+    final day = int.tryParse(parts[0]);
+    final month = int.tryParse(parts[1]);
+    final year = int.tryParse(parts[2]);
+    if (day == null || month == null || year == null) return null;
+    final date = DateTime.utc(year, month, day);
+    return date.day == day && date.month == month && date.year == year
+        ? date
+        : null;
+  }
+
+  bool _hasExplicitAbsoluteTime(String evidence, String proposed) {
+    for (final match in RegExp(r'\d{1,2}:\d{2}').allMatches(evidence)) {
+      if (match.group(0) != proposed) continue;
+      final previousIsDigit =
+          match.start > 0 && RegExp(r'\d').hasMatch(evidence[match.start - 1]);
+      final nextIsDigit =
+          match.end < evidence.length &&
+          RegExp(r'\d').hasMatch(evidence[match.end]);
+      if (!previousIsDigit && !nextIsDigit) return true;
+    }
+    return false;
+  }
+
+  bool _hasSupportingDuration(String evidence, int deltaMinutes) {
+    final duration = RegExp(
+      r'\b(\d{1,4})\s*(minutes?|mins?|hours?|hrs?|минут(?:а|ы)?|мин|час(?:а|ов)?)\b',
+      caseSensitive: false,
+      unicode: true,
+    );
+    for (final match in duration.allMatches(evidence)) {
+      final value = int.parse(match.group(1)!);
+      final unit = match.group(2)!.toLowerCase();
+      final minutes = unit.startsWith('h') || unit.startsWith('час')
+          ? value * 60
+          : value;
+      if ((minutes - deltaMinutes).abs() <= 5) return true;
+    }
+    return false;
+  }
+
+  bool _hasAnyNumericDuration(String evidence) => RegExp(
+    r'\b\d{1,4}\s*(?:minutes?|mins?|hours?|hrs?|минут(?:а|ы)?|мин|час(?:а|ов)?)\b',
+    caseSensitive: false,
+    unicode: true,
+  ).hasMatch(evidence);
+
+  bool _hasExplicitRpDay(String evidence, int day) => RegExp(
+    '\\b(?:rp[_ -]?day|рп[_ -]?день|day)\\s*$day\\b',
+    caseSensitive: false,
+    unicode: true,
+  ).hasMatch(evidence);
 
   bool _isFocalUserStateKey(String key, String focalUserName) {
     if (key.startsWith('npc:')) {

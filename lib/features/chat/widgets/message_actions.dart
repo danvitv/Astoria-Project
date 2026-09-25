@@ -7,7 +7,6 @@ import '../../../shared/widgets/glaze_bottom_sheet.dart';
 import '../chat_provider.dart';
 import '../bridge/chat_bridge_registry.dart';
 import '../editing_message_provider.dart';
-import 'message_delete_confirmation.dart';
 
 void showMessageContextMenu({
   required BuildContext context,
@@ -161,14 +160,6 @@ void showMessageContextMenu({
           isDestructive: true,
           onTap: () async {
             Navigator.of(context, rootNavigator: true).pop();
-            if (!await confirmMessageDeletion(
-              context,
-              ref,
-              sessionId: sessionId,
-            )) {
-              return;
-            }
-            if (!context.mounted) return;
             final current = ref.read(chatProvider(charId)).value;
             final messages = current?.session?.messages;
             if (current?.session?.id != sessionId ||

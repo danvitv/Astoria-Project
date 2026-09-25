@@ -157,6 +157,25 @@ void main() {
     expect(context.macroContext.reasoningEnd, '</api-think>');
   });
 
+  test('always exposes a complete authoritative clock to Studio', () {
+    final context = preparer.prepare(
+      inputs: const GenerationContextInputs(
+        character: Character(id: 'char', name: 'Lucy'),
+        history: [],
+        apiConfig: ApiConfig(id: 'api'),
+        gameTime: '10:00',
+        gameDate: '08.09.0755',
+        gameDay: '0',
+      ),
+      visibleMessageIds: const {},
+    );
+
+    final dynamic = context.join(StudioContextSlot.runtimeDynamic);
+    expect(dynamic, contains('<current_game_clock>'));
+    expect(dynamic, contains('08.09.0755 · RP_Day 0 · 10:00'));
+    expect(dynamic, contains('ordinal bells'));
+  });
+
   test('finalizes memory and recall independently for each source window', () {
     const entry = MemoryEntry(
       id: 'm1',

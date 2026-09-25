@@ -142,6 +142,10 @@ Game clock (world:time, world:date, world:day):
   stay in prose without touching world:time. When time passes midnight, advance
   world:day (day 0 is the first day of the story) and world:date.
 - Do not invent time skips that the narrative does not support.
+- Ordinal bells, chimes, strikes, watches, and similar atmosphere are not an
+  absolute clock mapping. In particular, "third bell" does not mean 15:00.
+  Keep the ordinary 1–5 minute advance unless accepted text explicitly states
+  a numeric absolute time or a numeric elapsed duration.
 - A timeskip already applied in a prior turn is consummated: it advances the
   clock once and the new world:date/day stand from then on. Do not re-apply the
   same timeskip on a later turn, and do not advance the clock for time the

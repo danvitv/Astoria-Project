@@ -373,6 +373,7 @@ final class LedgerReconciliationRunner {
       var parsed = _parser.parse(
         responseText,
         focalUserName: request.macroCtx?.userName ?? '',
+        clockPolicy: const LedgerClockPolicy.reconciliation(),
       );
       await _runDiagnostics.recordLedgerParserVerdict(outcome, parsed);
       trace.recordFirstResponse(
@@ -474,6 +475,7 @@ final class LedgerReconciliationRunner {
           final repaired = _parser.parse(
             repairedText,
             focalUserName: request.macroCtx?.userName ?? '',
+            clockPolicy: const LedgerClockPolicy.reconciliation(),
           );
           await _runDiagnostics.recordLedgerParserVerdict(repair, repaired);
           trace.recordRepairResponse(

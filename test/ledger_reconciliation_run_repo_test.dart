@@ -282,6 +282,28 @@ void main() {
     );
   });
 
+  test('stored run survives deletion of its trailing accepting user', () async {
+    await _seedSession(db);
+    await _seedVariationEvidence(db);
+    final refs = await repo.readAcceptedManifestRefs(
+      sessionId: 'session',
+      anchors: [_anchor()],
+    );
+    expect(
+      await repo.append(_run(acceptedManifestRefs: refs)),
+      isA<ReconciliationRunAppended>(),
+    );
+
+    await db.customStatement(
+      "DELETE FROM lorebook_use_acceptance_records WHERE acceptance_id = 'variation:session:user'",
+    );
+    await db.customStatement(
+      "UPDATE chat_sessions SET messages_json = '[{\"id\":\"message\",\"role\":\"assistant\",\"content\":\"canonical\",\"swipes\":[\"canonical\"],\"agentSwipes\":[]}]' WHERE session_id = 'session'",
+    );
+
+    expect((await repo.getHead('session'))?.id, 'run-1');
+  });
+
   test(
     'wrong acceptance identity, accepting user, or manifest rejects append',
     () async {

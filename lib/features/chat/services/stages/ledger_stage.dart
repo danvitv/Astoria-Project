@@ -583,8 +583,8 @@ class LedgerStage {
 
   /// Best-effort: stamps the current ledger game clock (world:time/date/day)
   /// onto the assistant message as a display-only field. The value is never
-  /// injected into the main prompt — the clock reaches the model through the
-  /// ledger state block — but auxiliary systems (memory/summary history) read
+  /// injected into the main history — the clock reaches the model through the
+  /// authoritative runtime clock block — but auxiliary systems read
   /// it so their outputs stay time-anchored.
   Future<void> _syncGameTimeToMessage({
     required String sessionId,

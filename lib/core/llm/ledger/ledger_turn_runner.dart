@@ -14,6 +14,7 @@ import '../../models/studio_ledger_export.dart';
 import '../../models/studio_regex.dart';
 import '../../utils/id_generator.dart';
 import '../aux_llm_client.dart';
+import '../game_time.dart';
 import '../knowledge_cleanup_parser.dart';
 import '../macro_engine.dart';
 import '../studio_ledger_export_parser.dart';
@@ -294,9 +295,14 @@ class LedgerTurnRunner {
       );
 
       var effectiveResponse = rawResponse;
+      final clockPolicy = LedgerClockPolicy.turn(
+        current: GameTimeState.fromTrackers(promptTrackers),
+        evidence: request.finalAssistantText,
+      );
       var parseResult = _parser.parse(
         effectiveResponse,
         focalUserName: request.macroCtx?.userName ?? '',
+        clockPolicy: clockPolicy,
       );
       await _runDiagnostics.recordLedgerParserVerdict(outcome, parseResult);
       trace.recordFirstResponse(
@@ -391,6 +397,7 @@ class LedgerTurnRunner {
         parseResult = _parser.parse(
           effectiveResponse,
           focalUserName: request.macroCtx?.userName ?? '',
+          clockPolicy: clockPolicy,
         );
         await _runDiagnostics.recordLedgerParserVerdict(repair, parseResult);
         trace.recordRepairResponse(

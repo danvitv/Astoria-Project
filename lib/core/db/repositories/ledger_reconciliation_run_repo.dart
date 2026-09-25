@@ -1060,7 +1060,7 @@ class LedgerReconciliationRunRepo {
         createdAt: row.createdAt,
       );
       return _anchorsMatchEvidence(run, evidence) &&
-          _refsMatchEvidence(run, evidence);
+          _refsMatchEvidence(run, evidence, allowRetiredAcceptance: true);
     } catch (_) {
       return false;
     }
@@ -1134,8 +1134,9 @@ class LedgerReconciliationRunRepo {
 
   bool _refsMatchEvidence(
     LedgerReconciliationRun run,
-    _ReconciliationEvidence evidence,
-  ) {
+    _ReconciliationEvidence evidence, {
+    bool allowRetiredAcceptance = false,
+  }) {
     for (final ref in run.acceptedManifestRefs) {
       final manifest =
           evidence.manifests[(ref.messageId, ref.swipeId, ref.agentSwipeId)];
@@ -1143,6 +1144,16 @@ class LedgerReconciliationRunRepo {
         return false;
       }
       final accepted = evidence.acceptances[ref.acceptanceId];
+      // A successful run already verified this acceptance when it was
+      // appended. Deleting only the later user/trigger tail retires that
+      // mutable acceptance row, but must not erase the completed anchored
+      // range. The immutable variation anchor and manifest hash remain the
+      // authoritative evidence. New runs still require live acceptance.
+      if (accepted == null &&
+          allowRetiredAcceptance &&
+          !evidence.messages.containsKey(ref.acceptedByUserMessageId)) {
+        continue;
+      }
       if (accepted == null ||
           accepted.acceptanceKind != 'variation' ||
           accepted.sessionId != ref.sessionId ||

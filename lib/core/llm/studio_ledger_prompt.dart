@@ -410,6 +410,9 @@ Rules:
   world:day (day 0 = first story day) and world:date.
   For an ordinary continuous turn with no explicit duration, advance the clock
   by 1–5 minutes. Use an explicitly narrated duration instead when available.
+  Ordinal bells, chimes, strikes, watches, and similar atmosphere do not map to
+  an absolute clock value unless the accepted text states that mapping. In
+  particular, "third bell" alone is not evidence that the time is 15:00.
   Do not invent time skips the narrative does not support.
   A timeskip already applied in a prior turn is consummated: it advances the
   clock once and the new world:date/day stand from then on. Do not re-apply the

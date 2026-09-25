@@ -2,8 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/repositories/chat_repo.dart';
 import '../../../core/db/repositories/card_evolution_proposal_run_repo.dart';
-import '../../../core/db/repositories/ledger_reconciliation_checkpoint_repo.dart';
-import '../../../core/db/repositories/ledger_reconciliation_run_repo.dart';
 import '../../../core/db/repositories/tracker_repo.dart';
 import '../../../core/db/repositories/tracker_snapshot_repo.dart';
 import '../../../core/llm/game_time.dart';
@@ -22,10 +20,6 @@ final manualLedgerClockServiceProvider = Provider<ManualLedgerClockService>((
     chatRepo: ref.watch(chatRepoProvider),
     snapshotRepo: ref.watch(trackerSnapshotRepoProvider),
     trackerRepo: ref.watch(trackerRepoProvider),
-    reconciliationRunRepo: ref.watch(ledgerReconciliationRunRepoProvider),
-    reconciliationCheckpointRepo: ref.watch(
-      ledgerReconciliationCheckpointRepoProvider,
-    ),
     proposalRunRepo: ref.watch(cardEvolutionProposalRunRepoProvider),
   );
 });
@@ -69,16 +63,12 @@ class ManualLedgerClockService {
     required this.chatRepo,
     required this.snapshotRepo,
     required this.trackerRepo,
-    required this.reconciliationRunRepo,
-    required this.reconciliationCheckpointRepo,
     required this.proposalRunRepo,
   });
 
   final ChatRepo chatRepo;
   final TrackerSnapshotRepo snapshotRepo;
   final TrackerRepo trackerRepo;
-  final LedgerReconciliationRunRepo reconciliationRunRepo;
-  final LedgerReconciliationCheckpointRepo reconciliationCheckpointRepo;
   final CardEvolutionProposalRunRepo proposalRunRepo;
 
   Future<List<ManualLedgerClockEntry>> loadRecent(
@@ -227,16 +217,9 @@ class ManualLedgerClockService {
           reason: 'manualClockEdit',
           now: updatedAt,
         );
-        await reconciliationRunRepo.invalidateForMessageMutation(
-          sessionId: sessionId,
-          messageIds: expectedIds,
-          reason: 'manual_clock_edit',
-          createdAt: updatedAt,
-        );
-        await reconciliationCheckpointRepo.deleteForMessages(
-          sessionId,
-          expectedIds,
-        );
+        // The correction rewrites the exact snapshots in place. Keep the
+        // completed reconciliation range and its checkpoint authoritative;
+        // the mutation revision still fences off work started on the old clock.
         await trackerRepo.bumpLedgerManualMutationRevision(sessionId);
 
         final latestActive = await loadRecent(sessionId, limit: 1);

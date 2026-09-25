@@ -41,15 +41,22 @@ final _memoryBookRepoProvider = Provider<MemoryBookRepo>(
 
 const _response = '''
 <glaze_memory_export>
-{"ops":[{"op":"set","key":"world:time","value":"01:00","evidence":"clock changed","eventState":"completed"}],"knowledgeFacts":[{"knowerKey":"alice","subjectKey":"bob","predicate":"knows","object":"the plan"}]}
+{"ops":[{"op":"set","key":"world:location","value":"courtyard","evidence":"location changed","eventState":"completed"}],"knowledgeFacts":[{"knowerKey":"alice","subjectKey":"bob","predicate":"knows","object":"the plan"}]}
 </glaze_memory_export>
 <studio_ledger>updated</studio_ledger>
 ''';
 
 const _repairResponse = '''
 <glaze_memory_export>
-{"ops":[{"op":"set","key":"world:time","value":"01:00","evidence":"clock changed","eventState":"completed"}],"knowledgeFacts":[]}
+{"ops":[{"op":"set","key":"world:location","value":"courtyard","evidence":"location changed","eventState":"completed"}],"knowledgeFacts":[]}
 </glaze_memory_export>
+''';
+
+const _clockResponse = '''
+<glaze_memory_export>
+{"ops":[{"op":"set","key":"world:time","value":"01:00","evidence":"thirty minutes pass","eventState":"completed"}],"knowledgeFacts":[{"knowerKey":"alice","subjectKey":"bob","predicate":"knows","object":"the plan"}]}
+</glaze_memory_export>
+<studio_ledger>updated</studio_ledger>
 ''';
 
 const _reconciliationResponse = '''
@@ -63,7 +70,7 @@ const _reconciliationResponse = '''
 String _reconciliationAt(String time) =>
     '''
 <glaze_memory_export>
-{"ops":[{"op":"set","key":"world:time","value":"$time","evidence":"clock changed","eventState":"completed"}],"knowledgeFacts":[]}
+{"ops":[{"op":"set","key":"world:location","value":"place-$time","evidence":"location corrected","eventState":"completed"}],"knowledgeFacts":[]}
 </glaze_memory_export>
 <studio_ledger>reviewed</studio_ledger>
 <glaze_knowledge_cleanup>{"ops":[]}</glaze_knowledge_cleanup>
@@ -791,7 +798,10 @@ void main() {
       final oldHead = (await reconciliationRuns.readSession('session')).single;
       final oldEffect = await reconciliationRuns.validateEffect(oldHead);
       expect(oldEffect, isA<ReconciliationEffectValid>());
-      expect((await trackers.get('session', 'world:time'))?.value, '01:00');
+      expect(
+        (await trackers.get('session', 'world:location'))?.value,
+        'place-01:00',
+      );
       await _seedRecoverableReplacementState(db, oldHead);
 
       final replacement = await service.replaceLatestReconciliation(
@@ -814,7 +824,10 @@ void main() {
         (newEffect as ReconciliationEffectValid).before.hash,
         (oldEffect as ReconciliationEffectValid).before.hash,
       );
-      expect((await trackers.get('session', 'world:time'))?.value, '02:00');
+      expect(
+        (await trackers.get('session', 'world:location'))?.value,
+        'place-02:00',
+      );
       expect((await checkpoints.get('session'))?.rangeHash, plan.rangeHash);
       expect(await db.select(db.cardEvolutionCollectorRuns).get(), isEmpty);
       expect(await db.select(db.cardEvolutionObservations).get(), isEmpty);
@@ -827,8 +840,8 @@ void main() {
           messageId: 'a1',
           swipeId: 0,
           agentSwipeId: 0,
-        ))?.trackers.singleWhere((item) => item.name == 'world:time').value,
-        '02:00',
+        ))?.trackers.singleWhere((item) => item.name == 'world:location').value,
+        'place-02:00',
       );
     },
   );
@@ -992,7 +1005,10 @@ void main() {
       );
       expect((await reconciliationRuns.getHead('session'))?.id, oldHead.id);
       expect(await reconciliationRuns.readInvalidations('session'), isEmpty);
-      expect((await trackers.get('session', 'world:time'))?.value, '01:00');
+      expect(
+        (await trackers.get('session', 'world:location'))?.value,
+        'place-01:00',
+      );
       expect(
         (await trackers.get('session', 'manual-during-call'))?.value,
         'preserve me',
@@ -1045,7 +1061,10 @@ void main() {
     expect((await future).status, 'aborted');
     expect((await reconciliationRuns.getHead('session'))?.id, head.id);
     expect(await reconciliationRuns.readInvalidations('session'), isEmpty);
-    expect((await trackers.get('session', 'world:time'))?.value, '01:00');
+    expect(
+      (await trackers.get('session', 'world:location'))?.value,
+      'place-01:00',
+    );
     expect((await db.select(db.rewriteJobs).getSingle()).status, 'applied');
   });
 
@@ -1129,7 +1148,7 @@ void main() {
       addTearDown(endpoint.close);
 
       expect((await run(endpoint.url)).status, 'ok');
-      final tracker = await trackers.get('session', 'world:time');
+      final tracker = await trackers.get('session', 'world:location');
       final fact = (await facts.getBySourceAnchor(
         sessionId: 'session',
         messageId: 'a1',
@@ -1143,7 +1162,7 @@ void main() {
         agentSwipeId: 0,
       );
       final snapshotTracker = snapshot!.trackers.singleWhere(
-        (item) => item.name == 'world:time',
+        (item) => item.name == 'world:location',
       );
       expect(tracker!.basisRevisionNumber, 1);
       expect(fact.basisRevisionNumber, 1);
@@ -1160,18 +1179,43 @@ void main() {
     await trackers.seedInitialGameTime(
       sessionId: 'session',
       time: '00:30',
-      date: '2026-08-26',
+      date: '26.08.2026',
       day: '0',
     );
-    final endpoint = await _serve(_response);
+    const timedAssistant = ChatMessage(
+      id: 'a1',
+      role: 'assistant',
+      content: 'Thirty minutes pass. It is now 01:00.',
+    );
+    await chats.put(
+      const ChatSession(
+        id: 'session',
+        characterId: 'char',
+        sessionIndex: 0,
+        messages: [
+          ChatMessage(id: 'u1', role: 'user', content: 'Start'),
+          timedAssistant,
+        ],
+      ),
+    );
+    final endpoint = await _serve(_clockResponse);
     addTearDown(endpoint.close);
 
-    final result = await run(endpoint.url);
+    final result = await service.run(
+      sessionId: 'session',
+      settings: const PipelineSettings(),
+      config: _config(endpoint.url),
+      finalAssistantText: timedAssistant.content,
+      recentHistoryText: 'Start',
+      messageId: 'a1',
+      swipeId: 0,
+      agentSwipeId: 0,
+    );
 
     expect(result.status, 'ok');
     expect(result.opsApplied, 1);
     expect((await trackers.get('session', 'world:time'))?.value, '01:00');
-    expect((await trackers.get('session', 'world:date'))?.value, '2026-08-26');
+    expect((await trackers.get('session', 'world:date'))?.value, '26.08.2026');
     expect((await trackers.get('session', 'world:day'))?.value, '0');
     expect(
       await facts.getBySourceAnchor(
@@ -1198,10 +1242,54 @@ void main() {
     );
   });
 
+  test('normal Ledger rejects an unsupported bell-based clock jump', () async {
+    await trackers.seedInitialGameTime(
+      sessionId: 'session',
+      time: '10:00',
+      date: '08.09.0755',
+    );
+    const bellAssistant = ChatMessage(
+      id: 'a1',
+      role: 'assistant',
+      content: 'Прозвучал третий колокол.',
+    );
+    await chats.put(
+      const ChatSession(
+        id: 'session',
+        characterId: 'char',
+        sessionIndex: 0,
+        messages: [
+          ChatMessage(id: 'u1', role: 'user', content: 'Start'),
+          bellAssistant,
+        ],
+      ),
+    );
+    final endpoint = await _serve('''
+<glaze_memory_export>
+{"ops":[{"op":"set","key":"world:time","value":"15:00","evidence":"third bell","eventState":"completed"}],"knowledgeFacts":[]}
+</glaze_memory_export>''');
+    addTearDown(endpoint.close);
+
+    final result = await service.run(
+      sessionId: 'session',
+      messageId: 'a1',
+      swipeId: 0,
+      agentSwipeId: 0,
+      finalAssistantText: bellAssistant.content,
+      recentHistoryText: '',
+      settings: const PipelineSettings(),
+      config: _config(endpoint.url),
+    );
+
+    expect(result.status, 'ok');
+    expect(result.opsApplied, 0);
+    expect((await trackers.get('session', 'world:time'))?.value, '10:00');
+  });
+
   group('structured output recovery', () {
     const malformed = '''
 <glaze_memory_export>
-{"ops":[{"op":"set","key":"world:time","value":"01:00","evidence":"clock changed","eventState":"completed"}],"knowledgeFacts":[]
+{"ops":[{"op":"set","key":"world:location","value":"courtyard","evidence":"location changed","eventState":"completed"}],"knowledgeFacts":[]
 </glaze_memory_export>''';
     const missing = '<studio_ledger>prose only</studio_ledger>';
     const semanticInvalid = '''
@@ -1229,7 +1317,10 @@ void main() {
         (LedgerAttemptPhase.initial, 1, 3),
         (LedgerAttemptPhase.parserRepair, 1, 3),
       ]);
-      expect((await trackers.get('session', 'world:time'))?.value, '01:00');
+      expect(
+        (await trackers.get('session', 'world:location'))?.value,
+        'courtyard',
+      );
       expect(
         await snapshots.getByAnchor(
           sessionId: 'session',
@@ -1358,7 +1449,7 @@ void main() {
       expect(row.parseFailure, 'incompleteJson');
       expect(row.rejectionReason, isNotNull);
       expect(row.responseText, contains('"ops"'));
-      expect(row.repairResponseText, contains('01:00'));
+      expect(row.repairResponseText, contains('courtyard'));
       expect(jsonDecode(row.attemptsJson), hasLength(2));
     });
 

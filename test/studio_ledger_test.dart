@@ -10,6 +10,7 @@ import 'package:glaze_flutter/core/db/repositories/ledger_reconciliation_checkpo
 import 'package:glaze_flutter/core/db/repositories/tracker_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/tracker_snapshot_repo.dart';
 import 'package:glaze_flutter/core/llm/studio_ledger_export_parser.dart';
+import 'package:glaze_flutter/core/llm/game_time.dart';
 import 'package:glaze_flutter/core/llm/knowledge_cleanup_parser.dart';
 import 'package:glaze_flutter/core/llm/studio_ledger_prompt.dart';
 import 'package:glaze_flutter/core/llm/studio_ledger_reconciliation.dart';
@@ -230,38 +231,46 @@ void main() {
       expect(prompt, isNot(contains('accepted assistant prose as evidence')));
     });
 
-    test('clock history block renders ordered entries and is omitted when empty', () {
-      final withEntries = const StudioLedgerPrompt().build(
-        finalAssistantText: 'Lucy closes the door.',
-        recentHistoryText: '',
-        currentTrackers: const [],
-        recentMemoryEntries: const [],
-        gameClockHistory: const [
-          '14.09.0755 · day 0 · 12:11',
-          '28.09.0755 · day 14 · 12:11',
-        ],
-      );
-      expect(withEntries, contains('<clock_history>'));
-      expect(withEntries, contains('14.09.0755 · day 0 · 12:11'));
-      expect(withEntries, contains('28.09.0755 · day 14 · 12:11'));
-      expect(withEntries, contains('A timeskip already applied in a prior turn is consummated'));
-      expect(withEntries, contains('Treat <clock_history> as the authoritative recent trajectory'));
+    test(
+      'clock history block renders ordered entries and is omitted when empty',
+      () {
+        final withEntries = const StudioLedgerPrompt().build(
+          finalAssistantText: 'Lucy closes the door.',
+          recentHistoryText: '',
+          currentTrackers: const [],
+          recentMemoryEntries: const [],
+          gameClockHistory: const [
+            '14.09.0755 · day 0 · 12:11',
+            '28.09.0755 · day 14 · 12:11',
+          ],
+        );
+        expect(withEntries, contains('<clock_history>'));
+        expect(withEntries, contains('14.09.0755 · day 0 · 12:11'));
+        expect(withEntries, contains('28.09.0755 · day 14 · 12:11'));
+        expect(
+          withEntries,
+          contains('A timeskip already applied in a prior turn is consummated'),
+        );
+        expect(
+          withEntries,
+          contains(
+            'Treat <clock_history> as the authoritative recent trajectory',
+          ),
+        );
 
-      final withoutEntries = const StudioLedgerPrompt().build(
-        finalAssistantText: 'Lucy closes the door.',
-        recentHistoryText: '',
-        currentTrackers: const [],
-        recentMemoryEntries: const [],
-      );
-      expect(withoutEntries, isNot(contains('</clock_history>')));
-      expect(withoutEntries, isNot(contains('14.09.0755 · day 0 · 12:11')));
-    });
+        final withoutEntries = const StudioLedgerPrompt().build(
+          finalAssistantText: 'Lucy closes the door.',
+          recentHistoryText: '',
+          currentTrackers: const [],
+          recentMemoryEntries: const [],
+        );
+        expect(withoutEntries, isNot(contains('</clock_history>')));
+        expect(withoutEntries, isNot(contains('14.09.0755 · day 0 · 12:11')));
+      },
+    );
 
     test('buildGameClockHistoryBlock is empty for no entries', () {
-      expect(
-        StudioLedgerPrompt.buildGameClockHistoryBlock(const []),
-        isEmpty,
-      );
+      expect(StudioLedgerPrompt.buildGameClockHistoryBlock(const []), isEmpty);
       expect(
         StudioLedgerPrompt.buildGameClockHistoryBlock([
           '29.09.0755 · day 15 · 08:00',
@@ -1060,6 +1069,172 @@ Ledger text.
 
       expect(result.wasRejected, isFalse);
       expect(result.export!.ops.single.key, 'world:day');
+    });
+
+    test('rejects a large clock jump based only on an ordinal bell', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[{"op":"set","key":"world:time","value":"15:00","evidence":"third bell","eventState":"completed"}]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(
+        raw,
+        clockPolicy: const LedgerClockPolicy.turn(
+          current: GameTimeState(time: '10:00', date: '08.09.0755', day: 0),
+          evidence: 'Прозвучал третий колокол.',
+        ),
+      );
+
+      expect(result.export, isNotNull);
+      expect(result.export!.ops, isEmpty);
+      expect(result.rejectedOps.single, contains('over 5 minutes'));
+    });
+
+    test('rejects clock writes when the current clock is incomplete', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[{"op":"set","key":"world:time","value":"10:00"}]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(
+        raw,
+        clockPolicy: const LedgerClockPolicy.turn(
+          current: GameTimeState(time: '09:55'),
+          evidence: 'It is now 10:00.',
+        ),
+      );
+
+      expect(result.export, isNotNull);
+      expect(result.export!.ops, isEmpty);
+      expect(result.rejectedOps.single, contains('complete current clock'));
+    });
+
+    test('accepts a large clock jump with explicit numeric duration', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[{"op":"set","key":"world:time","value":"15:00","evidence":"five hours pass","eventState":"completed"}]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(
+        raw,
+        clockPolicy: const LedgerClockPolicy.turn(
+          current: GameTimeState(time: '10:00', date: '08.09.0755', day: 0),
+          evidence: 'Прошло 5 часов. Теперь 15:00.',
+        ),
+      );
+
+      expect(result.export!.ops.single.value, '15:00');
+    });
+
+    test('accepts an explicit clock tuple crossing midnight', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[
+  {"op":"set","key":"world:date","value":"02.01.2026"},
+  {"op":"set","key":"world:day","value":"1"},
+  {"op":"set","key":"world:time","value":"00:02"}
+]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(
+        raw,
+        clockPolicy: const LedgerClockPolicy.turn(
+          current: GameTimeState(time: '23:59', date: '01.01.2026', day: 0),
+          evidence: 'It is 02.01.2026, RP day 1, at 00:02.',
+        ),
+      );
+
+      expect(result.export!.ops, hasLength(3));
+      expect(result.rejectedOps, isEmpty);
+    });
+
+    test('derives a consistent midnight rollover from numeric duration', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[
+  {"op":"set","key":"world:date","value":"02.01.2026"},
+  {"op":"set","key":"world:day","value":"1"},
+  {"op":"set","key":"world:time","value":"00:09"}
+]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(
+        raw,
+        clockPolicy: const LedgerClockPolicy.turn(
+          current: GameTimeState(time: '23:59', date: '01.01.2026', day: 0),
+          evidence: '10 minutes pass.',
+        ),
+      );
+
+      expect(result.export!.ops, hasLength(3));
+      expect(result.rejectedOps, isEmpty);
+    });
+
+    test('generic clock failure rejects otherwise valid clock siblings', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[
+  {"op":"explode","key":"world:date","value":"02.01.2026"},
+  {"op":"set","key":"world:time","value":"10:03"}
+]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(
+        raw,
+        clockPolicy: const LedgerClockPolicy.turn(
+          current: GameTimeState(time: '10:00', date: '01.01.2026', day: 0),
+          evidence: 'Three minutes pass.',
+        ),
+      );
+
+      expect(result.export, isNull);
+      expect(result.rejectedOps, hasLength(2));
+      expect(result.rejectedOps.join('\n'), contains('applied atomically'));
+    });
+
+    test('reconciliation cannot rewrite any clock component', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[
+  {"op":"set","key":"world:time","value":"15:00"},
+  {"op":"set","key":"world:date","value":"09.09.0755"},
+  {"op":"set","key":"world:day","value":"1"},
+  {"op":"set","key":"world:location","value":"gate"}
+]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(
+        raw,
+        clockPolicy: const LedgerClockPolicy.reconciliation(),
+      );
+
+      expect(result.export!.ops.map((op) => op.key), ['world:location']);
+      expect(result.rejectedOps, hasLength(3));
+    });
+
+    test('rejects a clock tuple atomically when one value is unsupported', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[
+  {"op":"set","key":"world:date","value":"02.01.2026"},
+  {"op":"set","key":"world:day","value":"1"},
+  {"op":"set","key":"world:time","value":"15:00"}
+]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(
+        raw,
+        clockPolicy: const LedgerClockPolicy.turn(
+          current: GameTimeState(time: '10:00', date: '01.01.2026', day: 0),
+          evidence: 'The date is 02.01.2026, RP day 1. The third bell rings.',
+        ),
+      );
+
+      expect(result.export, isNotNull);
+      expect(result.export!.ops, isEmpty);
+      expect(result.rejectedOps, hasLength(3));
+      expect(result.rejectedOps.join('\n'), contains('world:time'));
+      expect(result.rejectedOps.join('\n'), contains('applied atomically'));
     });
 
     test('rejects model-owned tracker and arc state for the focal user', () {

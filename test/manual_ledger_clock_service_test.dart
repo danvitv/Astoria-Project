@@ -4,7 +4,6 @@ import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/chat_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/card_evolution_proposal_run_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/ledger_reconciliation_checkpoint_repo.dart';
-import 'package:glaze_flutter/core/db/repositories/ledger_reconciliation_run_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/tracker_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/tracker_snapshot_repo.dart';
 import 'package:glaze_flutter/core/llm/game_time.dart';
@@ -29,8 +28,6 @@ void main() {
       chatRepo: chatRepo,
       snapshotRepo: snapshotRepo,
       trackerRepo: trackerRepo,
-      reconciliationRunRepo: LedgerReconciliationRunRepo(db),
-      reconciliationCheckpointRepo: LedgerReconciliationCheckpointRepo(db),
       proposalRunRepo: CardEvolutionProposalRunRepo(db),
     );
   });
@@ -207,29 +204,34 @@ void main() {
     expect((await trackerRepo.get('session', 'world:time'))!.value, '08:15');
   });
 
-  test('deletes a reconciliation checkpoint touched by a correction', () async {
-    await seed();
-    final checkpointRepo = LedgerReconciliationCheckpointRepo(db);
-    await checkpointRepo.upsert(
-      const LedgerReconciliationCheckpoint(
-        sessionId: 'session',
-        startMessageId: 'a1',
-        endMessageId: 'a3',
-        endSwipeId: 0,
-        endAgentSwipeId: 0,
-        messageIds: ['a1', 'u2', 'a3'],
-        rangeHash: 'old-range',
-      ),
-    );
-    final entries = await service.loadRecent('session', limit: 2);
+  test(
+    'preserves a reconciliation checkpoint touched by a correction',
+    () async {
+      await seed();
+      final checkpointRepo = LedgerReconciliationCheckpointRepo(db);
+      await checkpointRepo.upsert(
+        const LedgerReconciliationCheckpoint(
+          sessionId: 'session',
+          startMessageId: 'a1',
+          endMessageId: 'a3',
+          endSwipeId: 0,
+          endAgentSwipeId: 0,
+          messageIds: ['a1', 'u2', 'a3'],
+          rangeHash: 'old-range',
+        ),
+      );
+      final entries = await service.loadRecent('session', limit: 2);
 
-    await service.save('session', [
-      ManualLedgerClockCorrection(entry: entries[0], clock: clock('09:02')),
-      ManualLedgerClockCorrection(entry: entries[1], clock: clock('09:03')),
-    ]);
+      await service.save('session', [
+        ManualLedgerClockCorrection(entry: entries[0], clock: clock('09:02')),
+        ManualLedgerClockCorrection(entry: entries[1], clock: clock('09:03')),
+      ]);
 
-    expect(await checkpointRepo.get('session'), isNull);
-  });
+      final checkpoint = await checkpointRepo.get('session');
+      expect(checkpoint, isNotNull);
+      expect(checkpoint!.rangeHash, 'old-range');
+    },
+  );
 
   test('rejects calendar date and RP day disagreement', () async {
     await seed();

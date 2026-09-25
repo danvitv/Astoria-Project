@@ -279,6 +279,16 @@ final class StudioContextPreparer {
     add(StudioContextSlot.recalledMessages, recalled);
     add(StudioContextSlot.characterKnowledge, characterKnowledge);
     add(StudioContextSlot.studioSessionState, studioSessionState);
+    final authoritativeClock = gameTimeState.format();
+    if (authoritativeClock != null) {
+      add(StudioContextSlot.runtimeDynamic, '''<current_game_clock>
+$authoritativeClock
+This is the authoritative current scene clock. Do not infer an absolute time
+from ordinal bells, chimes, strikes, or similar atmosphere unless the setting
+explicitly defines that mapping. Keep a continuous scene close to this time
+unless the accepted narrative states a numeric time or elapsed duration.
+</current_game_clock>''');
+    }
     add(StudioContextSlot.runtimeDynamic, inputs.guidanceText);
     add(StudioContextSlot.runtimeDynamic, arcContent);
     add(StudioContextSlot.runtimeDynamic, inputs.entitiesContent);

@@ -166,7 +166,9 @@ void main() {
     expect(result, isTrue);
   });
 
-  testWidgets('message context menu opens the confirmation', (tester) async {
+  testWidgets('single-message context delete skips bulk confirmation', (
+    tester,
+  ) async {
     await _pumpButton(
       tester,
       settings: const AppSettings(),
@@ -199,6 +201,6 @@ void main() {
 
     await tester.tap(find.text('Delete'));
     await tester.pumpAndSettle();
-    expect(find.text('delete_messages_title'), findsOneWidget);
+    expect(find.text('delete_messages_title'), findsNothing);
   });
 }

@@ -106,6 +106,7 @@ class StudioMessageBuilder {
           (block) => _briefMacroRenderer.hasStudioBriefMacro(block.content),
         );
     final messages = <Map<String, dynamic>>[];
+    var emittedRuntimeDynamic = false;
 
     // Continue mode: the instruction belongs to the final writer only. The
     // controller agents analyse the scene; they never extend the reply, so
@@ -144,7 +145,10 @@ class StudioMessageBuilder {
     // continue instruction (when set) pinned directly after the last chat
     // message, and per-message reasoning attached on the final writer's run.
     List<Map<String, dynamic>> emitHistory(List<PromptMessage> history) {
-      final mergedHistory = _applyAppendToLastMessage(history, appendableEntries);
+      final mergedHistory = _applyAppendToLastMessage(
+        history,
+        appendableEntries,
+      );
       if (isFinalResponse &&
           !isThinkingPass &&
           (reasoningHistoryCount == -1 || reasoningHistoryCount > 0)) {
@@ -197,6 +201,10 @@ class StudioMessageBuilder {
       if (block.type == StudioBlockType.context && block.contextSlot != null) {
         final slotMessages = context.messagesFor(block.contextSlot!);
         if (slotMessages.isNotEmpty) {
+          if (block.contextSlot == StudioContextSlot.runtimeDynamic ||
+              block.contextSlot == StudioContextSlot.dynamicContext) {
+            emittedRuntimeDynamic = true;
+          }
           _recordLorebookSlotClassifications(
             block.contextSlot!,
             emittedLorebookClassifications,
@@ -261,6 +269,7 @@ class StudioMessageBuilder {
             emittedLorebookClassifications,
           );
           messages.addAll(context.dynamicContext.map((m) => m.toApiMap()));
+          emittedRuntimeDynamic = true;
         } else {
           final slot = _slotForBlockId(blockId);
           if (slot != null) {
@@ -378,7 +387,11 @@ class StudioMessageBuilder {
               .trim();
           if (prefill.isNotEmpty) {
             if (block.prefillStyle == 'structured') {
-              _setStructuredPrefillSchema(block.id, prefill, responseJsonSchema);
+              _setStructuredPrefillSchema(
+                block.id,
+                prefill,
+                responseJsonSchema,
+              );
             } else {
               _addFunctionPrefillTail(messages, block.id, prefill);
             }
@@ -387,6 +400,17 @@ class StudioMessageBuilder {
         case 'agentResponse':
           break;
       }
+    }
+
+    // The authoritative clock cannot depend on a user preset opting into the
+    // runtimeDynamic slot. Without this fallback, a valid custom preset can
+    // leave the final writer unaware of the current scene time.
+    if (isFinalResponse && !emittedRuntimeDynamic) {
+      messages.addAll(
+        context
+            .messagesFor(StudioContextSlot.runtimeDynamic)
+            .map((message) => message.toApiMap()),
+      );
     }
 
     if (mainResponse.trim().isNotEmpty) {
@@ -458,7 +482,8 @@ class StudioMessageBuilder {
     );
     messages.add({
       'role': 'user',
-      'content': 'Audit the scene using the complete preset and context above. '
+      'content':
+          'Audit the scene using the complete preset and context above. '
           'Return only the completed <thinking>...</thinking> block. '
           'Do not write the final roleplay response.',
     });
@@ -577,11 +602,7 @@ class StudioMessageBuilder {
         },
       ],
     });
-    messages.add({
-      'role': 'tool',
-      'tool_call_id': callId,
-      'content': prefill,
-    });
+    messages.add({'role': 'tool', 'tool_call_id': callId, 'content': prefill});
   }
 
   /// Sets [responseJsonSchema] (mutating the caller's map) to a strict JSON
@@ -602,7 +623,10 @@ class StudioMessageBuilder {
       ..addAll({
         'type': 'object',
         'properties': {
-          'prefix': {'type': 'string', 'enum': [prefill]},
+          'prefix': {
+            'type': 'string',
+            'enum': [prefill],
+          },
           'content': {'type': 'string'},
         },
         'required': ['prefix', 'content'],
