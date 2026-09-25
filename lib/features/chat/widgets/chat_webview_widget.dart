@@ -482,7 +482,7 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
       // before the initial render, or the load's jump to the bottom reads as a
       // downward scroll and this chat opens with its header already gone.
       await _showChatHeader(bridge);
-      await ChatWebViewInitializer(
+      final initializer = ChatWebViewInitializer(
         ref: ref,
         bridge: bridge,
         input: ChatWebViewInitInput(
@@ -546,13 +546,16 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
           isGeneratingImage: widget.isGeneratingImage,
           isSendPending: widget.isSendPending,
         ),
-        onContextPainting: () => _syncState.regexContextStale = false,
         onMessagesPainting: (messages, startIndex) {
           paintedMessages = messages;
           paintedVisibleStartIndex = startIndex;
           messagesPainting = true;
         },
-      ).run().timeout(_kWebViewInitTimeout);
+      );
+      await initializer.run().timeout(_kWebViewInitTimeout);
+      // The list the first frame was rewritten with, for the post-init
+      // staleness check below.
+      _syncState.paintedDisplayRegexes = initializer.paintedDisplayRegexes;
       PerfDebug.chatWebViewInitCompleted();
     } on TimeoutException catch (e, st) {
       _handleWebViewFailure(e, st, phase: 'init', rebuildable: true);
@@ -585,10 +588,6 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
     await _bridgeOp(_syncExtBlockPanels(), label: 'syncExtBlockPanels');
     final deferred = _deferredSwitchFrom;
     _deferredSwitchFrom = null;
-    // Consumed here whichever branch runs below: the other two re-push every
-    // message anyway, so the re-render this flag asks for happens regardless.
-    final contextChangedDuringPaint = _syncState.regexContextStale;
-    _syncState.regexContextStale = false;
     if (deferred != null) {
       unawaited(_applySessionSwitch(deferred, epoch: _sessionSwitchEpoch));
     } else if (initSessionId != widget.sessionId ||
@@ -600,11 +599,14 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
       // dispatcher skips them because _ready is false. Re-sync only when data
       // changed since the initializer captured it; an unconditional second
       // setMessages causes a visible duplicate first-chat render on Windows.
-      // `regexContextStale`: the display-script list resolved while init was
-      // running, after the initializer read the list it painted with. The
-      // messages are in the DOM rewritten by the older list, and only a
-      // re-render replaces them.
-      if (contextChangedDuringPaint ||
+      // Compare against the exact display-script list used for the first
+      // paint. Its initial provider resolution is already represented in the
+      // DOM; only a later change requires a full re-render.
+      final regexContextStale = displayRegexResyncNeeded(
+        _syncState.paintedDisplayRegexes,
+        ref.read(displayRegexesProvider).value ?? const [],
+      );
+      if (regexContextStale ||
           paintedVisibleStartIndex != widget.visibleStartIndex ||
           !chatMessageListsIdentical(
             paintedMessages ?? const <ChatMessage>[],
@@ -614,7 +616,7 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
           _resyncMessagesAfterInit(
             paintedMessages ?? const <ChatMessage>[],
             paintedVisibleStartIndex: paintedVisibleStartIndex,
-            forceRender: contextChangedDuringPaint,
+            forceRender: regexContextStale,
           ),
         );
       } else if (messagesPainting) {
