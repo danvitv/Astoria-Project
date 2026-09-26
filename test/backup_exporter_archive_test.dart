@@ -73,32 +73,36 @@ void main() {
       });
 
       final decoded = ZipDecoder().decodeStream(InputFileStream(archive.path));
-      final manifest = decoded.files
-          .firstWhere((f) => f.name == 'manifest.json')
-          .readBytes()!;
-      expect(
-        jsonDecode(utf8.decode(manifest))['schemaVersion'],
-        BackupExporter.schemaVersion,
-      );
+      try {
+        final manifest = decoded.files
+            .firstWhere((f) => f.name == 'manifest.json')
+            .readBytes()!;
+        expect(
+          jsonDecode(utf8.decode(manifest))['schemaVersion'],
+          BackupExporter.schemaVersion,
+        );
 
-      final chatEntry = decoded.files.firstWhere(
-        (f) => f.name == 'tables/chat_sessions.jsonl',
-      );
-      expect(
-        chatEntry.compression,
-        CompressionType.none,
-        reason: 'large table should be stored, not buffered/compressed',
-      );
+        final chatEntry = decoded.files.firstWhere(
+          (f) => f.name == 'tables/chat_sessions.jsonl',
+        );
+        expect(
+          chatEntry.compression,
+          CompressionType.none,
+          reason: 'large table should be stored, not buffered/compressed',
+        );
 
-      final lines = await readArchiveFileLines(chatEntry).toList();
-      expect(lines.length, 2);
-      final rows = lines
-          .map((l) => jsonDecode(l) as Map<String, dynamic>)
-          .toList();
-      final s1 = rows.firstWhere((r) => r['session_id'] == 's1');
-      expect(s1['messages_json'], hugeMessages);
-      final s2 = rows.firstWhere((r) => r['session_id'] == 's2');
-      expect(s2['messages_json'], '[]');
+        final lines = await readArchiveFileLines(chatEntry).toList();
+        expect(lines.length, 2);
+        final rows = lines
+            .map((l) => jsonDecode(l) as Map<String, dynamic>)
+            .toList();
+        final s1 = rows.firstWhere((r) => r['session_id'] == 's1');
+        expect(s1['messages_json'], hugeMessages);
+        final s2 = rows.firstWhere((r) => r['session_id'] == 's2');
+        expect(s2['messages_json'], '[]');
+      } finally {
+        await decoded.clear();
+      }
     },
   );
 }

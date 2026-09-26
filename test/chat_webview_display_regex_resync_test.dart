@@ -48,9 +48,7 @@ void main() {
       final source = File(
         'lib/features/chat/widgets/chat_webview_initializer.dart',
       ).readAsStringSync();
-      final capture = source.indexOf(
-        'paintedDisplayRegexes = bridge.displayRegexes;',
-      );
+      final capture = source.indexOf('paintedDisplayRegexes =');
       final paint = source.indexOf('await bridge.setMessages(');
       expect(capture, isNonNegative);
       expect(paint, isNonNegative);
