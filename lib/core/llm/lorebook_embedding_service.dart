@@ -72,8 +72,10 @@ class LorebookEmbeddingService {
       // Skip if already indexed with matching hash (unless forcing reindex)
       if (existing != null &&
           existing.textHash == textHash &&
-          _repo.decodeMetadata(existing)?['embeddingSignature'] ==
-              embeddingModelSignature(config) &&
+          embeddingSignatureMatches(
+            _repo.decodeMetadata(existing)?['embeddingSignature'],
+            embeddingModelSignature(config),
+          ) &&
           _repo.hasUsableVectors(existing) &&
           existing.errorJson == null) {
         skipped++;

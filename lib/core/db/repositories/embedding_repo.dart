@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 
 import '../app_db.dart';
 import '../tables.dart';
+import '../../llm/embedding_service.dart';
 import '../../llm/vector_math.dart';
 import '../../utils/time_helpers.dart';
 import '../../application/sync_repo_interfaces.dart';
@@ -36,7 +37,8 @@ class EmbeddingRepo extends DatabaseAccessor<AppDatabase>
       final metadata = decodeMetadata(row);
       final signature = metadata?['embeddingSignature'];
       final isMissing = signature is! String || signature.isEmpty;
-      final isStale = isMissing || signature != currentSignature;
+      final isStale =
+          isMissing || !embeddingSignatureMatches(signature, currentSignature);
       if (!isStale) continue;
       stale++;
       if (isMissing) missingMetadata++;
@@ -186,7 +188,8 @@ class EmbeddingRepo extends DatabaseAccessor<AppDatabase>
     if (stored == null) return null;
     // A previous backup import saved BLOB byte arrays as SQLite TEXT. Drift
     // exposes those rows as UTF-8 bytes; decode the original vector payload.
-    final isJsonArray = stored.length > 2 &&
+    final isJsonArray =
+        stored.length > 2 &&
         stored.first == 0x5b &&
         stored.last == 0x5d &&
         stored[1] >= 0x30 &&

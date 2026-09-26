@@ -65,7 +65,7 @@ void main() {
     );
   });
 
-  test('matching text with a stale model signature is reindexed', () async {
+  test('matching text and model are reused after endpoint change', () async {
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);
     final repo = EmbeddingRepo(db);
@@ -98,7 +98,7 @@ void main() {
     final result = await service.indexLorebookEntries('book', const [
       entry,
     ], const EmbeddingConfig(endpoint: 'https://new.example', model: 'model'));
-    expect(result.indexed, 1);
-    expect(embeddingService.requestedTexts, ['content']);
+    expect(result.skipped, 1);
+    expect(embeddingService.requestedTexts, isEmpty);
   });
 }

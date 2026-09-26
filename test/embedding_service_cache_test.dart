@@ -77,7 +77,7 @@ void main() {
   });
 
   group('EmbeddingConfig', () {
-    test('signature uses the effective embedding URL', () {
+    test('signature does not change with the embedding endpoint', () {
       const base = EmbeddingConfig(
         endpoint: 'https://api.openai.com/v1',
         model: 'text-embedding-3-small',
@@ -95,6 +95,50 @@ void main() {
       expect(
         embeddingModelSignature(embeddings),
         embeddingModelSignature(base),
+      );
+    });
+
+    test('signature changes with the model or chunk size', () {
+      const base = EmbeddingConfig(
+        endpoint: 'https://api.example/v1',
+        model: 'embedding-a',
+      );
+
+      expect(
+        embeddingModelSignature(
+          const EmbeddingConfig(
+            endpoint: 'https://api.example/v1',
+            model: 'embedding-b',
+          ),
+        ),
+        isNot(embeddingModelSignature(base)),
+      );
+      expect(
+        embeddingModelSignature(
+          const EmbeddingConfig(
+            endpoint: 'https://api.example/v1',
+            model: 'embedding-a',
+            maxChunkTokens: 4096,
+          ),
+        ),
+        isNot(embeddingModelSignature(base)),
+      );
+    });
+
+    test('legacy signatures ignore their endpoint when compared', () {
+      expect(
+        embeddingSignatureMatches(
+          'https://old.example/v1/embeddings|embedding-a|chunks:8192',
+          'embedding-a|chunks:8192',
+        ),
+        isTrue,
+      );
+      expect(
+        embeddingSignatureMatches(
+          'https://old.example/v1/embeddings|embedding-b|chunks:8192',
+          'embedding-a|chunks:8192',
+        ),
+        isFalse,
       );
     });
 

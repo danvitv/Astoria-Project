@@ -142,8 +142,10 @@ class LorebookVectorSearch {
       );
       final currentHash = computeHash(fingerprint);
       if (row.textHash != currentHash) continue;
-      if (_repo.decodeMetadata(row)?['embeddingSignature'] !=
-          embeddingModelSignature(config)) {
+      if (!embeddingSignatureMatches(
+        _repo.decodeMetadata(row)?['embeddingSignature'],
+        embeddingModelSignature(config),
+      )) {
         continue;
       }
 
@@ -184,8 +186,10 @@ class LorebookVectorSearch {
       );
       final currentHash = computeHash(fingerprint);
       if (row.textHash != currentHash) continue;
-      if (_repo.decodeMetadata(row)?['embeddingSignature'] !=
-          embeddingModelSignature(config)) {
+      if (!embeddingSignatureMatches(
+        _repo.decodeMetadata(row)?['embeddingSignature'],
+        embeddingModelSignature(config),
+      )) {
         continue;
       }
 

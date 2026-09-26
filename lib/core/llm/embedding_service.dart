@@ -36,10 +36,29 @@ String resolveEmbeddingEndpoint(String endpoint) =>
     EndpointNormalizer.embeddingsUrl(endpoint);
 
 String embeddingModelSignature(EmbeddingConfig config) {
-  final endpoint = resolveEmbeddingEndpoint(config.endpoint);
   final model = config.model.trim();
-  return '${endpoint.isEmpty ? '<endpoint>' : endpoint}|'
-      '${model.isEmpty ? '<model>' : model}|chunks:${config.maxChunkTokens}';
+  return '${model.isEmpty ? '<model>' : model}|chunks:${config.maxChunkTokens}';
+}
+
+bool embeddingSignatureMatches(
+  Object? storedSignature,
+  String currentSignature,
+) {
+  if (storedSignature is! String || storedSignature.isEmpty) return false;
+  if (storedSignature == currentSignature) return true;
+
+  // Signatures written before endpoint-independent invalidation used
+  // `<endpoint>|<model>|chunks:<size>`. Compare their model/chunk suffix so an
+  // endpoint change does not force a rebuild of otherwise compatible vectors.
+  return _embeddingSignatureModelAndChunks(storedSignature) ==
+      _embeddingSignatureModelAndChunks(currentSignature);
+}
+
+String _embeddingSignatureModelAndChunks(String signature) {
+  final chunksSeparator = signature.lastIndexOf('|chunks:');
+  if (chunksSeparator < 0) return signature;
+  final modelSeparator = signature.lastIndexOf('|', chunksSeparator - 1);
+  return signature.substring(modelSeparator + 1);
 }
 
 Map<String, dynamic> embeddingMetadataForConfig(

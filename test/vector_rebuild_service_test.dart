@@ -72,7 +72,7 @@ void main() {
         final db = AppDatabase.forTesting(NativeDatabase.memory());
         addTearDown(db.close);
         final repo = EmbeddingRepo(db);
-        const oldConfig = EmbeddingConfig(
+        const oldModelConfig = EmbeddingConfig(
           endpoint: 'http://old/v1',
           model: 'old-embed',
         );
@@ -88,7 +88,7 @@ void main() {
             [0.1, 0.2],
           ],
           textHash: 'h1',
-          retrievalMetadata: embeddingMetadataForConfig(oldConfig, const [
+          retrievalMetadata: embeddingMetadataForConfig(oldModelConfig, const [
             [0.1, 0.2],
           ]),
         );
@@ -112,5 +112,32 @@ void main() {
         expect(stats.bySource['memory_entry'], 1);
       },
     );
+
+    test('does not count a legacy signature from another endpoint', () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      final repo = EmbeddingRepo(db);
+      const config = EmbeddingConfig(
+        endpoint: 'http://new/v1',
+        model: 'same-embed',
+      );
+
+      await repo.putEmbeddingVector(
+        entryId: 'e1',
+        sourceType: 'memory_entry',
+        vectors: const [
+          [0.1, 0.2],
+        ],
+        textHash: 'h1',
+        retrievalMetadata: const {
+          'embeddingSignature':
+              'http://old/v1/embeddings|same-embed|chunks:8192',
+        },
+      );
+
+      final stats = await repo.getStaleStats(embeddingModelSignature(config));
+      expect(stats.total, 1);
+      expect(stats.stale, 0);
+    });
   });
 }
