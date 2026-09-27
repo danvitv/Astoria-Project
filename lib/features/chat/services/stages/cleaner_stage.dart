@@ -124,6 +124,7 @@ class CleanerStage {
     required String sessionId,
     required List<ChatMessage> messages,
     required int genId,
+    bool isRegeneration = false,
     PromptPayload? promptPayload,
     MainModelContextSnapshot? mainModelContextSnapshot,
     Character? character,
@@ -145,6 +146,7 @@ class CleanerStage {
         sessionId: sessionId,
         messages: messages,
         genId: genId,
+        isRegeneration: isRegeneration,
         promptPayload: promptPayload,
         mainModelContextSnapshot: mainModelContextSnapshot,
         character: character,
@@ -157,6 +159,7 @@ class CleanerStage {
     required String sessionId,
     required List<ChatMessage> messages,
     required int genId,
+    required bool isRegeneration,
     PromptPayload? promptPayload,
     MainModelContextSnapshot? mainModelContextSnapshot,
     Character? character,
@@ -259,6 +262,7 @@ class CleanerStage {
             genId: genId,
             finalAssistantText: lastAssistant.content,
             targetMessage: lastAssistant,
+            isRegeneration: isRegeneration,
             cancelToken: _cleanerCancelToken,
             studioTurnConfig: turnConfig,
           );
@@ -340,6 +344,7 @@ class CleanerStage {
       await _executeAndApplyCleaner(
         sessionId: sessionId,
         genId: genId,
+        isRegeneration: isRegeneration,
         targetMessage: lastAssistant,
         assistantText: lastAssistant.content,
         recentMessages: recentMessages,
@@ -454,6 +459,7 @@ class CleanerStage {
   Future<void> _executeAndApplyCleaner({
     required String sessionId,
     required int genId,
+    required bool isRegeneration,
     required ChatMessage targetMessage,
     required String assistantText,
     required List<ChatMessage> recentMessages,
@@ -1019,6 +1025,7 @@ class CleanerStage {
         finalAssistantText: ledgerText,
         targetMessage: ledgerTargetMessage ?? targetMessage,
         isManualRerun: isManualRerun,
+        isRegeneration: isRegeneration,
         cancelToken: _cleanerCancelToken,
         studioTurnConfig: studioTurnConfig,
       );
@@ -1148,6 +1155,7 @@ class CleanerStage {
       await _executeAndApplyCleaner(
         sessionId: sessionId,
         genId: -1,
+        isRegeneration: false,
         targetMessage: target,
         assistantText: finalText,
         recentMessages: recentMessages,

@@ -422,6 +422,14 @@ void main() {
       ),
       '<thinking>\nalready normalized\n</thinking>',
     );
+    expect(
+      StudioAgentExecutor.normalizeThinkingPrefill(
+        '<thinking>Instruction says return <thinking>...</thinking>.\n'
+        'CONTINUITY CONSTRAINTS:\nCompleted analysis.\n</thinking>',
+      ),
+      '<thinking>\nInstruction says return <thinking>...</thinking>.\n'
+      'CONTINUITY CONSTRAINTS:\nCompleted analysis.\n</thinking>',
+    );
   });
 
   test(

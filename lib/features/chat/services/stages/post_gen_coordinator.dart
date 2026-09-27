@@ -146,7 +146,7 @@ class PostGenCoordinator {
     required ChatGenerationService service,
     required GenerationNotificationService notifService,
     required String completedMessageId,
-    String? regenTargetId,
+    bool isRegeneration = false,
     StudioTurnConfigSnapshot? studioTurnConfig,
   }) async {
     if (!ctx.ref.mounted || !ctx.abortHandler.isCurrentGen(genId)) return;
@@ -239,6 +239,7 @@ class PostGenCoordinator {
       sessionId: sessionId,
       messages: result.session!.messages,
       genId: genId,
+      isRegeneration: isRegeneration,
       promptPayload: result.promptPayload,
       mainModelContextSnapshot: result.mainModelContextSnapshot,
       character: character,

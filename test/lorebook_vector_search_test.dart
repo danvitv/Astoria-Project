@@ -308,7 +308,7 @@ void main() {
     expect(withSessionVector.single.entryId, 'entry');
   });
 
-  test('rejects vectors from a different embedding signature', () async {
+  test('reuses vectors after an endpoint-only signature change', () async {
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);
     final repo = EmbeddingRepo(db);
@@ -338,7 +338,7 @@ void main() {
       const LorebookGlobalSettings(searchType: 'vector', vectorThreshold: 0),
       const EmbeddingConfig(endpoint: 'https://new.example', model: 'model'),
     );
-    expect(results, isEmpty);
-    expect(embeddings.queries, isEmpty);
+    expect(results.single.entryId, entry.id);
+    expect(embeddings.queries, ['query']);
   });
 }

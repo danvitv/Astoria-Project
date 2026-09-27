@@ -45,6 +45,7 @@ class _RecordingLedgerStage extends LedgerStage {
   List<ChatMessage>? messages;
   ChatMessage? targetMessage;
   CancelToken? cancelToken;
+  bool? isRegeneration;
 
   @override
   Future<void> run({
@@ -54,6 +55,7 @@ class _RecordingLedgerStage extends LedgerStage {
     required String finalAssistantText,
     required ChatMessage targetMessage,
     bool isManualRerun = false,
+    bool isRegeneration = false,
     CancelToken? cancelToken,
     StudioTurnConfigSnapshot? studioTurnConfig,
   }) async {
@@ -62,6 +64,7 @@ class _RecordingLedgerStage extends LedgerStage {
     this.messages = messages;
     this.targetMessage = targetMessage;
     this.cancelToken = cancelToken;
+    this.isRegeneration = isRegeneration;
   }
 }
 
@@ -161,6 +164,7 @@ void main() {
         sessionId: session.id,
         messages: populatedSession.messages,
         genId: genId,
+        isRegeneration: true,
         character: Character(id: 'c1', name: 'Alice'),
       );
 
@@ -170,6 +174,7 @@ void main() {
       expect(ledger.finalAssistantText, assistant.content);
       expect(ledger.messages, populatedSession.messages);
       expect(ledger.cancelToken, isNotNull);
+      expect(ledger.isRegeneration, isTrue);
       expect(
         container.read(cleanerCancelTokenProvider),
         isNull,

@@ -463,12 +463,20 @@ class StudioAgentExecutor {
     body = body.replaceFirst(RegExp(r'^```(?:\w+)?\s*'), '');
     body = body.replaceFirst(RegExp(r'\s*```$'), '');
     for (final tag in const ['thinking', 'audit']) {
-      final wrapped = RegExp(
-        '<$tag\\b[^>]*>([\\s\\S]*?)</$tag\\s*>',
+      final opening = RegExp(
+        '<$tag\\b[^>]*>',
         caseSensitive: false,
       ).firstMatch(body);
-      if (wrapped != null) {
-        body = wrapped.group(1)!.trim();
+      if (opening == null) continue;
+      final closings = RegExp(
+        '</$tag\\s*>',
+        caseSensitive: false,
+      ).allMatches(body);
+      final closing = closings.where((match) => match.start >= opening.end).lastOrNull;
+      if (closing != null) {
+        // Controller prose may quote the closing tag while paraphrasing an
+        // instruction. The final closing tag still delimits the outer block.
+        body = body.substring(opening.end, closing.start).trim();
         break;
       }
     }

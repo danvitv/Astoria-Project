@@ -28,4 +28,15 @@ void main() {
       isFalse,
     );
   });
+
+  test('assistant regeneration never repeats automatic reconciliation', () {
+    expect(
+      shouldRunAutomaticLedgerReconciliation(
+        ledgerEnabled: true,
+        isManualRerun: false,
+        isRegeneration: true,
+      ),
+      isFalse,
+    );
+  });
 }

@@ -266,7 +266,7 @@ class GenerationPipeline {
             service: service,
             notifService: notifService,
             completedMessageId: completedMessageId,
-            regenTargetId: regenTargetId,
+            isRegeneration: true,
             studioTurnConfig: studioTurnConfig,
           );
           // Post-gen finished — clear isPostGenRunning (unless a newer
@@ -354,7 +354,7 @@ class GenerationPipeline {
         service: service,
         notifService: notifService,
         completedMessageId: completedMessageId,
-        regenTargetId: regenTargetId,
+        isRegeneration: regenTargetId != null,
         studioTurnConfig: studioTurnConfig,
       );
       // Post-gen finished — clear isPostGenRunning (unless a newer
@@ -452,7 +452,6 @@ class GenerationPipeline {
       service: service,
       notifService: notifService,
       completedMessageId: continueTargetId,
-      regenTargetId: continueTargetId,
       studioTurnConfig: studioTurnConfig,
     );
     if (ctx.ref.mounted && ctx.abortHandler.isCurrentGen(genId)) {

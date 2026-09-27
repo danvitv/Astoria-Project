@@ -68,6 +68,7 @@ class LedgerStage {
     required String finalAssistantText,
     required ChatMessage targetMessage,
     bool isManualRerun = false,
+    bool isRegeneration = false,
     CancelToken? cancelToken,
     StudioTurnConfigSnapshot? studioTurnConfig,
   }) async {
@@ -246,6 +247,7 @@ class LedgerStage {
       if (shouldRunAutomaticLedgerReconciliation(
         ledgerEnabled: turnConfig.ledgerEnabled,
         isManualRerun: isManualRerun,
+        isRegeneration: isRegeneration,
       )) {
         final checkpointRepo = ctx.ref.read(
           ledgerReconciliationCheckpointRepoProvider,
@@ -780,9 +782,12 @@ class LedgerStage {
 }
 
 /// Automatic reconciliation belongs to the Studio Ledger. Card Rewriter may
-/// consume successful runs, but does not own their execution.
+/// consume successful runs, but does not own their execution. A regenerated
+/// trigger still gets its ordinary Ledger pass; the next new turn owns cadence
+/// reconciliation so an already completed range is not reviewed again.
 @visibleForTesting
 bool shouldRunAutomaticLedgerReconciliation({
   required bool ledgerEnabled,
   required bool isManualRerun,
-}) => !isManualRerun && ledgerEnabled;
+  bool isRegeneration = false,
+}) => !isManualRerun && !isRegeneration && ledgerEnabled;
