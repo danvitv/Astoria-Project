@@ -41,8 +41,8 @@ enum _EntryFilter { all, active, needsRebuild }
 /// The same for drafts — the three states a draft is actually triaged by.
 enum _DraftFilter { all, ready, needsGeneration, failed }
 
-/// What the host sheet drives from its own chrome: the settings button in the
-/// header and the extended FAB over the list. The tab owns the controller, so
+/// What the host sheet drives from its own chrome: header actions and the
+/// extended FAB over the list. The tab owns the controller, so
 /// it hands these out once it is mounted rather than the sheet reaching into
 /// it.
 class MemoryBooksActions {
@@ -133,6 +133,7 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   /// `build` means that rebuild runs this `build` again: without the guard the
   /// sheet setState'd itself on every frame and never settled.
   MemoryBooksActions? _publishedActions;
+  bool _reindexRequested = false;
 
   @override
   void initState() {
@@ -286,7 +287,7 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
       reindex: _reindexAll,
       deleteIndexes: _deleteAllMemoryIndexes,
       deleteAllDrafts: draftCount > 1 ? _deleteAllDrafts : null,
-      isReindexing: _ctrl.isReindexing,
+      isReindexing: _reindexRequested,
     );
     final published = _publishedActions;
     if (published != null && published.sameChrome(actions)) return;
@@ -741,7 +742,8 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   /// this used to match the English prefixes of an already-translated string,
   /// which meant no locale but English ever reached the error dialog.
   void _reindexAll() async {
-    setState(() {});
+    if (_reindexRequested) return;
+    setState(() => _reindexRequested = true);
     final hold = await GenerationNotificationService.instance.acquireWorkHold(
       title: 'Astoria',
       text: 'Indexing memories...',
@@ -751,9 +753,9 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
       outcome = await _ctrl.reindexAll();
     } finally {
       await hold.release();
+      if (mounted) setState(() => _reindexRequested = false);
     }
     if (!mounted) return;
-    setState(() {});
     switch (outcome) {
       case ReindexNotReady():
         break;

@@ -101,6 +101,21 @@ Future<void> _pumpSheet(WidgetTester tester, AppDatabase db) async {
 }
 
 void main() {
+  testWidgets('reindex is directly available in the books header', (
+    tester,
+  ) async {
+    final db = await _seedDb();
+    addTearDown(db.close);
+    await _pumpSheet(tester, db);
+
+    final reindex = find.byIcon(Icons.refresh_rounded);
+    final settings = find.byIcon(Icons.tune_rounded);
+    expect(reindex, findsOneWidget);
+    expect(settings, findsOneWidget);
+    expect(tester.getTopLeft(reindex).dy, tester.getTopLeft(settings).dy);
+    expect(find.byTooltip('memory_books_btn_reindex'.tr()), findsWidgets);
+  });
+
   testWidgets('the search button replaces the tab strip with a search bar', (
     tester,
   ) async {

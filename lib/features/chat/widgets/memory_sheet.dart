@@ -49,9 +49,8 @@ class _MemorySheetState extends ConsumerState<MemorySheet> {
   final Set<MemoryTab> _visited = {};
 
   /// Published by [MemoryBooksTab] once it is mounted. The books tab owns the
-  /// controller, so the sheet's own chrome — the header settings button and
-  /// the FAB — is driven from what the tab hands out rather than from the
-  /// sheet reaching into it.
+  /// controller, so the sheet's header actions and FAB are driven from what
+  /// the tab hands out rather than from the sheet reaching into it.
   MemoryBooksActions? _booksActions;
 
   @override
@@ -114,9 +113,21 @@ class _MemorySheetState extends ConsumerState<MemorySheet> {
           _summarySettingsAction(session.id),
         if (tab == MemoryTab.books && _booksActions != null)
           SheetViewAction(
-            // The chat input bar's round glass button, not a bare icon: this
-            // is the one control the books tab keeps in the chrome, and it
-            // should read as a button.
+            icon: MemoryCircleButton(
+              icon: Icons.refresh_rounded,
+              label: 'memory_books_btn_reindex'.tr(),
+              onTap: _booksActions!.isReindexing
+                  ? () {}
+                  : _booksActions!.reindex,
+            ),
+            tooltip: 'memory_books_btn_reindex'.tr(),
+            onPressed: _booksActions!.isReindexing
+                ? () {}
+                : _booksActions!.reindex,
+          ),
+        if (tab == MemoryTab.books && _booksActions != null)
+          SheetViewAction(
+            // Match the chat input bar's round glass controls.
             icon: MemoryCircleButton(
               icon: Icons.tune_rounded,
               label: 'memory_books_settings_title'.tr(),
