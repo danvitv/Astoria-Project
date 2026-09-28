@@ -174,6 +174,13 @@ Future<void> _settle(WidgetTester tester) async {
   await tester.pump();
 }
 
+Future<void> _settleGeneration(WidgetTester tester, _Harness harness) async {
+  for (var i = 0; i < 10 && harness.isRunning; i++) {
+    await _settle(tester);
+  }
+  expect(harness.isRunning, isFalse);
+}
+
 void main() {
   setUpAll(() async {
     SharedPreferences.setMockInitialValues({});
@@ -245,7 +252,7 @@ void main() {
     harness.generation.complete(
       const MemoryDraft(id: _draftId, content: 'GENERATED', updatedAt: 5),
     );
-    await _settle(tester);
+    await _settleGeneration(tester, harness);
   });
 
   testWidgets('a generation that lands while the sheet is open shows up', (
@@ -255,11 +262,12 @@ void main() {
     await _openSheet(tester, harness);
     unawaited(harness.startGeneration());
     await _settle(tester);
+    expect(harness.isRunning, isTrue);
 
     harness.generation.complete(
       const MemoryDraft(id: _draftId, content: 'GENERATED', updatedAt: 5),
     );
-    await _settle(tester);
+    await _settleGeneration(tester, harness);
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('GENERATED'), findsOneWidget);

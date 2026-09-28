@@ -788,6 +788,25 @@ void main() {
     });
 
     test(
+      'explains a rejected lorebook batch without echoing model content',
+      () {
+        expect(
+          CardRewriteOperationParser.explainLorebookEvolutionBatchFailure(
+            '{"operations":[{"lorebookId":"book","entryId":"entry",'
+            '"patches":[] }]}',
+          ),
+          'operation 0 requires non-empty patches',
+        );
+        expect(
+          CardRewriteOperationParser.explainLorebookEvolutionBatchFailure(
+            '{"operations":[],"comment":"private lorebook content"}',
+          ),
+          'expected exactly {"operations": [...]}',
+        );
+      },
+    );
+
+    test(
       'accepts a lorebook batch with fabricated or missing anchor hashes',
       () {
         // Regression for the live lorebook_writer failure: the model cannot

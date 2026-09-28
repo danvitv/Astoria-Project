@@ -95,11 +95,10 @@ class _AgenticReconcilerTabState extends ConsumerState<AgenticReconcilerTab> {
     // Captured before the await: `ref` is unusable once the widget is gone,
     // and the job still has to be cleared when it finishes.
     final jobs = _jobs;
-    if (!jobs.start(_reconciliationKey)) return;
+    final service = ref.read(manualStudioLedgerServiceProvider);
+    if (!await jobs.startWithForeground(_reconciliationKey)) return;
     try {
-      final outcome = await ref
-          .read(manualStudioLedgerServiceProvider)
-          .reconcile(widget.sessionId);
+      final outcome = await service.reconcile(widget.sessionId);
       if (!mounted) return;
       final result = outcome.result;
       GlazeToast.show(
@@ -125,7 +124,7 @@ class _AgenticReconcilerTabState extends ConsumerState<AgenticReconcilerTab> {
         );
       }
     } finally {
-      jobs.finish(_reconciliationKey);
+      await jobs.finishWithForeground(_reconciliationKey);
     }
   }
 
@@ -140,9 +139,9 @@ class _AgenticReconcilerTabState extends ConsumerState<AgenticReconcilerTab> {
       );
     }
     final jobs = _jobs;
-    if (!jobs.start(_ledgerKey)) return;
+    final service = ref.read(manualStudioLedgerServiceProvider);
+    if (!await jobs.startWithForeground(_ledgerKey)) return;
     try {
-      final service = ref.read(manualStudioLedgerServiceProvider);
       final outcome = missingEndpoint
           ? await service.rerunMissingForReconciliation(widget.sessionId)
           : await (() async {
@@ -184,7 +183,7 @@ class _AgenticReconcilerTabState extends ConsumerState<AgenticReconcilerTab> {
         );
       }
     } finally {
-      jobs.finish(_ledgerKey);
+      await jobs.finishWithForeground(_ledgerKey);
     }
   }
 
@@ -215,14 +214,13 @@ class _AgenticReconcilerTabState extends ConsumerState<AgenticReconcilerTab> {
     if (confirmed != true || !mounted) return;
     final jobs = _jobs;
     final key = _regenKey(run.row.id);
-    if (!jobs.start(key)) return;
+    final service = ref.read(manualStudioLedgerServiceProvider);
+    if (!await jobs.startWithForeground(key)) return;
     try {
-      final outcome = await ref
-          .read(manualStudioLedgerServiceProvider)
-          .regenerateLatest(
-            sessionId: widget.sessionId,
-            expectedRunId: run.row.id,
-          );
+      final outcome = await service.regenerateLatest(
+        sessionId: widget.sessionId,
+        expectedRunId: run.row.id,
+      );
       if (!mounted) return;
       final result = outcome.result;
       GlazeToast.show(
@@ -254,7 +252,7 @@ class _AgenticReconcilerTabState extends ConsumerState<AgenticReconcilerTab> {
         );
       }
     } finally {
-      jobs.finish(key);
+      await jobs.finishWithForeground(key);
     }
   }
 
@@ -333,10 +331,12 @@ class _AgenticReconcilerTabState extends ConsumerState<AgenticReconcilerTab> {
                           label: 'agent_ops_run_reconciliation'.tr(),
                           tone: GlazeActionTone.primary,
                           busy: _runningReconciliation,
-                          onTap: busy ? null : () => _runReconciliation(
-                            hasMissingLedger:
-                                data.missingLedgerTarget != null,
-                          ),
+                          onTap: busy
+                              ? null
+                              : () => _runReconciliation(
+                                  hasMissingLedger:
+                                      data.missingLedgerTarget != null,
+                                ),
                         ),
                         GlazeActionButton(
                           // A missing Ledger is what blocks reconciliation, so
@@ -353,9 +353,12 @@ class _AgenticReconcilerTabState extends ConsumerState<AgenticReconcilerTab> {
                               ? GlazeActionTone.neutral
                               : GlazeActionTone.destructive,
                           busy: _runningLedger,
-                          onTap: busy ? null : () => _rerunLedger(
-                            missingEndpoint: data.missingLedgerTarget != null,
-                          ),
+                          onTap: busy
+                              ? null
+                              : () => _rerunLedger(
+                                  missingEndpoint:
+                                      data.missingLedgerTarget != null,
+                                ),
                         ),
                       ],
                     ),

@@ -21,10 +21,6 @@ class MemoryBooksActionsFab extends StatelessWidget {
   final VoidCallback onReindex;
   final VoidCallback onDeleteIndexes;
 
-  /// False when the active API preset has semantic search switched off — the
-  /// reindex / drop-indexes entries are hidden rather than shown as dead ends.
-  final bool showIndexActions;
-
   /// Bulk draft deletion, offered only while there is more than one draft to
   /// delete. It used to sit inline in the drafts section header, where a long
   /// localized label and the header's own title ellipsised each other.
@@ -37,7 +33,6 @@ class MemoryBooksActionsFab extends StatelessWidget {
     required this.isReindexing,
     required this.onReindex,
     required this.onDeleteIndexes,
-    required this.showIndexActions,
     this.onDeleteAllDrafts,
   });
 
@@ -110,31 +105,29 @@ class MemoryBooksActionsFab extends StatelessWidget {
               onDeleteAllDrafts!();
             },
           ),
-        if (showIndexActions) ...[
-          BottomSheetItem(
-            icon: Icons.storage_rounded,
-            label: isReindexing
-                ? 'btn_indexing'.tr()
-                : 'memory_books_btn_reindex'.tr(),
-            onTap: isReindexing
-                ? () {}
-                : () {
-                    close();
-                    onReindex();
-                  },
-          ),
-          BottomSheetItem(
-            icon: Icons.delete_sweep_outlined,
-            label: 'action_delete_indexes'.tr(),
-            isDestructive: true,
-            onTap: isReindexing
-                ? () {}
-                : () {
-                    close();
-                    onDeleteIndexes();
-                  },
-          ),
-        ],
+        BottomSheetItem(
+          icon: Icons.storage_rounded,
+          label: isReindexing
+              ? 'btn_indexing'.tr()
+              : 'memory_books_btn_reindex'.tr(),
+          onTap: isReindexing
+              ? () {}
+              : () {
+                  close();
+                  onReindex();
+                },
+        ),
+        BottomSheetItem(
+          icon: Icons.delete_sweep_outlined,
+          label: 'action_delete_indexes'.tr(),
+          isDestructive: true,
+          onTap: isReindexing
+              ? () {}
+              : () {
+                  close();
+                  onDeleteIndexes();
+                },
+        ),
       ],
     );
   }

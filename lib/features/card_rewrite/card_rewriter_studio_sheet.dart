@@ -94,9 +94,9 @@ class _CardRewriterStudioSheetState
     // Captured before the await: `ref` is unusable once the widget is gone,
     // and the job still has to be cleared when it finishes.
     final jobs = _jobs;
-    if (!jobs.start(_runKey)) return;
+    final service = ref.read(automatedCardEvolutionServiceProvider);
+    if (!await jobs.startWithForeground(_runKey)) return;
     try {
-      final service = ref.read(automatedCardEvolutionServiceProvider);
       final outcome = recovery == null
           ? await service.runOneBatch(widget.sessionId)
           : await service.resumeFailedWriter(recovery.claim.id);
@@ -116,7 +116,7 @@ class _CardRewriterStudioSheetState
         );
       }
     } finally {
-      jobs.finish(_runKey);
+      await jobs.finishWithForeground(_runKey);
     }
   }
 
@@ -124,11 +124,10 @@ class _CardRewriterStudioSheetState
     if (_running || _recovering) return;
     final jobs = _jobs;
     final key = _recoveryKey(call.id);
-    if (!jobs.start(key)) return;
+    final service = ref.read(automatedCardEvolutionServiceProvider);
+    if (!await jobs.startWithForeground(key)) return;
     try {
-      final outcome = await ref
-          .read(automatedCardEvolutionServiceProvider)
-          .retryFailedWriterCall(call.id);
+      final outcome = await service.retryFailedWriterCall(call.id);
       if (!mounted) return;
       _refreshRecovery();
       if (outcome.isPersisted && _popToReview(outcome.job?.id)) return;
@@ -143,7 +142,7 @@ class _CardRewriterStudioSheetState
         );
       }
     } finally {
-      jobs.finish(key);
+      await jobs.finishWithForeground(key);
     }
   }
 
@@ -153,11 +152,13 @@ class _CardRewriterStudioSheetState
     if (!mounted || response == null || response.isEmpty) return;
     final jobs = _jobs;
     final key = _recoveryKey(call.id);
-    if (!jobs.start(key)) return;
+    final service = ref.read(automatedCardEvolutionServiceProvider);
+    if (!await jobs.startWithForeground(key)) return;
     try {
-      final outcome = await ref
-          .read(automatedCardEvolutionServiceProvider)
-          .correctFailedWriterCall(call.id, response: response);
+      final outcome = await service.correctFailedWriterCall(
+        call.id,
+        response: response,
+      );
       if (!mounted) return;
       _refreshRecovery();
       if (outcome.isPersisted && _popToReview(outcome.job?.id)) return;
@@ -172,7 +173,7 @@ class _CardRewriterStudioSheetState
         );
       }
     } finally {
-      jobs.finish(key);
+      await jobs.finishWithForeground(key);
     }
   }
 
@@ -236,11 +237,10 @@ class _CardRewriterStudioSheetState
     if (!confirmed || !mounted) return;
     final jobs = _jobs;
     final key = _recoveryKey(recovery.claim.id);
-    if (!jobs.start(key)) return;
+    final service = ref.read(automatedCardEvolutionServiceProvider);
+    if (!await jobs.startWithForeground(key)) return;
     try {
-      final outcome = await ref
-          .read(automatedCardEvolutionServiceProvider)
-          .deleteFailedWriter(recovery.claim.id);
+      final outcome = await service.deleteFailedWriter(recovery.claim.id);
       if (!mounted) return;
       _refreshRecovery();
       GlazeToast.show(
@@ -251,7 +251,7 @@ class _CardRewriterStudioSheetState
             .tr(namedArgs: {'result': outcome.kind}),
       );
     } finally {
-      jobs.finish(key);
+      await jobs.finishWithForeground(key);
     }
   }
 

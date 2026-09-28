@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/models/chat_message.dart';
 import '../../../core/models/memory_book.dart';
 import '../../../core/models/pipeline_settings.dart';
+import '../../../core/services/generation_notification_service.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../core/state/memory_settings_provider.dart';
 import '../../../core/utils/error_format.dart';
@@ -206,7 +207,10 @@ class MemoryDraftJobsNotifier extends Notifier<MemoryDraftJobsState> {
       },
     );
 
+    ForegroundWorkHold? foregroundHold;
     try {
+      foregroundHold = await GenerationNotificationService.instance
+          .acquireWorkHold(title: 'Astoria', text: 'Generating memory...');
       final generated = await ref.read(memoryDraftGeneratorProvider)(
         draft: draft,
         // The global settings, not the book's snapshot: this is the manual
@@ -274,10 +278,14 @@ class MemoryDraftJobsNotifier extends Notifier<MemoryDraftJobsState> {
       );
       _bumpBookRevision();
     } finally {
-      if (identical(_tokens[jobKey], token)) {
-        _tokens.remove(jobKey);
-        _leases.remove(jobKey)?.release();
-        _clearJob(jobKey);
+      try {
+        await foregroundHold?.release();
+      } finally {
+        if (identical(_tokens[jobKey], token)) {
+          _tokens.remove(jobKey);
+          _leases.remove(jobKey)?.release();
+          _clearJob(jobKey);
+        }
       }
     }
   }
@@ -294,18 +302,26 @@ class MemoryDraftJobsNotifier extends Notifier<MemoryDraftJobsState> {
         .toList();
     if (toGenerate.isEmpty) return;
 
+    final hold = await GenerationNotificationService.instance.acquireWorkHold(
+      title: 'Astoria',
+      text: 'Generating memories...',
+    );
     final futures = <Future<void>>[];
-    for (var i = 0; i < toGenerate.length; i++) {
-      if (i > 0) await Future<void>.delayed(const Duration(seconds: 2));
-      futures.add(
-        generate(
-          sessionId: sessionId,
-          charId: charId,
-          draftId: toGenerate[i].id,
-        ),
-      );
+    try {
+      for (var i = 0; i < toGenerate.length; i++) {
+        if (i > 0) await Future<void>.delayed(const Duration(seconds: 2));
+        futures.add(
+          generate(
+            sessionId: sessionId,
+            charId: charId,
+            draftId: toGenerate[i].id,
+          ),
+        );
+      }
+      await Future.wait(futures);
+    } finally {
+      await hold.release();
     }
-    await Future.wait(futures);
   }
 
   /// The drafts of [sessionId] that have no content yet and are not already

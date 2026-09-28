@@ -46,11 +46,10 @@ class _AgenticCollectorTabState extends ConsumerState<AgenticCollectorTab> {
     // same guard against starting it twice. The notifier is captured up front
     // because `ref` is unusable once the widget is gone.
     final jobs = _jobs;
-    if (!jobs.start(_pendingKey)) return;
+    final service = ref.read(automatedCardEvolutionServiceProvider);
+    if (!await jobs.startWithForeground(_pendingKey)) return;
     try {
-      final outcome = await ref
-          .read(automatedCardEvolutionServiceProvider)
-          .runPendingCollectors(widget.sessionId);
+      final outcome = await service.runPendingCollectors(widget.sessionId);
       if (!mounted) return;
       _refresh();
       final isFailure = const {
@@ -72,7 +71,7 @@ class _AgenticCollectorTabState extends ConsumerState<AgenticCollectorTab> {
         );
       }
     } finally {
-      jobs.finish(_pendingKey);
+      await jobs.finishWithForeground(_pendingKey);
     }
   }
 
@@ -82,11 +81,10 @@ class _AgenticCollectorTabState extends ConsumerState<AgenticCollectorTab> {
     }
     final jobs = _jobs;
     final key = _recoveryKey(run.row.id);
-    if (!jobs.start(key)) return;
+    final service = ref.read(automatedCardEvolutionServiceProvider);
+    if (!await jobs.startWithForeground(key)) return;
     try {
-      final outcome = await ref
-          .read(automatedCardEvolutionServiceProvider)
-          .retryFailedCollector(run.row.id);
+      final outcome = await service.retryFailedCollector(run.row.id);
       if (!mounted) return;
       _refresh();
       GlazeToast.show(context, _recoveryMessage(outcome.kind, outcome.detail));
@@ -98,7 +96,7 @@ class _AgenticCollectorTabState extends ConsumerState<AgenticCollectorTab> {
         );
       }
     } finally {
-      jobs.finish(key);
+      await jobs.finishWithForeground(key);
     }
   }
 
@@ -141,11 +139,13 @@ class _AgenticCollectorTabState extends ConsumerState<AgenticCollectorTab> {
     if (!mounted || response == null || response!.isEmpty) return;
     final jobs = _jobs;
     final key = _recoveryKey(run.row.id);
-    if (!jobs.start(key)) return;
+    final service = ref.read(automatedCardEvolutionServiceProvider);
+    if (!await jobs.startWithForeground(key)) return;
     try {
-      final outcome = await ref
-          .read(automatedCardEvolutionServiceProvider)
-          .correctFailedCollector(run.row.id, response: response!);
+      final outcome = await service.correctFailedCollector(
+        run.row.id,
+        response: response!,
+      );
       if (!mounted) return;
       _refresh();
       GlazeToast.show(context, _recoveryMessage(outcome.kind, outcome.detail));
@@ -159,7 +159,7 @@ class _AgenticCollectorTabState extends ConsumerState<AgenticCollectorTab> {
         );
       }
     } finally {
-      jobs.finish(key);
+      await jobs.finishWithForeground(key);
     }
   }
 

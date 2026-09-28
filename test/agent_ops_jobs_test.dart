@@ -35,6 +35,20 @@ void main() {
     expect(jobs.start(key), isTrue);
   });
 
+  test('foreground jobs keep their guard until work is finished', () async {
+    final c = container();
+    final jobs = c.read(agentOpsJobsProvider.notifier);
+    final key = AgentOpsJobKeys.cardRewriter('s1');
+
+    expect(await jobs.startWithForeground(key), isTrue);
+    expect(await jobs.startWithForeground(key), isFalse);
+    expect(jobs.isRunning(key), isTrue);
+    await jobs.finishWithForeground(key);
+    expect(jobs.isRunning(key), isFalse);
+    expect(await jobs.startWithForeground(key), isTrue);
+    await jobs.finishWithForeground(key);
+  });
+
   test('a scope answers whether any of its runs is going', () {
     final c = container();
     final jobs = c.read(agentOpsJobsProvider.notifier);

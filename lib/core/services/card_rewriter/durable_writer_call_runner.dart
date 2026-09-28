@@ -142,7 +142,9 @@ final class DurableWriterCallRunner {
               );
         final detail = parsed == null
             ? allowedCardFields == null
-                  ? 'Lorebook response is not a valid operation batch'
+                  ? CardRewriteOperationParser.explainLorebookEvolutionBatchFailure(
+                      response,
+                    )
                   : CardRewriteOperationParser.explainEvolutionBatchFailure(
                       response,
                       allowedFields: allowedCardFields,

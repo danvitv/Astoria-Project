@@ -440,8 +440,10 @@ class GenerationNotificationService {
     required String notificationTitle,
     required String notificationText,
   }) async {
+    // Desktop has no foreground task. Avoid queuing no-op holds across widget
+    // test fake-async zones (and unnecessary transitions on desktop).
+    if (!_isMobile) return true;
     return _serializeForegroundTransition(() async {
-      if (!_isMobile) return true;
       _foregroundHoldCount++;
       if (_foregroundHoldCount > 1) return true;
       try {
@@ -469,8 +471,8 @@ class GenerationNotificationService {
   }
 
   Future<void> _releaseForeground() async {
+    if (!_isMobile) return;
     await _serializeForegroundTransition(() async {
-      if (!_isMobile) return;
       if (_foregroundHoldCount <= 0) return;
       _foregroundHoldCount--;
       if (_foregroundHoldCount > 0) return;

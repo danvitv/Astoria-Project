@@ -1,5 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/services/generation_notification_service.dart';
+
 /// The Agentic Ops actions that are running right now, by job key.
 ///
 /// The work itself belongs to the services behind the buttons, not to the
@@ -10,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 /// that was still going, and nothing left to stop the reader from starting the
 /// same job a second time on top of the first.
 class AgentOpsJobsNotifier extends Notifier<Set<String>> {
+  final Map<String, ForegroundWorkHold> _foregroundHolds = {};
   @override
   Set<String> build() => const <String>{};
 
@@ -26,6 +29,31 @@ class AgentOpsJobsNotifier extends Notifier<Set<String>> {
     if (state.contains(key)) return false;
     state = {...state, key};
     return true;
+  }
+
+  /// Start the OS foreground hold before any detached Agentic Ops work begins.
+  /// A closed sheet does not end the job or the notification.
+  Future<bool> startWithForeground(String key) async {
+    if (!start(key)) return false;
+    try {
+      final hold = await GenerationNotificationService.instance.acquireWorkHold(
+        title: 'Astoria',
+        text: 'Processing agent operations...',
+      );
+      _foregroundHolds[key] = hold;
+      return true;
+    } catch (_) {
+      finish(key);
+      rethrow;
+    }
+  }
+
+  Future<void> finishWithForeground(String key) async {
+    try {
+      await _foregroundHolds.remove(key)?.release();
+    } finally {
+      finish(key);
+    }
   }
 
   void finish(String key) {

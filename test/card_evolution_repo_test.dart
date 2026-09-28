@@ -363,16 +363,24 @@ void main() {
   });
 
   test(
-    'a character without revisions is attributed as canon unavailable',
+    'a character without revisions selects read-only initial canon',
     () async {
       await db.customStatement(
         'DELETE FROM character_revision_rows WHERE character_id = ?',
         ['character'],
       );
 
+      final claim = await evolution.claim(
+        sessionId: 'session',
+        ownerId: 'owner',
+        now: 10,
+        leaseSeconds: 30,
+      );
+      expect(claim.kind, 'claimed');
+      expect(claim.claim!.selectedInputJson, contains('Alice is cautious.'));
       expect(
-        await evolution.selectionFailure('session'),
-        CardEvolutionSelectionFailure.canonUnavailable,
+        await CharacterRevisionRepo(db).getForCharacter('character'),
+        isEmpty,
       );
     },
   );

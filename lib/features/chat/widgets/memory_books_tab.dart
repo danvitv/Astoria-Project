@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/models/chat_message.dart';
 import '../../../core/models/memory_book.dart';
+import '../../../core/services/generation_notification_service.dart';
 import '../../../core/utils/error_format.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../core/state/lorebook_embedding_provider.dart';
@@ -52,7 +53,6 @@ class MemoryBooksActions {
   final VoidCallback deleteIndexes;
   final VoidCallback? deleteAllDrafts;
   final bool isReindexing;
-  final bool showIndexActions;
 
   const MemoryBooksActions({
     required this.openSettings,
@@ -62,7 +62,6 @@ class MemoryBooksActions {
     required this.deleteIndexes,
     required this.deleteAllDrafts,
     required this.isReindexing,
-    required this.showIndexActions,
   });
 
   /// Whether [other] would render the same chrome. The callbacks are stable
@@ -71,7 +70,6 @@ class MemoryBooksActions {
   /// screen.
   bool sameChrome(MemoryBooksActions other) =>
       isReindexing == other.isReindexing &&
-      showIndexActions == other.showIndexActions &&
       (deleteAllDrafts == null) == (other.deleteAllDrafts == null);
 }
 
@@ -278,7 +276,7 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   // ─── Build ───────────────────────────────────────────────────────
 
   /// Published after the frame, never during build: the host rebuilds on it.
-  void _publishActions(int draftCount, bool vectorAvailable) {
+  void _publishActions(int draftCount) {
     final publish = widget.onActions;
     if (publish == null) return;
     final actions = MemoryBooksActions(
@@ -289,7 +287,6 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
       deleteIndexes: _deleteAllMemoryIndexes,
       deleteAllDrafts: draftCount > 1 ? _deleteAllDrafts : null,
       isReindexing: _ctrl.isReindexing,
-      showIndexActions: vectorAvailable,
     );
     final published = _publishedActions;
     if (published != null && published.sameChrome(actions)) return;
@@ -329,10 +326,7 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
     final isGenerating = ref
         .watch(memoryDraftJobsProvider)
         .isBusy(widget.sessionId);
-    // Vector affordances (reindex, index badges, the index filter) only make
-    // sense while the active API preset has semantic search switched on.
-    final vectorAvailable = ref.watch(vectorSearchAvailableProvider);
-    _publishActions(scanDrafts.length, vectorAvailable);
+    _publishActions(scanDrafts.length);
 
     return Column(
       children: [
@@ -748,7 +742,16 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   /// which meant no locale but English ever reached the error dialog.
   void _reindexAll() async {
     setState(() {});
-    final outcome = await _ctrl.reindexAll();
+    final hold = await GenerationNotificationService.instance.acquireWorkHold(
+      title: 'Astoria',
+      text: 'Indexing memories...',
+    );
+    late final ReindexOutcome outcome;
+    try {
+      outcome = await _ctrl.reindexAll();
+    } finally {
+      await hold.release();
+    }
     if (!mounted) return;
     setState(() {});
     switch (outcome) {

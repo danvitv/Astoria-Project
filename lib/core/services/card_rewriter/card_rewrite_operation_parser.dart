@@ -299,46 +299,81 @@ abstract final class CardRewriteOperationParser {
   /// content.
   static List<LorebookRewriteOperationSnapshot>? parseLorebookEvolutionBatch(
     String output,
-  ) {
+  ) => _parseLorebookEvolutionBatch(output).operations;
+
+  /// Gives a bounded structural reason for a rejected lorebook response.
+  /// Exact model output remains available through the writer checkpoint.
+  static String? explainLorebookEvolutionBatchFailure(String output) =>
+      _parseLorebookEvolutionBatch(output).detail;
+
+  static _LorebookBatchParse _parseLorebookEvolutionBatch(String output) {
     final raw = extractJsonObject(output);
-    if (raw == null) return null;
+    if (raw == null) {
+      return const _LorebookBatchParse.failure('no JSON object was found');
+    }
     try {
       final decoded = jsonDecode(repairJson(raw));
       if (decoded is! Map ||
           decoded.length != 1 ||
           decoded['operations'] is! List) {
-        return null;
+        return const _LorebookBatchParse.failure(
+          'expected exactly {"operations": [...]}',
+        );
       }
       final result = <LorebookRewriteOperationSnapshot>[];
       final targets = <String>{};
-      for (final rawOperation in decoded['operations'] as List) {
-        if (rawOperation is! Map) return null;
+      final operations = decoded['operations'] as List;
+      for (var index = 0; index < operations.length; index++) {
+        final rawOperation = operations[index];
+        if (rawOperation is! Map) {
+          return _LorebookBatchParse.failure(
+            'operation $index is not an object',
+          );
+        }
         final normalized = <String, Object?>{
           'target': 'lorebook',
           ...Map<String, Object?>.from(rawOperation),
         };
         final patchesValue = normalized['patches'];
-        if (patchesValue is! List) return null;
+        if (patchesValue is! List || patchesValue.isEmpty) {
+          return _LorebookBatchParse.failure(
+            'operation $index requires non-empty patches',
+          );
+        }
         final patches = <Map<String, Object?>>[];
         for (final rawPatch in patchesValue) {
-          if (rawPatch is! Map) return null;
+          if (rawPatch is! Map) {
+            return _LorebookBatchParse.failure(
+              'operation $index has a non-object patch',
+            );
+          }
           final patch = Map<String, Object?>.from(rawPatch);
           final anchor = patch['anchor'];
-          if (anchor is! String) return null;
+          if (anchor is! String) {
+            return _LorebookBatchParse.failure(
+              'operation $index has a patch without a string anchor',
+            );
+          }
           patch['anchorSha256'] = CardCanonicalizer.scalarSha256(anchor);
           patches.add(patch);
         }
         normalized['patches'] = patches;
         final snapshot = RewriteOperationSnapshotCodec.tryDecode(normalized);
-        if (snapshot is! LorebookRewriteOperationSnapshot ||
-            !targets.add('${snapshot.lorebookId}\u0000${snapshot.entryId}')) {
-          return null;
+        if (snapshot is! LorebookRewriteOperationSnapshot) {
+          return _LorebookBatchParse.failure(
+            'operation $index has invalid fields, patches, or macro tokens',
+          );
+        }
+        if (!targets.add('${snapshot.lorebookId}\u0000${snapshot.entryId}')) {
+          return _LorebookBatchParse.failure(
+            'operation $index repeats a target',
+          );
         }
         result.add(snapshot);
       }
-      return List.unmodifiable(result);
+      return _LorebookBatchParse.success(List.unmodifiable(result));
     } catch (_) {
-      return null;
+      return const _LorebookBatchParse.failure('JSON could not be decoded');
     }
   }
 
@@ -665,5 +700,13 @@ final class _EvolutionBatchParse {
   const _EvolutionBatchParse.failure(this.detail) : operations = null;
 
   final List<CardRewriteOperationSnapshot>? operations;
+  final String? detail;
+}
+
+final class _LorebookBatchParse {
+  const _LorebookBatchParse.success(this.operations) : detail = null;
+  const _LorebookBatchParse.failure(this.detail) : operations = null;
+
+  final List<LorebookRewriteOperationSnapshot>? operations;
   final String? detail;
 }
