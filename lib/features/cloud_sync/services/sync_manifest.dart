@@ -31,6 +31,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
   final SyncCharacterKnowledgeStore? _characterKnowledgeStore;
   final SyncSessionLorebookOverlayStore? _sessionLorebookOverlayStore;
   final SyncReconciliationStateStore? _reconciliationStateStore;
+  final SyncRewriteJobHistoryStore? _rewriteJobHistoryStore;
   final SyncImageStore? _imageStore;
 
   static const _manifestKey = 'gz_sync_manifest_v2';
@@ -59,6 +60,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
     this._characterKnowledgeStore,
     this._sessionLorebookOverlayStore,
     this._reconciliationStateStore,
+    this._rewriteJobHistoryStore,
     this._imageStore,
   });
 
@@ -506,6 +508,32 @@ class SyncManifestBuilder implements SyncManifestProvider {
         // legacy anchors). Keep its accepted manifest marker so it is not
         // downloaded and rejected again on every pull.
         entries[previousEntry.key] = cloudEntry;
+      }
+    }
+
+    if (_rewriteJobHistoryStore != null) {
+      final sessionIds = await _rewriteJobHistoryStore.getAllSessionIds();
+      for (final sessionId in sessionIds) {
+        if (!chatSessionIds.contains(sessionId) ||
+            await isDeleted('chat', sessionId)) {
+          continue;
+        }
+        final history = await _rewriteJobHistoryStore.getBySessionId(sessionId);
+        if (history == null) continue;
+        final hash = SyncSerialization.computeSyncHash(history);
+        final key = entryKey('rewrite_job_history', sessionId);
+        entries[key] = SyncManifestEntry(
+          type: 'rewrite_job_history',
+          id: sessionId,
+          path: cloudPath('rewrite_job_history', sessionId),
+          updatedAt: _resolveUpdatedAt(
+            hash: hash,
+            prevEntry: previous.entries[key],
+            cloudEntry: cloudManifest?.entries[key],
+            now: now,
+          ),
+          hash: hash,
+        );
       }
     }
 

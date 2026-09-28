@@ -62,6 +62,7 @@ class SyncEngine {
   final SyncCharacterKnowledgeStore? _characterKnowledgeStore;
   final SyncReconciliationStateStore? _reconciliationStateStore;
   final SyncSessionLorebookOverlayStore? _sessionLorebookOverlayStore;
+  final SyncRewriteJobHistoryStore? _rewriteJobHistoryStore;
   final SessionDeletionStore _sessionDeletionStore;
   final CharacterDeletionStore _characterDeletionStore;
   final Future<void> Function(LorebookActivations) _saveLorebookActivations;
@@ -104,6 +105,7 @@ class SyncEngine {
     this._reconcilePulledSessions,
     this._operationDelayMs = 300,
     this._wipePollInterval = const Duration(seconds: 2),
+    this._rewriteJobHistoryStore,
   ]) {
     _binarySyncer = SyncBinaryAssetSyncer(
       _adapter,
@@ -137,6 +139,7 @@ class SyncEngine {
     await _adapter.ensureFolder('$cloudBase/character_knowledge');
     await _adapter.ensureFolder('$cloudBase/session_lorebook_overlays');
     await _adapter.ensureFolder('$cloudBase/reconciliation_state');
+    await _adapter.ensureFolder('$cloudBase/rewrite_job_history');
 
     onProgress(const SyncProgress(message: 'Building sync manifest...'));
     final previousManifest = await _manifestBuilder.readLocalManifest();
@@ -153,10 +156,13 @@ class SyncEngine {
       rethrow;
     }
     await _mergeCloudReconciliationState(cloudManifest, previousManifest);
+    // This aggregate is a union of applied jobs. On a push-first device,
+    // merge any cloud-only history before computing the final manifest; a
+    // local prefix must not replace a longer cloud history.
+    await _mergeCloudRewriteJobHistory(cloudManifest);
     final localManifest = await _manifestBuilder.buildLocalManifest(
       cloudManifest: cloudManifest,
     );
-
     final entries = localManifest.entries.values.toList();
     final candidatePaths = cloudManifest == null
         ? const <String>[]
@@ -279,6 +285,25 @@ class SyncEngine {
     final cleanedEntries = Map<String, SyncManifestEntry>.from(
       localManifest.entries,
     )..removeWhere((_, e) => e.deleted);
+    // A device that has not pulled a cloud chat yet must not erase its applied
+    // history (or its owning chat) merely by pushing other local changes first.
+    // Keep those cloud manifest entries until the normal pull imports the chat.
+    if (cloudManifest != null && _rewriteJobHistoryStore != null) {
+      for (final history in cloudManifest.entries.values) {
+        if (history.type != 'rewrite_job_history' || history.deleted) continue;
+        final chatKey = entryKey('chat', history.id);
+        final cloudChat = cloudManifest.entries[chatKey];
+        if (cloudChat == null ||
+            cloudChat.deleted ||
+            await _manifestBuilder.isDeleted('chat', history.id)) {
+          continue;
+        }
+        if (!cleanedEntries.containsKey(chatKey)) {
+          cleanedEntries[chatKey] = cloudChat;
+          cleanedEntries[history.key] = history;
+        }
+      }
+    }
 
     final updatedManifest = localManifest.copyWith(
       version: SyncManifest.currentVersion,
@@ -349,6 +374,17 @@ class SyncEngine {
     final acceptedCloudEntries = <SyncManifestEntry>[];
 
     for (final cloudEntry in entries) {
+      if (cloudEntry.type == 'rewrite_job_history') {
+        if (_rewriteJobHistoryStore == null || cloudEntry.deleted) continue;
+        final chatEntry =
+            cloudManifest.entries[entryKey('chat', cloudEntry.id)];
+        if (chatEntry == null ||
+            chatEntry.deleted ||
+            await _manifestBuilder.isDeleted('chat', cloudEntry.id)) {
+          // The owning chat is absent or deleted; don't import an orphan.
+          continue;
+        }
+      }
       final localEntry = localManifest.entries[cloudEntry.key];
       final previouslyAccepted = previousManifest.entries[cloudEntry.key];
 
@@ -370,7 +406,8 @@ class SyncEngine {
 
       // This aggregate is merge-only, but validating it reads the owning chat.
       // Defer the merge until the ordered pull phase has applied that chat.
-      if (cloudEntry.type == 'reconciliation_state') {
+      if (cloudEntry.type == 'reconciliation_state' ||
+          cloudEntry.type == 'rewrite_job_history') {
         pullEntries.add(cloudEntry);
         continue;
       }
@@ -464,6 +501,16 @@ class SyncEngine {
     final acceptedCloudEntries = <SyncManifestEntry>[];
 
     for (final cloudEntry in cloudManifest.entries.values) {
+      if (cloudEntry.type == 'rewrite_job_history') {
+        if (_rewriteJobHistoryStore == null || cloudEntry.deleted) continue;
+        final chatEntry =
+            cloudManifest.entries[entryKey('chat', cloudEntry.id)];
+        if (chatEntry == null ||
+            chatEntry.deleted ||
+            await _manifestBuilder.isDeleted('chat', cloudEntry.id)) {
+          continue;
+        }
+      }
       final localEntry = localManifest.entries[cloudEntry.key];
       final previouslyAccepted = previousManifest.entries[cloudEntry.key];
       if (_isAlreadyCurrentOrAccepted(
@@ -473,7 +520,8 @@ class SyncEngine {
       )) {
         continue;
       }
-      if (cloudEntry.type == 'reconciliation_state') {
+      if (cloudEntry.type == 'reconciliation_state' ||
+          cloudEntry.type == 'rewrite_job_history') {
         pullEntries.add(cloudEntry);
         continue;
       }
@@ -540,7 +588,8 @@ class SyncEngine {
         .where(
           (entry) =>
               entry.type != 'session_lorebook_overlays' &&
-              entry.type != 'reconciliation_state',
+              entry.type != 'reconciliation_state' &&
+              entry.type != 'rewrite_job_history',
         )
         .toList(growable: false);
     final overlayEntries = pullEntries
@@ -548,6 +597,9 @@ class SyncEngine {
         .toList(growable: false);
     final reconciliationEntries = pullEntries
         .where((entry) => entry.type == 'reconciliation_state')
+        .toList(growable: false);
+    final rewriteEntries = pullEntries
+        .where((entry) => entry.type == 'rewrite_job_history')
         .toList(growable: false);
 
     Future<List<Object>> applyEntries(List<SyncManifestEntry> entries) async {
@@ -562,8 +614,28 @@ class SyncEngine {
               message: 'Pulling ${entry.type}:${entry.id}',
             ),
           );
-          await _pullEntry(entry);
-          appliedEntries.add(entry);
+          if (entry.type == 'rewrite_job_history' && !entry.deleted) {
+            final cloudData = await SyncSerialization.readRequiredCloudEntity(
+              _adapter,
+              entry,
+            );
+            _verifyRewriteHistoryHash(entry, cloudData);
+            final merged = await _rewriteJobHistoryStore!.mergeBySessionId(
+              entry.id,
+              cloudData,
+            );
+            // Only accept the cloud hash when it covers the entire local
+            // union; otherwise the next push must publish local-only jobs.
+            if (SyncSerialization.computeSyncHash(merged) == entry.hash) {
+              appliedEntries.add(entry);
+            }
+          } else if (entry.type == 'rewrite_job_history') {
+            // Only deleting the owning chat removes immutable job history.
+            // A standalone cloud tombstone must not erase local records.
+          } else {
+            await _pullEntry(entry);
+            appliedEntries.add(entry);
+          }
         });
       }
       if (tasks.isEmpty) return const [];
@@ -606,6 +678,7 @@ class SyncEngine {
     final taskErrors = <Object>[
       ...await applyEntries(overlayEntries),
       ...await applyEntries(reconciliationEntries),
+      ...await applyEntries(rewriteEntries),
     ];
 
     await _finalizePull(
@@ -996,6 +1069,9 @@ class SyncEngine {
         case 'reconciliation_state':
           if (_reconciliationStateStore == null) return null;
           return _reconciliationStateStore.getBySessionId(id);
+        case 'rewrite_job_history':
+          if (_rewriteJobHistoryStore == null) return null;
+          return _rewriteJobHistoryStore.getBySessionId(id);
         default:
           return null;
       }
@@ -1103,6 +1179,12 @@ class SyncEngine {
             await _reconciliationStateStore.mergeBySessionId(id, data);
           }
           break;
+        case 'rewrite_job_history':
+          if (_rewriteJobHistoryStore == null) {
+            throw StateError('Rewrite history sync store unavailable');
+          }
+          await _rewriteJobHistoryStore.mergeBySessionId(id, data);
+          break;
       }
     } catch (_) {
       if (type == 'chat' ||
@@ -1111,6 +1193,7 @@ class SyncEngine {
           type == 'tracker_snapshot' ||
           type == 'tracker_value' ||
           type == 'reconciliation_state' ||
+          type == 'rewrite_job_history' ||
           type == 'session_lorebook_overlays') {
         rethrow;
       }
@@ -1446,6 +1529,10 @@ class SyncEngine {
             await _reconciliationStateStore.deleteBySessionId(id);
           }
           break;
+        // Rewrite history has no independent tombstones. The owning chat's
+        // deletion cascade removes it; a stale aggregate must never erase it.
+        case 'rewrite_job_history':
+          break;
         // extensions_settings has no meaningful "delete" — it's always present.
       }
     } catch (_) {}
@@ -1486,6 +1573,46 @@ class SyncEngine {
         _adapter,
         entry,
       );
+      await store.mergeBySessionId(entry.id, cloudData);
+    }
+  }
+
+  void _verifyRewriteHistoryHash(
+    SyncManifestEntry entry,
+    Map<String, dynamic> data,
+  ) {
+    if (SyncSerialization.computeSyncHash(data) != entry.hash) {
+      throw StateError('Rewrite history cloud hash mismatch: ${entry.key}');
+    }
+  }
+
+  Future<void> _mergeCloudRewriteJobHistory(SyncManifest? cloudManifest) async {
+    final store = _rewriteJobHistoryStore;
+    if (store == null || cloudManifest == null) return;
+    final localSessions = (await _chatRepo.getAllSessionMetadata())
+        .map((session) => session.sessionId)
+        .toSet();
+    for (final entry in cloudManifest.entries.values) {
+      if (entry.type != 'rewrite_job_history' || entry.deleted) continue;
+      if (await _manifestBuilder.isDeleted('chat', entry.id)) continue;
+      final chatEntry = cloudManifest.entries[entryKey('chat', entry.id)];
+      if (chatEntry == null || chatEntry.deleted) {
+        continue;
+      }
+      // A push must not pull back a session that this device deliberately
+      // deleted. The ordinary pull phase decides whether a cloud chat is
+      // reintroduced; history only follows an already present local chat.
+      if (!localSessions.contains(entry.id)) continue;
+      final local = await store.getBySessionId(entry.id);
+      if (local != null &&
+          SyncSerialization.computeSyncHash(local) == entry.hash) {
+        continue;
+      }
+      final cloudData = await SyncSerialization.readRequiredCloudEntity(
+        _adapter,
+        entry,
+      );
+      _verifyRewriteHistoryHash(entry, cloudData);
       await store.mergeBySessionId(entry.id, cloudData);
     }
   }

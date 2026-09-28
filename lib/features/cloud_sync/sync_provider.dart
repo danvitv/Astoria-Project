@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/legacy.dart';
 
 import '../../../core/state/db_provider.dart';
 import '../../../core/db/repositories/sync_session_consistency_repo.dart';
+import '../../../core/db/repositories/rewrite_job_history_sync_repo.dart';
 import '../../../core/state/character_folder_provider.dart'
     show characterFolderRepoProvider;
 import '../../../core/state/lorebook_provider.dart'
@@ -59,6 +60,7 @@ final syncServiceProvider = FutureProvider<SyncService>((ref) async {
     reconciliationStateStore: ReconciliationStateSyncStore(
       ref.watch(appDbProvider),
     ),
+    rewriteJobHistoryStore: RewriteJobHistorySyncRepo(ref.watch(appDbProvider)),
     sessionDeletionStore: ref.watch(sessionDeletionRepoProvider),
     characterDeletionStore: ref.watch(characterDeletionRepoProvider),
     saveLorebookActivations: saveLorebookActivations,

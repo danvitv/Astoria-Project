@@ -151,3 +151,14 @@ abstract class SyncReconciliationStateStore {
   );
   Future<void> deleteBySessionId(String sessionId);
 }
+
+/// Merge-only, terminal rewrite review history for one chat. An imported job
+/// must never become an active writer or a reviewable proposal on the receiver.
+abstract class SyncRewriteJobHistoryStore {
+  Future<List<String>> getAllSessionIds();
+  Future<Map<String, dynamic>?> getBySessionId(String sessionId);
+  Future<Map<String, dynamic>> mergeBySessionId(
+    String sessionId,
+    Map<String, dynamic> data,
+  );
+}

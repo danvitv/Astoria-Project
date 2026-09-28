@@ -433,6 +433,59 @@ class FakeReconciliationStateStore implements SyncReconciliationStateStore {
   }
 }
 
+class FakeRewriteJobHistoryStore implements SyncRewriteJobHistoryStore {
+  final Map<String, Map<String, dynamic>> data = {};
+  Future<void> Function(String sessionId)? beforeMerge;
+
+  @override
+  Future<List<String>> getAllSessionIds() async => data.keys.toList()..sort();
+
+  @override
+  Future<Map<String, dynamic>?> getBySessionId(String sessionId) async =>
+      data[sessionId];
+
+  @override
+  Future<Map<String, dynamic>> mergeBySessionId(
+    String sessionId,
+    Map<String, dynamic> incoming,
+  ) async {
+    await beforeMerge?.call(sessionId);
+    if (incoming['__rewriteJobHistory'] != true ||
+        incoming['sessionId'] != sessionId) {
+      throw const FormatException('Invalid rewrite history');
+    }
+    final jobs = <String, Map<String, dynamic>>{};
+    for (final payload in [data[sessionId], incoming]) {
+      for (final raw in (payload?['jobs'] as List?) ?? const []) {
+        final job = Map<String, dynamic>.from(raw as Map);
+        jobs[job['id'] as String] = job;
+      }
+    }
+    final sorted = jobs.keys.toList()..sort();
+    return data[sessionId] = {
+      '__rewriteJobHistory': true,
+      'schemaVersion': 1,
+      'sessionId': sessionId,
+      'jobs': [for (final id in sorted) jobs[id]!],
+      'operations': <dynamic>[],
+      'revisions': <dynamic>[],
+      'evidence': <dynamic>[],
+    };
+  }
+}
+
+Map<String, dynamic> fakeRewriteHistory(String sessionId, List<String> ids) => {
+  '__rewriteJobHistory': true,
+  'schemaVersion': 1,
+  'sessionId': sessionId,
+  'jobs': [
+    for (final id in ids) {'id': id},
+  ],
+  'operations': <dynamic>[],
+  'revisions': <dynamic>[],
+  'evidence': <dynamic>[],
+};
+
 class FakeSessionLorebookOverlayStore
     implements SyncSessionLorebookOverlayStore {
   final Map<String, Map<String, dynamic>> data = {};
@@ -589,6 +642,7 @@ class InMemoryManifestProvider implements SyncManifestProvider {
     SyncStudioPresetStore? studioPresetStore,
     SyncSessionLorebookOverlayStore? sessionLorebookOverlayStore,
     SyncReconciliationStateStore? reconciliationStateStore,
+    SyncRewriteJobHistoryStore? rewriteJobHistoryStore,
   }) : _builder = SyncManifestBuilder(
          characterRepo: characterRepo,
          chatRepo: chatRepo,
@@ -609,6 +663,7 @@ class InMemoryManifestProvider implements SyncManifestProvider {
          studioPresetStore: studioPresetStore,
          sessionLorebookOverlayStore: sessionLorebookOverlayStore,
          reconciliationStateStore: reconciliationStateStore,
+         rewriteJobHistoryStore: rewriteJobHistoryStore,
        );
 
   @override
@@ -680,10 +735,12 @@ class SyncWorld {
   late final FakeSessionDeletionStore sessionDeletions;
   late final FakeCharacterDeletionStore characterDeletions;
   late final FakeReconciliationStateStore? reconciliationStates;
+  late final FakeRewriteJobHistoryStore? rewriteJobHistory;
   late final FakeSessionLorebookOverlayStore? sessionLorebookOverlays;
 
   SyncWorld({
     FakeReconciliationStateStore? reconciliationStateStore,
+    FakeRewriteJobHistoryStore? rewriteJobHistoryStore,
     FakeSessionLorebookOverlayStore? sessionLorebookOverlayStore,
     Future<void> Function(Set<String>)? reconcilePulledSessions,
   }) {
@@ -703,6 +760,7 @@ class SyncWorld {
     sessionDeletions = FakeSessionDeletionStore(chats);
     characterDeletions = FakeCharacterDeletionStore(characters);
     reconciliationStates = reconciliationStateStore;
+    rewriteJobHistory = rewriteJobHistoryStore;
     sessionLorebookOverlays = sessionLorebookOverlayStore;
     _reconcilePulledSessions = reconcilePulledSessions;
     manifestProvider = InMemoryManifestProvider(
@@ -718,6 +776,7 @@ class SyncWorld {
       studioPresetStore: studioPresets,
       sessionLorebookOverlayStore: sessionLorebookOverlays,
       reconciliationStateStore: reconciliationStates,
+      rewriteJobHistoryStore: rewriteJobHistory,
     );
   }
 
@@ -755,6 +814,7 @@ class SyncWorld {
     _reconcilePulledSessions,
     0,
     Duration.zero,
+    rewriteJobHistory,
   );
 }
 
@@ -1007,6 +1067,229 @@ void main() {
     expect(world.chats.data[sessionId], cloudChat);
     expect(reconciliationStates.data[sessionId], statePayload);
   });
+
+  test('pull imports applied rewrite history after its owning chat', () async {
+    final history = FakeRewriteJobHistoryStore();
+    final world = SyncWorld(rewriteJobHistoryStore: history);
+    const sessionId = 'rewrite-pull-session';
+    final chat = makeChat(sessionId);
+    final payload = fakeRewriteHistory(sessionId, ['applied-job']);
+    history.beforeMerge = (id) async {
+      if (world.chats.data[id] == null) {
+        throw StateError('History imported before its owning chat');
+      }
+    };
+    final chatEntry = SyncManifestEntry(
+      type: 'chat',
+      id: sessionId,
+      path: cloudPath('chat', sessionId),
+      updatedAt: 1000,
+      hash: SyncSerialization.computeChatMetadataHash(
+        SessionMetadata(
+          sessionId: sessionId,
+          characterId: chat.characterId,
+          sessionIndex: chat.sessionIndex,
+          updatedAt: chat.updatedAt,
+          messageCount: 0,
+          lastMessageContent: '',
+          lastMessageTimestamp: 0,
+        ),
+      ),
+    );
+    final historyEntry = SyncManifestEntry(
+      type: 'rewrite_job_history',
+      id: sessionId,
+      path: cloudPath('rewrite_job_history', sessionId),
+      updatedAt: 1000,
+      hash: SyncSerialization.computeSyncHash(payload),
+    );
+    world.cloud.files[chatEntry.path] = jsonEncode(chat.toJson());
+    world.cloud.files[historyEntry.path] = jsonEncode(payload);
+    world.cloud.files[cloudPath('manifest', 'manifest')] = jsonEncode(
+      SyncManifest(
+        deviceId: 'cloud',
+        createdAt: 1,
+        entries: {chatEntry.key: chatEntry, historyEntry.key: historyEntry},
+      ).toJson(),
+    );
+
+    await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+    expect(
+      (history.data[sessionId]!['jobs'] as List).single['id'],
+      'applied-job',
+    );
+    final accepted = await world.manifestProvider.readLocalManifest();
+    expect(accepted.entries[historyEntry.key]?.hash, historyEntry.hash);
+    world.cloud.downloadCalls.clear();
+    await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+    expect(world.cloud.downloadCalls, [cloudPath('manifest', 'manifest')]);
+  });
+
+  test('push-first unions cloud and local rewrite history', () async {
+    const sessionId = 'rewrite-union-session';
+    final sourceHistory = FakeRewriteJobHistoryStore();
+    final source = SyncWorld(rewriteJobHistoryStore: sourceHistory);
+    await source.chats.put(makeChat(sessionId));
+    sourceHistory.data[sessionId] = fakeRewriteHistory(sessionId, [
+      'cloud-job',
+    ]);
+    await source.engine.pushEntities(onProgress: (_) {});
+
+    final targetHistory = FakeRewriteJobHistoryStore();
+    final target = SyncWorld(rewriteJobHistoryStore: targetHistory);
+    target.cloud.files.addAll(source.cloud.files);
+    await target.chats.put(makeChat(sessionId));
+    targetHistory.data[sessionId] = fakeRewriteHistory(sessionId, [
+      'local-job',
+    ]);
+    await target.engine.pushEntities(onProgress: (_) {});
+
+    final path = cloudPath('rewrite_job_history', sessionId);
+    expect(
+      (jsonDecode(target.cloud.files[path]!)['jobs'] as List).map(
+        (job) => job['id'],
+      ),
+      ['cloud-job', 'local-job'],
+    );
+    expect((targetHistory.data[sessionId]!['jobs'] as List), hasLength(2));
+    expect(
+      target.cloud.downloadCalls.where((call) => call == path),
+      hasLength(1),
+    );
+  });
+
+  test('pull unions local history and next push publishes both jobs', () async {
+    const sessionId = 'rewrite-pull-union-session';
+    final sourceHistory = FakeRewriteJobHistoryStore();
+    final source = SyncWorld(rewriteJobHistoryStore: sourceHistory);
+    await source.chats.put(makeChat(sessionId));
+    sourceHistory.data[sessionId] = fakeRewriteHistory(sessionId, [
+      'cloud-job',
+    ]);
+    await source.engine.pushEntities(onProgress: (_) {});
+
+    final targetHistory = FakeRewriteJobHistoryStore();
+    final target = SyncWorld(rewriteJobHistoryStore: targetHistory);
+    target.cloud.files.addAll(source.cloud.files);
+    await target.chats.put(makeChat(sessionId));
+    targetHistory.data[sessionId] = fakeRewriteHistory(sessionId, [
+      'local-job',
+    ]);
+    final conflicts = <SyncConflict>[];
+    await target.engine.pullEntities(
+      onProgress: (_) {},
+      onConflict: conflicts.add,
+    );
+    expect(conflicts, isEmpty);
+    expect((targetHistory.data[sessionId]!['jobs'] as List), hasLength(2));
+    await target.engine.pushEntities(onProgress: (_) {});
+    expect(
+      (jsonDecode(
+                target.cloud.files[cloudPath(
+                  'rewrite_job_history',
+                  sessionId,
+                )]!,
+              )['jobs']
+              as List)
+          .map((job) => job['id']),
+      ['cloud-job', 'local-job'],
+    );
+  });
+
+  test(
+    'deleted chat is not resurrected by orphaned cloud rewrite history',
+    () async {
+      const sessionId = 'removed-rewrite-session';
+      final history = FakeRewriteJobHistoryStore();
+      final world = SyncWorld(rewriteJobHistoryStore: history);
+      final payload = fakeRewriteHistory(sessionId, ['old-job']);
+      final historyEntry = SyncManifestEntry(
+        type: 'rewrite_job_history',
+        id: sessionId,
+        path: cloudPath('rewrite_job_history', sessionId),
+        updatedAt: 1000,
+        hash: SyncSerialization.computeSyncHash(payload),
+      );
+      final chatEntry = SyncManifestEntry(
+        type: 'chat',
+        id: sessionId,
+        path: cloudPath('chat', sessionId),
+        updatedAt: 2000,
+        hash: '',
+        deleted: true,
+      );
+      world.cloud.files[historyEntry.path] = jsonEncode(payload);
+      world.cloud.files[cloudPath('manifest', 'manifest')] = jsonEncode(
+        SyncManifest(
+          deviceId: 'cloud',
+          createdAt: 1,
+          entries: {chatEntry.key: chatEntry, historyEntry.key: historyEntry},
+        ).toJson(),
+      );
+
+      await world.engine.pushEntities(onProgress: (_) {});
+      expect(world.chats.data, isEmpty);
+      expect(history.data, isEmpty);
+      await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+      expect(world.chats.data, isEmpty);
+      expect(history.data, isEmpty);
+    },
+  );
+
+  test('push rejects a tampered rewrite history payload', () async {
+    const sessionId = 'tampered-rewrite-session';
+    final sourceHistory = FakeRewriteJobHistoryStore();
+    final source = SyncWorld(rewriteJobHistoryStore: sourceHistory);
+    await source.chats.put(makeChat(sessionId));
+    sourceHistory.data[sessionId] = fakeRewriteHistory(sessionId, ['original']);
+    await source.engine.pushEntities(onProgress: (_) {});
+
+    final targetHistory = FakeRewriteJobHistoryStore();
+    final target = SyncWorld(rewriteJobHistoryStore: targetHistory);
+    target.cloud.files.addAll(source.cloud.files);
+    target.cloud.files[cloudPath('rewrite_job_history', sessionId)] =
+        jsonEncode(fakeRewriteHistory(sessionId, ['tampered']));
+    await target.chats.put(makeChat(sessionId));
+    await expectLater(
+      target.engine.pushEntities(onProgress: (_) {}),
+      throwsStateError,
+    );
+    expect(targetHistory.data, isEmpty);
+  });
+
+  test(
+    'push does not restore a missing local chat from cloud history',
+    () async {
+      const sessionId = 'cloud-only-rewrite-session';
+      final sourceHistory = FakeRewriteJobHistoryStore();
+      final source = SyncWorld(rewriteJobHistoryStore: sourceHistory);
+      await source.chats.put(makeChat(sessionId));
+      sourceHistory.data[sessionId] = fakeRewriteHistory(sessionId, [
+        'old-job',
+      ]);
+      await source.engine.pushEntities(onProgress: (_) {});
+
+      final targetHistory = FakeRewriteJobHistoryStore();
+      final target = SyncWorld(rewriteJobHistoryStore: targetHistory);
+      target.cloud.files.addAll(source.cloud.files);
+      await target.engine.pushEntities(onProgress: (_) {});
+
+      expect(target.chats.data, isEmpty);
+      expect(targetHistory.data, isEmpty);
+      final pushedManifest = SyncManifest.fromJson(
+        jsonDecode(target.cloud.files[cloudPath('manifest', 'manifest')]!)
+            as Map<String, dynamic>,
+      );
+      expect(pushedManifest.entries, contains(entryKey('chat', sessionId)));
+      expect(
+        pushedManifest.entries,
+        contains(entryKey('rewrite_job_history', sessionId)),
+      );
+      await target.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+      expect(target.chats.data, contains(sessionId));
+      expect((targetHistory.data[sessionId]!['jobs'] as List), hasLength(1));
+    },
+  );
 
   test('pull reconciles touched sessions after primary entities', () async {
     final seen = <Set<String>>[];

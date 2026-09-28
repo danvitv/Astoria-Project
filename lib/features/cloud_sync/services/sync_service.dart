@@ -43,6 +43,7 @@ class SyncService {
   final SyncCharacterKnowledgeStore? _characterKnowledgeStore;
   final SyncSessionLorebookOverlayStore? _sessionLorebookOverlayStore;
   final SyncReconciliationStateStore? _reconciliationStateStore;
+  final SyncRewriteJobHistoryStore? _rewriteJobHistoryStore;
   final SessionDeletionStore _sessionDeletionStore;
   final CharacterDeletionStore _characterDeletionStore;
   final Future<void> Function(LorebookActivations) _saveLorebookActivations;
@@ -118,6 +119,7 @@ class SyncService {
     this._characterKnowledgeStore,
     this._sessionLorebookOverlayStore,
     this._reconciliationStateStore,
+    this._rewriteJobHistoryStore,
     required SessionDeletionStore sessionDeletionStore,
     required CharacterDeletionStore characterDeletionStore,
     required Future<void> Function(LorebookActivations) saveLorebookActivations,
@@ -158,6 +160,7 @@ class SyncService {
     characterKnowledgeStore: _characterKnowledgeStore,
     sessionLorebookOverlayStore: _sessionLorebookOverlayStore,
     reconciliationStateStore: _reconciliationStateStore,
+    rewriteJobHistoryStore: _rewriteJobHistoryStore,
     imageStore: _imageStorage,
   );
 
@@ -191,6 +194,9 @@ class SyncService {
     _reconciliationStateStore,
     _sessionLorebookOverlayStore,
     _reconcilePulledSessions,
+    300,
+    const Duration(seconds: 2),
+    _rewriteJobHistoryStore,
   );
 
   Future<void> init() async {

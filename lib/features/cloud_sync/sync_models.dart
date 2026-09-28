@@ -110,7 +110,8 @@ class SyncManifest {
   ///  12 — added merge-only `reconciliation_state` provenance.
   ///  13 — added immutable reconciliation effects to reconciliation state.
   ///  14 — added current session-local lorebook overlay projections.
-  static const int currentVersion = 14;
+  ///  15 — added merge-only terminal rewrite job history.
+  static const int currentVersion = 15;
 
   final int version;
   final String deviceId;
@@ -246,6 +247,8 @@ String cloudPath(String type, String id) {
       return '$cloudBase/session_lorebook_overlays/$id.json';
     case 'reconciliation_state':
       return '$cloudBase/reconciliation_state/$id.json';
+    case 'rewrite_job_history':
+      return '$cloudBase/rewrite_job_history/$id.json';
     case 'lorebooks':
       return '$cloudBase/lorebooks.json';
     case 'api_presets':
