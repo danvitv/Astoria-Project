@@ -132,10 +132,11 @@ class ManualRewriteApplyRepo {
           }
         }
 
-        final input = await _canonReader.readInTransaction(
+        final rawInput = await _canonReader.readInTransaction(
           sessionId: job.chatSessionId,
           characterId: job.characterId,
         );
+        final input = EffectiveCanonReadRepository.withInitialLineage(rawInput);
         if (!_hasCurrentSourceLineage(input)) {
           return const ManualRewriteApplyOutcome.blocked('sourceLineageStale');
         }
@@ -283,6 +284,22 @@ class ManualRewriteApplyRepo {
           updated = _withField(updated, entry.key, next);
         }
         final parent = input.lineage.last;
+        // Persist the virtual root only inside guarded apply. If any later
+        // validation or lorebook CAS fails, the transaction rolls it back.
+        // Checkpoint creation below requires this revision to exist already.
+        if (rawInput.lineage.isEmpty) {
+          await _db
+              .into(_db.characterRevisionRows)
+              .insert(
+                CharacterRevisionRowsCompanion.insert(
+                  characterId: parent.characterId,
+                  revision: parent.revision,
+                  revisionHash: parent.revisionHash,
+                  snapshotJson: parent.snapshotJson,
+                  createdAt: Value(parent.createdAt),
+                ),
+              );
+        }
         final anchor = _latestAcceptedAnchor(session.messagesJson);
         if (anchor == null) {
           return const ManualRewriteApplyOutcome.blocked(

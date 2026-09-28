@@ -143,9 +143,10 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
     bool stableStamp = false,
   }) async {
     try {
-      final input = await ref
+      final rawInput = await ref
           .read(_canonReaderProvider)
           .readFromSource(sessionId: sessionId, sourceCharacter: character);
+      final input = EffectiveCanonReadRepository.withInitialLineage(rawInput);
       return const EffectiveCanonAssembler()
           .assemble(input, stampVolatileState: !stableStamp)
           .identity;

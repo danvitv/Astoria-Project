@@ -378,6 +378,119 @@ void main() {
     },
   );
 
+  test('applies a proposal based on a read-only initial revision', () async {
+    final stamp = await seed();
+    await (db.delete(
+      db.characterRevisionRows,
+    )..where((row) => row.characterId.equals('c'))).go();
+    expect(await revisions.getForCharacter('c'), isEmpty);
+
+    final input = EffectiveCanonReadRepository.withInitialLineage(
+      await reader.readInTransaction(sessionId: 's', characterId: 'c'),
+    );
+    expect(const EffectiveCanonAssembler().assemble(input).identity, stamp);
+
+    final repo = ManualRewriteApplyRepo(db: db, canonReader: reader);
+    final outcome = await repo.applyApproved(
+      jobId: 'job',
+      expectedCanonStamp: stamp,
+      expectedJobVersion: 1,
+    );
+    expect(outcome.kind, 'applied');
+    expect(await revisions.getForCharacter('c'), hasLength(1));
+    final session = await db.select(db.chatSessions).getSingle();
+    final fork = (await characters.getById(session.characterId))!;
+    expect(fork.description, 'new text');
+    expect(await revisions.getForCharacter(fork.id), hasLength(2));
+    expect(
+      (await repo.applyApproved(
+        jobId: 'job',
+        expectedCanonStamp: stamp,
+        expectedJobVersion: 1,
+      )).kind,
+      'alreadyApplied',
+    );
+  });
+
+  test('applies automated proposal against a virtual stable canon', () async {
+    await seed();
+    await (db.delete(
+      db.characterRevisionRows,
+    )..where((row) => row.characterId.equals('c'))).go();
+    final input = EffectiveCanonReadRepository.withInitialLineage(
+      await reader.readInTransaction(sessionId: 's', characterId: 'c'),
+    );
+    final stableStamp = const EffectiveCanonAssembler()
+        .assemble(input, stampVolatileState: false)
+        .identity;
+    await (db.update(db.rewriteJobs)..where((row) => row.id.equals('job')))
+        .write(RewriteJobsCompanion(canonStamp: Value(stableStamp)));
+    await addAutomaticProposal();
+
+    final outcome = await ManualRewriteApplyRepo(db: db, canonReader: reader)
+        .applyApproved(
+          jobId: 'job',
+          expectedCanonStamp: stableStamp,
+          expectedJobVersion: 1,
+        );
+    expect(outcome.kind, 'applied');
+    expect(await revisions.getForCharacter('c'), hasLength(1));
+    final session = await db.select(db.chatSessions).getSingle();
+    expect(
+      (await characters.getById(session.characterId))!.description,
+      'new text',
+    );
+  });
+
+  test(
+    'virtual initial revision is rolled back when apply is blocked',
+    () async {
+      final stamp = await seed();
+      await (db.delete(
+        db.characterRevisionRows,
+      )..where((row) => row.characterId.equals('c'))).go();
+      await addApprovedOperation(
+        id: 'op2',
+        field: CardRewriteField.personality,
+        anchor: 'untouched',
+        value: 'changed',
+        transitionId: 'transition',
+      );
+      final outcome = await ManualRewriteApplyRepo(db: db, canonReader: reader)
+          .applyApproved(
+            jobId: 'job',
+            expectedCanonStamp: stamp,
+            expectedJobVersion: 1,
+          );
+      expect(outcome.reason, 'duplicateTransition');
+      expect(await revisions.getForCharacter('c'), isEmpty);
+      expect((await characters.getById('c'))!.description, 'old text');
+    },
+  );
+
+  test('stale lorebook rolls back a virtual root and card fork', () async {
+    final stamp = await seed();
+    await (db.delete(
+      db.characterRevisionRows,
+    )..where((row) => row.characterId.equals('c'))).go();
+    await addApprovedLorebookOperation(expectedContent: 'concurrent content');
+
+    final outcome = await ManualRewriteApplyRepo(db: db, canonReader: reader)
+        .applyApproved(
+          jobId: 'job',
+          expectedCanonStamp: stamp,
+          expectedJobVersion: 1,
+        );
+
+    expect(outcome.reason, 'staleLorebookEntry');
+    expect(await db.select(db.characterRevisionRows).get(), isEmpty);
+    expect(await db.select(db.sessionCanonCheckpointRows).get(), isEmpty);
+    expect((await db.select(db.chatSessions).getSingle()).characterId, 'c');
+    expect((await characters.getById('c'))!.description, 'old text');
+    expect((await db.select(db.rewriteJobs).getSingle()).status, 'pending');
+    expect(await db.select(db.characters).get(), hasLength(1));
+  });
+
   test('duplicate transition ids fail closed before apply writes', () async {
     final stamp = await seed();
     await addApprovedOperation(
@@ -418,8 +531,9 @@ void main() {
           stampVolatileState: false,
         )
         .identity;
-    await (db.update(db.rewriteJobs)..where((t) => t.id.equals('job')))
-        .write(RewriteJobsCompanion(canonStamp: Value(stableStamp)));
+    await (db.update(db.rewriteJobs)..where((t) => t.id.equals('job'))).write(
+      RewriteJobsCompanion(canonStamp: Value(stableStamp)),
+    );
     return stableStamp;
   }
 

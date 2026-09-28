@@ -4,7 +4,6 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../models/character.dart';
-import 'character_revision_repo.dart';
 import '../../services/card_rewriter/card_rewrite_operation_parser.dart';
 import '../../services/card_rewriter/card_rewriter_contracts.dart';
 import '../../services/card_rewriter/effective_canon_assembler.dart';
@@ -1656,27 +1655,9 @@ class CardEvolutionRepo {
       // Older imported cards may not have a persisted source revision yet.
       // Match the read-only effective-canon loader's initial reconciliation
       // without writing a revision inside the claim/eligibility transaction.
-      final effectiveInput = input.lineage.isEmpty
-          ? EffectiveCanonAssemblyInput(
-              sourceCharacter: input.sourceCharacter,
-              lineage: [
-                CharacterRevisionRecord(
-                  characterId: characterId,
-                  revision: 1,
-                  revisionHash: CardCanonicalizer.sha256(input.sourceCharacter),
-                  parentRevisionHash: '',
-                  snapshotJson: jsonEncode(input.sourceCharacter.toJson()),
-                  createdAt: input.sourceCharacter.updatedAt,
-                ),
-              ],
-              baseline: input.baseline,
-              facts: input.facts,
-              committedTrackers: input.committedTrackers,
-              manualControls: input.manualControls,
-              transitions: input.transitions,
-              transitionFactRefs: input.transitionFactRefs,
-            )
-          : input;
+      final effectiveInput = EffectiveCanonReadRepository.withInitialLineage(
+        input,
+      );
       // The automated evolution lane stamps canon with the stable identity:
       // the per-turn Ledger mutates committed trackers and facts every turn,
       // which would invalidate every automated proposal within a minute.

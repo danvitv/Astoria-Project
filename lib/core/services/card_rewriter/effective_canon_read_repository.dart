@@ -14,6 +14,7 @@ import 'package:glaze_flutter/core/models/ledger_raw_tracker_state.dart';
 import 'package:glaze_flutter/core/models/character.dart';
 import 'package:glaze_flutter/core/models/historical_message_window.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/effective_canon_assembler.dart';
+import 'package:glaze_flutter/core/services/card_rewriter/card_rewriter_contracts.dart';
 
 /// Aggregate effective-canon reads under one database transaction boundary.
 class EffectiveCanonReadRepository {
@@ -64,6 +65,36 @@ class EffectiveCanonReadRepository {
   final LedgerRawTrackerStateReader _rawTrackerStateReader;
   final Future<LedgerRawTrackerState> Function(String sessionId)?
   _runtimeRawTrackerStateLoader;
+
+  /// Model an imported card's initial revision without changing the database.
+  /// The same root is used by selection, review and apply so their canon stamps
+  /// agree even before any write-side workflow has reconciled source lineage.
+  /// Never synthesize over a non-empty (potentially stale) revision chain.
+  static EffectiveCanonAssemblyInput withInitialLineage(
+    EffectiveCanonAssemblyInput input,
+  ) {
+    if (input.lineage.isNotEmpty) return input;
+    final source = input.sourceCharacter;
+    return EffectiveCanonAssemblyInput(
+      sourceCharacter: source,
+      lineage: [
+        CharacterRevisionRecord(
+          characterId: source.id,
+          revision: 1,
+          revisionHash: CardCanonicalizer.sha256(source),
+          parentRevisionHash: '',
+          snapshotJson: jsonEncode(source.toJson()),
+          createdAt: source.updatedAt,
+        ),
+      ],
+      baseline: input.baseline,
+      facts: input.facts,
+      committedTrackers: input.committedTrackers,
+      manualControls: input.manualControls,
+      transitions: input.transitions,
+      transitionFactRefs: input.transitionFactRefs,
+    );
+  }
 
   Future<EffectiveCanonAssemblyInput> read({
     required String sessionId,
