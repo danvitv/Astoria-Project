@@ -492,6 +492,16 @@ List<CardPatchViolation> advisoryViolations(
   return validation.violations;
 }
 
+/// A committed patch describes a past transition, not an instruction to apply
+/// against today's card. Only reviewable operations get live-anchor warnings.
+List<CardPatchViolation> reviewOperationViolations(
+  ManualRewriteOperationView view,
+  CardRewriteOperationSnapshot snapshot,
+  Character? character,
+) => view.operation.status == 'applied' || character == null
+    ? const []
+    : advisoryViolations(snapshot, character);
+
 Map<CardRewriteField, String?> rewriteFieldValues(Character c) => {
   for (final field in CardRewriteField.values)
     field: rewrittenFieldValue(c, field),

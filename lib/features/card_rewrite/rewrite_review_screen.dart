@@ -123,6 +123,7 @@ class _ReviewBody extends ConsumerWidget {
           };
           final locked =
               operation is CardRewriteOperationSnapshot &&
+              view.operation.status == 'reviewable' &&
               lockOverlap(operation, lockedNames).isNotEmpty;
           return RewriteOperationRailTile(
             index: i,
@@ -231,14 +232,15 @@ class _OperationItem extends ConsumerWidget {
       );
     }
     final snapshot = decoded is CardRewriteOperationSnapshot ? decoded : null;
-    final locked = snapshot == null
+    final applied = view.operation.status == 'applied';
+    final locked = snapshot == null || applied
         ? <String>{}
         : lockOverlap(snapshot, controls);
     final card = character;
-    final violations = snapshot == null || card == null
+    final violations = snapshot == null
         ? const <CardPatchViolation>[]
-        : advisoryViolations(snapshot, card);
-    final fieldValue = snapshot == null || card == null
+        : reviewOperationViolations(view, snapshot, card);
+    final fieldValue = snapshot == null || card == null || applied
         ? null
         : rewrittenFieldValue(card, snapshot.field);
     final controller = ref.read(

@@ -123,6 +123,12 @@ abstract final class CardRewriterPromptBuilder {
         'destination in promotionDestination.',
       )
       ..writeln(
+        '- Every card operation MUST include a non-empty string '
+        'transition.promotionDestination. Set it to the exact field name of '
+        'that operation (description, personality, or scenario); do not omit '
+        'it even when transition.factIds is empty.',
+      )
+      ..writeln(
         '- Each anchor must occur exactly once in its current field. '
         'Empty anchors are forbidden. Use a meaningful literal phrase of at '
         'least 12 code units, never an isolated word, number, punctuation mark, '

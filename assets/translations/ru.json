@@ -2465,6 +2465,8 @@
   "rewrite_invalid_snapshot": "Сохранённое предложение не удалось прочитать.",
   "rewrite_diff_current": "Текущее",
   "rewrite_diff_proposed": "Предложенное",
+  "rewrite_diff_before_apply": "Фрагмент до применения",
+  "rewrite_diff_after_apply": "Фрагмент после применения",
   "rewrite_anchor_ambiguous": "Якорь встречается в текущей карточке больше одного раза.",
   "rewrite_anchor_missing": "Якорь больше не найден в текущей карточке.",
   "rewrite_evidence_title": "Доказательства ({count})",

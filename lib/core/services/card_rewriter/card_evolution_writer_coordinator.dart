@@ -497,11 +497,19 @@ final class CardEvolutionWriterCoordinator {
         : 'Every patch and transition scopeKey MUST equal one of these exact '
               'available keys: ${jsonEncode(allowed)}. Do not shorten, combine, '
               'translate, or derive a scope key.';
+    final destinationCorrection =
+        failure.contains('missingPromotionDestination')
+        ? 'Your rejected transition omitted or emptied the required '
+              'promotionDestination. For EVERY card operation, set '
+              'transition.promotionDestination to the non-empty string matching '
+              'that operation\'s field (description, personality, or scenario). '
+              'Do not leave it out of any operation. '
+        : '';
     return '$originalPrompt\n\n'
         '# Required correction\n'
         'Your previous response was rejected: $failure. Return a fresh complete '
         'response containing exactly one valid JSON object with no prose before '
-        'or after it. $scopeCorrection Every replacement value MUST preserve '
+        'or after it. $destinationCorrection$scopeCorrection Every replacement value MUST preserve '
         'the exact macro-token multiset from its anchor. Never add, remove, rename, '
         'or substitute tokens such as {{user}}.';
   }

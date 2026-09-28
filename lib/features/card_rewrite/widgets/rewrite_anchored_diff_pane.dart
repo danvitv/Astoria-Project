@@ -17,6 +17,7 @@ class RewriteAnchoredDiffPane extends StatelessWidget {
     super.key,
     required this.patch,
     required this.fieldValue,
+    this.historical = false,
     this.onDelete,
   });
 
@@ -24,13 +25,18 @@ class RewriteAnchoredDiffPane extends StatelessWidget {
 
   /// Current value of the operation's target field; null while loading.
   final String? fieldValue;
+
+  /// Applied operations are historical: their original anchor is not expected
+  /// to survive in the live card. Show only the saved before/after fragment.
+  final bool historical;
   final VoidCallback? onDelete;
 
   RewriteAnchoredDiffPane.lorebook({
     super.key,
     required LorebookAnchoredPatch patch,
     required this.fieldValue,
-  }) : onDelete = null,
+  }) : historical = false,
+       onDelete = null,
        patch = AnchoredScalarPatch(
          scopeKey: 'world:lorebook',
          field: CardRewriteField.description,
@@ -43,22 +49,29 @@ class RewriteAnchoredDiffPane extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = context.cs;
     final current = fieldValue;
-    if (current == null) return const _SkeletonPane();
+    if (!historical && current == null) return const _SkeletonPane();
 
-    final occurrences = _occurrences(current, patch.anchor);
-    if (occurrences != 1) {
-      return _AnchorMissingPane(
-        anchor: patch.anchor,
-        ambiguous: occurrences > 1,
-      );
+    late final String left;
+    late final String right;
+    if (historical) {
+      left = patch.anchor;
+      right = patch.value;
+    } else {
+      final occurrences = _occurrences(current!, patch.anchor);
+      if (occurrences != 1) {
+        return _AnchorMissingPane(
+          anchor: patch.anchor,
+          ambiguous: occurrences > 1,
+        );
+      }
+      final start = current.indexOf(patch.anchor);
+      final end = start + patch.anchor.length;
+      final window = _contextWindow(current, start, end);
+      left =
+          '${window.prefixEllipsis ? '…\n' : ''}${window.before}${patch.anchor}${window.after}${window.suffixEllipsis ? '\n…' : ''}';
+      right =
+          '${window.prefixEllipsis ? '…\n' : ''}${window.before}${patch.value}${window.after}${window.suffixEllipsis ? '\n…' : ''}';
     }
-    final start = current.indexOf(patch.anchor);
-    final end = start + patch.anchor.length;
-    final window = _contextWindow(current, start, end);
-    final left =
-        '${window.prefixEllipsis ? '…\n' : ''}${window.before}${patch.anchor}${window.after}${window.suffixEllipsis ? '\n…' : ''}';
-    final right =
-        '${window.prefixEllipsis ? '…\n' : ''}${window.before}${patch.value}${window.after}${window.suffixEllipsis ? '\n…' : ''}';
     final diff = computeLineDiff(left, right);
 
     return Container(
@@ -72,13 +85,21 @@ class RewriteAnchoredDiffPane extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _Half(
-            label: 'rewrite_diff_current'.tr(),
+            label:
+                (historical
+                        ? 'rewrite_diff_before_apply'
+                        : 'rewrite_diff_current')
+                    .tr(),
             accent: cs.onSurfaceVariant,
             lines: diff.leftLines,
           ),
           Divider(height: 1, color: cs.outlineVariant),
           _Half(
-            label: 'rewrite_diff_proposed'.tr(),
+            label:
+                (historical
+                        ? 'rewrite_diff_after_apply'
+                        : 'rewrite_diff_proposed')
+                    .tr(),
             accent: cs.primary,
             lines: diff.rightLines,
             onDelete: onDelete,

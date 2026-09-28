@@ -356,6 +356,40 @@ void main() {
     );
   });
 
+  test(
+    'missing promotion destination is called out in repair prompt',
+    () async {
+      var calls = 0;
+      final prompts = <String>[];
+      final invalid =
+          jsonDecode(fixture.cardBatchOutput) as Map<String, dynamic>;
+      final operation = (invalid['operations'] as List).single as Map;
+      (operation['transition'] as Map).remove('promotionDestination');
+
+      final result = await fixture
+          .service((_, prompt) async {
+            calls++;
+            prompts.add(prompt);
+            return _ok(
+              calls == 1 ? jsonEncode(invalid) : fixture.cardBatchOutput,
+            );
+          })
+          .runOneBatch('session');
+
+      expect(result.kind, 'persisted');
+      expect(calls, 2);
+      expect(prompts.first, contains('transition.promotionDestination'));
+      expect(prompts.last, contains('missingPromotionDestination'));
+      expect(
+        prompts.last,
+        contains(
+          'transition.promotionDestination to the non-empty string matching',
+        ),
+      );
+      await fixture.expectCanonRowsUnchanged();
+    },
+  );
+
   test('invalid scope is rejected after exactly one repair attempt', () async {
     var calls = 0;
     final invalid = jsonDecode(fixture.cardBatchOutput) as Map<String, dynamic>;

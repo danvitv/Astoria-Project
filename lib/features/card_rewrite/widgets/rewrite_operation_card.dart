@@ -222,6 +222,7 @@ class RewriteOperationCard extends StatelessWidget {
                   RewriteAnchoredDiffPane(
                     patch: patch,
                     fieldValue: fieldValue,
+                    historical: op.status == 'applied',
                     onDelete:
                         editPermitted(interactionsEnabled, reviewable) &&
                             snapshot!.patches.length > 1

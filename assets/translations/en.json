@@ -2444,6 +2444,8 @@
   "rewrite_invalid_snapshot": "This saved proposal cannot be read.",
   "rewrite_diff_current": "Current",
   "rewrite_diff_proposed": "Proposed",
+  "rewrite_diff_before_apply": "Fragment before apply",
+  "rewrite_diff_after_apply": "Fragment after apply",
   "rewrite_anchor_ambiguous": "The anchor appears more than once in the current card.",
   "rewrite_anchor_missing": "The anchor is no longer present in the current card.",
   "rewrite_evidence_title": "Evidence ({count})",
