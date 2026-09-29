@@ -206,15 +206,23 @@ class DropboxAdapter implements CloudAdapter {
 
   @override
   Future<Uint8List> downloadBinary(String path) async {
-    return _retryOn401(() async {
-      final headers = await _headers();
-      headers['Dropbox-API-Arg'] = jsonEncode({'path': _stripPrefix(path)});
-      final response = await _dio.post<List<int>>(
-        '$_contentBase/files/download',
-        options: Options(headers: headers, responseType: ResponseType.bytes),
-      );
-      return Uint8List.fromList(response.data ?? []);
-    });
+    try {
+      return await _retryOn401(() async {
+        final headers = await _headers();
+        headers['Dropbox-API-Arg'] = jsonEncode({'path': _stripPrefix(path)});
+        final response = await _dio.post<List<int>>(
+          '$_contentBase/files/download',
+          options: Options(headers: headers, responseType: ResponseType.bytes),
+        );
+        return Uint8List.fromList(response.data ?? []);
+      });
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 409 &&
+          e.response?.data.toString().contains('not_found') == true) {
+        throw CloudFileNotFoundException(path);
+      }
+      rethrow;
+    }
   }
 
   @override

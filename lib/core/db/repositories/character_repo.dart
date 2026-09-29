@@ -236,6 +236,22 @@ class CharacterRepo implements SyncCharacterStore {
         .insertOnConflictUpdate(_toCompanion(withTokens));
   }
 
+  @override
+  Future<void> updateAvatarPath(String id, String path) async {
+    await (_db.update(_db.characters)..where((t) => t.charId.equals(id))).write(
+      CharactersCompanion(avatarPath: Value(relativeGlazeFilePath(path))),
+    );
+  }
+
+  @override
+  Future<void> updateGallery(String id, List<GalleryEntry> gallery) async {
+    await (_db.update(_db.characters)..where((t) => t.charId.equals(id))).write(
+      CharactersCompanion(
+        galleryJson: Value(jsonEncode(gallery.map((e) => e.toJson()).toList())),
+      ),
+    );
+  }
+
   /// Writes [characters] in a single batch, so the reactive watchers emit
   /// **one** update instead of one per row.
   ///

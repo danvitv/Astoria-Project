@@ -9,6 +9,7 @@ import 'package:glaze_flutter/core/db/repositories/chat_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/ledger_reconciliation_run_repo.dart';
 import 'package:glaze_flutter/core/models/api_config.dart';
 import 'package:glaze_flutter/core/models/character.dart';
+import 'package:glaze_flutter/core/models/gallery_entry.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/lorebook.dart';
 import 'package:glaze_flutter/core/models/memory_book.dart';
@@ -33,6 +34,7 @@ import 'package:glaze_flutter/features/extensions/models/extension_preset.dart';
 import 'package:glaze_flutter/features/extensions/models/extensions_settings.dart';
 import 'package:glaze_flutter/features/extensions/models/info_block.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path/path.dart' as p;
 
 // ─── In-memory fakes ────────────────────────────────────────────────
 
@@ -48,6 +50,16 @@ class FakeCharacterStore implements SyncCharacterStore {
   @override
   Future<void> put(Character c) async {
     data[c.id] = c;
+  }
+
+  @override
+  Future<void> updateAvatarPath(String id, String path) async {
+    data[id] = data[id]!.copyWith(avatarPath: path);
+  }
+
+  @override
+  Future<void> updateGallery(String id, List<GalleryEntry> gallery) async {
+    data[id] = data[id]!.copyWith(gallery: gallery);
   }
 
   @override
@@ -147,6 +159,11 @@ class FakePersonaStore implements SyncPersonaStore {
   @override
   Future<void> put(Persona p) async {
     data[p.id] = p;
+  }
+
+  @override
+  Future<void> updateAvatarPath(String id, String path) async {
+    data[id] = data[id]!.copyWith(avatarPath: path);
   }
 
   @override
@@ -381,9 +398,19 @@ class FakeStudioPresetStore implements SyncStudioPresetStore {
 
 class FakeImageStore implements SyncImageStore {
   final Map<String, Uint8List> saved = {};
+  final Directory? directory;
+
+  FakeImageStore([this.directory]);
 
   @override
-  String? absolutePath(String? relativePath) => relativePath;
+  String? absolutePath(String? relativePath) {
+    if (relativePath == null ||
+        directory == null ||
+        p.isAbsolute(relativePath)) {
+      return relativePath;
+    }
+    return p.join(directory!.path, relativePath);
+  }
 
   @override
   Future<String> saveBytes(
@@ -394,6 +421,11 @@ class FakeImageStore implements SyncImageStore {
   ) async {
     final key = '$subfolder/$filename.$ext';
     saved[key] = bytes;
+    if (directory != null) {
+      final file = File(absolutePath(key)!);
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(bytes);
+    }
     return key;
   }
 }
@@ -527,6 +559,7 @@ class FakeCloudAdapter implements CloudAdapter {
   final Set<String> listFolderFailures = {};
   bool requireEnsuredParentForUpload = false;
   final uploadFailures = <String>{};
+  final binaryUploadFailures = <String>{};
 
   @override
   Future<bool> isConnected() async => true;
@@ -558,6 +591,9 @@ class FakeCloudAdapter implements CloudAdapter {
   @override
   Future<void> uploadBinary(String path, Uint8List data) async {
     _checkUploadParent(path);
+    if (binaryUploadFailures.contains(path)) {
+      throw Exception('Binary upload failed: $path');
+    }
     files[path] = String.fromCharCodes(data);
   }
 
@@ -575,7 +611,7 @@ class FakeCloudAdapter implements CloudAdapter {
   @override
   Future<Uint8List> downloadBinary(String path) async {
     final data = files[path];
-    if (data == null) throw Exception('File not found: $path');
+    if (data == null) throw CloudFileNotFoundException(path);
     return Uint8List.fromList(data.codeUnits);
   }
 
@@ -643,6 +679,7 @@ class InMemoryManifestProvider implements SyncManifestProvider {
     SyncSessionLorebookOverlayStore? sessionLorebookOverlayStore,
     SyncReconciliationStateStore? reconciliationStateStore,
     SyncRewriteJobHistoryStore? rewriteJobHistoryStore,
+    SyncImageStore? imageStore,
   }) : _builder = SyncManifestBuilder(
          characterRepo: characterRepo,
          chatRepo: chatRepo,
@@ -664,6 +701,7 @@ class InMemoryManifestProvider implements SyncManifestProvider {
          sessionLorebookOverlayStore: sessionLorebookOverlayStore,
          reconciliationStateStore: reconciliationStateStore,
          rewriteJobHistoryStore: rewriteJobHistoryStore,
+         imageStore: imageStore,
        );
 
   @override
@@ -750,6 +788,7 @@ class SyncWorld {
   late final FakeSessionLorebookOverlayStore? sessionLorebookOverlays;
 
   SyncWorld({
+    Directory? imageDirectory,
     FakeReconciliationStateStore? reconciliationStateStore,
     FakeRewriteJobHistoryStore? rewriteJobHistoryStore,
     FakeSessionLorebookOverlayStore? sessionLorebookOverlayStore,
@@ -763,7 +802,7 @@ class SyncWorld {
     memoryBooks = FakeMemoryBookStore();
     lorebooks = FakeLorebookStore();
     embeddings = FakeEmbeddingStore();
-    images = FakeImageStore();
+    images = FakeImageStore(imageDirectory);
     cloud = FakeCloudAdapter();
     uiThemes = FakeThemePresetStore();
     studioConfigs = FakeStudioConfigStore();
@@ -788,6 +827,7 @@ class SyncWorld {
       sessionLorebookOverlayStore: sessionLorebookOverlays,
       reconciliationStateStore: reconciliationStates,
       rewriteJobHistoryStore: rewriteJobHistory,
+      imageStore: images,
     );
   }
 
@@ -3282,6 +3322,199 @@ void main() {
       await tmpDir.delete(recursive: true);
     } catch (_) {}
   });
+
+  test(
+    'Pull retries missing character and persona avatars after a completed sync',
+    () async {
+      final dir = Directory.systemTemp.createTempSync('glaze_sync_retry');
+      try {
+        final world = SyncWorld(imageDirectory: dir);
+        await world.characters.put(makeChar('c1', name: 'Card'));
+        await world.personas.put(const Persona(id: 'p1', name: 'Profile'));
+        world.cloud.files[galleryCloudPath('c1', 'avatar', 'png')] =
+            'character bytes';
+        world.cloud.files[personaAvatarCloudPath('p1', 'png')] =
+            'persona bytes';
+
+        await world.engine.pushEntities(onProgress: (_) {});
+        await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+        expect(world.characters.data['c1']?.avatarPath, 'avatars/c1.png');
+        expect(world.personas.data['p1']?.avatarPath, 'avatars/p1.png');
+
+        await File(p.join(dir.path, 'avatars', 'c1.png')).delete();
+        await File(p.join(dir.path, 'avatars', 'p1.png')).delete();
+        await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+
+        expect(
+          await File(p.join(dir.path, 'avatars', 'c1.png')).readAsString(),
+          'character bytes',
+        );
+        expect(
+          await File(p.join(dir.path, 'avatars', 'p1.png')).readAsString(),
+          'persona bytes',
+        );
+      } finally {
+        await dir.delete(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'Fresh pull restores gallery entries and retries a failed image download',
+    () async {
+      final dir = Directory.systemTemp.createTempSync('glaze_sync_gallery');
+      try {
+        final deviceA = SyncWorld();
+        await deviceA.characters.put(
+          makeChar('c1', name: 'Card').copyWith(
+            gallery: [
+              const GalleryEntry(
+                id: 'photo',
+                characterId: 'c1',
+                imagePath: '/source/device/gallery/photo.webp',
+                label: 'Portrait',
+              ),
+            ],
+          ),
+        );
+        await deviceA.engine.pushEntities(onProgress: (_) {});
+
+        final deviceB = SyncWorld(imageDirectory: dir);
+        deviceB.cloud.files.addAll(deviceA.cloud.files);
+        await deviceB.engine.pullEntities(
+          onProgress: (_) {},
+          onConflict: (_) {},
+        );
+        expect(deviceB.characters.data['c1']?.gallery.single.label, 'Portrait');
+        expect(
+          deviceB.characters.data['c1']?.gallery.single.imagePath,
+          'gallery/c1/photo.webp',
+        );
+
+        deviceB.cloud.files[galleryCloudPath('c1', 'photo', 'webp')] =
+            'gallery bytes';
+        await deviceB.engine.pullEntities(
+          onProgress: (_) {},
+          onConflict: (_) {},
+        );
+        expect(
+          deviceB.characters.data['c1']?.gallery.single.imagePath,
+          'gallery/c1/photo.webp',
+        );
+        expect(
+          await File(
+            p.join(dir.path, 'gallery', 'c1', 'photo.webp'),
+          ).readAsString(),
+          'gallery bytes',
+        );
+      } finally {
+        await dir.delete(recursive: true);
+      }
+    },
+  );
+
+  test('Gallery-only edits change the character manifest hash', () async {
+    final world = SyncWorld();
+    await world.characters.put(makeChar('c1', name: 'Card'));
+    final before = await world.manifestProvider.buildLocalManifest();
+    await world.characters.put(
+      makeChar('c1', name: 'Card').copyWith(
+        gallery: [
+          const GalleryEntry(
+            id: 'photo',
+            characterId: 'c1',
+            imagePath: 'gallery/c1/photo.png',
+          ),
+        ],
+      ),
+    );
+    final after = await world.manifestProvider.buildLocalManifest();
+    expect(
+      after.entries[entryKey('character', 'c1')]?.hash,
+      isNot(before.entries[entryKey('character', 'c1')]?.hash),
+    );
+  });
+
+  test(
+    'Push-first restores missing avatar instead of uploading a missing file',
+    () async {
+      final dir = Directory.systemTemp.createTempSync('glaze_sync_push_retry');
+      try {
+        final world = SyncWorld(imageDirectory: dir);
+        await world.characters.put(
+          makeChar('c1', name: 'Card', avatarPath: 'avatars/c1.png'),
+        );
+        await world.personas.put(
+          const Persona(
+            id: 'p1',
+            name: 'Profile',
+            avatarPath: 'avatars/p1.png',
+          ),
+        );
+        final charFile = File(p.join(dir.path, 'avatars', 'c1.png'));
+        final personaFile = File(p.join(dir.path, 'avatars', 'p1.png'));
+        await charFile.parent.create(recursive: true);
+        await charFile.writeAsString('card pixels');
+        await personaFile.writeAsString('persona pixels');
+        await world.engine.pushEntities(onProgress: (_) {});
+
+        await charFile.delete();
+        await personaFile.delete();
+        await world.engine.pushEntities(onProgress: (_) {});
+
+        expect(await charFile.readAsString(), 'card pixels');
+        expect(await personaFile.readAsString(), 'persona pixels');
+        expect(
+          world.cloud.files[galleryCloudPath('c1', 'avatar', 'png')],
+          'card pixels',
+        );
+        expect(
+          world.cloud.files[personaAvatarCloudPath('p1', 'png')],
+          'persona pixels',
+        );
+      } finally {
+        await dir.delete(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'Binary upload failure does not commit a successful sync manifest',
+    () async {
+      final dir = Directory.systemTemp.createTempSync('glaze_sync_upload');
+      try {
+        final world = SyncWorld(imageDirectory: dir);
+        final image = File(p.join(dir.path, 'avatars', 'p1.png'));
+        await image.parent.create(recursive: true);
+        await image.writeAsString('persona pixels');
+        await world.personas.put(
+          const Persona(
+            id: 'p1',
+            name: 'Profile',
+            avatarPath: 'avatars/p1.png',
+          ),
+        );
+        world.cloud.binaryUploadFailures.add(
+          personaAvatarCloudPath('p1', 'png'),
+        );
+
+        await expectLater(
+          world.engine.pushEntities(onProgress: (_) {}),
+          throwsA(isA<SyncQueueAggregateError>()),
+        );
+        expect(
+          world.cloud.files.containsKey(cloudPath('manifest', 'manifest')),
+          isFalse,
+        );
+        expect(
+          (await world.manifestProvider.readLocalManifest()).entries,
+          isEmpty,
+        );
+      } finally {
+        await dir.delete(recursive: true);
+      }
+    },
+  );
 
   test('Push strips API keys when includeApiKeys is false', () async {
     final world = SyncWorld();

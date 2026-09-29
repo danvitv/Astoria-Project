@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import '../models/api_config.dart';
 import '../models/character.dart';
+import '../models/gallery_entry.dart';
 import '../models/chat_message.dart';
 import '../models/lorebook.dart';
 import '../models/memory_book.dart';
@@ -13,6 +14,8 @@ abstract class SyncCharacterStore {
   Future<List<Character>> getAll();
   Future<Character?> getById(String id);
   Future<void> put(Character c);
+  Future<void> updateAvatarPath(String id, String path);
+  Future<void> updateGallery(String id, List<GalleryEntry> gallery);
   Future<void> delete(String id);
 }
 
@@ -27,6 +30,7 @@ abstract class SyncPersonaStore {
   Future<List<Persona>> getAll();
   Future<Persona?> getById(String id);
   Future<void> put(Persona p);
+  Future<void> updateAvatarPath(String id, String path);
   Future<void> delete(String id);
 }
 

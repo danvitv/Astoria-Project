@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 import 'package:glaze_flutter/core/models/character.dart';
+import 'package:glaze_flutter/core/models/gallery_entry.dart';
 import 'package:glaze_flutter/core/models/persona.dart';
 import 'package:glaze_flutter/core/models/preset.dart';
 import 'package:glaze_flutter/features/cloud_sync/cloud_adapter.dart';
@@ -49,7 +50,8 @@ class FakeAdapter implements CloudAdapter {
   Future<String> download(String path) => throw UnimplementedError('download');
 
   @override
-  Future<void> deleteFile(String path) => throw UnimplementedError('deleteFile');
+  Future<void> deleteFile(String path) =>
+      throw UnimplementedError('deleteFile');
 
   @override
   Future<void> deleteFolder(String path) =>
@@ -91,6 +93,14 @@ class UnusedCharacterStore implements SyncCharacterStore {
   Future<void> put(Character c) => throw UnimplementedError();
 
   @override
+  Future<void> updateAvatarPath(String id, String path) =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> updateGallery(String id, List<GalleryEntry> gallery) =>
+      throw UnimplementedError();
+
+  @override
   Future<void> delete(String id) => throw UnimplementedError();
 }
 
@@ -103,6 +113,10 @@ class UnusedPersonaStore implements SyncPersonaStore {
 
   @override
   Future<void> put(Persona p) => throw UnimplementedError();
+
+  @override
+  Future<void> updateAvatarPath(String id, String path) =>
+      throw UnimplementedError();
 
   @override
   Future<void> delete(String id) => throw UnimplementedError();
@@ -216,9 +230,11 @@ void main() {
 
   group('pullPresetImages', () {
     test('downloads a cover this device does not have yet', () async {
-      adapter.binaries[presetImageCloudPath('p1', 'png')] = Uint8List.fromList(
-        [4, 5, 6],
-      );
+      adapter.binaries[presetImageCloudPath('p1', 'png')] = Uint8List.fromList([
+        4,
+        5,
+        6,
+      ]);
       presets.data['p1'] = const Preset(
         id: 'p1',
         name: 'P1',
@@ -251,9 +267,11 @@ void main() {
       // Another device replaced the image: the version suffix changed, so the
       // old local file no longer satisfies the preset.
       writeCover('avatars/preset_p1_10.png', [1, 2, 3]);
-      adapter.binaries[presetImageCloudPath('p1', 'png')] = Uint8List.fromList(
-        [9, 9, 9],
-      );
+      adapter.binaries[presetImageCloudPath('p1', 'png')] = Uint8List.fromList([
+        9,
+        9,
+        9,
+      ]);
       presets.data['p1'] = const Preset(
         id: 'p1',
         name: 'P1',

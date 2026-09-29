@@ -614,14 +614,24 @@ class SyncManifestBuilder implements SyncManifestProvider {
   /// avatarPath is replaced by _avatarFileSize (platform-neutral) so that
   /// a missing or changed avatar binary triggers a re-push without causing
   /// Android↔Windows false-conflicts from differing absolute paths.
-  /// Gallery is excluded entirely: image paths are device-local, and gallery
-  /// metadata (ids, labels, order) can drift between devices without
-  /// representing a meaningful content change.
+  /// Gallery paths are device-local, but ids, labels and order must be hashed
+  /// so a gallery edit gets pushed even when character text is unchanged.
   Map<String, dynamic> _normalizeForHash(Map<String, dynamic> json) {
     final out = Map<String, dynamic>.from(json);
     final avatarPath = out['avatarPath'] as String?;
     out.remove('avatarPath');
-    out.remove('gallery');
+    final gallery = out.remove('gallery') as List?;
+    if (gallery != null && gallery.isNotEmpty) {
+      out['_gallery'] = [
+        for (final raw in gallery)
+          if (raw is Map<String, dynamic>)
+            {
+              'id': raw['id'],
+              'label': raw['label'],
+              'createdAt': raw['createdAt'],
+            },
+      ];
+    }
     // Include avatar file size so that uploading/deleting the avatar binary
     // changes the hash and triggers a re-push, even when the JSON is unchanged.
     // Using file size (not path) keeps hashes consistent across platforms.

@@ -11,6 +11,7 @@ import 'sync_queue.dart';
 import 'sync_image_stripper.dart';
 import 'sync_serialization.dart';
 import '../../../core/models/character.dart';
+import '../../../core/models/gallery_entry.dart';
 import '../../../core/models/memory_book.dart';
 import '../../../core/models/persona.dart';
 import '../../../core/models/chat_message.dart';
@@ -154,6 +155,9 @@ class SyncEngine {
     } catch (e, st) {
       debugPrint('[sync] cloud manifest download failed: $e\n$st');
       rethrow;
+    }
+    if (cloudManifest != null) {
+      await _repairPreviouslySyncedAvatars(cloudManifest, previousManifest);
     }
     await _mergeCloudReconciliationState(cloudManifest, previousManifest);
     // This aggregate is a union of applied jobs. On a push-first device,
@@ -400,6 +404,9 @@ class SyncEngine {
                 (previousManifest.acceptedLocalHashes[cloudEntry.key] != '' &&
                     await _dependentStateMissing(cloudEntry))),
       )) {
+        if (!cloudEntry.deleted) {
+          await _repairMissingBinaryAssets(cloudEntry);
+        }
         continue;
       }
 
@@ -425,6 +432,9 @@ class SyncEngine {
         cloudManifest,
       )) {
         acceptedCloudEntries.add(cloudEntry);
+        if (!cloudEntry.deleted) {
+          await _repairMissingBinaryAssets(cloudEntry);
+        }
         continue;
       }
 
@@ -529,6 +539,9 @@ class SyncEngine {
                 (previousManifest.acceptedLocalHashes[cloudEntry.key] != '' &&
                     await _dependentStateMissing(cloudEntry))),
       )) {
+        if (!cloudEntry.deleted) {
+          await _repairMissingBinaryAssets(cloudEntry);
+        }
         continue;
       }
       if (cloudEntry.type == 'reconciliation_state' ||
@@ -542,6 +555,9 @@ class SyncEngine {
         cloudManifest,
       )) {
         acceptedCloudEntries.add(cloudEntry);
+        if (!cloudEntry.deleted) {
+          await _repairMissingBinaryAssets(cloudEntry);
+        }
         continue;
       }
       if (SyncConflictDetector.needsConflict(localEntry, cloudEntry)) {
@@ -936,8 +952,71 @@ class SyncEngine {
     if (entry.type == 'chat') {
       final charId = cloudData['characterId'] as String?;
       if (charId != null) {
-        await _binarySyncer.sanitizeInvalidAvatarPath(charId);
-        await _binarySyncer.pullCharacterAvatar(charId);
+        final character = await _characterRepo.getById(charId);
+        if (character != null &&
+            !_binarySyncer.localFileExists(character.avatarPath)) {
+          await _binarySyncer.pullCharacterAvatar(charId);
+        }
+      }
+    }
+  }
+
+  /// Entity hashes cover text and avatar size, not whether a previously synced
+  /// binary is still present on this device. Retry missing assets even when the
+  /// entity itself is already current, without reapplying its cloud JSON.
+  Future<void> _repairMissingBinaryAssets(SyncManifestEntry entry) async {
+    if (entry.type == 'character') {
+      var character = await _characterRepo.getById(entry.id);
+      if (character == null) return;
+      if (!_binarySyncer.localFileExists(character.avatarPath)) {
+        await _binarySyncer.pullCharacterAvatar(entry.id);
+      }
+      if (character.gallery.any(
+        (image) => !_binarySyncer.localFileExists(image.imagePath),
+      )) {
+        await _binarySyncer.pullCharacterGallery(entry.id);
+      }
+    } else if (entry.type == 'persona') {
+      final persona = await _personaRepo.getById(entry.id);
+      if (persona != null &&
+          !_binarySyncer.localFileExists(persona.avatarPath)) {
+        await _binarySyncer.pullPersonaAvatar(entry.id);
+      }
+    } else if (entry.type == 'theme_presets') {
+      await _binarySyncer.pullPresetImages();
+    }
+  }
+
+  /// Restore lost bytes before push-first hashing.
+  /// Only a previously accepted cloud version can supply the old avatar; a
+  /// local change to the avatar path must remain a local change.
+  Future<void> _repairPreviouslySyncedAvatars(
+    SyncManifest cloudManifest,
+    SyncManifest previousManifest,
+  ) async {
+    for (final entry in cloudManifest.entries.values) {
+      if (entry.deleted ||
+          previousManifest.entries[entry.key]?.hash != entry.hash) {
+        continue;
+      }
+      if (entry.type == 'character') {
+        final character = await _characterRepo.getById(entry.id);
+        if (character?.avatarPath != null &&
+            !_binarySyncer.localFileExists(character!.avatarPath)) {
+          final repaired = await _binarySyncer.pullCharacterAvatar(entry.id);
+          if (!repaired) {
+            throw StateError('Missing cloud avatar for character ${entry.id}');
+          }
+        }
+      } else if (entry.type == 'persona') {
+        final persona = await _personaRepo.getById(entry.id);
+        if (persona?.avatarPath != null &&
+            !_binarySyncer.localFileExists(persona!.avatarPath)) {
+          final repaired = await _binarySyncer.pullPersonaAvatar(entry.id);
+          if (!repaired) {
+            throw StateError('Missing cloud avatar for persona ${entry.id}');
+          }
+        }
       }
     }
   }
@@ -1297,9 +1376,8 @@ class SyncEngine {
     }
   }
 
-  /// avatarPath and gallery hold device-local paths; never apply cloud values
-  /// directly — binary assets are synced in [_pullCharacterAvatar] /
-  /// [_pullCharacterGallery].
+  /// Keep local paths, but restore cloud gallery metadata so the binary pull
+  /// knows which gallery image IDs to fetch on a fresh installation.
   Future<void> _applyCloudCharacter(
     String id,
     Map<String, dynamic> data,
@@ -1307,15 +1385,58 @@ class SyncEngine {
     final local = await _characterRepo.getById(id);
     final json = Map<String, dynamic>.from(data);
     json.remove('avatarPath');
-    json.remove('gallery');
+    if (data.containsKey('gallery')) {
+      json['gallery'] = _cloudGallery(id, data).map((e) => e.toJson()).toList();
+    } else {
+      json['gallery'] = local?.gallery.map((e) => e.toJson()).toList() ?? [];
+    }
     var character = Character.fromJson(json);
     if (local != null) {
       character = character.copyWith(
         avatarPath: local.avatarPath,
-        gallery: local.gallery,
+        gallery: data.containsKey('gallery')
+            ? [
+                for (final cloudImage in character.gallery)
+                  local.gallery
+                          .where(
+                            (image) =>
+                                image.id == cloudImage.id &&
+                                _binarySyncer.localFileExists(image.imagePath),
+                          )
+                          .firstOrNull
+                          ?.copyWith(
+                            label: cloudImage.label,
+                            createdAt: cloudImage.createdAt,
+                          ) ??
+                      cloudImage,
+              ]
+            : local.gallery,
       );
     }
     await _characterRepo.put(character);
+  }
+
+  List<GalleryEntry> _cloudGallery(String id, Map<String, dynamic> data) {
+    final gallery = data['gallery'] as List?;
+    if (gallery == null) return [];
+    return [
+      for (final raw in gallery.whereType<Map<String, dynamic>>())
+        if (raw['id'] is String)
+          GalleryEntry.fromJson({
+            ...Map<String, dynamic>.from(raw),
+            // The source path can be absolute on another device. Binary pulls
+            // use the image id, so keep only a portable local placeholder.
+            'imagePath':
+                'gallery/$id/${raw['id']}.${_galleryExtension(raw['imagePath'])}',
+          }),
+    ];
+  }
+
+  String _galleryExtension(Object? path) {
+    final extension = path is String ? path.split('.').last.toLowerCase() : '';
+    return const {'png', 'jpg', 'webp', 'gif'}.contains(extension)
+        ? extension
+        : 'png';
   }
 
   Future<void> _applyCloudPersona(String id, Map<String, dynamic> data) async {

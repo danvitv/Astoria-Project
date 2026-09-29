@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 
 import '../app_db.dart';
 import '../../models/persona.dart';
+import '../../utils/platform_paths.dart';
 import '../../application/sync_repo_interfaces.dart';
 
 class PersonaRepo implements SyncPersonaStore {
@@ -73,6 +74,16 @@ class PersonaRepo implements SyncPersonaStore {
         persona.avatarPath,
         persona.createdAt,
       ],
+    );
+  }
+
+  @override
+  Future<void> updateAvatarPath(String id, String path) async {
+    await _ensureDisplayNameColumn();
+    await (_db.update(
+      _db.personas,
+    )..where((t) => t.personaId.equals(id))).write(
+      PersonasCompanion(avatarPath: Value(relativeGlazeFilePath(path))),
     );
   }
 

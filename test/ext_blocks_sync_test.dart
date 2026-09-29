@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:glaze_flutter/core/models/api_config.dart';
 import 'package:glaze_flutter/core/models/character.dart';
+import 'package:glaze_flutter/core/models/gallery_entry.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/lorebook.dart';
 import 'package:glaze_flutter/core/models/memory_book.dart';
@@ -41,6 +42,16 @@ class FakeCharacterStore implements SyncCharacterStore {
   @override
   Future<void> put(Character c) async {
     data[c.id] = c;
+  }
+
+  @override
+  Future<void> updateAvatarPath(String id, String path) async {
+    data[id] = data[id]!.copyWith(avatarPath: path);
+  }
+
+  @override
+  Future<void> updateGallery(String id, List<GalleryEntry> gallery) async {
+    data[id] = data[id]!.copyWith(gallery: gallery);
   }
 
   @override
@@ -105,6 +116,11 @@ class FakePersonaStore implements SyncPersonaStore {
   @override
   Future<void> put(Persona p) async {
     data[p.id] = p;
+  }
+
+  @override
+  Future<void> updateAvatarPath(String id, String path) async {
+    data[id] = data[id]!.copyWith(avatarPath: path);
   }
 
   @override
@@ -1016,9 +1032,7 @@ void main() {
       final world = SyncWorld();
 
       await world.extensionPresets.put(makeExtPreset('ep1', name: 'My Preset'));
-      await world.extensionsSettings.put(
-        makeSettings(activePresetId: 'ep1'),
-      );
+      await world.extensionsSettings.put(makeSettings(activePresetId: 'ep1'));
       await world.infoBlocks.insert(makeInfoBlock('ib1', 'session1'));
 
       final manifest = await world.manifestProvider.buildLocalManifest();
