@@ -706,10 +706,21 @@ class InMemoryManifestProvider implements SyncManifestProvider {
   }
 
   @override
-  Future<void> clearDeleted() async {}
+  Future<void> clearDeleted() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('gz_sync_deleted_entries');
+  }
 
   @override
-  Future<bool> isDeleted(String type, String id) async => false;
+  Future<bool> isDeleted(String type, String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('gz_sync_deleted_entries');
+    if (raw == null) return false;
+    final entries = jsonDecode(raw) as List;
+    return entries.any(
+      (entry) => entry is Map && entry['type'] == type && entry['id'] == id,
+    );
+  }
 
   @override
   Future<String> getDeviceId() => _builder.getDeviceId();
@@ -1124,6 +1135,201 @@ void main() {
     await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
     expect(world.cloud.downloadCalls, [cloudPath('manifest', 'manifest')]);
   });
+
+  test(
+    'pull restores a deleted chat and its rewrite history together',
+    () async {
+      const sessionId = 'deleted-then-restored-rewrite-session';
+      final sourceHistory = FakeRewriteJobHistoryStore();
+      final source = SyncWorld(rewriteJobHistoryStore: sourceHistory);
+      await source.chats.put(makeChat(sessionId));
+      sourceHistory.data[sessionId] = fakeRewriteHistory(sessionId, [
+        'applied-job',
+      ]);
+      await source.engine.pushEntities(onProgress: (_) {});
+
+      final targetHistory = FakeRewriteJobHistoryStore();
+      final target = SyncWorld(rewriteJobHistoryStore: targetHistory);
+      target.cloud.files.addAll(source.cloud.files);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'gz_sync_deleted_entries',
+        jsonEncode([
+          {'type': 'chat', 'id': sessionId},
+        ]),
+      );
+      expect(
+        await target.manifestProvider.isDeleted('chat', sessionId),
+        isTrue,
+      );
+
+      await target.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+
+      expect(target.chats.data, contains(sessionId));
+      expect((targetHistory.data[sessionId]!['jobs'] as List), hasLength(1));
+      expect(
+        await target.manifestProvider.isDeleted('chat', sessionId),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'pull restores previously accepted reconciliation after chat deletion',
+    () async {
+      const sessionId = 'deleted-then-restored-reconciliation-session';
+      final state = FakeReconciliationStateStore();
+      final world = SyncWorld(reconciliationStateStore: state);
+      await world.chats.put(makeChat(sessionId));
+      final payload = <String, dynamic>{
+        'runs': [
+          {'id': 'accepted-run', 'ordinal': 1},
+        ],
+        'collectors': <dynamic>[],
+      };
+      state.data[sessionId] = payload;
+      await world.engine.pushEntities(onProgress: (_) {});
+      await world.chats.delete(sessionId);
+      state.data.remove(sessionId);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'gz_sync_deleted_entries',
+        jsonEncode([
+          {'type': 'chat', 'id': sessionId},
+        ]),
+      );
+
+      await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+
+      expect(world.chats.data, contains(sessionId));
+      expect(state.data[sessionId], payload);
+      expect(
+        await world.manifestProvider.isDeleted('chat', sessionId),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'pull repairs reconciliation missing after an earlier chat restoration',
+    () async {
+      const sessionId = 'previously-skipped-reconciliation-session';
+      final state = FakeReconciliationStateStore();
+      final world = SyncWorld(reconciliationStateStore: state);
+      await world.chats.put(makeChat(sessionId));
+      final payload = <String, dynamic>{
+        'runs': [
+          {'id': 'cloud-run', 'ordinal': 1},
+        ],
+        'collectors': <dynamic>[],
+      };
+      state.data[sessionId] = payload;
+      await world.engine.pushEntities(onProgress: (_) {});
+      state.data.remove(sessionId);
+
+      await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+
+      expect(state.data[sessionId], payload);
+      final repaired = await world.manifestProvider.readLocalManifest();
+      expect(
+        repaired.acceptedLocalHashes,
+        isNot(contains(entryKey('reconciliation_state', sessionId))),
+      );
+    },
+  );
+
+  test(
+    'push repairs reconciliation missing after an earlier chat restoration',
+    () async {
+      const sessionId = 'push-repairs-previously-skipped-state';
+      final state = FakeReconciliationStateStore();
+      final world = SyncWorld(reconciliationStateStore: state);
+      await world.chats.put(makeChat(sessionId));
+      final payload = <String, dynamic>{
+        'runs': [
+          {'id': 'cloud-run', 'ordinal': 1},
+        ],
+        'collectors': <dynamic>[],
+      };
+      state.data[sessionId] = payload;
+      await world.engine.pushEntities(onProgress: (_) {});
+      state.data.remove(sessionId);
+
+      await world.engine.pushEntities(onProgress: (_) {});
+
+      expect(state.data[sessionId], payload);
+      final cloudManifest = SyncManifest.fromJson(
+        jsonDecode(world.cloud.files[cloudPath('manifest', 'manifest')]!)
+            as Map<String, dynamic>,
+      );
+      expect(
+        cloudManifest
+            .entries[entryKey('reconciliation_state', sessionId)]
+            ?.hash,
+        SyncSerialization.computeSyncHash(payload),
+      );
+    },
+  );
+
+  test(
+    'pull restores previously accepted lorebook overlays after chat deletion',
+    () async {
+      const sessionId = 'deleted-then-restored-overlay-session';
+      final overlays = FakeSessionLorebookOverlayStore();
+      final world = SyncWorld(sessionLorebookOverlayStore: overlays);
+      await world.chats.put(makeChat(sessionId));
+      final payload = <String, dynamic>{
+        '__sessionLorebookOverlays': true,
+        'schemaVersion': 1,
+        'sessionId': sessionId,
+        'overlays': <dynamic>[],
+      };
+      overlays.data[sessionId] = payload;
+      await world.engine.pushEntities(onProgress: (_) {});
+      await world.chats.delete(sessionId);
+      overlays.data.remove(sessionId);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'gz_sync_deleted_entries',
+        jsonEncode([
+          {'type': 'chat', 'id': sessionId},
+        ]),
+      );
+
+      await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+
+      expect(world.chats.data, contains(sessionId));
+      expect(overlays.data[sessionId], payload);
+      final repaired = await world.manifestProvider.readLocalManifest();
+      expect(
+        repaired.acceptedLocalHashes,
+        isNot(contains(entryKey('session_lorebook_overlays', sessionId))),
+      );
+    },
+  );
+
+  test(
+    'pull repairs lorebook overlays missing after an earlier chat restoration',
+    () async {
+      const sessionId = 'previously-skipped-overlay-session';
+      final overlays = FakeSessionLorebookOverlayStore();
+      final world = SyncWorld(sessionLorebookOverlayStore: overlays);
+      await world.chats.put(makeChat(sessionId));
+      final payload = <String, dynamic>{
+        '__sessionLorebookOverlays': true,
+        'schemaVersion': 1,
+        'sessionId': sessionId,
+        'overlays': <dynamic>[],
+      };
+      overlays.data[sessionId] = payload;
+      await world.engine.pushEntities(onProgress: (_) {});
+      overlays.data.remove(sessionId);
+
+      await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+
+      expect(overlays.data[sessionId], payload);
+    },
+  );
 
   test('push-first unions cloud and local rewrite history', () async {
     const sessionId = 'rewrite-union-session';
@@ -1560,6 +1766,8 @@ void main() {
       );
 
       await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+      final accepted = await world.manifestProvider.readLocalManifest();
+      expect(accepted.acceptedLocalHashes[entry.key], '');
       final progress = <SyncProgress>[];
       await world.engine.pullEntities(
         onProgress: progress.add,
@@ -1715,6 +1923,7 @@ void main() {
       createdAt: 1,
       lastSync: 1000,
       entries: {stateEntry.key: stateEntry},
+      acceptedLocalHashes: {stateEntry.key: ''},
     );
     await world.manifestProvider.writeLocalManifest(cloudManifest);
     world.cloud.files[stateEntry.path] = jsonEncode(payload);

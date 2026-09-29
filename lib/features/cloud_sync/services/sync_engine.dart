@@ -378,10 +378,11 @@ class SyncEngine {
         if (_rewriteJobHistoryStore == null || cloudEntry.deleted) continue;
         final chatEntry =
             cloudManifest.entries[entryKey('chat', cloudEntry.id)];
-        if (chatEntry == null ||
-            chatEntry.deleted ||
-            await _manifestBuilder.isDeleted('chat', cloudEntry.id)) {
-          // The owning chat is absent or deleted; don't import an orphan.
+        if (chatEntry == null || chatEntry.deleted) {
+          // The owning cloud chat is absent or deleted; don't import an orphan.
+          // A local deletion marker does not apply here: this pull can restore
+          // the chat before the ordered rewrite-history import. The marker is
+          // cleared only after the pull finishes.
           continue;
         }
       }
@@ -392,6 +393,12 @@ class SyncEngine {
         cloudEntry,
         localEntry,
         previouslyAccepted,
+        ignorePreviouslyAccepted:
+            (cloudEntry.type == 'reconciliation_state' ||
+                cloudEntry.type == 'session_lorebook_overlays') &&
+            (await _manifestBuilder.isDeleted('chat', cloudEntry.id) ||
+                (previousManifest.acceptedLocalHashes[cloudEntry.key] != '' &&
+                    await _dependentStateMissing(cloudEntry))),
       )) {
         continue;
       }
@@ -505,9 +512,7 @@ class SyncEngine {
         if (_rewriteJobHistoryStore == null || cloudEntry.deleted) continue;
         final chatEntry =
             cloudManifest.entries[entryKey('chat', cloudEntry.id)];
-        if (chatEntry == null ||
-            chatEntry.deleted ||
-            await _manifestBuilder.isDeleted('chat', cloudEntry.id)) {
+        if (chatEntry == null || chatEntry.deleted) {
           continue;
         }
       }
@@ -517,6 +522,12 @@ class SyncEngine {
         cloudEntry,
         localEntry,
         previouslyAccepted,
+        ignorePreviouslyAccepted:
+            (cloudEntry.type == 'reconciliation_state' ||
+                cloudEntry.type == 'session_lorebook_overlays') &&
+            (await _manifestBuilder.isDeleted('chat', cloudEntry.id) ||
+                (previousManifest.acceptedLocalHashes[cloudEntry.key] != '' &&
+                    await _dependentStateMissing(cloudEntry))),
       )) {
         continue;
       }
@@ -707,9 +718,16 @@ class SyncEngine {
     for (final accepted in localManifest.acceptedLocalHashes.entries) {
       final rebuiltEntry = rebuilt.entries[accepted.key];
       final baselineEntry = localManifest.entries[accepted.key];
-      if (rebuiltEntry == null ||
-          baselineEntry == null ||
-          rebuiltEntry.hash != accepted.value) {
+      if (baselineEntry == null) continue;
+      final explicitlyAcceptedEmpty =
+          accepted.value.isEmpty &&
+          (baselineEntry.type == 'reconciliation_state' ||
+              baselineEntry.type == 'session_lorebook_overlays');
+      if ((explicitlyAcceptedEmpty &&
+              await _manifestBuilder.isDeleted('chat', baselineEntry.id)) ||
+          (rebuiltEntry == null
+              ? !explicitlyAcceptedEmpty
+              : rebuiltEntry.hash != accepted.value)) {
         continue;
       }
       entries[accepted.key] = baselineEntry;
@@ -718,10 +736,15 @@ class SyncEngine {
     for (final entry in acceptedCloudEntries) {
       final rebuiltEntry = rebuilt.entries[entry.key];
       entries[entry.key] = entry;
-      if (rebuiltEntry != null && rebuiltEntry.hash != entry.hash) {
-        acceptedLocalHashes[entry.key] = rebuiltEntry.hash;
-      } else {
+      if (rebuiltEntry != null && rebuiltEntry.hash == entry.hash) {
         acceptedLocalHashes.remove(entry.key);
+      } else if (rebuiltEntry != null ||
+          entry.type == 'reconciliation_state' ||
+          entry.type == 'session_lorebook_overlays') {
+        // An empty normalized result has no local row to hash. Record that
+        // explicitly so a later deletion can be distinguished from a state
+        // that was accepted but intentionally normalized to nothing.
+        acceptedLocalHashes[entry.key] = rebuiltEntry?.hash ?? '';
       }
     }
     await _manifestBuilder.writeLocalManifest(
@@ -740,16 +763,31 @@ class SyncEngine {
   bool _isAlreadyCurrentOrAccepted(
     SyncManifestEntry cloudEntry,
     SyncManifestEntry? localEntry,
-    SyncManifestEntry? previouslyAccepted,
-  ) {
+    SyncManifestEntry? previouslyAccepted, {
+    bool ignorePreviouslyAccepted = false,
+  }) {
     if (cloudEntry.hash == localEntry?.hash &&
         cloudEntry.deleted == localEntry?.deleted) {
       return true;
     }
-    return (cloudEntry.type == 'reconciliation_state' ||
+    return !ignorePreviouslyAccepted &&
+        (cloudEntry.type == 'reconciliation_state' ||
             cloudEntry.type == 'session_lorebook_overlays') &&
         cloudEntry.hash == previouslyAccepted?.hash &&
         cloudEntry.deleted == previouslyAccepted?.deleted;
+  }
+
+  Future<bool> _dependentStateMissing(SyncManifestEntry entry) async {
+    switch (entry.type) {
+      case 'reconciliation_state':
+        return await _reconciliationStateStore?.getBySessionId(entry.id) ==
+            null;
+      case 'session_lorebook_overlays':
+        return await _sessionLorebookOverlayStore?.getBySessionId(entry.id) ==
+            null;
+      default:
+        return false;
+    }
   }
 
   Future<SyncManifest?> _downloadCloudManifest() async {
@@ -1549,7 +1587,10 @@ class SyncEngine {
       final previouslyAccepted = previousManifest.entries[entry.key];
       if (previouslyAccepted != null &&
           !previouslyAccepted.deleted &&
-          previouslyAccepted.hash == entry.hash) {
+          previouslyAccepted.hash == entry.hash &&
+          (await store.getBySessionId(entry.id) != null ||
+              previousManifest.acceptedLocalHashes[entry.key] == '') &&
+          !await _manifestBuilder.isDeleted('chat', entry.id)) {
         continue;
       }
       if (await _manifestBuilder.isDeleted(entry.type, entry.id) ||

@@ -455,6 +455,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
         if (cloudEntry == null ||
             cloudEntry.deleted ||
             cloudEntry.hash != previousEntry.hash ||
+            !previous.acceptedLocalHashes.containsKey(previousEntry.key) ||
             await isDeleted(previousEntry.type, previousEntry.id) ||
             await isDeleted('chat', previousEntry.id)) {
           continue;
@@ -500,6 +501,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
         if (cloudEntry == null ||
             cloudEntry.deleted ||
             cloudEntry.hash != previousEntry.hash ||
+            !previous.acceptedLocalHashes.containsKey(previousEntry.key) ||
             await isDeleted(previousEntry.type, previousEntry.id) ||
             await isDeleted('chat', previousEntry.id)) {
           continue;
