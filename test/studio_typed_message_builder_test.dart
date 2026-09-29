@@ -430,6 +430,29 @@ void main() {
       '<thinking>\nInstruction says return <thinking>...</thinking>.\n'
       'CONTINUITY CONSTRAINTS:\nCompleted analysis.\n</thinking>',
     );
+    expect(
+      StudioAgentExecutor.normalizeThinkingPrefill(
+        'Previous prompt mentioned <thinking>legacy</thinking>.\n'
+        '<audit>Current analysis\nNext step</audit>',
+      ),
+      '<thinking>\nCurrent analysis\nNext step\n</thinking>',
+    );
+    expect(
+      StudioAgentExecutor.normalizeThinkingPrefill(
+        '<thinking>Old prompt quoted <audit>example</audit>.\n'
+        'Actual legacy analysis</thinking>',
+      ),
+      '<thinking>\nOld prompt quoted <audit>example</audit>.\n'
+      'Actual legacy analysis\n</thinking>',
+    );
+    expect(
+      StudioAgentExecutor.normalizeThinkingPrefill(
+        '<audit>New prompt quoted <thinking>example</thinking>.\n'
+        'Actual analysis</audit>',
+      ),
+      '<thinking>\nNew prompt quoted <thinking>example</thinking>.\n'
+      'Actual analysis\n</thinking>',
+    );
   });
 
   test(
@@ -604,7 +627,7 @@ void main() {
     'Think controller passes provider reasoning separately from its block',
     () async {
       final runner = _CapturingAgentRunner()
-        ..text = '<thinking>Completed audit</thinking>'
+        ..text = '<audit>Completed audit</audit>'
         ..reasoning = 'Controller native reasoning';
       final updates = <String>[];
       final result =
@@ -635,9 +658,9 @@ void main() {
           );
 
       expect(result.status, 'ok');
-      expect(result.text, '<thinking>Completed audit</thinking>');
+      expect(result.text, '<audit>Completed audit</audit>');
       expect(result.nativeReasoning, 'Controller native reasoning');
-      expect(updates, ['<thinking>Completed audit</thinking>']);
+      expect(updates, ['<audit>Completed audit</audit>']);
     },
   );
 
@@ -757,7 +780,9 @@ void main() {
           ),
           StudioPresetBlock(
             id: 'think-template',
-            content: 'Audit according to the template',
+            content:
+                '<thinking_rules>Audit according to the template. '
+                'Return <thinking>analysis</thinking>.</thinking_rules>',
             injectionPoint: 'specificAgent',
             targetAgentId: 'think',
             role: 'assistant',
@@ -808,7 +833,7 @@ void main() {
           'Typed character card',
           'First',
           'Second',
-          'Audit according to the template',
+          contains('Audit according to the template'),
         ]),
       );
       expect(
@@ -819,8 +844,15 @@ void main() {
         contents.join('\n'),
         isNot(contains('Final-answer-only synthetic tool tail')),
       );
+      expect(contents.join('\n'), contains('<audit_rules>'));
+      expect(contents.join('\n'), contains('<audit>analysis</audit>'));
+      expect(contents.join('\n'), isNot(contains('<thinking>')));
+      expect(
+        preset.blocks.last.content,
+        contains('<thinking>analysis</thinking>'),
+      );
       expect(runner.capturedMessages!.any((m) => m['role'] == 'tool'), isFalse);
-      expect(contents.last, contains('Return only the completed <thinking>'));
+      expect(contents.last, contains('Return only the completed <audit>'));
       expect(result.isThinkReplacement, isTrue);
     },
   );

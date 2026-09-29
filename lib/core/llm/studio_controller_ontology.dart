@@ -165,20 +165,20 @@ class StudioControllerOntology {
       name: 'Think / Reasoning Controller',
       purpose:
           'Produce the full pre-response reasoning for the turn as a single '
-          '<thinking> block, then hand it to the Main Writer as completed '
+          '<audit> block, then hand it to the Main Writer as completed '
           'analysis. Used when a preset opts into think-replacement: this '
           'controller runs alone (outside the batch) and its output is seeded '
           'back as the final generator\'s prior reasoning.',
       outputContract:
-          'At chat time, output ONLY the block between <thinking> and '
-          '</thinking>, nothing else. Fill every section of the assigned '
-          'thinking template with content grounded in the current scene.',
+          'At chat time, output ONLY one <audit>...</audit> block, nothing '
+          'else. Fill every section of the assigned audit template with '
+          'content grounded in the current scene.',
       laneOwns:
           'the complete pre-response reasoning pass: scene analysis, character '
           'intent, continuity, style decisions, and the final response plan.',
       laneSkip:
           'the visible RP prose itself — that is the Main Writer\'s job, '
-          'driven by this thinking block.',
+          'driven by this audit.',
       refreshPolicy: 'turn',
       temperature: 0.3,
       maxTokens: 6000,

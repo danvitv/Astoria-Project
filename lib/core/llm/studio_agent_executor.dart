@@ -462,7 +462,11 @@ class StudioAgentExecutor {
     var body = value.trim();
     body = body.replaceFirst(RegExp(r'^```(?:\w+)?\s*'), '');
     body = body.replaceFirst(RegExp(r'\s*```$'), '');
-    for (final tag in const ['thinking', 'audit']) {
+    // Use the outermost closing delimiter: an audit can quote an old thinking
+    // block, and an older thinking block can quote a sample audit.
+    var closingEnd = -1;
+    String? extracted;
+    for (final tag in const ['audit', 'thinking']) {
       final opening = RegExp(
         '<$tag\\b[^>]*>',
         caseSensitive: false,
@@ -472,14 +476,17 @@ class StudioAgentExecutor {
         '</$tag\\s*>',
         caseSensitive: false,
       ).allMatches(body);
-      final closing = closings.where((match) => match.start >= opening.end).lastOrNull;
-      if (closing != null) {
+      final closing = closings
+          .where((match) => match.start >= opening.end)
+          .lastOrNull;
+      if (closing != null && closing.end > closingEnd) {
         // Controller prose may quote the closing tag while paraphrasing an
         // instruction. The final closing tag still delimits the outer block.
-        body = body.substring(opening.end, closing.start).trim();
-        break;
+        extracted = body.substring(opening.end, closing.start).trim();
+        closingEnd = closing.end;
       }
     }
+    body = extracted ?? body;
     return '<thinking>\n$body\n</thinking>';
   }
 

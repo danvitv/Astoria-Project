@@ -437,7 +437,7 @@ class StudioMessageBuilder {
 
   /// The Think controller audits the same active preset, context slots and
   /// history window as the final writer. Its own addressed instructions come
-  /// last, so they can request a `<thinking>` block rather than visible prose.
+  /// last, so they can request an `<audit>` block rather than visible prose.
   List<Map<String, dynamic>> buildThinkControllerMessages({
     required StudioAgent agent,
     required StudioAgent finalAgent,
@@ -464,11 +464,25 @@ class StudioMessageBuilder {
     if (thinkAgentId == null) {
       throw StateError('Think controller has no Studio lane.');
     }
-    final thinkBlocks = studioPreset.blocks.where(
-      (block) =>
-          block.injectionPoint == 'specificAgent' &&
-          block.targetAgentId == thinkAgentId,
-    );
+    final thinkBlocks = studioPreset.blocks
+        .where(
+          (block) =>
+              block.injectionPoint == 'specificAgent' &&
+              block.targetAgentId == thinkAgentId,
+        )
+        .map(
+          (block) => block.type == StudioBlockType.instruction
+              ? block.copyWith(
+                  content: block.content.replaceAllMapped(
+                    RegExp(
+                      r'<(/?)thinking(?=[\s>/]|_rules\s*>)',
+                      caseSensitive: false,
+                    ),
+                    (match) => '<${match.group(1)}audit',
+                  ),
+                )
+              : block,
+        );
     messages.addAll(
       buildAgentMessages(
         agent: agent,
@@ -484,7 +498,7 @@ class StudioMessageBuilder {
       'role': 'user',
       'content':
           'Audit the scene using the complete preset and context above. '
-          'Return only the completed <thinking>...</thinking> block. '
+          'Return only the completed <audit>...</audit> block. '
           'Do not write the final roleplay response.',
     });
     return messages;

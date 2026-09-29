@@ -262,7 +262,7 @@ void main() {
       containsAllInOrder([
         contains('Final preset context'),
         contains('Think template'),
-        contains('Return only the completed <thinking>'),
+        contains('Return only the completed <audit>'),
       ]),
     );
     expect(controller.rawRequest?['messageCount'], controller.messages.length);
