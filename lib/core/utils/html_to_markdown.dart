@@ -25,14 +25,6 @@ String htmlToMarkdown(String html) {
   result = _convertColoredFont(result);
   result = _convertBackgroundImages(result);
 
-  result = result.replaceAllMapped(
-    RegExp(r'<h([1-6])[^>]*>(.*?)</h\1>', caseSensitive: false, dotAll: true),
-    (m) => '\n${'#' * int.parse(m[1]!)} ${_inline(m[2]!)}\n',
-  );
-
-  result = _convertInline(result, 'strong', '**');
-  result = _convertInline(result, 'b', '**');
-
   result = _extractStyledImageFrames(result);
 
   result = result.replaceAllMapped(
@@ -57,6 +49,23 @@ String htmlToMarkdown(String html) {
     RegExp(r'''<a[^>]*href=["']([^"']*)["'][^>]*>(.*?)</a>''', caseSensitive: false, dotAll: true),
     (m) => '[${_inline(m[2]!)}](${m[1]!})',
   );
+
+  // Convert images before headings: _inline strips HTML tags, so an <img>
+  // nested inside <h3> would otherwise disappear before image conversion.
+  result = result.replaceAllMapped(
+    RegExp(r'<h([1-6])[^>]*>(.*?)</h\1>', caseSensitive: false, dotAll: true),
+    (m) {
+      final inner = _inline(m[2]!);
+      if (RegExp(r'^\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)$').hasMatch(inner) ||
+          RegExp(r'^!\[[^\]]*\]\([^)]*\)$').hasMatch(inner)) {
+        return '\n$inner\n';
+      }
+      return '\n${'#' * int.parse(m[1]!)} $inner\n';
+    },
+  );
+
+  result = _convertInline(result, 'strong', '**');
+  result = _convertInline(result, 'b', '**');
 
   result = result.replaceAllMapped(
     RegExp(r'<p([^>]*)>(.*?)</p>', caseSensitive: false, dotAll: true),

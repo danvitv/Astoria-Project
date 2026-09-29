@@ -18,6 +18,22 @@ void main() {
       );
     });
 
+    test('image nested in an HTML heading remains a standalone image', () {
+      const url = 'https://ella.janitorai.com/media-approved/example.webp';
+      expect(
+        htmlToMarkdown('<h3><img src="$url"></h3>'),
+        '![]($url)',
+      );
+    });
+
+    test('linked image nested in a heading keeps its image and link', () {
+      const url = 'https://ella.janitorai.com/media-approved/example.webp';
+      expect(
+        htmlToMarkdown('<h3><a href="https://example.org"><img src="$url"></a></h3>'),
+        '[![]($url)](https://example.org)',
+      );
+    });
+
     test('spoiler: colour span wrapping bg mark → single ==bg:== marker', () {
       const html =
           '<span style="color: rgb(153, 153, 153);">'
