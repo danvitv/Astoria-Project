@@ -1768,6 +1768,67 @@ void main() {
     },
   );
 
+  for (final operation in ['pull', 'pending pull', 'push']) {
+    test(
+      '$operation retries reconciliation accepted by the old importer',
+      () async {
+        const sessionId = 'partially-restored-session';
+        final states = FakeReconciliationStateStore()..discardCollectors = true;
+        final world = SyncWorld(reconciliationStateStore: states);
+        await world.chats.put(makeChat(sessionId, charId: 'character'));
+        final payload = <String, dynamic>{
+          'runs': [
+            {'id': 'cloud-run', 'ordinal': 1},
+          ],
+          'collectors': [
+            {'id': 'cloud-collector'},
+          ],
+        };
+        final entry = SyncManifestEntry(
+          type: 'reconciliation_state',
+          id: sessionId,
+          path: cloudPath('reconciliation_state', sessionId),
+          updatedAt: 1000,
+          hash: SyncSerialization.computeSyncHash(payload),
+        );
+        final manifest = SyncManifest(
+          deviceId: 'cloud-device',
+          createdAt: 1,
+          lastSync: 1000,
+          entries: {entry.key: entry},
+        );
+        world.cloud.files[entry.path] = jsonEncode(payload);
+        world.cloud.files[cloudPath('manifest', 'manifest')] = jsonEncode(
+          manifest.toJson(),
+        );
+        await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+        final accepted = await world.manifestProvider.readLocalManifest();
+        expect(accepted.acceptedLocalHashes[entry.key], isNotEmpty);
+        await world.manifestProvider.writeLocalManifest(
+          accepted.copyWith(version: 15),
+        );
+        states.discardCollectors = false;
+
+        Future<void> sync() => switch (operation) {
+          'push' => world.engine.pushEntities(onProgress: (_) {}),
+          'pending pull' => world.engine.applyPendingPull(onProgress: (_) {}),
+          _ => world.engine.pullEntities(
+            onProgress: (_) {},
+            onConflict: (_) {},
+          ),
+        };
+        await sync();
+
+        expect(states.data[sessionId]!['collectors'], payload['collectors']);
+        final repaired = await world.manifestProvider.readLocalManifest();
+        expect(repaired.version, SyncManifest.currentVersion);
+        world.cloud.downloadCalls.clear();
+        await sync();
+        expect(world.cloud.downloadCalls, isNot(contains(entry.path)));
+      },
+    );
+  }
+
   test(
     'reconciliation state normalized to empty does not repeat on next pull',
     () async {
@@ -3471,6 +3532,127 @@ void main() {
         expect(
           world.cloud.files[personaAvatarCloudPath('p1', 'png')],
           'persona pixels',
+        );
+      } finally {
+        await dir.delete(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'Push-first continues when both local and cloud avatars are missing',
+    () async {
+      final dir = Directory.systemTemp.createTempSync(
+        'glaze_sync_missing_both',
+      );
+      try {
+        final world = SyncWorld(imageDirectory: dir);
+        await world.characters.put(
+          makeChar('c1', name: 'Card', avatarPath: 'avatars/c1.png'),
+        );
+        await world.personas.put(
+          const Persona(
+            id: 'p1',
+            name: 'Profile',
+            avatarPath: 'avatars/p1.png',
+          ),
+        );
+        final cardFile = File(p.join(dir.path, 'avatars', 'c1.png'));
+        final personaFile = File(p.join(dir.path, 'avatars', 'p1.png'));
+        await cardFile.parent.create(recursive: true);
+        await cardFile.writeAsString('card pixels');
+        await personaFile.writeAsString('persona pixels');
+        await world.engine.pushEntities(onProgress: (_) {});
+
+        final manifestPath = cloudPath('manifest', 'manifest');
+        final characterPath = cloudPath('character', 'c1');
+        final personaPath = cloudPath('persona', 'p1');
+        final originalManifest = SyncManifest.fromJson(
+          jsonDecode(world.cloud.files[manifestPath]!) as Map<String, dynamic>,
+        );
+        final originalCharacter = world.cloud.files[characterPath];
+        final originalPersona = world.cloud.files[personaPath];
+        await cardFile.delete();
+        await personaFile.delete();
+        world.cloud.files.remove(galleryCloudPath('c1', 'avatar', 'png'));
+        world.cloud.files.remove(personaAvatarCloudPath('p1', 'png'));
+        await world.characters.put(makeChar('c2', name: 'New card'));
+
+        await world.engine.pushEntities(onProgress: (_) {});
+        final pushedManifest = SyncManifest.fromJson(
+          jsonDecode(world.cloud.files[manifestPath]!) as Map<String, dynamic>,
+        );
+        for (final key in [
+          entryKey('character', 'c1'),
+          entryKey('persona', 'p1'),
+        ]) {
+          expect(
+            pushedManifest.entries[key]?.hash,
+            originalManifest.entries[key]?.hash,
+          );
+        }
+        expect(world.cloud.files[characterPath], originalCharacter);
+        expect(world.cloud.files[personaPath], originalPersona);
+        expect(world.cloud.files[cloudPath('character', 'c2')], isNotNull);
+
+        final conflicts = <SyncConflict>[];
+        await world.engine.pullEntities(
+          onProgress: (_) {},
+          onConflict: conflicts.add,
+        );
+        expect(conflicts, isEmpty);
+        expect(world.characters.data['c1']?.avatarPath, 'avatars/c1.png');
+        expect(world.personas.data['p1']?.avatarPath, 'avatars/p1.png');
+        await world.engine.pushEntities(onProgress: (_) {});
+        expect(world.cloud.files[characterPath], originalCharacter);
+        expect(world.cloud.files[personaPath], originalPersona);
+
+        // A later backup/upload can supply the bytes without forcing an
+        // unrelated character/persona edit to be accepted or discarded.
+        world.cloud.files[galleryCloudPath('c1', 'avatar', 'png')] =
+            'restored card pixels';
+        world.cloud.files[personaAvatarCloudPath('p1', 'png')] =
+            'restored persona pixels';
+        await world.engine.pushEntities(onProgress: (_) {});
+        expect(await cardFile.readAsString(), 'restored card pixels');
+        expect(await personaFile.readAsString(), 'restored persona pixels');
+      } finally {
+        await dir.delete(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'A real card edit still pushes when its old avatar is missing',
+    () async {
+      final dir = Directory.systemTemp.createTempSync('glaze_sync_avatar_edit');
+      try {
+        final world = SyncWorld(imageDirectory: dir);
+        await world.characters.put(
+          makeChar('c1', name: 'Before', avatarPath: 'avatars/c1.png'),
+        );
+        final image = File(p.join(dir.path, 'avatars', 'c1.png'));
+        await image.parent.create(recursive: true);
+        await image.writeAsString('image bytes');
+        await world.engine.pushEntities(onProgress: (_) {});
+        final original = await world.manifestProvider.readLocalManifest();
+
+        await image.delete();
+        world.cloud.files.remove(galleryCloudPath('c1', 'avatar', 'png'));
+        await world.characters.put(
+          makeChar('c1', name: 'After', avatarPath: 'avatars/c1.png'),
+        );
+        await world.engine.pushEntities(onProgress: (_) {});
+
+        expect(
+          (jsonDecode(world.cloud.files[cloudPath('character', 'c1')]!)
+              as Map<String, dynamic>)['name'],
+          'After',
+        );
+        final manifest = await world.manifestProvider.readLocalManifest();
+        expect(
+          manifest.entries[entryKey('character', 'c1')]?.hash,
+          isNot(original.entries[entryKey('character', 'c1')]?.hash),
         );
       } finally {
         await dir.delete(recursive: true);

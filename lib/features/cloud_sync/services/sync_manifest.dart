@@ -545,6 +545,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
     final acceptedLocalHashes = <String, String>{};
     if (applyAcceptedHashes) {
       for (final accepted in previous.acceptedLocalHashes.entries) {
+        if (previous.needsReconciliationRestore(accepted.key)) continue;
         final entry = entries[accepted.key];
         final previousEntry = previous.entries[accepted.key];
         if (entry == null ||

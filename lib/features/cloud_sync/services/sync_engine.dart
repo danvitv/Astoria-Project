@@ -156,17 +156,54 @@ class SyncEngine {
       debugPrint('[sync] cloud manifest download failed: $e\n$st');
       rethrow;
     }
-    if (cloudManifest != null) {
-      await _repairPreviouslySyncedAvatars(cloudManifest, previousManifest);
-    }
+    final missingAvatarKeys = cloudManifest == null
+        ? <String>{}
+        : await _repairPreviouslySyncedAvatars(cloudManifest, previousManifest);
     await _mergeCloudReconciliationState(cloudManifest, previousManifest);
     // This aggregate is a union of applied jobs. On a push-first device,
     // merge any cloud-only history before computing the final manifest; a
     // local prefix must not replace a longer cloud history.
     await _mergeCloudRewriteJobHistory(cloudManifest);
-    final localManifest = await _manifestBuilder.buildLocalManifest(
+    var localManifest = await _manifestBuilder.buildLocalManifest(
       cloudManifest: cloudManifest,
     );
+    if (missingAvatarKeys.isNotEmpty) {
+      // A vanished local file cannot be uploaded, and a vanished cloud file
+      // cannot be restored. Keep the last cloud entity instead of publishing a
+      // new hash that falsely represents the missing bytes as an avatar edit.
+      final entries = Map<String, SyncManifestEntry>.from(
+        localManifest.entries,
+      );
+      final accepted = Map<String, String>.from(
+        localManifest.acceptedLocalHashes,
+      );
+      for (final key in missingAvatarKeys) {
+        final cloudEntry = cloudManifest!.entries[key]!;
+        final localEntry = entries[key];
+        if (localEntry == null || localEntry.deleted) continue;
+        final localData = await _readLocalEntity(
+          cloudEntry.type,
+          cloudEntry.id,
+        );
+        final cloudData = await SyncSerialization.readRequiredCloudEntity(
+          _adapter,
+          cloudEntry,
+        );
+        if (localData != null &&
+            _sameEntityWithoutImagePaths(localData, cloudData)) {
+          entries[key] = cloudEntry;
+          accepted[key] = localEntry.hash;
+        } else {
+          // A real text edit must still be pushed even if its old avatar is
+          // gone; only unchanged entities may reuse the old cloud hash.
+          accepted.remove(key);
+        }
+      }
+      localManifest = localManifest.copyWith(
+        entries: entries,
+        acceptedLocalHashes: accepted,
+      );
+    }
     final entries = localManifest.entries.values.toList();
     final candidatePaths = cloudManifest == null
         ? const <String>[]
@@ -393,17 +430,19 @@ class SyncEngine {
       final localEntry = localManifest.entries[cloudEntry.key];
       final previouslyAccepted = previousManifest.entries[cloudEntry.key];
 
-      if (_isAlreadyCurrentOrAccepted(
-        cloudEntry,
-        localEntry,
-        previouslyAccepted,
-        ignorePreviouslyAccepted:
-            (cloudEntry.type == 'reconciliation_state' ||
-                cloudEntry.type == 'session_lorebook_overlays') &&
-            (await _manifestBuilder.isDeleted('chat', cloudEntry.id) ||
-                (previousManifest.acceptedLocalHashes[cloudEntry.key] != '' &&
-                    await _dependentStateMissing(cloudEntry))),
-      )) {
+      if (!previousManifest.needsReconciliationRestore(cloudEntry.key) &&
+          _isAlreadyCurrentOrAccepted(
+            cloudEntry,
+            localEntry,
+            previouslyAccepted,
+            ignorePreviouslyAccepted:
+                (cloudEntry.type == 'reconciliation_state' ||
+                    cloudEntry.type == 'session_lorebook_overlays') &&
+                (await _manifestBuilder.isDeleted('chat', cloudEntry.id) ||
+                    (previousManifest.acceptedLocalHashes[cloudEntry.key] !=
+                            '' &&
+                        await _dependentStateMissing(cloudEntry))),
+          )) {
         if (!cloudEntry.deleted) {
           await _repairMissingBinaryAssets(cloudEntry);
         }
@@ -528,17 +567,19 @@ class SyncEngine {
       }
       final localEntry = localManifest.entries[cloudEntry.key];
       final previouslyAccepted = previousManifest.entries[cloudEntry.key];
-      if (_isAlreadyCurrentOrAccepted(
-        cloudEntry,
-        localEntry,
-        previouslyAccepted,
-        ignorePreviouslyAccepted:
-            (cloudEntry.type == 'reconciliation_state' ||
-                cloudEntry.type == 'session_lorebook_overlays') &&
-            (await _manifestBuilder.isDeleted('chat', cloudEntry.id) ||
-                (previousManifest.acceptedLocalHashes[cloudEntry.key] != '' &&
-                    await _dependentStateMissing(cloudEntry))),
-      )) {
+      if (!previousManifest.needsReconciliationRestore(cloudEntry.key) &&
+          _isAlreadyCurrentOrAccepted(
+            cloudEntry,
+            localEntry,
+            previouslyAccepted,
+            ignorePreviouslyAccepted:
+                (cloudEntry.type == 'reconciliation_state' ||
+                    cloudEntry.type == 'session_lorebook_overlays') &&
+                (await _manifestBuilder.isDeleted('chat', cloudEntry.id) ||
+                    (previousManifest.acceptedLocalHashes[cloudEntry.key] !=
+                            '' &&
+                        await _dependentStateMissing(cloudEntry))),
+          )) {
         if (!cloudEntry.deleted) {
           await _repairMissingBinaryAssets(cloudEntry);
         }
@@ -765,6 +806,7 @@ class SyncEngine {
     }
     await _manifestBuilder.writeLocalManifest(
       rebuilt.copyWith(
+        version: SyncManifest.currentVersion,
         createdAt: cloudManifest.createdAt != 0
             ? cloudManifest.createdAt
             : rebuilt.createdAt,
@@ -990,10 +1032,11 @@ class SyncEngine {
   /// Restore lost bytes before push-first hashing.
   /// Only a previously accepted cloud version can supply the old avatar; a
   /// local change to the avatar path must remain a local change.
-  Future<void> _repairPreviouslySyncedAvatars(
+  Future<Set<String>> _repairPreviouslySyncedAvatars(
     SyncManifest cloudManifest,
     SyncManifest previousManifest,
   ) async {
+    final missing = <String>{};
     for (final entry in cloudManifest.entries.values) {
       if (entry.deleted ||
           previousManifest.entries[entry.key]?.hash != entry.hash) {
@@ -1005,7 +1048,7 @@ class SyncEngine {
             !_binarySyncer.localFileExists(character!.avatarPath)) {
           final repaired = await _binarySyncer.pullCharacterAvatar(entry.id);
           if (!repaired) {
-            throw StateError('Missing cloud avatar for character ${entry.id}');
+            missing.add(entry.key);
           }
         }
       } else if (entry.type == 'persona') {
@@ -1014,11 +1057,32 @@ class SyncEngine {
             !_binarySyncer.localFileExists(persona!.avatarPath)) {
           final repaired = await _binarySyncer.pullPersonaAvatar(entry.id);
           if (!repaired) {
-            throw StateError('Missing cloud avatar for persona ${entry.id}');
+            missing.add(entry.key);
           }
         }
       }
     }
+    return missing;
+  }
+
+  bool _sameEntityWithoutImagePaths(
+    Map<String, dynamic> local,
+    Map<String, dynamic> cloud,
+  ) {
+    Map<String, dynamic> portable(Map<String, dynamic> data) {
+      final result = Map<String, dynamic>.from(data)..remove('avatarPath');
+      final gallery = result['gallery'];
+      if (gallery is List) {
+        result['gallery'] = [
+          for (final item in gallery)
+            if (item is Map<String, dynamic>)
+              Map<String, dynamic>.from(item)..remove('imagePath'),
+        ];
+      }
+      return result;
+    }
+
+    return jsonEncode(portable(local)) == jsonEncode(portable(cloud));
   }
 
   Future<bool> _entriesSemanticallyEqual(
@@ -1706,7 +1770,8 @@ class SyncEngine {
     for (final entry in cloudManifest.entries.values) {
       if (entry.type != 'reconciliation_state' || entry.deleted) continue;
       final previouslyAccepted = previousManifest.entries[entry.key];
-      if (previouslyAccepted != null &&
+      if (!previousManifest.needsReconciliationRestore(entry.key) &&
+          previouslyAccepted != null &&
           !previouslyAccepted.deleted &&
           previouslyAccepted.hash == entry.hash &&
           (await store.getBySessionId(entry.id) != null ||

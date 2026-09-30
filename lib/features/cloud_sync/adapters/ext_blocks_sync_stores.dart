@@ -937,7 +937,11 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
         await _clearReconciliationLane(sessionId);
       }
       await _mergeSourceRows(sessionId, data);
-      final importedComplete = await _mergeRuns(sessionId, normalized.runs);
+      final importedComplete = await _mergeRuns(
+        sessionId,
+        normalized.runs,
+        normalized.invalidations,
+      );
       if (importedComplete) {
         await _mergeEffects(
           sessionId,
@@ -1368,6 +1372,7 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
   Future<bool> _mergeRuns(
     String sessionId,
     List<Map<String, dynamic>> incoming,
+    List<Map<String, dynamic>> incomingInvalidations,
   ) async {
     incoming.sort(
       (a, b) => (a['ordinal'] as int).compareTo(b['ordinal'] as int),
@@ -1387,10 +1392,18 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
       }
     }
     final repo = LedgerReconciliationRunRepo(_db);
+    final invalidations = {
+      for (final json in incomingInvalidations)
+        json['runId'] as String:
+            LedgerReconciliationRunInvalidationRow.fromJson(json),
+    };
     for (var i = local.length; i < incoming.length; i++) {
       final row = LedgerReconciliationSuccessfulRunRow.fromJson(incoming[i]);
       _requireSession(sessionId, row.sessionId);
-      final result = await repo.append(_runFromRow(row));
+      final invalidation = invalidations[row.id];
+      final result = invalidation == null
+          ? await repo.append(_runFromRow(row))
+          : await repo.restoreInvalidatedRun(_runFromRow(row), invalidation);
       if (result is ReconciliationRunMalformed) return false;
       if (result is! ReconciliationRunAppended &&
           result is! ReconciliationRunIdempotent) {

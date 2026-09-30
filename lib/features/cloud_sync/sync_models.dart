@@ -111,7 +111,9 @@ class SyncManifest {
   ///  13 — added immutable reconciliation effects to reconciliation state.
   ///  14 — added current session-local lorebook overlay projections.
   ///  15 — added merge-only terminal rewrite job history.
-  static const int currentVersion = 15;
+  ///  16 — restore explicitly invalidated reconciliation history and retry
+  ///         nonempty normalized states accepted by the previous importer.
+  static const int currentVersion = 16;
 
   final int version;
   final String deviceId;
@@ -128,6 +130,11 @@ class SyncManifest {
 
   /// Whether the last cloud push included API/embedding keys in api_presets.
   final bool apiKeysIncluded;
+
+  bool needsReconciliationRestore(String key) =>
+      version < 16 &&
+      entries[key]?.type == 'reconciliation_state' &&
+      (acceptedLocalHashes[key]?.isNotEmpty ?? false);
 
   const SyncManifest({
     this.version = 2,

@@ -40,6 +40,61 @@ void main() {
     expect((await repo.getHead('session'))!.id, 'run-2');
   });
 
+  test(
+    'invalidated history cannot be imported with an unrelated marker',
+    () async {
+      final run = _run();
+      final invalidation = LedgerReconciliationRunInvalidationRow(
+        id: 0,
+        sessionId: 'session',
+        runId: 'another-run',
+        causeMessageId: 'message',
+        reason: 'message_deleted',
+        createdAt: 2,
+      );
+      expect(
+        await db.transaction(
+          () => repo.restoreInvalidatedRun(run, invalidation),
+        ),
+        isA<ReconciliationRunMalformed>(),
+      );
+      expect(await repo.readPhysicalSession('session'), isEmpty);
+      expect(await repo.readInvalidations('session'), isEmpty);
+    },
+  );
+
+  test(
+    'invalidated history retains contiguous chain and shape checks',
+    () async {
+      final invalidation = LedgerReconciliationRunInvalidationRow(
+        id: 0,
+        sessionId: 'session',
+        runId: 'run-1',
+        causeMessageId: 'message',
+        reason: 'message_deleted',
+        createdAt: 2,
+      );
+      expect(
+        await db.transaction(
+          () => repo.restoreInvalidatedRun(
+            _run(ordinal: 2, predecessor: 'missing'),
+            invalidation,
+          ),
+        ),
+        isA<ReconciliationRunConcurrencyConflict>(),
+      );
+      expect(
+        await db.transaction(
+          () =>
+              repo.restoreInvalidatedRun(_run(anchors: const []), invalidation),
+        ),
+        isA<ReconciliationRunMalformed>(),
+      );
+      expect(await repo.readPhysicalSession('session'), isEmpty);
+      expect(await repo.readInvalidations('session'), isEmpty);
+    },
+  );
+
   test('candidate replay keeps the stored legacy identity', () async {
     await _seedSession(db);
     final stored = _run(id: 'legacy-id');

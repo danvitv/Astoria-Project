@@ -576,6 +576,105 @@ void main() {
     );
   });
 
+  for (final restorePrefix in [false, true]) {
+    test('restores collectors past a deleted invalidated run '
+        '(partial local history: $restorePrefix)', () async {
+      final runs = await _appendChain(
+        sourceDb,
+        7,
+        anchorForOrdinal: (ordinal) => ordinal == 4
+            ? ReconciliationAnchor(
+                messageId: 'user-2',
+                swipeId: 0,
+                agentSwipeId: 0,
+                role: 'user',
+                contentHash: computeHash('Continue.'),
+              )
+            : _openingAnchor,
+      );
+      await sourceDb
+          .into(sourceDb.ledgerReconciliationRunInvalidations)
+          .insert(
+            LedgerReconciliationRunInvalidationsCompanion.insert(
+              sessionId: 'session',
+              runId: runs[3].id,
+              causeMessageId: 'user-2',
+              reason: 'message_deleted',
+              createdAt: 8,
+            ),
+          );
+      final firstCollector = await _completeCollector(
+        sourceDb,
+        runs.take(3).toList(),
+      );
+      final secondCollector = await _completeCollector(
+        sourceDb,
+        runs.sublist(4),
+      );
+      await _insertObservation(sourceDb);
+      await _insertCompletedClaim(sourceDb, secondCollector);
+      final sourceRepo = LedgerReconciliationRunRepo(sourceDb);
+      final state = await sourceRepo.captureState('session');
+      for (final run in runs) {
+        await sourceRepo.recordEffect(
+          runId: run.id,
+          sessionId: 'session',
+          before: state,
+          after: state,
+          createdAt: run.createdAt,
+        );
+      }
+      await _replaceMessages(
+        targetDb,
+        _messages.where((message) => message['id'] != 'user-2').toList(),
+      );
+      if (restorePrefix) await _appendChain(targetDb, 3);
+      final payload = (await sourceStore.getBySessionId('session'))!;
+
+      await targetStore.mergeBySessionId('session', payload);
+      await targetStore.mergeBySessionId('session', payload);
+
+      final audit = await LedgerReconciliationRunRepo(
+        targetDb,
+      ).readSessionAudit('session');
+      expect(
+        audit.physical.map((run) => run.chainHash),
+        runs.map((run) => run.chainHash),
+      );
+      expect(
+        audit.logical.map((run) => run.id),
+        runs.where((run) => run.ordinal != 4).map((run) => run.id),
+      );
+      expect(audit.invalidations, hasLength(1));
+      expect(audit.integrity, isA<ReconciliationRunValid>());
+      expect(
+        await targetDb.select(targetDb.ledgerReconciliationEffects).get(),
+        hasLength(7),
+      );
+      final collectors = await targetDb
+          .select(targetDb.cardEvolutionCollectorRuns)
+          .get();
+      expect(collectors.map((row) => row.id), [
+        firstCollector.id,
+        secondCollector.id,
+      ]);
+      expect(
+        await targetDb.select(targetDb.cardEvolutionObservations).get(),
+        hasLength(1),
+      );
+      expect(
+        await targetDb.select(targetDb.cardEvolutionClaims).get(),
+        hasLength(1),
+      );
+      expect(
+        await CardEvolutionCollectorRunRepo(
+          targetDb,
+        ).pendingValidPairs('session'),
+        isEmpty,
+      );
+    });
+  }
+
   test('completed collector round-trip consumes its valid batch', () async {
     final runs = await _appendChain(sourceDb, 3);
     final collectorRepo = CardEvolutionCollectorRunRepo(sourceDb);
@@ -980,6 +1079,7 @@ Future<List<LedgerReconciliationRun>> _appendChain(
   int count, {
   String resultPrefix = 'result',
   bool progressingEndpoints = false,
+  ReconciliationAnchor Function(int ordinal)? anchorForOrdinal,
 }) async {
   final repo = LedgerReconciliationRunRepo(db);
   final runs = <LedgerReconciliationRun>[];
@@ -990,7 +1090,8 @@ Future<List<LedgerReconciliationRun>> _appendChain(
       sessionId: 'session',
       ordinal: ordinal,
       anchors: [
-        progressingEndpoints ? _progressAnchor(ordinal) : _openingAnchor,
+        anchorForOrdinal?.call(ordinal) ??
+            (progressingEndpoints ? _progressAnchor(ordinal) : _openingAnchor),
       ],
       acceptedManifestRefs: const [],
       effectiveCanonStamp: 'stamp-$ordinal',

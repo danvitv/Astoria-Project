@@ -246,6 +246,46 @@ class LedgerReconciliationRunRepo {
     if (valid is! ReconciliationRunValid) {
       return valid;
     }
+    return _appendValidatedRun(run);
+  }
+
+  /// Restores physical history whose evidence was explicitly invalidated.
+  /// Caller owns the transaction: the row and its invalidation must become
+  /// durable together, so it can never enter the logical evidence projection.
+  Future<ReconciliationRunIntegrity> restoreInvalidatedRun(
+    LedgerReconciliationRun run,
+    LedgerReconciliationRunInvalidationRow invalidation,
+  ) async {
+    if (invalidation.sessionId != run.sessionId ||
+        invalidation.runId != run.id ||
+        invalidation.causeMessageId.isEmpty ||
+        invalidation.reason.isEmpty) {
+      return const ReconciliationRunMalformed('invalid history invalidation');
+    }
+    final valid = _validateShape(run);
+    if (valid is! ReconciliationRunValid) return valid;
+    final result = await _appendValidatedRun(run);
+    if (result is ReconciliationRunAppended ||
+        result is ReconciliationRunIdempotent) {
+      await _db
+          .into(_db.ledgerReconciliationRunInvalidations)
+          .insert(
+            LedgerReconciliationRunInvalidationsCompanion.insert(
+              sessionId: invalidation.sessionId,
+              runId: invalidation.runId,
+              causeMessageId: invalidation.causeMessageId,
+              reason: invalidation.reason,
+              createdAt: invalidation.createdAt,
+            ),
+            mode: InsertMode.insertOrIgnore,
+          );
+    }
+    return result;
+  }
+
+  Future<ReconciliationRunIntegrity> _appendValidatedRun(
+    LedgerReconciliationRun run,
+  ) async {
     final existing = await getByContentHash(run.sessionId, run.contentHash);
     if (existing != null) {
       return _same(existing, run)
@@ -946,6 +986,23 @@ class LedgerReconciliationRunRepo {
   Future<ReconciliationRunIntegrity> _validate(
     LedgerReconciliationRun run,
   ) async {
+    final shape = _validateShape(run);
+    if (shape is! ReconciliationRunValid) return shape;
+    final evidence = await _ReconciliationEvidence.load(_db, run.sessionId);
+    if (!_anchorsMatchEvidence(run, evidence)) {
+      return const ReconciliationRunMalformed(
+        'message anchors do not match the current transcript',
+      );
+    }
+    if (!_refsMatchEvidence(run, evidence)) {
+      return const ReconciliationRunMalformed(
+        'accepted manifests do not match durable provenance',
+      );
+    }
+    return const ReconciliationRunValid();
+  }
+
+  ReconciliationRunIntegrity _validateShape(LedgerReconciliationRun run) {
     final malformedReason = switch (run) {
       LedgerReconciliationRun(id: '') => 'run ID is empty',
       LedgerReconciliationRun(sessionId: '') => 'session ID is empty',
@@ -968,17 +1025,6 @@ class LedgerReconciliationRunRepo {
     };
     if (malformedReason != null) {
       return ReconciliationRunMalformed(malformedReason);
-    }
-    final evidence = await _ReconciliationEvidence.load(_db, run.sessionId);
-    if (!_anchorsMatchEvidence(run, evidence)) {
-      return const ReconciliationRunMalformed(
-        'message anchors do not match the current transcript',
-      );
-    }
-    if (!_refsMatchEvidence(run, evidence)) {
-      return const ReconciliationRunMalformed(
-        'accepted manifests do not match durable provenance',
-      );
     }
     return const ReconciliationRunValid();
   }

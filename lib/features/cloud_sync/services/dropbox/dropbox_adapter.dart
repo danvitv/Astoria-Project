@@ -32,16 +32,19 @@ class DropboxAdapter implements CloudAdapter {
       : <String>{};
 
   final DropboxAuth _auth;
-  final Dio _dio = Dio(
-    BaseOptions(
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(seconds: 120),
-    ),
-  );
+  final Dio _dio;
 
   final Set<String> _ensuredFolders = {};
 
-  DropboxAdapter(this._auth);
+  DropboxAdapter(this._auth, {Dio? dio})
+    : _dio =
+          dio ??
+          Dio(
+            BaseOptions(
+              connectTimeout: const Duration(seconds: 30),
+              receiveTimeout: const Duration(seconds: 120),
+            ),
+          );
 
   /// Canonical cloud path (`/Astoria-dev/characters/x.json`) to the
   /// App-folder-relative path Dropbox expects (`/dev/characters/x.json`).
@@ -114,6 +117,31 @@ class DropboxAdapter implements CloudAdapter {
         return await fn();
       }
       rethrow;
+    }
+  }
+
+  /// Dio returns a list of bytes for download errors when requesting an image.
+  bool _isMissingFile(DioException error) {
+    if (error.response?.statusCode != 409) return false;
+    final data = error.response?.data;
+    try {
+      final Map<String, dynamic> body;
+      if (data is Map<String, dynamic>) {
+        body = data;
+      } else if (data is List<int>) {
+        body = jsonDecode(utf8.decode(data)) as Map<String, dynamic>;
+      } else if (data is String) {
+        body = jsonDecode(data) as Map<String, dynamic>;
+      } else {
+        return false;
+      }
+      final summary = body['error_summary'];
+      return summary == 'path/not_found' ||
+          (summary is String && summary.startsWith('path/not_found/'));
+    } on FormatException {
+      return false;
+    } on TypeError {
+      return false;
     }
   }
 
@@ -196,8 +224,7 @@ class DropboxAdapter implements CloudAdapter {
         return response.data ?? '';
       });
     } on DioException catch (e) {
-      if (e.response?.statusCode == 409 &&
-          e.response?.data.toString().contains('not_found') == true) {
+      if (_isMissingFile(e)) {
         throw CloudFileNotFoundException(path);
       }
       rethrow;
@@ -217,8 +244,7 @@ class DropboxAdapter implements CloudAdapter {
         return Uint8List.fromList(response.data ?? []);
       });
     } on DioException catch (e) {
-      if (e.response?.statusCode == 409 &&
-          e.response?.data.toString().contains('not_found') == true) {
+      if (_isMissingFile(e)) {
         throw CloudFileNotFoundException(path);
       }
       rethrow;
