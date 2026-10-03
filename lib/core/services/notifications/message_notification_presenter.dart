@@ -31,7 +31,7 @@ String? notificationAvatarPath(String? avatarPath) {
   return null;
 }
 
-/// Platform half of the "new message from <character>" notification.
+/// Platform half of the `new message from <character>` notification.
 ///
 /// Owns the `flutter_local_notifications` plugin: per-platform initialization,
 /// the Android channel, and the construction of one notification. It never

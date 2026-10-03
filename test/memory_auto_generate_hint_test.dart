@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:glaze_flutter/core/models/memory_book.dart';
 import 'package:glaze_flutter/core/state/memory_settings_provider.dart';
 import 'package:glaze_flutter/features/chat/widgets/memory/memory_books_controls.dart';
 import 'package:glaze_flutter/features/chat/widgets/memory/memory_books_toolbar.dart';

@@ -325,8 +325,7 @@ lib/
 │   │   ├── state/
 │   │   │   ├── chat_body_selectors.dart # batteryAware dual-read helper
 │   │   │   ├── chat_drawer_editing_provider.dart # Drawer edit mode; also drives the composer row
-│   │   │   ├── cached_token_breakdown.dart
-│   │   │   └── token_breakdown_cache.dart
+│   │   │   └── cached_token_breakdown.dart # Last build, reused only as a display placeholder
 │   │   ├── utils/
 │   │   │   └── message_preview.dart   # Notification preview text helper
 │   │   └── widgets/                      # Chat UI widgets (sheets, header, webview, etc.)

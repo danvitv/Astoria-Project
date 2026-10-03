@@ -57,17 +57,27 @@ String imageExtensionForBytes(Uint8List bytes) {
 /// new [kThumbnailShortSide] / resize policy takes effect for existing
 /// libraries. Pair with [_kThumbBackfillKey] so the wiped thumbnails are
 /// regenerated in the background.
-const String _kThumbMigrationKey = 'gz_thumb_v6_migrated';
+const String _kThumbMigrationKey = 'gz_thumb_v7_migrated';
 
 /// SharedPreferences flag guarding the one-time background thumbnail backfill.
-const String _kThumbBackfillKey = 'gz_thumb_v6_backfilled';
+const String _kThumbBackfillKey = 'gz_thumb_v7_backfilled';
 
-const String _kThumbMigrationMarker = '.thumbnails-v6-migrated';
-const String _kThumbRefreshMarker = '.thumbnails-v6-refresh-required';
+const String _kThumbMigrationMarker = '.thumbnails-v7-migrated';
+const String _kThumbRefreshMarker = '.thumbnails-v7-refresh-required';
+
+typedef EncodedThumbnail = ({Uint8List bytes, String extension});
+
+bool hasTransparentPixel(img.Image image) {
+  if (!image.hasAlpha && image.palette == null) return false;
+  for (final pixel in image) {
+    if (pixel.aNormalized < 1) return true;
+  }
+  return false;
+}
 
 /// Runs in a background isolate and scales without upscaling or changing the
 /// aspect ratio. Both axes are bounded to keep extreme images mobile-safe.
-Uint8List? resizeAvatarBytes(
+EncodedThumbnail? resizeAvatarBytes(
   Uint8List imageBytes,
   int maxShortSide, [
   int maxLongSide = kThumbnailLongSide,
@@ -87,8 +97,14 @@ Uint8List? resizeAvatarBytes(
             height: (image.height * scale).round().clamp(1, maxLongSide),
           )
         : image;
-    return Uint8List.fromList(
-      img.encodeJpg(scaled, quality: _kThumbnailQuality),
+    final transparent = hasTransparentPixel(scaled);
+    return (
+      bytes: Uint8List.fromList(
+        transparent
+            ? img.encodePng(scaled)
+            : img.encodeJpg(scaled, quality: _kThumbnailQuality),
+      ),
+      extension: transparent ? 'png' : 'jpg',
     );
   } catch (_) {
     return null;
@@ -165,7 +181,7 @@ class ImageStorageService implements SyncImageStore {
           continue;
         }
         final name = p.basenameWithoutExtension(resolvedPath);
-        await File(p.join(dir.path, '$name.jpg')).writeAsBytes(thumbnail);
+        await _writeThumbnail(dir, name, thumbnail);
         made++;
       } catch (_) {
         complete = false;
@@ -210,9 +226,7 @@ class ImageStorageService implements SyncImageStore {
     }
     final thumbnail = await _resizeImage(imageBytes, kThumbnailShortSide);
     if (thumbnail == null) return null;
-    final path = p.join(dir.path, '$characterId.jpg');
-    await File(path).writeAsBytes(thumbnail);
-    return path;
+    return _writeThumbnail(dir, characterId, thumbnail);
   }
 
   Future<String?> ensureThumbnailForAvatarPath(String? avatarPath) async {
@@ -231,8 +245,21 @@ class ImageStorageService implements SyncImageStore {
     }
 
     final name = p.basenameWithoutExtension(resolvedPath);
-    final path = p.join(dir.path, '$name.jpg');
-    await File(path).writeAsBytes(thumbnail);
+    return _writeThumbnail(dir, name, thumbnail);
+  }
+
+  Future<String> _writeThumbnail(
+    Directory dir,
+    String name,
+    EncodedThumbnail thumbnail,
+  ) async {
+    final path = p.join(dir.path, '$name.${thumbnail.extension}');
+    await File(path).writeAsBytes(thumbnail.bytes);
+    for (final extension in kThumbnailExtensions) {
+      if (extension == thumbnail.extension) continue;
+      final stale = File(p.join(dir.path, '$name.$extension'));
+      if (await stale.exists()) await stale.delete();
+    }
     return path;
   }
 
@@ -240,16 +267,22 @@ class ImageStorageService implements SyncImageStore {
     final avatarPath = p.join(baseDir, 'avatars', '$characterId.png');
     final file = File(avatarPath);
     if (await file.exists()) await file.delete();
-    final thumbPath = p.join(baseDir, 'thumbnails', '$characterId.jpg');
-    final thumbFile = File(thumbPath);
-    if (await thumbFile.exists()) await thumbFile.delete();
+    for (final extension in kThumbnailExtensions) {
+      final thumbFile = File(
+        p.join(baseDir, 'thumbnails', '$characterId.$extension'),
+      );
+      if (await thumbFile.exists()) await thumbFile.delete();
+    }
   }
 
   String? thumbnailPath(String? avatarPath) {
     if (avatarPath == null || avatarPath.isEmpty) return null;
     final name = p.basenameWithoutExtension(avatarPath);
-    final thumb = p.join(baseDir, 'thumbnails', '$name.jpg');
-    return File(thumb).existsSync() ? thumb : null;
+    for (final extension in kThumbnailExtensions) {
+      final thumb = p.join(baseDir, 'thumbnails', '$name.$extension');
+      if (File(thumb).existsSync()) return thumb;
+    }
+    return null;
   }
 
   @override
@@ -306,8 +339,10 @@ class ImageStorageService implements SyncImageStore {
   /// card; a mass import piled up hundreds of them. `Isolate.run` hands those
   /// buffers back the moment the worker exits (the thumbnail backfill above
   /// already worked this way).
-  Future<Uint8List?> _resizeImage(Uint8List imageBytes, int maxDimension) =>
-      Isolate.run(() => resizeAvatarBytes(imageBytes, maxDimension));
+  Future<EncodedThumbnail?> _resizeImage(
+    Uint8List imageBytes,
+    int maxDimension,
+  ) => Isolate.run(() => resizeAvatarBytes(imageBytes, maxDimension));
 
   Uint8List _stripPngTextChunks(Uint8List pngBytes) {
     if (pngBytes.length < 8) return pngBytes;

@@ -216,16 +216,10 @@ class JanitorExtractor {
         (meta?['chat_name'] ?? '').toString(),
       }.where((n) => n.trim().isNotEmpty).toList();
       String macro(String text) => restoreMacros(
-            text,
-            charNames: charNames,
-            userName: capture.bakedUserName,
-          );
-
-      final card = macro(rawCard);
-      final scenario = macro(extractScenario(payload).isNotEmpty
-          ? extractScenario(payload)
-          : (meta?['scenario'] ?? '').toString());
-      final example = macro(extractExample(payload));
+        text,
+        charNames: charNames,
+        userName: capture.bakedUserName,
+      );
 
       // Lore a script wrote INTO the character's own fields never reaches the
       // separator (it drops those blocks whole, and never reads the first
@@ -239,8 +233,7 @@ class JanitorExtractor {
       final probeFields = probePayload == null
           ? null
           : PromptFields.fromPayload(probePayload, restore: macro);
-      final cleanFields =
-          definitionPublic ? PromptFields.fromMeta(meta) : null;
+      final cleanFields = definitionPublic ? PromptFields.fromMeta(meta) : null;
       final separated = macro(sep.lorebookText);
       final scan = scanInjectedFields(
         capture: PromptFields.fromPayload(payload, restore: macro),
@@ -249,10 +242,34 @@ class JanitorExtractor {
         publicContents: publicContents,
         existing: separated,
       );
-      final lorebookText = [separated, scan.text]
-          .map((t) => t.trim())
-          .where((t) => t.isNotEmpty)
-          .join('\n\n');
+      final lorebookText = [
+        separated,
+        scan.text,
+      ].map((t) => t.trim()).where((t) => t.isNotEmpty).join('\n\n');
+
+      // The trigger snapshot contains conditional lore inside card fields.
+      // Import the probe baseline and remove recovered always-on injections.
+      final cardSource = probePayload ?? payload;
+      final card = withoutInjected(
+        macro(extractCard(cardSource)),
+        InjectionField.persona,
+        scan,
+      );
+      final baselineScenario = extractScenario(cardSource);
+      final scenario = withoutInjected(
+        macro(
+          baselineScenario.isNotEmpty
+              ? baselineScenario
+              : (meta?['scenario'] ?? '').toString(),
+        ).trim(),
+        InjectionField.scenario,
+        scan,
+      );
+      final example = withoutInjected(
+        macro(extractExample(cardSource)).trim(),
+        InjectionField.example,
+        scan,
+      );
 
       // Greetings, best source first: the chat object the capture created (it
       // carries them verbatim even when a closed card withholds them from
@@ -260,12 +277,15 @@ class JanitorExtractor {
       // in the captured prompt — which is the character's opening line and the
       // only place a fully withheld greeting survives.
       final normalized = normalizeGreetings(
-        primary: capture.greetings.isEmpty ? null : macro(capture.greetings.first),
+        primary: capture.greetings.isEmpty
+            ? null
+            : macro(capture.greetings.first),
         others: [
           ...capture.greetings.skip(1).map(macro),
-          if (meta?['first_message'] is String) macro(meta!['first_message'] as String),
+          if (meta?['first_message'] is String)
+            macro(meta!['first_message'] as String),
           ...greetingList(meta?['first_messages']).map(macro),
-          macro(extractFirstMessage(payload)),
+          macro(extractFirstMessage(cardSource)),
         ],
       );
       final firstMes = normalized.firstMes;
@@ -308,12 +328,12 @@ class JanitorExtractor {
       // model to throw that lore away. Use the catalog's clean copy wherever
       // there is one; a closed card has none, and there the captured text is
       // still better than nothing.
-      final cardContext = cleanFields != null &&
-              cleanFields.persona.trim().isNotEmpty
+      final cardContext =
+          cleanFields != null && cleanFields.persona.trim().isNotEmpty
           ? cleanFields.persona
           : card;
-      final scenarioContext = cleanFields != null &&
-              cleanFields.scenario.trim().isNotEmpty
+      final scenarioContext =
+          cleanFields != null && cleanFields.scenario.trim().isNotEmpty
           ? cleanFields.scenario
           : scenario;
 

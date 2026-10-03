@@ -981,7 +981,7 @@ resolved content:
 * `contentForAccounting` — same shape, but with dynamic macro
   injections blanked out (`replaceMacros` is run against a context
   where `summaryContent` / `memoryContent` / `lorebooksContent` /
-  `guidanceText` are null). This is what `attributionBlocks` see, so
+  `guidanceText` are null). This is `StaticBlock.presetContent`, so
   `sourceTokens['preset']` reports ONLY the preset's static chrome.
 
 Before this split, a preset block that contained `{{memory}}` would
@@ -1008,6 +1008,21 @@ character/persona payloads.
 
 `presetNetTokens` equals `sourceTokens['preset']` (no further
 subtraction — external macros are already excluded in accounting).
+
+**Request budgeting is separate from source attribution.** `StaticBlock.content`
+contains the fully expanded request text; totals and the history budget must
+include card fields, persona and runtime injections even when their preset-row
+cost is zero. Setvar-only blocks have no request cost. Append-to-last blocks
+are counted with history, not a second time as static text. Deferred memory
+placeholders have no text cost; finalized memory is accounted separately.
+`stripInlineMedia` replaces large embedded base64 media in both text budgeting
+and request serialization. Actual image attachments remain image parts.
+
+The inspector uses `countRequestTokens` on post-processed request messages,
+including replayed reasoning and excluding image/redaction JSON. Source rows
+remain the pre-transport breakdown. Opening the Context tab always recalculates;
+the last breakdown is a placeholder, and input changes during a calculation
+queue a fresh run rather than leaving stale counts on screen.
 
 ### INV-PS7: Macro resolution order is fixed
 

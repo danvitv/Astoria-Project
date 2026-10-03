@@ -685,26 +685,32 @@ PromptResult _assembleMessages({
       final content = block.content;
       final accountingContent = block.contentForAccounting;
 
-      // setvar-only blocks: no LLM-visible text, but definitions count toward preset.
+      // Definitions appear on the preset row, but send no text to the model.
       if (content.trim().isEmpty && !block.sendEmptyBlock) {
         if (accountingContent.isNotEmpty) {
           attributionBlocks.add(
-            StaticBlock(id: block.id, content: accountingContent),
+            StaticBlock(
+              id: block.id,
+              content: '',
+              presetContent: accountingContent,
+            ),
           );
         }
         if (block.id == 'char_card') injectLoreAfter();
         continue;
       }
 
-      // attributionBlocks feed the token breakdown. We pass the
-      // "accounting" content (dynamic macros blanked out) so that the
-      // preset's static chrome is attributed to sourceTokens['preset']
-      // and NOT double-counted under sourceTokens['memory'] /
-      // sourceTokens['summary'] / sourceTokens['lorebooks']. The
-      // dynamic injections are counted separately via dedicated
-      // StaticBlocks (hard-block injection) and macroTokens.
+      // Budget the expanded request text; accounting only splits source rows.
+      // Deferred memory is counted after finalization. Appended text already
+      // travels inside the last user message and is counted with history.
       attributionBlocks.add(
-        StaticBlock(id: block.id, content: accountingContent),
+        StaticBlock(
+          id: block.id,
+          content: block.appendToLastMessage
+              ? ''
+              : content.replaceAll(deferredMemoryPlaceholder, ''),
+          presetContent: accountingContent,
+        ),
       );
 
       // appendToLastMessage blocks are merged into the last user message in

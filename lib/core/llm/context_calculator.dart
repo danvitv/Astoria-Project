@@ -4,13 +4,31 @@ import 'history_assembler.dart';
 
 class StaticBlock {
   final String id;
+
+  /// Expanded request text, counted toward the total and the history budget.
   final String content;
-  const StaticBlock({required this.id, required this.content});
 
-  Map<String, dynamic> toJson() => {'id': id, 'content': content};
+  /// Preset-authored text with external injections blanked (INV-PS5).
+  /// This is attribution only: it must not replace the request's budget cost.
+  final String? presetContent;
 
-  factory StaticBlock.fromJson(Map<String, dynamic> json) =>
-      StaticBlock(id: json['id'] as String, content: json['content'] as String);
+  const StaticBlock({
+    required this.id,
+    required this.content,
+    this.presetContent,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'content': content,
+    if (presetContent != null) 'presetContent': presetContent,
+  };
+
+  factory StaticBlock.fromJson(Map<String, dynamic> json) => StaticBlock(
+    id: json['id'] as String,
+    content: json['content'] as String,
+    presetContent: json['presetContent'] as String?,
+  );
 }
 
 class ContextCalculator {
@@ -70,11 +88,26 @@ class ContextCalculator {
     final sourceTokens = <String, int>{};
     var staticTotal = 0;
 
+    void attribute(String source, int tokens) {
+      sourceTokens[source] = (sourceTokens[source] ?? 0) + tokens;
+    }
+
     for (final block in staticBlocks) {
       final tokens = estimateTokens(block.content);
       final source = _sourceForBlock(block.id);
-      sourceTokens[source] = (sourceTokens[source] ?? 0) + tokens;
       staticTotal += tokens;
+      final presetContent = block.presetContent;
+      if (presetContent == null) {
+        attribute(source, tokens);
+        continue;
+      }
+      // Definitions can appear on the preset row without reaching the request.
+      // Generic blocks expose injections through macroTokens instead.
+      final chrome = estimateTokens(presetContent);
+      attribute('preset', chrome);
+      if (source != 'preset' && tokens > chrome) {
+        attribute(source, tokens - chrome);
+      }
     }
 
     final actualLorebook =
@@ -378,7 +411,29 @@ class TokenBreakdown {
     );
   }
 
+  /// Adds a last-generation vector count while preserving the history window.
+  TokenBreakdown withVectorLore(int tokens) {
+    if (tokens <= 0 || vectorLoreTokens > 0) return this;
+    return TokenBreakdown(
+      sourceTokens: {...sourceTokens, 'vectorLore': tokens},
+      macroTokens: macroTokens,
+      staticTotal: staticTotal,
+      historyBudget: historyBudget,
+      historyTokens: historyTokens,
+      totalTokens: totalTokens + tokens,
+      cutoffIndex: cutoffIndex,
+      trimmedHistory: trimmedHistory,
+      historyAnchorId: historyAnchorId,
+      lorebookReserveTokens: lorebookReserveTokens,
+      memoryTokens: memoryTokens,
+      vectorLoreTokens: tokens,
+      fixedTotal: fixedTotal + tokens,
+      remaining: remaining - tokens,
+      visibleMessageIds: visibleMessageIds,
+    );
+  }
+
   /// Preset row in the tokenizer. Same as [sourceTokens]['preset']: external
-  /// injections are already blanked in `contentForAccounting` (see INV-PS5).
+  /// injections are already blanked in `StaticBlock.presetContent` (INV-PS5).
   int get presetNetTokens => sourceTokens['preset'] ?? 0;
 }

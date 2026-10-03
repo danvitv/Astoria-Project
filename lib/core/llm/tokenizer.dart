@@ -8,6 +8,7 @@ import '../utils/platform_paths.dart';
 // ignore: depend_on_referenced_packages, implementation_imports
 import 'package:tiktoken/src/common/byte_array.dart';
 import 'package:tiktoken/tiktoken.dart';
+import 'inline_media.dart';
 
 const _o200kBaseVocabUrl =
     'https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken';
@@ -34,13 +35,16 @@ Future<void> preloadO200kBase({String? appSupportPath}) async {
     if (await cacheFile.exists()) {
       bpeData = await cacheFile.readAsString();
     } else {
-      final response = await Dio(BaseOptions(
-        connectTimeout: const Duration(seconds: 15),
-        receiveTimeout: const Duration(seconds: 60),
-      )).get<String>(
-        _o200kBaseVocabUrl,
-        options: Options(responseType: ResponseType.plain),
-      );
+      final response =
+          await Dio(
+            BaseOptions(
+              connectTimeout: const Duration(seconds: 15),
+              receiveTimeout: const Duration(seconds: 60),
+            ),
+          ).get<String>(
+            _o200kBaseVocabUrl,
+            options: Options(responseType: ResponseType.plain),
+          );
       bpeData = response.data!;
       await cacheFile.writeAsString(bpeData);
     }
@@ -50,23 +54,23 @@ Future<void> preloadO200kBase({String? appSupportPath}) async {
       if (line.isEmpty) continue;
       final parts = line.split(' ');
       if (parts.length != 2) continue;
-      mergeableRanks[ByteArray.fromList(base64Decode(parts[0]))] =
-          int.parse(parts[1]);
+      mergeableRanks[ByteArray.fromList(base64Decode(parts[0]))] = int.parse(
+        parts[1],
+      );
     }
 
     _o200kBaseEncoder = Tiktoken(
       name: 'o200k_base',
       patStr: _o200kBasePatStr,
       mergeableRanks: mergeableRanks,
-      specialTokens: const {
-        '<|endoftext|>': 199999,
-        '<|endofprompt|>': 200018,
-      },
+      specialTokens: const {'<|endoftext|>': 199999, '<|endofprompt|>': 200018},
     );
 
     // Smoke test
-    _o200kBaseEncoder!
-        .encode('test', disallowedSpecial: SpecialTokensSet.empty());
+    _o200kBaseEncoder!.encode(
+      'test',
+      disallowedSpecial: SpecialTokensSet.empty(),
+    );
     _tokenCache.clear();
   } catch (e) {
     // Ignore tokenizer errors
@@ -83,7 +87,7 @@ bool get o200kBaseLoaded => _o200kBaseEncoder != null;
 /// Falls back to ~4 chars/token if encoder is not yet loaded.
 int estimateTokens(String text, {bool useCache = true}) {
   if (text.isEmpty) return 0;
-  final cleaned = _stripBase64Media(text);
+  final cleaned = stripInlineMedia(text);
   if (cleaned.isEmpty) return 0;
 
   final encoder = _o200kBaseEncoder;
@@ -122,18 +126,3 @@ String _cacheKey(String text) {
 }
 
 void clearTokenCache() => _tokenCache.clear();
-
-/// Strips base64-encoded images/data URIs from text before token counting,
-/// since they inflate char count but are not sent to the LLM.
-String _stripBase64Media(String text) {
-  if (text.length < 256) return text;
-  var result = text.replaceAllMapped(
-    RegExp(r'<img\s+src="data:image/[^"]{256,}?"\s*/?>'),
-    (_) => '',
-  );
-  result = result.replaceAllMapped(
-    RegExp(r'data:image/[^;]+;base64,[A-Za-z0-9+/=]{256,}'),
-    (_) => '',
-  );
-  return result;
-}

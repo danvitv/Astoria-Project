@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +13,7 @@ import '../../../core/llm/history_trim.dart';
 import '../../../core/llm/prompt_builder.dart';
 import '../../../core/llm/prompt_isolate.dart';
 import '../../../core/llm/prompt_worker.dart';
+import '../../../core/llm/request_tokens.dart';
 import '../../../shared/widgets/glaze_spinner.dart';
 import '../providers/prompt_build_providers.dart';
 import '../../../core/llm/transport/anthropic_chat_transport.dart';
@@ -95,6 +98,7 @@ class _PromptPreviewScreenState extends ConsumerState<PromptPreviewScreen> {
   String? _charName;
   String? _userName;
   Map<String, dynamic>? _requestBody;
+  int? _requestTokens;
 
   /// The built prompt after the connection's post-processing mode, computed
   /// once per build rather than per frame. Empty until the first prompt lands.
@@ -105,6 +109,9 @@ class _PromptPreviewScreenState extends ConsumerState<PromptPreviewScreen> {
   List<InspectorMessage> _messages = const [];
 
   bool _loading = true;
+  bool _building = false;
+  bool _rebuildPending = false;
+
   /// Raw JSON of the built request instead of the rendered message list.
   bool _raw = false;
 
@@ -115,6 +122,12 @@ class _PromptPreviewScreenState extends ConsumerState<PromptPreviewScreen> {
   }
 
   Future<void> _build() async {
+    if (!mounted) return;
+    if (_building) {
+      _rebuildPending = true;
+      return;
+    }
+    _building = true;
     setState(() => _loading = true);
 
     try {
@@ -130,6 +143,7 @@ class _PromptPreviewScreenState extends ConsumerState<PromptPreviewScreen> {
         charId: widget.charId,
         session: session,
       );
+      if (!mounted) return;
       _apiConfig = payload.apiConfig;
       _sessionId = session.id;
       _charName = payload.character.name;
@@ -139,6 +153,13 @@ class _PromptPreviewScreenState extends ConsumerState<PromptPreviewScreen> {
         payload,
         priority: PromptWorkerPriority.background,
       );
+
+      if (!mounted || _rebuildPending) return;
+      if (ref.read(chatProvider(widget.charId)).value?.session?.id !=
+          session.id) {
+        _rebuildPending = true;
+        return;
+      }
 
       ref.read(cachedTokenBreakdownProvider(widget.charId).notifier).state =
           result.breakdown;
@@ -168,6 +189,12 @@ class _PromptPreviewScreenState extends ConsumerState<PromptPreviewScreen> {
     } catch (e) {
       debugPrint('Prompt preview error: $e');
       if (mounted) setState(() => _loading = false);
+    } finally {
+      _building = false;
+      if (mounted && _rebuildPending) {
+        _rebuildPending = false;
+        unawaited(_build());
+      }
     }
   }
 
@@ -176,7 +203,7 @@ class _PromptPreviewScreenState extends ConsumerState<PromptPreviewScreen> {
     ref.listen(chatProvider(widget.charId), (prev, next) {
       final prevSession = prev?.value?.session;
       final nextSession = next.value?.session;
-      if (prevSession != nextSession && !_loading) {
+      if (prevSession != nextSession) {
         _build();
       }
     });
@@ -189,7 +216,7 @@ class _PromptPreviewScreenState extends ConsumerState<PromptPreviewScreen> {
         (config) => config?.contextBudgetSignature ?? '',
       ),
       (previous, next) {
-        if (previous == null || previous == next || _loading) return;
+        if (previous == null || previous == next) return;
         _build();
       },
     );
@@ -273,7 +300,7 @@ class _PromptPreviewScreenState extends ConsumerState<PromptPreviewScreen> {
         }
         return RequestBodyView(
           topInset: topPad,
-          tokens: _result!.breakdown.totalTokens,
+          tokens: _requestTokens ?? _result!.breakdown.totalTokens,
           contextSize: _apiConfig?.contextSize ?? 0,
           paramsTitle: _protocolLabel,
           params: _requestBody == null
@@ -415,6 +442,7 @@ class _PromptPreviewScreenState extends ConsumerState<PromptPreviewScreen> {
   /// instead of always emitting an OpenAI-shaped body. Returns `null` when the
   /// prompt/config isn't ready or building throws.
   Map<String, dynamic>? _buildRequestBody() {
+    _requestTokens = null;
     if (_result == null || _apiConfig == null) return null;
     try {
       final cfg = _apiConfig!;
@@ -436,6 +464,7 @@ class _PromptPreviewScreenState extends ConsumerState<PromptPreviewScreen> {
         ),
       );
 
+      _requestTokens = countRequestTokens(request.messages);
       return switch (cfg.protocol) {
         LlmProtocol.anthropic => AnthropicChatTransport.buildRequest(
           request,

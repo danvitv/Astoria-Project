@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../shared/shell/desktop/sidebar_sheet_provider.dart';
@@ -14,7 +15,6 @@ import '../../core/llm/transport/endpoint_resolution_cache.dart';
 import '../../core/llm/transport/llm_protocol.dart';
 import '../../core/llm/transport/transport_factory.dart';
 import '../../core/services/api_connection_tester.dart';
-import '../chat/state/token_breakdown_cache.dart';
 import '../chat/state/cached_token_breakdown.dart';
 import '../../core/llm/history_trim.dart';
 import '../../core/models/api_config.dart';
@@ -517,7 +517,6 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
           updated.contextBudgetSignature != config.contextBudgetSignature;
       await _container.read(apiListProvider.notifier).put(updated);
       if (budgetChanged) {
-        TokenBreakdownCache.invalidate();
         _container.invalidate(cachedTokenBreakdownProvider);
       }
     }
@@ -827,8 +826,8 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
         // A lazy list never builds it, and `Scrollable.ensureVisible` cannot
         // scroll to an element that does not exist, so while a focus is
         // pending the viewport builds far enough down to reach it.
-        cacheExtent: widget.focusSection == ApiSettingsSection.context
-            ? 3000
+        scrollCacheExtent: widget.focusSection == ApiSettingsSection.context
+            ? const ScrollCacheExtent.pixels(3000)
             : null,
         padding: EdgeInsets.only(
           top: MediaQuery.paddingOf(context).top + 12,

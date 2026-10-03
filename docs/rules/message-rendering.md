@@ -239,6 +239,19 @@ wrong word.
 
 ---
 
+## Late height changes preserve the reader's anchor
+
+ResizeObserver reads the top visible row from cached heights before updating
+the batch. Height changes above that anchor offset scrollTop by the same delta,
+preserving the visible text and its pixel offset. DOM geometry already reflects
+the new heights and cannot supply the old anchor. Ignore replacement sentinels
+and editor-controlled growth; bottom-pinned readers retain the existing follow.
+Mark compensation as programmatic and update the last scroll position so it
+does not impersonate a reader gesture. Browser coverage lives in
+`specs/reading_position.spec.js`.
+
+---
+
 ## A variation moves as one piece, and the footer does not move at all
 
 The reply body is not the variation. `.msg-content-stack` holds the reasoning

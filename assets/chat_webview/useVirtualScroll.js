@@ -181,6 +181,7 @@ class UseVirtualScroll {
         this._lastScrollTop = 0;
         this._selfPinTop = null;
         this._smartScrollUnlock = null;
+        this._heightOffsetUnlock = null;
         
         this.visibleIndices = new Set();
         this.realVisibleIndices = new Set();
@@ -1058,6 +1059,9 @@ class UseVirtualScroll {
             this.resizeObserver = new ResizeObserver((entries) => {
                 if (!this.mounted) return;
                 const wasPinned = this._pinnedToBottom;
+                // Read the old geometry: DOM heights have already reflowed.
+                const anchorIndex = wasPinned ? -1 : this._topVisibleIndexFromCache();
+                let anchorDelta = 0;
                 let changed = false;
                 let editedRowChanged = false;
                 for (const entry of entries) {
@@ -1068,6 +1072,12 @@ class UseVirtualScroll {
                         entry.target.parentNode !== this.container) continue;
                     const previous = this.cache.itemHeights.get(idx);
                     if (previous == null || Math.abs(previous - height) > 1) {
+                        const editing = entry.target.classList.contains('editing');
+                        // Zero is the updateMessage replacement sentinel, not
+                        // a previous measurement suitable for compensation.
+                        if (!editing && previous > 0 && idx < anchorIndex) {
+                            anchorDelta += height - previous;
+                        }
                         this.cache.setHeight(idx, height);
                         changed = true;
                         if (entry.target.classList.contains('editing')) {
@@ -1077,6 +1087,16 @@ class UseVirtualScroll {
                 }
                 if (!changed) return;
                 this.updateSpacers();
+                if (!wasPinned && anchorDelta !== 0) {
+                    this.isProgrammaticScrolling = true;
+                    this.container.scrollTop += anchorDelta;
+                    this._lastScrollTop = this.container.scrollTop;
+                    clearTimeout(this._heightOffsetUnlock);
+                    this._heightOffsetUnlock = setTimeout(() => {
+                        this._heightOffsetUnlock = null;
+                        if (this.mounted) this.isProgrammaticScrolling = false;
+                    }, 80);
+                }
                 // A late height correction (images, fonts, badges) rewrites the
                 // spacers under a scroll position that stays put. In a long
                 // chat that can shift the mounted rows out of the viewport with
@@ -1158,8 +1178,21 @@ class UseVirtualScroll {
         });
     }
 
+    // Topmost reader anchor in the cached geometry before a resize batch.
+    _topVisibleIndexFromCache() {
+        let top = this.paddingTop;
+        const scrollTop = this.container.scrollTop;
+        for (let i = this.renderStart; i < this.renderEnd; i++) {
+            const height = this.cache.getHeight(i);
+            if (top + height > scrollTop + 1) return i;
+            top += height;
+        }
+        return -1;
+    }
+
     destroy() {
         this.mounted = false;
+        clearTimeout(this._heightOffsetUnlock);
         this._cancelSettle();
         if (this.observer) this.observer.disconnect();
         if (this.realObserver) this.realObserver.disconnect();

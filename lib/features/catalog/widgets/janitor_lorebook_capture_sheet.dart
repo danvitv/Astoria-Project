@@ -198,11 +198,7 @@ class _JanitorLorebookCaptureState
   /// `renderPublicBooks` private grouping (`!accessible && !isJs`).
   List<PublicLorebook> get _closedBooks => closedLorebooks(_public);
 
-  /// The character's plain public books (1:1 conversion) and its public
-  /// scripted ones (LLM rebuild) — the two halves the Public section renders,
-  /// and together everything "Download all" works through.
-  List<PublicLorebook> get _jsonBooks => publicJsonBooks(_public);
-  List<PublicLorebook> get _jsBooks => publicJsBooks(_public);
+  /// The plain and scripted public books that "Download all" works through.
   List<PublicLorebook> get _downloadableBooks =>
       downloadablePublicBooks(_public);
 

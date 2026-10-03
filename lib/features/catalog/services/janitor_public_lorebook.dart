@@ -74,10 +74,10 @@ class PublicLorebook {
   /// Convert to a Glaze [Lorebook]. When [characterId] is given the book is
   /// scoped to that character, otherwise global.
   Lorebook toLorebook({String? characterId}) => convertJanitorScript(
-        rawEntries,
-        name: title.isNotEmpty ? title : 'Janitor Lorebook',
-        characterId: characterId,
-      );
+    rawEntries,
+    name: title.isNotEmpty ? title : 'Janitor Lorebook',
+    characterId: characterId,
+  );
 
   /// Convert to a SillyTavern World Info `{entries:{...}}` map for `.json`
   /// export.
@@ -117,14 +117,18 @@ List<JanitorScriptRef> lorebookScriptRefs(Map<String, dynamic>? meta) {
   if (scripts is! List) return const [];
   return scripts
       .whereType<Map<String, dynamic>>()
-      .where((s) =>
-          (s['type'] == 'lorebook' || s['type'] == 'advanced') &&
-          s['id'] != null)
-      .map((s) => JanitorScriptRef(
-            id: s['id'].toString(),
-            title: (s['title'] ?? '').toString(),
-            isPublic: s['is_public'] != false,
-          ))
+      .where(
+        (s) =>
+            (s['type'] == 'lorebook' || s['type'] == 'advanced') &&
+            s['id'] != null,
+      )
+      .map(
+        (s) => JanitorScriptRef(
+          id: s['id'].toString(),
+          title: (s['title'] ?? '').toString(),
+          isPublic: s['is_public'] != false,
+        ),
+      )
       .toList();
 }
 
@@ -204,8 +208,9 @@ String _parsePublishedContent(String html) {
 /// Never throws — returns '' when the page can't be read (e.g. closed page).
 Future<String> _fetchScriptDescription(String scriptId) async {
   try {
-    final body =
-        await JanitorWebViewProxy.instance.fetch('$_origin/scripts/$scriptId');
+    final body = await JanitorWebViewProxy.instance.fetch(
+      '$_origin/scripts/$scriptId',
+    );
     return _parsePublishedContent(body);
   } catch (e) {
     debugPrint('[janitor-public-lore] scripts page $scriptId failed: $e');
@@ -221,19 +226,24 @@ Future<PublicLorebook> fetchPublicLorebook(
   String title = '',
 }) async {
   try {
-    final body = await JanitorWebViewProxy.instance
-        .fetch('$_origin/hampter/script/$scriptId');
+    final body = await JanitorWebViewProxy.instance.fetch(
+      '$_origin/hampter/script/$scriptId',
+    );
     final rec = jsonDecode(body);
     if (rec is! Map) {
       return PublicLorebook(
-          id: scriptId, title: title, error: 'response was not JSON');
+        id: scriptId,
+        title: title,
+        error: 'response was not JSON',
+      );
     }
     // The real description lives on the lorebook's public /scripts page, not in
     // the /hampter record (whose `description` is usually empty). Stored as
     // plain text (closed pages fall back to the empty hampter description).
     final pageDesc = await _fetchScriptDescription(scriptId);
     final description = _stripHtml(
-        pageDesc.isNotEmpty ? pageDesc : (rec['description'] ?? '').toString());
+      pageDesc.isNotEmpty ? pageDesc : (rec['description'] ?? '').toString(),
+    );
     final entries = parseScriptEntries(rec);
     final usable = entries
         .whereType<Map<String, dynamic>>()
@@ -356,10 +366,17 @@ List<Map<String, dynamic>> rawLorebookEntries(String text) {
 
 List<String> _asKeys(dynamic v) {
   if (v is List) {
-    return v.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
+    return v
+        .map((e) => e.toString().trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
   }
   if (v is String) {
-    return v.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    return v
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
   }
   return const [];
 }
@@ -372,8 +389,21 @@ int _asOrder(Map<String, dynamic> e) {
   return 100;
 }
 
-/// JanitorAI numeric/string position → Glaze position token. Mirrors the
-/// mapping in `character_book_converter.dart`.
+/// The nearest supported slot for Janitor's card-field placement.
+String? _placementPosition(Map<String, dynamic> entry) {
+  final placement = entry['placement'];
+  if (placement != 'personality' &&
+      placement != 'scenario' &&
+      placement != 'example_dialogs') {
+    return null;
+  }
+  // Glaze cannot inject into these fields: retain the requested side of card.
+  return entry['placementPosition'] == 'before'
+      ? 'worldInfoBefore'
+      : 'worldInfoAfter';
+}
+
+/// JanitorAI numeric/string position → Glaze position token.
 String _mapPosition(dynamic pos) {
   if (pos is String) {
     switch (pos) {
@@ -406,18 +436,24 @@ String _mapPosition(dynamic pos) {
 LorebookEntry _toEntry(Map<String, dynamic> e, int index) {
   final keys = _asKeys(e['key'] ?? e['keys'] ?? e['keysRaw'] ?? e['keywords']);
   final secondary = _asKeys(
-      e['keysecondary'] ?? e['secondary_keys'] ?? e['keySecondary']);
+    e['keysecondary'] ?? e['secondary_keys'] ?? e['keySecondary'],
+  );
   final content = (e['content'] ?? e['text'] ?? '').toString();
   final comment =
-      (e['comment'] ?? e['title'] ?? e['name'] ?? e['category'] ?? 'Entry $index')
+      (e['comment'] ??
+              e['title'] ??
+              e['name'] ??
+              e['category'] ??
+              'Entry $index')
           .toString()
           .trim();
   final rawProb = e['probability'];
   final probability = rawProb is num
       ? (rawProb <= 1 ? (rawProb * 100).round() : rawProb.round()).clamp(0, 100)
       : 100;
-  final selectiveLogic =
-      e['selectiveLogic'] is num ? (e['selectiveLogic'] as num).toInt() : 5;
+  final selectiveLogic = e['selectiveLogic'] is num
+      ? (e['selectiveLogic'] as num).toInt()
+      : 5;
   return LorebookEntry(
     id: 'jpl_${index}_${generateId()}',
     comment: comment,
@@ -426,13 +462,16 @@ LorebookEntry _toEntry(Map<String, dynamic> e, int index) {
     content: content,
     enabled: e['enabled'] != false && e['disable'] != true,
     constant: e['constant'] == true,
-    position: _mapPosition(e['position']),
+    position: _mapPosition(e['position'] ?? _placementPosition(e)),
     order: _asOrder(e),
     selectiveLogic: selectiveLogic,
     probability: probability,
-    caseSensitive: e['case_sensitive'] is bool ? e['case_sensitive'] as bool : null,
-    matchWholeWords:
-        e['match_whole_words'] is bool ? e['match_whole_words'] as bool : null,
+    caseSensitive: e['case_sensitive'] is bool
+        ? e['case_sensitive'] as bool
+        : null,
+    matchWholeWords: e['match_whole_words'] is bool
+        ? e['match_whole_words'] as bool
+        : null,
     preventRecursion: e['prevent_recursion'] == true,
   );
 }
@@ -488,7 +527,8 @@ int _tavernPosition(dynamic pos) {
 Map<String, dynamic> _tavernEntry(Map<String, dynamic> e, int uid) {
   final key = _asKeys(e['key'] ?? e['keys'] ?? e['keysRaw'] ?? e['keywords']);
   final keysecondary = _asKeys(
-      e['keysecondary'] ?? e['secondary_keys'] ?? e['keySecondary']);
+    e['keysecondary'] ?? e['secondary_keys'] ?? e['keySecondary'],
+  );
   final content = (e['content'] ?? e['text'] ?? '').toString().trim();
   final comment =
       (e['comment'] ?? e['title'] ?? e['name'] ?? e['category'] ?? 'Entry $uid')
@@ -508,7 +548,7 @@ Map<String, dynamic> _tavernEntry(Map<String, dynamic> e, int uid) {
     'constant': constant,
     'selective': !constant,
     'order': _asOrder(e),
-    'position': _tavernPosition(e['position']),
+    'position': _tavernPosition(e['position'] ?? _placementPosition(e)),
     'disable': e['enabled'] == false || e['disable'] == true,
     'displayIndex': uid,
     'addMemo': true,
@@ -527,16 +567,21 @@ Map<String, dynamic> _tavernEntry(Map<String, dynamic> e, int uid) {
     'preventRecursion': e['prevent_recursion'] == true,
     'delayUntilRecursion': false,
     'scanDepth': null,
-    'caseSensitive':
-        e['case_sensitive'] is bool ? e['case_sensitive'] : null,
-    'matchWholeWords':
-        e['match_whole_words'] is bool ? e['match_whole_words'] : null,
+    'caseSensitive': e['case_sensitive'] is bool ? e['case_sensitive'] : null,
+    'matchWholeWords': e['match_whole_words'] is bool
+        ? e['match_whole_words']
+        : null,
     'useGroupScoring': null,
     'automationId': '',
-    'selectiveLogic':
-        e['selectiveLogic'] is num ? (e['selectiveLogic'] as num).toInt() : 0,
+    'selectiveLogic': e['selectiveLogic'] is num
+        ? (e['selectiveLogic'] as num).toInt()
+        : 0,
     'ignoreBudget': false,
-    'characterFilter': {'isExclude': false, 'names': <String>[], 'tags': <String>[]},
+    'characterFilter': {
+      'isExclude': false,
+      'names': <String>[],
+      'tags': <String>[],
+    },
   };
 }
 
@@ -555,10 +600,7 @@ Map<String, dynamic> janitorScriptToTavernJson(
     out['$uid'] = entry;
     uid += 1;
   }
-  return {
-    if (name.isNotEmpty) 'name': name,
-    'entries': out,
-  };
+  return {if (name.isNotEmpty) 'name': name, 'entries': out};
 }
 
 int _glazeTavernPosition(String pos) {

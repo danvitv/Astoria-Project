@@ -215,7 +215,7 @@ void main() {
         Lorebook(
           id: 'bookV',
           name: 'Book V',
-          entries: const [],
+          entries: [],
         ),
       ],
       settings: const LorebookGlobalSettings(

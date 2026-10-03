@@ -4,6 +4,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 
 import '../../../../core/llm/tokenizer.dart';
+import '../../../../core/llm/request_tokens.dart';
 import '../../../../shared/theme/app_colors.dart';
 import '../../services/prompt_preview_post_processor.dart';
 import 'inspector_surface.dart';
@@ -37,10 +38,18 @@ class InspectorMessage {
     this.isHistory = false,
     this.isDepth = false,
     this.isCacheAnchor = false,
+    this.captured,
   });
 
   final String role;
   final String content;
+
+  /// Original captured shape; the rendered JSON of image parts is not text.
+  final Map<String, dynamic>? captured;
+
+  int get tokens => captured == null
+      ? estimateTokens(content)
+      : countRequestMessageTokens(captured!);
 
   /// Name of the prompt block this message was built from, when it is known.
   final String? blockName;
@@ -73,6 +82,7 @@ class InspectorMessage {
     isHistory: isHistory,
     isDepth: isDepth,
     isCacheAnchor: true,
+    captured: captured,
   );
 
   /// Flags the first history message in [messages] as the cache anchor.
@@ -129,6 +139,7 @@ class InspectorMessage {
           : content == null
           ? ''
           : const JsonEncoder.withIndent('  ').convert(content),
+      captured: message,
     );
   }
 }
@@ -216,7 +227,7 @@ class _InspectorMessageCardState extends State<InspectorMessageCard> {
   }
 
   Widget _header(BuildContext context, InspectorMessage message) {
-    final tokens = estimateTokens(message.content);
+    final tokens = message.tokens;
 
     return Row(
       children: [

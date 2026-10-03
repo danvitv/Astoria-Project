@@ -5,35 +5,36 @@ import 'package:glaze_flutter/features/catalog/services/janitor_public_lorebook.
 
 /// A JanitorAI `scripts` metadata block: one public lorebook, one private.
 Map<String, dynamic> _meta() => {
-      'name': 'Aria',
-      'scripts': [
-        {'type': 'lorebook', 'id': 101, 'title': 'World Lore', 'is_public': true},
-        {'type': 'lorebook', 'id': 202, 'title': 'Secret Lore', 'is_public': false},
-        {'type': 'regex', 'id': 303, 'title': 'Not a lorebook'},
-      ],
-    };
+  'name': 'Aria',
+  'scripts': [
+    {'type': 'lorebook', 'id': 101, 'title': 'World Lore', 'is_public': true},
+    {'type': 'lorebook', 'id': 202, 'title': 'Secret Lore', 'is_public': false},
+    {'type': 'regex', 'id': 303, 'title': 'Not a lorebook'},
+  ],
+};
 
 /// Entries in JanitorAI's native script shape.
 List<dynamic> _entries() => [
-      {
-        'key': ['Northern Keep', 'fortress'],
-        'keysecondary': ['cliffs'],
-        'content': 'The Northern Keep is an ancient fortress carved into the cliffs.',
-        'insertion_order': 50,
-        'constant': false,
-      },
-      {
-        'keys': 'Frostfang, blade',
-        'content': 'The Frostfang Blade never dulls.',
-        'order': 100,
-        'probability': 0.5,
-      },
-      {
-        // Empty content → skipped.
-        'key': ['ignored'],
-        'content': '   ',
-      },
-    ];
+  {
+    'key': ['Northern Keep', 'fortress'],
+    'keysecondary': ['cliffs'],
+    'content':
+        'The Northern Keep is an ancient fortress carved into the cliffs.',
+    'insertion_order': 50,
+    'constant': false,
+  },
+  {
+    'keys': 'Frostfang, blade',
+    'content': 'The Frostfang Blade never dulls.',
+    'order': 100,
+    'probability': 0.5,
+  },
+  {
+    // Empty content → skipped.
+    'key': ['ignored'],
+    'content': '   ',
+  },
+];
 
 void main() {
   group('lorebookScriptRefs', () {
@@ -70,6 +71,42 @@ void main() {
   });
 
   group('convertJanitorScript', () {
+    test('card-field placements retain their side in import and export', () {
+      final entries = [
+        for (final placement in ['personality', 'scenario', 'example_dialogs'])
+          for (final side in ['before', 'after'])
+            {
+              'key': ['k'],
+              'content': 'Lore',
+              'placement': placement,
+              'placementPosition': side,
+            },
+        {
+          'key': ['k'],
+          'content': 'Lore',
+          'placement': 'default',
+          'placementPosition': 'before',
+        },
+      ];
+      expect(
+        convertJanitorScript(
+          entries,
+          name: 'Placed',
+        ).entries.map((e) => e.position),
+        [
+          'worldInfoBefore',
+          'worldInfoAfter',
+          'worldInfoBefore',
+          'worldInfoAfter',
+          'worldInfoBefore',
+          'worldInfoAfter',
+          'worldInfoAfter',
+        ],
+      );
+      final tavern = janitorScriptToTavernJson(entries)['entries'] as Map;
+      expect((tavern['0'] as Map)['position'], 0);
+      expect((tavern['1'] as Map)['position'], 1);
+    });
     test('maps native entries to Glaze LorebookEntry, skipping empties', () {
       final book = convertJanitorScript(_entries(), name: 'World Lore');
       expect(book.name, 'World Lore');
@@ -88,8 +125,11 @@ void main() {
     });
 
     test('scopes to a character when characterId is given', () {
-      final book = convertJanitorScript(_entries(),
-          name: 'World Lore', characterId: 'char-1');
+      final book = convertJanitorScript(
+        _entries(),
+        name: 'World Lore',
+        characterId: 'char-1',
+      );
       expect(book.activationScope, 'character');
       expect(book.activationTargetId, 'char-1');
     });
@@ -100,8 +140,11 @@ void main() {
       // (it has to — a global book pinned to a character carries both flags).
       // So importing a character *with* its lorebooks used to put that book in
       // every other character's prompt too.
-      final book = convertJanitorScript(_entries(),
-          name: 'World Lore', characterId: 'char-1');
+      final book = convertJanitorScript(
+        _entries(),
+        name: 'World Lore',
+        characterId: 'char-1',
+      );
       expect(book.enabled, isFalse);
     });
 

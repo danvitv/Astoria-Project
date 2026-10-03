@@ -95,13 +95,14 @@ class PromptFields {
   }
 
   String operator [](InjectionField field) => switch (field) {
-        InjectionField.persona => persona,
-        InjectionField.scenario => scenario,
-        InjectionField.example => example,
-        InjectionField.firstMessage => firstMessage,
-      };
+    InjectionField.persona => persona,
+    InjectionField.scenario => scenario,
+    InjectionField.example => example,
+    InjectionField.firstMessage => firstMessage,
+  };
 
-  bool get isEmpty => InjectionField.values.every((f) => this[f].trim().isEmpty);
+  bool get isEmpty =>
+      InjectionField.values.every((f) => this[f].trim().isEmpty);
 }
 
 /// One block of lorebook text recovered from [field].
@@ -182,6 +183,23 @@ List<String> _residue(String after, String before) {
   }
   flush();
   return blocks;
+}
+
+/// Removes recovered lore from a card field, so it is not imported both as
+/// always-on card text and as a keyed lorebook entry.
+String withoutInjected(String text, InjectionField field, InjectionScan scan) {
+  final injected = {
+    for (final block in scan.blocks.where((b) => b.field == field))
+      for (final line in block.text.split('\n'))
+        if (_fold(line).isNotEmpty) _fold(line),
+  };
+  if (injected.isEmpty) return text;
+  return text
+      .split('\n')
+      .where((line) => !injected.contains(_fold(line)))
+      .join('\n')
+      .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+      .trim();
 }
 
 /// Recovers the lorebook text injected into [capture]'s own fields.

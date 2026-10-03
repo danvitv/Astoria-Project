@@ -109,22 +109,26 @@ String relativeGlazeFilePath(String path) {
 /// Two characters minimum, so a Windows drive letter is not read as one.
 final RegExp _urlSchemeRegex = RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]+:');
 
-/// Returns the on-disk path to the 512px thumbnail JPG for a stored avatar
+const kThumbnailExtensions = ['png', 'jpg'];
+
+/// Returns the on-disk path to the PNG/JPEG thumbnail for a stored avatar
 /// path when that thumbnail exists, otherwise the resolved full-resolution
 /// avatar path (or `null` when there is no avatar).
 ///
 /// Lists (character grid, folder cards, chat history) should prefer this over
-/// [resolveGlazeFilePath] so that scrolling decodes small square JPGs instead
+/// [resolveGlazeFilePath] so that scrolling decodes scaled thumbnails instead
 /// of the multi-megabyte source PNGs — the latter causes visible jank and
 /// delayed "pop-in" the first time each card scrolls into view.
 String? resolveGlazeThumbnailPath(String? avatarPath) {
   final resolved = resolveGlazeFilePath(avatarPath);
   if (resolved == null || resolved.isEmpty) return resolved;
   final name = p.basenameWithoutExtension(resolved);
-  // avatars/<id>.png -> <base>/thumbnails/<id>.jpg
+  // Transparent thumbnails are PNG, opaque ones JPEG.
   final base = p.dirname(p.dirname(resolved));
-  final thumb = p.join(base, 'thumbnails', '$name.jpg');
-  if (File(thumb).existsSync()) return thumb;
+  for (final extension in kThumbnailExtensions) {
+    final thumb = p.join(base, 'thumbnails', '$name.$extension');
+    if (File(thumb).existsSync()) return thumb;
+  }
   return resolved;
 }
 

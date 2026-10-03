@@ -22,6 +22,7 @@ import '../services/magic_drawer_layout_service.dart';
 import '../services/magic_drawer_stats_service.dart';
 import 'magic_drawer_widgets.dart';
 import '../state/magic_drawer_stats_cache.dart';
+import '../state/cached_token_breakdown.dart';
 import '../../extensions/models/extension_preset.dart';
 import '../../extensions/models/extensions_settings.dart';
 import '../../extensions/providers/extension_presets_provider.dart';
@@ -236,8 +237,7 @@ class _MagicDrawerPanelState extends ConsumerState<MagicDrawerPanel> {
     return list;
   }
 
-  bool _canAddMore() =>
-      _allItems.any((item) => !_itemIds.contains(item.id));
+  bool _canAddMore() => _allItems.any((item) => !_itemIds.contains(item.id));
 
   String? _statusFor(
     String id,
@@ -375,6 +375,9 @@ class _MagicDrawerPanelState extends ConsumerState<MagicDrawerPanel> {
       }
     });
     ref.listen(activePresetIdProvider, (prev, next) {
+      if (prev != next) _scheduleRefresh();
+    });
+    ref.listen(cachedTokenBreakdownProvider(widget.charId), (prev, next) {
       if (prev != next) _scheduleRefresh();
     });
     ref.listen(presetConnectionsProvider, (prev, next) {

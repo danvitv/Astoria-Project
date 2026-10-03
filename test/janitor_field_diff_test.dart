@@ -43,6 +43,46 @@ const _loreB =
     'Marcus Vane runs the night watch and answers to no one in the city.';
 
 void main() {
+  group('withoutInjected', () {
+    test('recovered conditional lore leaves only its own card field', () {
+      const scenario = 'You meet Anna at the library.\n$_loreA';
+      final scan = scanInjectedFields(
+        capture: PromptFields.fromPayload(payload(scenario: scenario)),
+        probe: PromptFields.fromPayload(payload()),
+      );
+      expect(
+        withoutInjected(scenario, InjectionField.scenario, scan),
+        'You meet Anna at the library.',
+      );
+      expect(withoutInjected(scenario, InjectionField.persona, scan), scenario);
+    });
+    test(
+      'always-on lore recovered from the probe is not duplicated in the card',
+      () {
+        const persona = 'Anna is a librarian.\n$_loreA\nShe is thirty.';
+        final probe = PromptFields.fromPayload(payload(persona: persona));
+        final scan = scanInjectedFields(
+          capture: probe,
+          probe: probe,
+          clean: PromptFields.fromMeta({
+            'personality': 'Anna is a librarian.\nShe is thirty.',
+          }),
+        );
+        expect(
+          withoutInjected(persona, InjectionField.persona, scan),
+          'Anna is a librarian.\nShe is thirty.',
+        );
+        expect(
+          withoutInjected(
+            'Anna.\n\n\n\nBob.',
+            InjectionField.persona,
+            InjectionScan.none,
+          ),
+          'Anna.\n\n\n\nBob.',
+        );
+      },
+    );
+  });
   group('scanInjectedFields', () {
     test('recovers lore the trigger fired into the scenario', () {
       final before = PromptFields.fromPayload(payload());
@@ -87,18 +127,20 @@ void main() {
 
     test('reports every field a single trigger wrote into', () {
       final before = PromptFields.fromPayload(payload());
-      final after = PromptFields.fromPayload(payload(
-        scenario: 'You meet Anna at the library.\n$_loreA',
-        firstMessage: '$_loreB\n\nAnna looks up from her book.',
-      ));
+      final after = PromptFields.fromPayload(
+        payload(
+          scenario: 'You meet Anna at the library.\n$_loreA',
+          firstMessage: '$_loreB\n\nAnna looks up from her book.',
+        ),
+      );
 
       final scan = scanInjectedFields(capture: after, probe: before);
 
       expect(scan.length, 2);
-      expect(
-        scan.fields,
-        {InjectionField.scenario, InjectionField.firstMessage},
-      );
+      expect(scan.fields, {
+        InjectionField.scenario,
+        InjectionField.firstMessage,
+      });
       expect(scan.text, contains(_loreA));
       expect(scan.text, contains(_loreB));
     });

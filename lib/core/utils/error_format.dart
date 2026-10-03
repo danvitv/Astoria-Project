@@ -121,7 +121,7 @@ Future<DioException> decodeByteError(DioException err) async {
   );
 }
 
-/// Builds "HTTP <code> - <description>" and appends the provider message on a
+/// Builds `HTTP <code> - <description>` and appends the provider message on a
 /// second line when the body carries one.
 String _formatHttpError(Response<dynamic> response) {
   final code = response.statusCode;

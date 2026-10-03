@@ -84,6 +84,51 @@ void main() {
     await service.deleteAvatar('nonexistent');
   });
 
+  test(
+    'transparent thumbnails retain alpha and switching format removes siblings',
+    () async {
+      final image = img.Image(width: 30, height: 30, numChannels: 4);
+      img.fill(image, color: img.ColorRgba8(100, 80, 60, 255));
+      image.setPixelRgba(0, 0, 100, 80, 60, 0);
+      final png = Uint8List.fromList(img.encodePng(image));
+      final avatar = await service.saveAvatar('alpha', makePng(30, 30));
+      final jpegPath = service.thumbnailPath(avatar)!;
+      expect(jpegPath, endsWith('.jpg'));
+      final pngPath = (await service.saveThumbnail('alpha', png))!;
+      expect(pngPath, endsWith('.png'));
+      expect(File(jpegPath).existsSync(), isFalse);
+      expect(service.thumbnailPath(avatar), pngPath);
+      expect(
+        img.decodePng(await File(pngPath).readAsBytes())!.getPixel(0, 0).a,
+        0,
+      );
+      await service.saveThumbnail('alpha', makePng(30, 30));
+      expect(File(pngPath).existsSync(), isFalse);
+      expect(service.thumbnailPath(avatar), jpegPath);
+      await service.saveThumbnail('alpha', png);
+      await service.deleteAvatar('alpha');
+      expect(File(pngPath).existsSync(), isFalse);
+    },
+  );
+
+  test('v6 thumbnails are refreshed to the alpha-aware v7 policy', () async {
+    SharedPreferences.setMockInitialValues({
+      'gz_thumb_v6_migrated': true,
+      'gz_thumb_v6_backfilled': true,
+    });
+    final image = img.Image(width: 30, height: 30, numChannels: 4);
+    img.fill(image, color: img.ColorRgba8(100, 80, 60, 0));
+    final avatar = await service.saveAvatar('refresh', makePng(30, 30));
+    await File(avatar).writeAsBytes(img.encodePng(image));
+    await service.migrateOldThumbnails();
+    expect(await service.backfillMissingThumbnails([avatar]), 1);
+    expect(service.thumbnailPath(avatar), endsWith('.png'));
+    expect(
+      File(p.join(tmpDir.path, 'thumbnails', 'refresh.jpg')).existsSync(),
+      isFalse,
+    );
+  });
+
   test('saveAvatarFromDataUrl decodes base64 and saves', () async {
     final simplePng = makePng(50, 50);
     final b64 = base64Encode(simplePng);
@@ -148,10 +193,10 @@ void main() {
 
   test('thumbnail bounds both axes while preserving extreme aspect ratio', () {
     final portrait = img.decodeJpg(
-      resizeAvatarBytes(makePng(500, 5000), 768)!,
+      resizeAvatarBytes(makePng(500, 5000), 768)!.bytes,
     )!;
     final landscape = img.decodeJpg(
-      resizeAvatarBytes(makePng(5000, 500), 768)!,
+      resizeAvatarBytes(makePng(5000, 500), 768)!.bytes,
     )!;
 
     expect(portrait.width, 410);
@@ -173,7 +218,7 @@ void main() {
       1,
     );
     var prefs = await SharedPreferences.getInstance();
-    expect(prefs.getBool('gz_thumb_v6_backfilled'), isNot(true));
+    expect(prefs.getBool('gz_thumb_v7_backfilled'), isNot(true));
 
     await retry.writeAsBytes(makePng(100, 100));
     expect(
@@ -181,7 +226,7 @@ void main() {
       1,
     );
     prefs = await SharedPreferences.getInstance();
-    expect(prefs.getBool('gz_thumb_v6_backfilled'), isTrue);
+    expect(prefs.getBool('gz_thumb_v7_backfilled'), isTrue);
   });
 
   test(
@@ -196,14 +241,14 @@ void main() {
       await service.migrateOldThumbnails(prefs);
 
       expect(await thumbnail.exists(), isTrue);
-      expect(prefs.getBool('gz_thumb_v6_migrated'), isTrue);
+      expect(prefs.getBool('gz_thumb_v7_migrated'), isTrue);
       expect(
-        await File(p.join(tmpDir.path, '.thumbnails-v6-migrated')).exists(),
+        await File(p.join(tmpDir.path, '.thumbnails-v7-migrated')).exists(),
         isTrue,
       );
       expect(
         await File(
-          p.join(tmpDir.path, '.thumbnails-v6-refresh-required'),
+          p.join(tmpDir.path, '.thumbnails-v7-refresh-required'),
         ).exists(),
         isTrue,
       );
@@ -211,20 +256,20 @@ void main() {
   );
 
   test(
-    'adopting an existing v6 library only backfills missing files',
+    'adopting an existing v7 library only backfills missing files',
     () async {
       SharedPreferences.setMockInitialValues({
-        'gz_thumb_v6_migrated': true,
-        'gz_thumb_v6_backfilled': true,
+        'gz_thumb_v7_migrated': true,
+        'gz_thumb_v7_backfilled': true,
       });
       final prefs = await SharedPreferences.getInstance();
 
       await service.migrateOldThumbnails(prefs);
 
-      expect(prefs.getBool('gz_thumb_v6_backfilled'), isFalse);
+      expect(prefs.getBool('gz_thumb_v7_backfilled'), isFalse);
       expect(
         await File(
-          p.join(tmpDir.path, '.thumbnails-v6-refresh-required'),
+          p.join(tmpDir.path, '.thumbnails-v7-refresh-required'),
         ).exists(),
         isFalse,
       );
