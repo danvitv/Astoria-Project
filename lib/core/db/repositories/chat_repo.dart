@@ -96,47 +96,68 @@ class ChatRepo implements SyncChatStore {
 
   @override
   Future<List<SessionMetadata>> getAllSessionMetadata() async {
-    final rows = await _db
-        .customSelect(
-          '''
+    final rows = await _sessionMetadataQuery().get();
+    return rows.map(_projectedMetadata).toList();
+  }
+
+  // Project only fields used by the list. Session variables and the last message
+  // can contain large Studio payloads/swipes even in a short chat; transferring
+  // and decoding either whole JSON object makes draft notifications expensive.
+  Selectable<QueryRow> _sessionMetadataQuery() => _db.customSelect(
+    '''
 SELECT
   session_id,
   character_id,
   session_index,
   updated_at,
-  session_vars_json,
+  CASE WHEN json_valid(session_vars_json) THEN
+    CASE WHEN json_type(session_vars_json, '\$.sessionName') = 'text'
+      THEN json_extract(session_vars_json, '\$.sessionName') END
+  END AS session_name,
+  CASE WHEN json_valid(session_vars_json) THEN
+    CASE WHEN json_type(session_vars_json, '\$.branchedAt') = 'text'
+      THEN json_extract(session_vars_json, '\$.branchedAt') END
+  END AS branched_at,
   json_array_length(messages_json) AS message_count,
   json_extract(messages_json, '\$[0].timestamp') AS first_timestamp,
-  json_extract(messages_json, '\$[#-1]') AS last_message_json
+  json_extract(messages_json, '\$[#-1].timestamp') AS last_timestamp,
+  json_extract(messages_json, '\$[#-1].continuationOffset') AS continuation_offset,
+  CASE json_type(messages_json, '\$[#-1].content')
+    WHEN 'text' THEN json_extract(messages_json, '\$[#-1].content')
+    WHEN 'array' THEN (
+      SELECT group_concat(json_extract(part.value, '\$.text'), ' ')
+      FROM json_each(json_extract(messages_json, '\$[#-1].content')) AS part
+      WHERE part.type = 'object'
+        AND json_extract(part.value, '\$.type') = 'text'
+        AND json_type(part.value, '\$.text') = 'text'
+    )
+  END AS last_content
 FROM chat_sessions
 ORDER BY updated_at DESC
 ''',
-          readsFrom: {_db.chatSessions},
-        )
-        .get();
-    return rows.map(_projectedMetadata).toList();
-  }
+    readsFrom: {_db.chatSessions},
+  );
 
   Stream<List<SessionMetadata>> watchAllSessionMetadata() {
-    var lastEmit = <SessionMetadata>[];
-    return (_db.select(_db.chatSessions)
-          ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
+    return _sessionMetadataQuery()
         .watch()
-        .asyncMap((rows) async {
-          final meta = rows.map(_toMetadata).toList();
-          if (_metadataEqual(lastEmit, meta)) return lastEmit;
-          lastEmit = meta;
-          return meta;
-        });
+        .map((rows) => rows.map(_projectedMetadata).toList())
+        .distinct(_metadataEqual);
   }
 
   static bool _metadataEqual(List<SessionMetadata> a, List<SessionMetadata> b) {
     if (a.length != b.length) return false;
     for (int i = 0; i < a.length; i++) {
       if (a[i].sessionId != b[i].sessionId ||
+          a[i].characterId != b[i].characterId ||
+          a[i].sessionIndex != b[i].sessionIndex ||
           a[i].updatedAt != b[i].updatedAt ||
           a[i].messageCount != b[i].messageCount ||
-          a[i].sessionName != b[i].sessionName) {
+          a[i].sessionName != b[i].sessionName ||
+          a[i].lastMessageContent != b[i].lastMessageContent ||
+          a[i].lastMessageTimestamp != b[i].lastMessageTimestamp ||
+          a[i].originTimestamp != b[i].originTimestamp ||
+          a[i].originKind != b[i].originKind) {
         return false;
       }
     }
@@ -265,11 +286,9 @@ ORDER BY updated_at DESC
         if ((snapshot.draft ?? '').isEmpty) {
           return _toModel(snapshot, messages: prepared.messages);
         }
-        await (_db.update(
-          _db.chatSessions,
-        )..where((t) => t.sessionId.equals(sessionId))).write(
-          const ChatSessionsCompanion(draft: Value('')),
-        );
+        await (_db.update(_db.chatSessions)
+              ..where((t) => t.sessionId.equals(sessionId)))
+            .write(const ChatSessionsCompanion(draft: Value('')));
         return _toModel(
           snapshot.copyWith(draft: const Value('')),
           messages: prepared.messages,
@@ -344,26 +363,24 @@ ORDER BY updated_at DESC
   /// Updates only the draft column, and only if [expectedMessageCount] still
   /// matches the row. A delayed input debounce from before Send must not write
   /// an old draft over a session that has since gained the user message.
-  Future<ChatSession?> updateDraftIfMessageCount({
+  /// Returns the persisted draft, or null when the guard did not match. Count
+  /// in SQLite on the database executor: never transfer/decode the history just
+  /// to save text in an unrelated column.
+  Future<String?> updateDraftIfMessageCount({
     required String sessionId,
     required String draft,
     required int expectedMessageCount,
   }) async {
-    return _db.transaction(() async {
-      final row = await (_db.select(
-        _db.chatSessions,
-      )..where((t) => t.sessionId.equals(sessionId))).getSingleOrNull();
-      if (row == null) return null;
-
-      final (messageCount, _) = _scanTopLevelObjects(row.messagesJson);
-      if (messageCount != expectedMessageCount) return null;
-
-      await (_db.update(_db.chatSessions)
-            ..where((t) => t.sessionId.equals(sessionId)))
-          .write(ChatSessionsCompanion(draft: Value(draft)));
-
-      return _toModel(row.copyWith(draft: Value(draft)));
-    });
+    final changed =
+        await (_db.update(_db.chatSessions)..where(
+              (t) =>
+                  t.sessionId.equals(sessionId) &
+                  const CustomExpression<int>(
+                    'json_array_length(messages_json)',
+                  ).equals(expectedMessageCount),
+            ))
+            .write(ChatSessionsCompanion(draft: Value(draft)));
+    return changed == 1 ? draft : null;
   }
 
   /// Atomically transforms the latest durable message list for a session.
@@ -1278,45 +1295,18 @@ ORDER BY updated_at DESC
   }
 
   SessionMetadata _projectedMetadata(QueryRow row) {
-    final lastMessageJson = row.readNullable<String>('last_message_json');
-    var lastContent = '';
-    var lastTimestamp = 0;
-    if (lastMessageJson != null) {
-      try {
-        final lastMessage = jsonDecode(lastMessageJson) as Map<String, dynamic>;
-        final rawContent = lastMessage['content'];
-        if (rawContent is String) {
-          lastContent = rawContent;
-        } else if (rawContent is List) {
-          lastContent = rawContent
-              .whereType<Map<Object?, Object?>>()
-              .where((part) => part['type'] == 'text' && part['text'] is String)
-              .map((part) => part['text'] as String)
-              .join(' ');
-        }
-        lastContent = previewSource(
-          lastContent,
-          lastMessage['continuationOffset'] as int?,
-        );
-        if (lastContent.length > 250) {
-          lastContent = lastContent.substring(0, 250);
-        }
-        lastTimestamp = (lastMessage['timestamp'] as int?) ?? 0;
-      } catch (_) {}
+    // Offsets are Dart UTF-16 positions, not SQLite character positions. Keep
+    // continuation slicing here so emoji before the boundary remain correct.
+    var lastContent = previewSource(
+      row.readNullable<String>('last_content') ?? '',
+      row.readNullable<int>('continuation_offset'),
+    );
+    if (lastContent.length > 250) {
+      lastContent = lastContent.substring(0, 250);
     }
-
-    String? sessionName;
-    int? branchedAt;
-    final sessionVarsJson = row.readNullable<String>('session_vars_json');
-    if (sessionVarsJson != null && sessionVarsJson.isNotEmpty) {
-      try {
-        final vars = jsonDecode(sessionVarsJson) as Map;
-        sessionName = vars['sessionName'] as String?;
-        final rawBranchedAt = vars['branchedAt'];
-        if (rawBranchedAt is String) branchedAt = int.tryParse(rawBranchedAt);
-      } catch (_) {}
-    }
-
+    final branchedAt = int.tryParse(
+      row.readNullable<String>('branched_at') ?? '',
+    );
     final firstTimestamp = row.readNullable<int>('first_timestamp') ?? 0;
     final hasBranchTimestamp = branchedAt != null && branchedAt > 0;
     return SessionMetadata(
@@ -1326,8 +1316,8 @@ ORDER BY updated_at DESC
       updatedAt: row.read<int>('updated_at'),
       messageCount: row.readNullable<int>('message_count') ?? 0,
       lastMessageContent: lastContent,
-      lastMessageTimestamp: lastTimestamp,
-      sessionName: sessionName,
+      lastMessageTimestamp: row.readNullable<int>('last_timestamp') ?? 0,
+      sessionName: row.readNullable<String>('session_name'),
       originTimestamp: hasBranchTimestamp ? branchedAt : firstTimestamp,
       originKind: hasBranchTimestamp
           ? 'branched'

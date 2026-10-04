@@ -188,7 +188,10 @@ class _ChatInputBarState extends ConsumerState<ChatInputBar> {
   static const double _keyboardDismissDragThreshold = 28;
 
   late final TextEditingController _controller;
+  late String _lastDraftText;
+  late bool _hasMessageText;
   final _guidanceController = TextEditingController();
+  bool _hasGuidanceText = false;
   bool _guidanceMode = false;
   Timer? _debounce;
   final _internalFocusNode = FocusNode();
@@ -213,7 +216,10 @@ class _ChatInputBarState extends ConsumerState<ChatInputBar> {
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.initialDraft);
+    _lastDraftText = _controller.text;
+    _hasMessageText = _lastDraftText.trim().isNotEmpty;
     _controller.addListener(_onTextChanged);
+    _guidanceController.addListener(_onGuidanceChanged);
     _updateFocusNodeHandler();
     // Attach / fullscreen / guidance act on the controllers this State owns, so
     // the drawer cannot run them itself once one of their cards is sitting in
@@ -250,14 +256,30 @@ class _ChatInputBarState extends ConsumerState<ChatInputBar> {
   }
 
   void _onTextChanged() {
-    if (_debounce?.isActive ?? false) _debounce!.cancel();
-    _debounce = Timer(const Duration(milliseconds: 500), () {
-      // Do not persist streamed impersonation text as the user's draft.
-      if (mounted && !_isImpersonating) {
-        widget.onDraftChanged?.call(_controller.text);
-      }
-    });
-    setState(() {});
+    final text = _controller.text;
+    // EditableText owns cursor, selection, composition and text layout. None
+    // of those notifications needs to rebuild the surrounding glass/buttons.
+    if (text == _lastDraftText) return;
+    _lastDraftText = text;
+    _debounce?.cancel();
+    if (!_isImpersonating && widget.onDraftChanged != null) {
+      _debounce = Timer(const Duration(milliseconds: 500), () {
+        if (mounted && !_isImpersonating) {
+          widget.onDraftChanged?.call(_controller.text);
+        }
+      });
+    }
+    final hasText = text.trim().isNotEmpty;
+    if (hasText != _hasMessageText) {
+      setState(() => _hasMessageText = hasText);
+    }
+  }
+
+  void _onGuidanceChanged() {
+    final hasText = _guidanceController.text.trim().isNotEmpty;
+    if (hasText != _hasGuidanceText) {
+      setState(() => _hasGuidanceText = hasText);
+    }
   }
 
   /// Free attachment slots left on the next message.
@@ -548,6 +570,7 @@ class _ChatInputBarState extends ConsumerState<ChatInputBar> {
       if (!mounted) return;
       if (next.active) {
         if (!_isImpersonating) {
+          _debounce?.cancel();
           setState(() => _isImpersonating = true);
         }
         if (_controller.text != next.text) {
@@ -666,7 +689,6 @@ class _ChatInputBarState extends ConsumerState<ChatInputBar> {
       onChanged: (value) {
         if (!mounted) return;
         _controller.text = value;
-        setState(() {});
       },
     );
   }
@@ -845,7 +867,7 @@ class _ChatInputBarState extends ConsumerState<ChatInputBar> {
       icon: isGenerating
           ? Icons.stop_rounded
           : hasContent
-          ? (_guidanceMode && _controller.text.trim().isEmpty
+          ? (_guidanceMode && !_hasMessageText
                 ? Icons.check_rounded
                 : Icons.send_rounded)
           : (emptyAction?.icon ?? Icons.account_circle_rounded),
@@ -1141,7 +1163,7 @@ class _ChatInputBarState extends ConsumerState<ChatInputBar> {
   /// worked this way, switching between the send glyph and a checkmark. The
   /// panel just never said which one it was, so the reader could not tell
   /// what pressing it would do.
-  bool get _guidanceImpersonates => _controller.text.trim().isEmpty;
+  bool get _guidanceImpersonates => !_hasMessageText;
 
   /// Sends a quick reply pinned to the row, on the same terms the drawer's
   /// Actions tab sends it: the host's pre-generation guard first, then either
@@ -1347,8 +1369,8 @@ class _ChatInputBarState extends ConsumerState<ChatInputBar> {
     }
 
     final hasContent =
-        _controller.text.trim().isNotEmpty ||
-        (_guidanceMode && _guidanceController.text.trim().isNotEmpty) ||
+        _hasMessageText ||
+        (_guidanceMode && _hasGuidanceText) ||
         _attachments.isNotEmpty;
     final isGenerating =
         widget.isGenerating ||

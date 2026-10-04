@@ -63,4 +63,54 @@ void main() {
     expect(persisted.messages.last.content, 'typed text');
     expect(persisted.draft, '');
   });
+
+  test(
+    'draft-only write guards missing rows and preserves all other columns',
+    () async {
+      expect(
+        await repo.updateDraftIfMessageCount(
+          sessionId: 'missing',
+          draft: '',
+          expectedMessageCount: 0,
+        ),
+        isNull,
+      );
+      const session = ChatSession(
+        id: 'draft',
+        characterId: 'c',
+        sessionIndex: 2,
+        updatedAt: 17,
+        sessionVars: {'note': 'keep'},
+        messages: [
+          ChatMessage(
+            id: 'u',
+            role: 'user',
+            content: 'quoted { "nested": [1] } 🌙',
+          ),
+        ],
+      );
+      await repo.put(session);
+      expect(
+        await repo.updateDraftIfMessageCount(
+          sessionId: session.id,
+          draft: 'новый 🐈',
+          expectedMessageCount: 1,
+        ),
+        'новый 🐈',
+      );
+      expect(
+        await repo.getById(session.id),
+        session.copyWith(draft: 'новый 🐈'),
+      );
+      expect(
+        await repo.updateDraftIfMessageCount(
+          sessionId: session.id,
+          draft: '',
+          expectedMessageCount: 1,
+        ),
+        '',
+      );
+      expect(await repo.getById(session.id), session.copyWith(draft: ''));
+    },
+  );
 }

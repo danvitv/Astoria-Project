@@ -133,6 +133,8 @@ class ChatHistoryNotifier extends AsyncNotifier<List<ChatSessionInfo>> {
   StreamSubscription<dynamic>? _sub;
   StreamSubscription<dynamic>? _charactersSub;
   List<ChatSessionInfo>? _lastResult;
+  int _buildEpoch = 0;
+  int _updateEpoch = 0;
 
   /// Mirrors [revealHiddenCharactersProvider]: while false, sessions belonging
   /// to hidden characters are dropped from the history list. Watched in
@@ -141,17 +143,19 @@ class ChatHistoryNotifier extends AsyncNotifier<List<ChatSessionInfo>> {
 
   @override
   Future<List<ChatSessionInfo>> build() async {
+    final buildEpoch = ++_buildEpoch;
     _revealHidden = ref.watch(revealHiddenCharactersProvider);
     final chatRepo = ref.read(chatRepoProvider);
     final charRepo = ref.read(characterRepoProvider);
     await _sub?.cancel();
     await _charactersSub?.cancel();
+    if (!ref.mounted || buildEpoch != _buildEpoch) return const [];
     _sub = chatRepo.watchAllSessionMetadata().listen((allMeta) {
-      _updateFromMetadata(allMeta, charRepo);
+      _updateFromMetadata(allMeta, charRepo, buildEpoch);
     });
     _charactersSub = charRepo.watchAll().listen((_) async {
       final allMeta = await chatRepo.getAllSessionMetadata();
-      await _updateFromMetadata(allMeta, charRepo);
+      await _updateFromMetadata(allMeta, charRepo, buildEpoch);
     });
     ref.onDispose(() {
       unawaited(_sub?.cancel());
@@ -218,8 +222,16 @@ class ChatHistoryNotifier extends AsyncNotifier<List<ChatSessionInfo>> {
   Future<void> _updateFromMetadata(
     List<SessionMetadata> allMeta,
     CharacterRepo charRepo,
+    int buildEpoch,
   ) async {
+    if (!ref.mounted || buildEpoch != _buildEpoch) return;
+    final updateEpoch = ++_updateEpoch;
     final data = await _buildFromMetadata(allMeta, charRepo);
+    if (!ref.mounted ||
+        buildEpoch != _buildEpoch ||
+        updateEpoch != _updateEpoch) {
+      return;
+    }
     if (_lastResult != null &&
         _lastResult!.length == data.length &&
         _listEquals(_lastResult!, data)) {

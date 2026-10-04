@@ -10,6 +10,7 @@ import 'package:glaze_flutter/core/models/chat_message.dart'
     show maxMessageAttachments;
 import 'package:glaze_flutter/features/chat/composer_empty_action_provider.dart';
 import 'package:glaze_flutter/features/chat/composer_pins_provider.dart';
+import 'package:glaze_flutter/features/chat/chat_provider.dart';
 import 'package:glaze_flutter/features/chat/state/chat_drawer_editing_provider.dart';
 import 'package:glaze_flutter/features/chat/widgets/chat_input_bar.dart';
 import 'package:glaze_flutter/features/chat/widgets/input_bar.dart';
@@ -33,10 +34,12 @@ void main() {
       bool isGeneratingImage = false,
       String initialDraft = '',
       void Function(String? guidance)? onImpersonate,
+      Future<bool> Function(String text, String? guidance)? onSendWithGuidance,
       VoidCallback? onStop,
       bool acceptSend = true,
       bool isDrawerOpen = false,
       VoidCallback? onMagicDrawer,
+      String? charId,
     }) {
       sentMessages = [];
       sentAttachments = [];
@@ -45,6 +48,7 @@ void main() {
         child: MaterialApp(
           home: Scaffold(
             body: ChatInputBar(
+              charId: charId,
               isDrawerOpen: isDrawerOpen,
               onMagicDrawer: onMagicDrawer,
               onSend: (text) async {
@@ -65,6 +69,7 @@ void main() {
               initialDraft: initialDraft,
               onDraftChanged: draftWrites.add,
               onImpersonate: onImpersonate,
+              onSendWithGuidance: onSendWithGuidance,
               onStop: onStop,
             ),
           ),
@@ -77,6 +82,120 @@ void main() {
       final textField = tester.widget<TextField>(find.byType(TextField));
       expect(textField.textCapitalization, TextCapitalization.sentences);
     });
+
+    testWidgets('cursor and composing updates do not postpone draft saves', (
+      tester,
+    ) async {
+      await tester.pumpWidget(buildChatInputBar());
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'draft');
+      await tester.pump(const Duration(milliseconds: 300));
+      final field = tester.widget<TextField>(find.byType(TextField));
+      tester.testTextInput.updateEditingValue(
+        field.controller!.value.copyWith(
+          selection: const TextSelection.collapsed(offset: 2),
+          composing: const TextRange(start: 0, end: 2),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(draftWrites, ['draft']);
+      expect(tester.widget<TextField>(find.byType(TextField)), same(field));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(draftWrites, ['draft']);
+    });
+
+    testWidgets('typing within nonempty text only updates the editable field', (
+      tester,
+    ) async {
+      await tester.pumpWidget(buildChatInputBar(initialDraft: 'a'));
+      await tester.pumpAndSettle();
+      final field = tester.widget<TextField>(find.byType(TextField));
+      await tester.enterText(find.byType(TextField), 'a\nsecond line');
+      await tester.pump();
+      expect(tester.widget<TextField>(find.byType(TextField)), same(field));
+      expect(find.byIcon(Icons.send_rounded), findsOneWidget);
+      await tester.enterText(find.byType(TextField), '  ');
+      await tester.pump();
+      expect(find.byIcon(Icons.account_circle_rounded), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(draftWrites, ['  ']);
+    });
+
+    testWidgets('guidance uses the latest text without rebuilding each edit', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        ComposerEmptyActionNotifier.storageKey: 'action:guidance',
+      });
+      String? usedGuidance;
+      await tester.pumpWidget(
+        buildChatInputBar(
+          initialDraft: 'Message',
+          onSendWithGuidance: (text, guidance) async {
+            usedGuidance = guidance;
+            return true;
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+      // Guidance is available through its pinned action, independently of
+      // the empty-button assignment when a message is already composed.
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(ChatInputBar)),
+      );
+      container.read(composerActionBridgeProvider).run(ComposerAction.guidance);
+      await tester.pumpAndSettle();
+      final guidance = find.byType(TextField).first;
+      await tester.enterText(guidance, 'First');
+      await tester.pump();
+      final field = tester.widget<TextField>(guidance);
+      await tester.enterText(guidance, 'Latest');
+      await tester.pump();
+      expect(tester.widget<TextField>(guidance), same(field));
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      expect(usedGuidance, 'Latest');
+      await tester.pump(const Duration(milliseconds: 600));
+      // Sending still clears the durable draft immediately.
+      expect(draftWrites, ['']);
+    });
+
+    testWidgets(
+      'impersonation cancels pending drafts and leaves editable text',
+      (tester) async {
+        await tester.pumpWidget(buildChatInputBar(charId: 'character'));
+        await tester.pumpAndSettle();
+        final container = ProviderScope.containerOf(
+          tester.element(find.byType(ChatInputBar)),
+        );
+        await tester.enterText(find.byType(TextField), 'Before stream');
+        await tester.pump(const Duration(milliseconds: 200));
+        final state = container.read(
+          impersonationStateProvider('character').notifier,
+        );
+        state.state = const ImpersonationState(active: true, text: 'Stream');
+        await tester.pump();
+        state.state = const ImpersonationState(
+          active: true,
+          text: 'Stream complete',
+        );
+        await tester.pump(const Duration(milliseconds: 600));
+        expect(draftWrites, isEmpty);
+        expect(
+          tester.widget<TextField>(find.byType(TextField)).readOnly,
+          isTrue,
+        );
+        state.state = const ImpersonationState(text: 'Final text');
+        await tester.pump(const Duration(milliseconds: 600));
+        expect(draftWrites, isEmpty);
+        expect(
+          tester.widget<TextField>(find.byType(TextField)).controller!.text,
+          'Final text',
+        );
+        await tester.enterText(find.byType(TextField), 'Final text edited');
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(draftWrites, ['Final text edited']);
+      },
+    );
 
     testWidgets('onTap unfocuses then refocuses when already focused', (
       tester,
