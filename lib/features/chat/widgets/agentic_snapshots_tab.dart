@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/models/tracker.dart';
 import '../../../shared/theme/app_colors.dart';
-import '../../../shared/widgets/glaze_bottom_sheet.dart';
 import '../../../shared/widgets/glaze_expansion_tile.dart';
 import '../../../shared/widgets/list_controls.dart';
 import '../../../shared/widgets/glaze_spinner.dart';
@@ -54,10 +53,13 @@ class _AgenticSnapshotsTabState extends ConsumerState<AgenticSnapshotsTab> {
   Future<void> _editClock() async {
     final sessionId = _sessionIdOf(context);
     if (sessionId == null) return;
-    await GlazeBottomSheet.show<bool>(
-      context,
-      title: 'agent_ops_clock_title'.tr(),
-      child: ManualLedgerClockSheet(sessionId: sessionId, onSaved: _reload),
+    await showModalBottomSheet<bool>(
+      context: context,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) =>
+          ManualLedgerClockSheet(sessionId: sessionId, onSaved: _reload),
     );
   }
 

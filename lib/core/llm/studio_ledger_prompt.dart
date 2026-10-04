@@ -27,7 +27,10 @@ class StudioLedgerPrompt {
   /// [finalAssistantText] — cleaned final assistant response (post-cleaner
   /// output when enabled, raw response otherwise).
   ///
-  /// [recentHistoryText] — last ~10 user+assistant turns in plain text,
+  /// [currentUserText] — user input belonging to this assistant turn, separated
+  /// from older history so the model does not re-apply earlier timeskips.
+  ///
+  /// [recentHistoryText] — last ~10 user+assistant messages in plain text,
   /// for scene/entity context.
   ///
   /// [currentTrackers] — current tracker_rows for this session (entity,
@@ -46,6 +49,7 @@ class StudioLedgerPrompt {
   /// identities immediately, without waiting for reconciliation.
   String build({
     required String finalAssistantText,
+    String currentUserText = '',
     required String recentHistoryText,
     required List<Tracker> currentTrackers,
     required List<MemoryEntry> recentMemoryEntries,
@@ -86,6 +90,8 @@ $recentHistoryText
 <final_assistant_response>
 $finalAssistantText
 </final_assistant_response>
+
+${buildCurrentUserTurnBlock(currentUserText)}
 
 Now produce the Studio Ledger output. You MUST return BOTH blocks below.
 The <glaze_memory_export> block is MANDATORY — even when there is nothing
@@ -140,6 +146,7 @@ knowledgeFacts rules:
   /// claimed to be a byte-for-byte historical prompt copy.
   String buildLegacyTurnOnly({
     required String finalAssistantText,
+    String currentUserText = '',
     required String recentHistoryText,
     required List<Tracker> currentTrackers,
     required List<MemoryEntry> recentMemoryEntries,
@@ -174,6 +181,9 @@ $recentHistoryText
 <final_assistant_response>
 $finalAssistantText
 </final_assistant_response>
+
+${buildCurrentUserTurnBlock(currentUserText)}
+$gameClockRules
 
 Now produce the Studio Ledger output. You MUST return BOTH blocks below.
 The <glaze_memory_export> block is MANDATORY — even when there is nothing
@@ -229,6 +239,37 @@ knowledgeFacts rules:
     if (ledgerTrackers.isEmpty) return '(no prior state)';
     return ledgerTrackers.map((t) => '${t.name}: ${t.value}').join('\n');
   }
+
+  static String buildCurrentUserTurnBlock(String text) =>
+      '<current_user_turn>\n${text.trim().isEmpty ? '(no new user turn)' : text}\n'
+      '</current_user_turn>';
+
+  /// Runtime contract shared by built-in, user-preset, and compatibility paths.
+  /// Elapsed time is a narrative estimate; code validates the clock tuple only.
+  static const String gameClockRules =
+      '''Game clock (world:time, world:date, world:day):
+- Maintain a complete tuple: 24-hour HH:MM, real calendar date DD.MM.YYYY,
+  and zero-based RP day. Never invent a missing month or year. If canon gives
+  only a month and year, day-of-month = 1 + world:day (Day 0 = the 1st).
+- Independently estimate elapsed time from the scene: conversation, travel,
+  waiting, work, rest, and scene transitions. There is no five-minute cap and
+  no requirement for a numeric time or duration to appear in the prose.
+- Explicit user timeskips take priority, including "спустя полчаса", "на
+  следующее утро", and "следующая сцена". Honor them even if the assistant
+  does not repeat the cue. Use a stated duration; otherwise choose a plausible
+  interval from context. Do not freeze the clock during a genuine transition.
+- A directly continuing moment may advance slightly or stay at the same time.
+  Do not add a fixed number of minutes mechanically for every response.
+- Advance only FORWARD. Memories, flashbacks, plans, promises, hypothetical
+  events, and mentions of future appointments do not themselves advance time.
+- Apply each timeskip once. <current_user_turn> and <final_assistant_response>
+  describe this turn; older <recent_chat> and <clock_history> help distinguish
+  already-applied skips. The newest clock-history line is the prior trajectory,
+  while <current_state> includes any newer manual clock corrections.
+- Bells, lighting, watches, and other atmospheric cues require setting context;
+  ordinal bells do not automatically map to real-world clock hours.
+- Crossing midnight must advance world:date and world:day together by the same
+  number of days. Keep all clock components consistent.''';
 
   bool _isRelevantTracker(Tracker tracker, String turnContext) {
     if (tracker.name.startsWith('world:') ||
@@ -400,27 +441,7 @@ Rules:
 - Never write npc:*.knowledge or relationship:*.knowledge. Use knowledgeFacts.
 - Arc keys: arc:id.status, arc:id.summary, arc:id.do_not_reopen, arc:id.card_override
 - World/scene keys: world:location, world:time, world:date, world:day, world:active_threats, scene.present_entities, scene.absent_backstory_entities
-- Game clock: keep world:time in 24h HH:MM as the current in-game time of day and
-  keep it paired with world:date (DD.MM.YYYY) and zero-based world:day. Never
-  invent a month or year; when the canonical timeline names only a month and year,
-  derive day-of-month = 1 + world:day (Day 0 = the 1st of that month) and write
-  world:date in DD.MM.YYYY. When all three are established,
-  advance it when narrated events imply elapsed time. The clock only moves
-  FORWARD — never rewind it; flashbacks stay in prose. Past midnight, advance
-  world:day (day 0 = first story day) and world:date.
-  For an ordinary continuous turn with no explicit duration, advance the clock
-  by 1–5 minutes. Use an explicitly narrated duration instead when available.
-  Ordinal bells, chimes, strikes, watches, and similar atmosphere do not map to
-  an absolute clock value unless the accepted text states that mapping. In
-  particular, "third bell" alone is not evidence that the time is 15:00.
-  Do not invent time skips the narrative does not support.
-  A timeskip already applied in a prior turn is consummated: it advances the
-  clock once and the new world:date/day stand from then on. Do not re-apply the
-  same timeskip on a later turn, and do not advance the clock for time the
-  narrative does not actually spend. Unless the user explicitly requests a NEW
-  timeskip, advance only by the hours/minutes the narrated events require.
-  Treat <clock_history> as the authoritative recent trajectory — its newest
-  line is where the clock currently stands.''';
+$gameClockRules''';
 
   static const String _legacyTurnOnlySystemPrompt =
       '''You are Studio Ledger, an internal continuity and state extractor.

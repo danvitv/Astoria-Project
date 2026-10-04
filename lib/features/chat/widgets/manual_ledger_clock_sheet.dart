@@ -8,6 +8,7 @@ import '../../../shared/widgets/glass_surface.dart';
 import '../../../shared/widgets/glaze_action_button.dart';
 import '../../../shared/widgets/glaze_spinner.dart';
 import '../../../shared/widgets/glaze_text_field.dart';
+import '../../../shared/widgets/sheet_view.dart';
 import '../services/manual_ledger_clock_service.dart';
 
 class ManualLedgerClockSheet extends ConsumerStatefulWidget {
@@ -28,6 +29,7 @@ class ManualLedgerClockSheet extends ConsumerStatefulWidget {
 class _ManualLedgerClockSheetState
     extends ConsumerState<ManualLedgerClockSheet> {
   final _count = TextEditingController(text: '5');
+  final _scroll = ScrollController();
   List<_ClockRow>? _rows;
   bool _loading = false;
   bool _saving = false;
@@ -42,6 +44,7 @@ class _ManualLedgerClockSheetState
   @override
   void dispose() {
     _count.dispose();
+    _scroll.dispose();
     for (final row in _rows ?? const <_ClockRow>[]) {
       row.dispose();
     }
@@ -111,14 +114,19 @@ class _ManualLedgerClockSheetState
   @override
   Widget build(BuildContext context) {
     final rows = _rows;
-    return SizedBox(
-      width: 720,
-      height: 580,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+    return SheetView(
+      title: 'agent_ops_clock_title'.tr(),
+      collapsedFraction: 0.85,
+      scrollController: _scroll,
+      body: Builder(
+        builder: (context) => ListView(
+          controller: _scroll,
+          padding: EdgeInsets.fromLTRB(
+            20,
+            MediaQuery.paddingOf(context).top + 12,
+            20,
+            MediaQuery.paddingOf(context).bottom + 20,
+          ),
           children: [
             Text(
               'agent_ops_clock_description'.tr(),
@@ -147,18 +155,14 @@ class _ManualLedgerClockSheetState
             ),
             const SizedBox(height: 12),
             if (_loading)
-              const Expanded(child: Center(child: GlazeSpinner()))
+              const Center(child: GlazeSpinner())
             else if (rows == null || rows.isEmpty)
-              Expanded(child: Center(child: Text('agent_ops_clock_empty'.tr())))
+              Center(child: Text('agent_ops_clock_empty'.tr()))
             else
-              Expanded(
-                child: ListView.separated(
-                  itemCount: rows.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) =>
-                      _ClockRowCard(row: rows[index]),
-                ),
-              ),
+              for (final row in rows) ...[
+                _ClockRowCard(row: row),
+                const SizedBox(height: 8),
+              ],
             if (_error != null) ...[
               const SizedBox(height: 10),
               Text(

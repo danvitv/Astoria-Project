@@ -125,6 +125,9 @@ class MemoryStudioService {
       turnConfig: turnConfig,
       onThinkingUpdate: onThinkingUpdate,
     );
+    if (token.isCancelled) {
+      return const StudioPipelineResult(status: 'aborted', response: '');
+    }
     if (phaseResult.status != 'ok') {
       return StudioPipelineResult(
         status: phaseResult.status,
@@ -158,8 +161,9 @@ class MemoryStudioService {
     final completedThinking = thinkingBrief == null
         ? null
         : StudioAgentExecutor.normalizeThinkingPrefill(thinkingBrief.brief);
-    final normalBriefs =
-        briefs.where((brief) => !brief.isThinkReplacement).toList();
+    final normalBriefs = briefs
+        .where((brief) => !brief.isThinkReplacement)
+        .toList();
     onFinalStart?.call();
     final agentResult = await _executor.runFinalGenerator(
       agent: finalAgent,
@@ -255,7 +259,8 @@ class MemoryStudioService {
     StudioContext? thinkContext;
     if (preset != null &&
         preset.agents.any(
-          (agent) => agent.enabled && agent.reasoningMode == 'think-replacement',
+          (agent) =>
+              agent.enabled && agent.reasoningMode == 'think-replacement',
         )) {
       final settings = turnConfig!.pipelineSettings.studioAgent;
       final finalContextSize = settings.studioFinalContextSize > 0

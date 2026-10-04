@@ -187,14 +187,15 @@ void main() {
   test(
     'canon changes after LLM completion abort normal commit without writes',
     () async {
-      final endpoint = await _serve(_response);
+      final endpoint = await _serveSequence([_response]);
       addTearDown(endpoint.close);
-      var checks = 0;
+      var mutated = false;
 
       final result = await run(
         endpoint.url,
         isStillCurrent: () async {
-          if (++checks == 3) {
+          if (!mutated && endpoint.requests() > 0) {
+            mutated = true;
             // This is the post-LLM guard. Exercise each stamp input without
             // changing the target itself; the transaction fence must reject it.
             await trackers.upsertValue(
@@ -268,14 +269,15 @@ void main() {
           db: db,
           fact: fact,
         );
-        final endpoint = await _serve(_response);
+        final endpoint = await _serveSequence([_response]);
         addTearDown(endpoint.close);
-        var checks = 0;
+        var mutated = false;
 
         final result = await run(
           endpoint.url,
           isStillCurrent: () async {
-            if (++checks == 3) {
+            if (!mutated && endpoint.requests() > 0) {
+              mutated = true;
               await _applyStampMutation(mutation, snapshots: snapshots, db: db);
             }
             return true;
@@ -313,13 +315,14 @@ void main() {
         assistant.copyWith(content: 'swiped content'),
         assistant.copyWith(swipeId: 1),
       ]) {
-        final endpoint = await _serve(_response);
+        final endpoint = await _serveSequence([_response]);
         addTearDown(endpoint.close);
-        var checks = 0;
+        var mutated = false;
         final result = await run(
           endpoint.url,
           isStillCurrent: () async {
-            if (++checks == 3) {
+            if (!mutated && endpoint.requests() > 0) {
+              mutated = true;
               await chats.put(
                 ChatSession(
                   id: 'session',
@@ -1242,16 +1245,16 @@ void main() {
     );
   });
 
-  test('normal Ledger rejects an unsupported bell-based clock jump', () async {
+  test('normal Ledger applies a model-estimated scene transition', () async {
     await trackers.seedInitialGameTime(
       sessionId: 'session',
       time: '10:00',
       date: '08.09.0755',
     );
-    const bellAssistant = ChatMessage(
+    const nextSceneAssistant = ChatMessage(
       id: 'a1',
       role: 'assistant',
-      content: 'Прозвучал третий колокол.',
+      content: 'Они вошли в гостиницу и устроились у окна.',
     );
     await chats.put(
       const ChatSession(
@@ -1259,15 +1262,27 @@ void main() {
         characterId: 'char',
         sessionIndex: 0,
         messages: [
-          ChatMessage(id: 'u1', role: 'user', content: 'Start'),
-          bellAssistant,
+          ChatMessage(
+            id: 'old-u',
+            role: 'user',
+            content: 'Пропустим вчерашнюю ночь.',
+          ),
+          ChatMessage(id: 'old-a', role: 'assistant', content: 'Настало утро.'),
+          ChatMessage(
+            id: 'u1',
+            role: 'user',
+            content: 'Следующая сцена: после перехода через долину.',
+          ),
+          nextSceneAssistant,
         ],
       ),
     );
-    final endpoint = await _serve('''
+    final endpoint = await _serveSequence([
+      '''
 <glaze_memory_export>
-{"ops":[{"op":"set","key":"world:time","value":"15:00","evidence":"third bell","eventState":"completed"}],"knowledgeFacts":[]}
-</glaze_memory_export>''');
+{"ops":[{"op":"set","key":"world:time","value":"15:00","evidence":"Переход через долину и следующая сцена","eventState":"completed"}],"knowledgeFacts":[]}
+</glaze_memory_export>''',
+    ]);
     addTearDown(endpoint.close);
 
     final result = await service.run(
@@ -1275,15 +1290,26 @@ void main() {
       messageId: 'a1',
       swipeId: 0,
       agentSwipeId: 0,
-      finalAssistantText: bellAssistant.content,
+      finalAssistantText: nextSceneAssistant.content,
       recentHistoryText: '',
       settings: const PipelineSettings(),
       config: _config(endpoint.url),
     );
 
     expect(result.status, 'ok');
-    expect(result.opsApplied, 0);
-    expect((await trackers.get('session', 'world:time'))?.value, '10:00');
+    expect(result.opsApplied, 1);
+    expect((await trackers.get('session', 'world:time'))?.value, '15:00');
+    final request =
+        jsonDecode(endpoint.bodies().single) as Map<String, dynamic>;
+    final messages = request['messages'] as List<dynamic>;
+    final prompt =
+        (messages.single as Map<String, dynamic>)['content'] as String;
+    final userTurn = RegExp(
+      r'<current_user_turn>\n([\s\S]*?)\n</current_user_turn>',
+    ).firstMatch(prompt)!.group(1)!;
+    expect(userTurn, 'Следующая сцена: после перехода через долину.');
+    expect(userTurn, isNot(contains('вчерашнюю ночь')));
+    expect(prompt, contains('There is no five-minute cap'));
   });
 
   group('structured output recovery', () {

@@ -94,6 +94,25 @@ class LedgerCanonAuthority {
   Future<bool> passesCurrentnessGuard(FutureOr<bool> Function()? guard) async =>
       await guard?.call() ?? true;
 
+  /// Separates this assistant turn's user input from older history so the model
+  /// can distinguish new timeskips from ones that have already been applied.
+  Future<String> loadCurrentUserTurn(String sessionId, String messageId) async {
+    final session = await chatRepo.getById(sessionId);
+    if (session == null) return '';
+    final index = session.messages.indexWhere((item) => item.id == messageId);
+    if (index < 0) return '';
+    final texts = <String>[];
+    for (var i = index - 1; i >= 0; i--) {
+      final message = session.messages[i];
+      if (message.isHidden || message.isError || message.isTyping) continue;
+      if (message.role == 'assistant') break;
+      if (message.role == 'user' && message.content.trim().isNotEmpty) {
+        texts.add(message.content.trim());
+      }
+    }
+    return texts.reversed.join('\n\n');
+  }
+
   /// Transactional commit fence. The check order is part of the contract.
   Future<void> throwIfCommitStale({
     required String sessionId,

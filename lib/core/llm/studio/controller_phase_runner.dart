@@ -205,6 +205,7 @@ class ControllerPhaseRunner {
         apiConfigId: effectivePreset.cheapApiConfigId,
         turnConfig: turnConfig,
       );
+      if (token.isCancelled) return const PreGenPhaseResult(status: 'aborted');
       final fetchedResults = await _batcher.runPhase(
         batchGroups: grouping.batchGroups,
         individualAgents: grouping.individualAgents,

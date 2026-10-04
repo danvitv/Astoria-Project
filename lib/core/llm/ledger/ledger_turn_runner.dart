@@ -189,8 +189,20 @@ class LedgerTurnRunner {
       final gameClockHistory = await _canonAuthority.loadRecentGameClock(
         request.sessionId,
       );
+      final currentUserText = await _canonAuthority.loadCurrentUserTurn(
+        request.sessionId,
+        request.messageId,
+      );
+      if (token.isCancelled ||
+          !await _canonAuthority.passesCurrentnessGuard(
+            request.isStillCurrent,
+          ) ||
+          !await _canonAuthority.isStillCurrent(request.sessionId, canon)) {
+        return LedgerRunResult.aborted;
+      }
       final rawPrompt = _promptFactory.buildLedgerPrompt(
         finalAssistantText: request.finalAssistantText,
+        currentUserText: currentUserText,
         recentHistoryText: request.recentHistoryText,
         currentTrackers: promptTrackers,
         recentMemoryEntries: recentEntries,
@@ -297,7 +309,6 @@ class LedgerTurnRunner {
       var effectiveResponse = rawResponse;
       final clockPolicy = LedgerClockPolicy.turn(
         current: GameTimeState.fromTrackers(promptTrackers),
-        evidence: request.finalAssistantText,
       );
       var parseResult = _parser.parse(
         effectiveResponse,

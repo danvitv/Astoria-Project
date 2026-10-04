@@ -15,6 +15,7 @@ class LedgerPromptFactory {
 
   String buildLedgerPrompt({
     required String finalAssistantText,
+    String currentUserText = '',
     required String recentHistoryText,
     required List<Tracker> currentTrackers,
     required List<MemoryEntry> recentMemoryEntries,
@@ -28,6 +29,7 @@ class LedgerPromptFactory {
     if (engine == StudioLedgerEngine.legacyTurnOnly) {
       return _promptBuilder.buildLegacyTurnOnly(
         finalAssistantText: finalAssistantText,
+        currentUserText: currentUserText,
         recentHistoryText: recentHistoryText,
         currentTrackers: currentTrackers,
         recentMemoryEntries: recentMemoryEntries,
@@ -45,6 +47,7 @@ class LedgerPromptFactory {
     if (!hasActiveLedgerBlocks || macroCtx == null) {
       return _promptBuilder.build(
         finalAssistantText: finalAssistantText,
+        currentUserText: currentUserText,
         recentHistoryText: recentHistoryText,
         currentTrackers: currentTrackers,
         recentMemoryEntries: recentMemoryEntries,
@@ -88,6 +91,8 @@ $recentHistoryText
 $finalAssistantText
 </final_assistant_response>
 
+${StudioLedgerPrompt.buildCurrentUserTurnBlock(currentUserText)}
+
 Now produce the Studio Ledger output. You MUST return BOTH blocks below.
 The <glaze_memory_export> block is MANDATORY — even when there is nothing
 to write, include it with empty arrays. Do not omit it under any circumstance.
@@ -127,32 +132,7 @@ Relationship trust/status/attitude and card overrides are current state and must
 Reuse an exact key from <current_state> or <existing_keys> for the same fact; update it with set instead of creating a synonym key.
 Allowed eventState: planned, suggested, threatened, attempted, completed, failed, cancelled, unknown (or omit).
 
-Game clock (world:time, world:date, world:day):
-- Maintain world:time as the current in-game time of day in 24h HH:MM format.
-- Keep one complete tuple: world:date (DD.MM.YYYY), zero-based world:day, and
-  world:time. Never invent a month or year. When the canonical timeline names a
-  month and year but no day-of-month, derive world:date deterministically as
-  day-of-month = 1 + world:day (so Day 0 = the 1st of that month) and advance
-  the day-of-month together with world:day. Always write world:date in DD.MM.YYYY.
-- When the final response or chat implies elapsed time, advance world:time to the
-  new in-game time based on how much time the narrated events would take.
-- For an ordinary continuous turn with no explicit duration, advance the clock
-  by 1–5 minutes. Use an explicitly narrated duration instead when available.
-- The game clock only moves FORWARD. Never rewind time; flashbacks and memories
-  stay in prose without touching world:time. When time passes midnight, advance
-  world:day (day 0 is the first day of the story) and world:date.
-- Do not invent time skips that the narrative does not support.
-- Ordinal bells, chimes, strikes, watches, and similar atmosphere are not an
-  absolute clock mapping. In particular, "third bell" does not mean 15:00.
-  Keep the ordinary 1–5 minute advance unless accepted text explicitly states
-  a numeric absolute time or a numeric elapsed duration.
-- A timeskip already applied in a prior turn is consummated: it advances the
-  clock once and the new world:date/day stand from then on. Do not re-apply the
-  same timeskip on a later turn, and do not advance the clock for time the
-  narrative does not actually spend. Unless the user explicitly requests a NEW
-  timeskip, advance only by the hours/minutes the narrated events require.
-  Treat the <clock_history> block as the authoritative recent trajectory — its
-  newest line is where the clock currently stands.''';
+${StudioLedgerPrompt.gameClockRules}''';
 
     return const StudioAuxPromptAssembler().assemble(
       blocks: ledgerBlocks,

@@ -107,7 +107,7 @@ class GenerationPipeline {
     String? regenTargetId,
     String? continueTargetId,
   }) async {
-    if (!ctx.ref.mounted) return null;
+    if (!ctx.ref.mounted || !ctx.abortHandler.isCurrentGen(genId)) return null;
     ctx.abortHandler.clearStreaming();
 
     final notifService = GenerationNotificationService.instance;

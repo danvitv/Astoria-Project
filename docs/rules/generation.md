@@ -66,6 +66,14 @@ isAborted: () => !abortHandler.isCurrentGen(genId),
 `AbortHandler.setCancelToken()` attaches the Dio `CancelToken` for the active gen.
 Image generation uses a separate `_imgGenCancelToken`.
 
+On send, claim the genId before the optimistic bubble and durable append, and
+carry that same id through accepted-variation setup into `_runGeneration`.
+Stop during preparation invalidates that claim; no delayed setup may allocate a
+replacement id and restart controllers. The accepted user append still settles
+durably (including the preceding variation's snapshot acceptance), without
+reopening the reply window. Check ownership after each setup await before
+launching generation, and let only the latest send release its send mutex.
+
 ---
 
 ## Abort signal chain

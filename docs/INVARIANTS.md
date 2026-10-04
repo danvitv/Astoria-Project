@@ -69,6 +69,13 @@ Guard: `AbortHandler.isCurrentGen(genId)` — exposed to the stream as
 → `StreamGenerationService.run()`. `AbortHandler.nextGenId()` increments `_activeGenId`
 on abort and on each new generation start.
 
+Send claims its generation id before publishing the optimistic user message,
+not after durable append / accepted-variation preparation. The same id is passed
+into the pipeline. Stop at any preparation checkpoint cannot resurrect the run
+by allocating a new id; the user's accepted append still completes, without
+starting controllers or the main writer. Late setup cleanup and Studio results
+must not clear a newer run's mutex or cycle indicator.
+
 ### INV-C8: The typing bubble lives exactly as long as a reply is on its way
 
 The "Generating…" bubble is not a message. It is a virtual one — a single
@@ -688,6 +695,17 @@ migration of every read.
 
 Studio Ledger reads the effective committed snapshot before applying its next
 typed canonical update; tracker UI reads the same snapshot-backed state.
+
+Normal-turn game-clock extraction delegates elapsed-time estimation to the
+model: there is no five-minute cap or numeric-evidence requirement. The prompt
+separates the current user turn from older history and tells the model to apply
+each skip once. Built-in, preset, and compatibility paths share the same runtime
+clock contract. Clock writes are validated atomically against the effective
+current tuple: canonical HH:MM / DD.MM.YYYY / non-negative RP day, valid calendar
+dates, equal calendar-date and RP-day deltas, no deletion, duplicate components,
+or backward time. An incomplete current clock is not automatically filled in.
+Reconciliation cannot rewrite the clock; manual-correction and stale-result
+commit fences remain authoritative.
 
 ### INV-TS4: Snapshot granularity is per-agent-swipe ✅ ENFORCED (Phase 1)
 

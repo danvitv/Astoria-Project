@@ -488,6 +488,13 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     // Claimed before the try so the `finally` sweep can see it. Bumped here
     // rather than at the optimistic paint: the claim order is the tap order.
     final sendPendingToken = ++_sendPendingSeq;
+    // Stop must own preparation too. Allocating a fresh id in _runGeneration
+    // after these awaits would resurrect a send that has already been aborted.
+    final genId = _abortHandler.nextGenId();
+    bool ownsSend() =>
+        ref.mounted &&
+        _abortHandler.isCurrentGen(genId) &&
+        state.value?.session?.id == current.session!.id;
 
     try {
       // Stamp the message with the persona that sent it. The id is what the
@@ -602,18 +609,33 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       if (!ref.mounted) return;
       if (updatedSession == null) {
         // The session row is gone — roll the optimistic append back.
-        state = AsyncData(current);
+        if (ownsSend()) state = AsyncData(current);
         return;
       }
       // The append is now durable, so later setup work must not keep the
       // composer blocked if a tracker or post-generation stage stalls.
-      _sendInFlight = false;
+      if (sendPendingToken == _sendPendingSeq) _sendInFlight = false;
       if (durableAcceptance != null && !durableAcceptance.isCompleted) {
         durableAcceptance.complete(true);
       }
       ChatSessionService.updateCache(updatedSession);
       _invalidateHistory();
       final afterWrite = state.value;
+      if (!_abortHandler.isCurrentGen(genId)) {
+        // Stop cancels the reply, not the user's append. Finish publishing the
+        // durable message without reopening the generation window, but never
+        // replace a newer run/session's state.
+        if (sendPendingToken == _sendPendingSeq &&
+            afterWrite?.session?.id == updatedSession.id &&
+            !afterWrite!.isGenerating &&
+            !afterWrite.isPostGenRunning) {
+          state = AsyncData(
+            afterWrite.copyWith(session: updatedSession, isSendPending: false),
+          );
+        }
+        await _commitAcceptedVariation(current.session!.id, acceptedAssistant);
+        return;
+      }
       // The session may have changed, or another operation (regenerate/continue)
       // may have started generating while the durable append was in flight —
       // bail out in either case.
@@ -634,7 +656,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       // Dispatch `afterUser` extension blocks. This is fire-and-forget — the
       // generation pipeline starts immediately, the post-gen service runs
       // the chain in the background and persists its own InfoBlocks.
-      unawaited(_dispatchAfterUserBlocks(updatedSession));
+      unawaited(_dispatchAfterUserBlocks(updatedSession, genId: genId));
 
       try {
         // Commit the exact visible green/blue swipe, never whichever Ledger
@@ -649,11 +671,11 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
         // generation state it now runs behind, instead of escaping with
         // `isGenerating` stuck true.
         await _commitAcceptedVariation(current.session!.id, acceptedAssistant);
-        if (!ref.mounted) return;
+        if (!ownsSend()) return;
 
         final charRepo = ref.read(characterRepoProvider);
         final character = await charRepo.getById(arg);
-        if (!ref.mounted) return;
+        if (!ownsSend()) return;
         if (character != null) {
           final talkativeness = character.extensions['talkativeness'];
           if (talkativeness is num && talkativeness < 1.0) {
@@ -671,11 +693,12 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
         await _runGeneration(
           updatedSession,
           current,
+          genId: genId,
           guidanceText: guidanceText,
         );
       } catch (e, st) {
         debugPrint('[ChatNotifier] send setup failed: $e\n$st');
-        if (!ref.mounted) return;
+        if (!ownsSend()) return;
         final latest = state.value;
         if (latest?.session?.id == updatedSession.id) {
           state = AsyncData(
@@ -692,7 +715,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       if (durableAcceptance != null && !durableAcceptance.isCompleted) {
         durableAcceptance.complete(false);
       }
-      _sendInFlight = false;
+      if (sendPendingToken == _sendPendingSeq) _sendInFlight = false;
       _clearSendPending(sendPendingToken);
       // A send that never reached the pipeline (session gone, ownership lost,
       // a throw) owns the phase it set above and has to put it back. The
@@ -700,8 +723,11 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       // a no-op there; the guard keeps it from clobbering whichever run took
       // ownership instead.
       final settled = state.value;
-      if (settled != null &&
+      if (ref.mounted &&
+          _abortHandler.isCurrentGen(genId) &&
+          settled != null &&
           !settled.isGenerating &&
+          !settled.isSendPending &&
           !settled.isPostGenRunning) {
         setGenerationPhase(ref, arg, GenerationPhase.idle);
       }
@@ -725,6 +751,9 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   /// sent is the accepted one: commits its tracker snapshot and activates the
   /// knowledge facts anchored to it. No-op when the send had no preceding
   /// assistant message, or when that variation carries no snapshot.
+  /// This belongs to the accepted user append: Stop cancels the reply, not the
+  /// preceding variation's acceptance. The caller rechecks run ownership before
+  /// launching any generation after this durable work settles.
   Future<void> _commitAcceptedVariation(
     String sessionId,
     ChatMessage? acceptedAssistant,
@@ -778,12 +807,15 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     );
   }
 
-  Future<void> _dispatchAfterUserBlocks(ChatSession session) async {
+  Future<void> _dispatchAfterUserBlocks(
+    ChatSession session, {
+    required int genId,
+  }) async {
     try {
-      if (!ref.mounted) return;
+      if (!ref.mounted || !_abortHandler.isCurrentGen(genId)) return;
       final charRepo = ref.read(characterRepoProvider);
       final character = await charRepo.getById(arg);
-      if (!ref.mounted) return;
+      if (!ref.mounted || !_abortHandler.isCurrentGen(genId)) return;
       if (character == null) return;
       final post = ref.read(extensionPostGenServiceProvider);
       await post.runAfterUserBlocks(
@@ -1104,6 +1136,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   Future<void> _runGeneration(
     ChatSession session,
     ChatState current, {
+    int? genId,
     ChatSession? saveSession,
     String? guidanceText,
     String guidanceType = 'GENERATION',
@@ -1116,7 +1149,10 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     String? regenTargetId,
     String? continueTargetId,
   }) {
-    final genId = _abortHandler.nextGenId();
+    final runGenId = genId ?? _abortHandler.nextGenId();
+    if (!ref.mounted || !_abortHandler.isCurrentGen(runGenId)) {
+      return Future<void>.value();
+    }
     // The typing bubble is already on screen (isGenerating flipped true just
     // before this call), so name the phase it is actually in rather than
     // letting it claim the model is writing while the prompt is still being
@@ -1133,7 +1169,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       getState: () => state,
     );
     return pipeline.run(
-      genId: genId,
+      genId: runGenId,
       session: session,
       saveSession: saveSession,
       guidanceText: guidanceText,

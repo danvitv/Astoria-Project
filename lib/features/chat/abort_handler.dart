@@ -179,6 +179,10 @@ class AbortHandler {
           ),
         );
       }
+    } else if (current != null && current.isSendPending) {
+      // The accepted user append may still be in flight. Its owner will publish
+      // the durable message when it settles, but must not launch a reply.
+      _setState(AsyncData(current.copyWith(isSendPending: false)));
     } else if (current != null && current.isGeneratingImage) {
       _setState(AsyncData(current.copyWith(isGeneratingImage: false)));
     }

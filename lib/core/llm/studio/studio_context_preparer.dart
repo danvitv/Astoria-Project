@@ -285,8 +285,13 @@ final class StudioContextPreparer {
 $authoritativeClock
 This is the authoritative current scene clock. Do not infer an absolute time
 from ordinal bells, chimes, strikes, or similar atmosphere unless the setting
-explicitly defines that mapping. Keep a continuous scene close to this time
-unless the accepted narrative states a numeric time or elapsed duration.
+explicitly defines that mapping. Keep a continuous scene close to this time.
+Independently estimate elapsed time from conversation, travel, waiting, work,
+rest, and scene transitions; there is no five-minute cap or numeric-cue requirement.
+Honor new user timeskips, including "спустя полчаса" and "следующая сцена",
+even if the response does not repeat them. Advance from this clock rather than
+freezing it; an immediately continuing moment may keep the same time.
+Do not reapply an older timeskip or treat future plans as elapsed time.
 </current_game_clock>''');
     }
     add(StudioContextSlot.runtimeDynamic, inputs.guidanceText);

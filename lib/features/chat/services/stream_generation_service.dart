@@ -395,6 +395,9 @@ class StreamGenerationService {
         }
 
         final studioOutputRegexes = await _ref.read(studioRegexProvider.future);
+        if (_isAborted()) {
+          throw const PromptBuildStaleException('Generation cancelled.');
+        }
         String transformStudioOutput(String text) =>
             applyStudioOutputRegexesToText(
               text: text,
@@ -480,8 +483,10 @@ class StreamGenerationService {
         );
         closeStudioStreamPublishing();
         if (_isAborted() || studioResult.status == 'aborted') {
-          _ref.read(studioCycleStateProvider.notifier).state =
-              const StudioCycleState.idle();
+          if (!_isAborted()) {
+            _ref.read(studioCycleStateProvider.notifier).state =
+                const StudioCycleState.idle();
+          }
           return ChatState(
             session: saveSession ?? session,
             isGenerating: false,

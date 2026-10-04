@@ -99,17 +99,15 @@ enum LedgerParseFailure {
 enum LedgerClockWriteMode { validateTurn, rejectAll }
 
 final class LedgerClockPolicy {
-  const LedgerClockPolicy.turn({required this.current, required this.evidence})
+  const LedgerClockPolicy.turn({required this.current})
     : mode = LedgerClockWriteMode.validateTurn;
 
   const LedgerClockPolicy.reconciliation()
     : mode = LedgerClockWriteMode.rejectAll,
-      current = const GameTimeState(),
-      evidence = '';
+      current = const GameTimeState();
 
   final LedgerClockWriteMode mode;
   final GameTimeState current;
-  final String evidence;
 }
 
 /// Parses and validates the Studio Ledger LLM output.
@@ -208,23 +206,11 @@ class StudioLedgerExportParser {
 
     if (clockPolicy != null) {
       final clockOps = validatedOps.where((op) => _isClockKey(op.key)).toList();
-      final proposedDay = _proposedClockDay(clockOps, clockPolicy.current.day);
-      final proposedDate = _proposedClockDate(
-        clockOps,
-        clockPolicy.current.date,
-      );
-      final clockRejections = <String>[];
-      for (final op in clockOps) {
-        final reason = _validateClockOp(
-          op,
-          clockPolicy,
-          proposedDay: proposedDay,
-          proposedDate: proposedDate,
-        );
-        if (reason != null) {
-          clockRejections.add('${op.op} ${op.key}: $reason');
-        }
-      }
+      final clockReason = _validateClockPatch(clockOps, clockPolicy);
+      final clockRejections = [
+        if (clockReason != null)
+          for (final op in clockOps) '${op.op} ${op.key}: $clockReason',
+      ];
       if (genericClockRejection || clockRejections.isNotEmpty) {
         rejectedOnlyClockWritesByPolicy = clockOps.length == export.ops.length;
         validatedOps.removeWhere((op) => _isClockKey(op.key));
@@ -675,128 +661,63 @@ class StudioLedgerExportParser {
       key == GameTimeState.dateKey ||
       key == GameTimeState.dayKey;
 
-  int? _proposedClockDay(List<LedgerOp> ops, int? currentDay) {
-    final dayOps = ops.where((op) => op.key == GameTimeState.dayKey).toList();
-    if (dayOps.length != 1 || dayOps.single.op == 'delete') return currentDay;
-    return int.tryParse(dayOps.single.value.trim());
-  }
-
-  String? _proposedClockDate(List<LedgerOp> ops, String? currentDate) {
-    final dateOps = ops.where((op) => op.key == GameTimeState.dateKey).toList();
-    if (dateOps.length != 1 || dateOps.single.op == 'delete') {
-      return currentDate;
-    }
-    return dateOps.single.value.trim();
-  }
-
-  String? _validateClockOp(
-    LedgerOp op,
-    LedgerClockPolicy policy, {
-    required int? proposedDay,
-    required String? proposedDate,
-  }) {
+  /// The model estimates elapsed time. This guard validates the resulting
+  /// clock tuple only; it does not require lexical evidence or cap the advance.
+  String? _validateClockPatch(List<LedgerOp> ops, LedgerClockPolicy policy) {
+    if (ops.isEmpty) return null;
     if (policy.mode == LedgerClockWriteMode.rejectAll) {
       return 'reconciliation cannot rewrite the game clock';
     }
     if (policy.current.format() == null) {
       return 'automatic clock updates require a complete current clock';
     }
-    if (op.op == 'delete') return 'the game clock cannot be deleted';
-    if (op.key == GameTimeState.dateKey) {
-      final proposed = GameTimeState.parse(
-        time: policy.current.time ?? '',
-        date: op.value,
-        day: '${policy.current.day ?? ''}',
-      ).date;
-      if (proposed == null || proposed != op.value.trim()) {
-        return 'world:date must be canonical DD.MM.YYYY';
+    final byKey = <String, String>{};
+    for (final op in ops) {
+      if (op.op == 'delete') return 'the game clock cannot be deleted';
+      if (byKey.containsKey(op.key)) {
+        return 'duplicate clock component ${op.key}';
       }
-      if (proposed != policy.current.date &&
-          !policy.evidence.contains(proposed) &&
-          !_hasSupportedRollover(
-            policy,
-            proposedDay: proposedDay,
-            proposedDate: proposedDate,
-          )) {
-        return 'world:date change needs the explicit numeric date in accepted text';
-      }
-      return null;
+      byKey[op.key] = op.value.trim();
     }
-    if (op.key == GameTimeState.dayKey) {
-      final proposed = int.tryParse(op.value.trim());
-      if (proposed == null || proposed < 0 || '$proposed' != op.value.trim()) {
-        return 'world:day must be a non-negative integer';
-      }
-      if (proposed != policy.current.day &&
-          !_hasExplicitRpDay(policy.evidence, proposed) &&
-          !_hasSupportedRollover(
-            policy,
-            proposedDay: proposedDay,
-            proposedDate: proposedDate,
-          )) {
-        return 'world:day change needs an explicit RP day in accepted text';
-      }
-      return null;
-    }
-
-    final proposed = GameTimeState.parse(
-      time: op.value,
-      date: policy.current.date ?? '',
-      day: '${policy.current.day ?? ''}',
-    ).time;
-    if (proposed == null || proposed != op.value.trim()) {
+    final current = policy.current;
+    final time = byKey[GameTimeState.timeKey] ?? current.time!;
+    final date = byKey[GameTimeState.dateKey] ?? current.date!;
+    final day = byKey[GameTimeState.dayKey] ?? '${current.day!}';
+    final proposed = GameTimeState.parse(time: time, date: date, day: day);
+    if (proposed.time == null || proposed.time != time) {
       return 'world:time must be canonical 24-hour HH:MM';
     }
-    final current = policy.current.time!;
-    final currentMinutes = _minutesOfDay(current);
-    final proposedMinutes = _minutesOfDay(proposed);
-    final currentDay = policy.current.day;
-    final dayDelta = currentDay == null || proposedDay == null
-        ? 0
-        : proposedDay - currentDay;
+    if (proposed.date == null || proposed.date != date) {
+      return 'world:date must be canonical DD.MM.YYYY';
+    }
+    if (proposed.day == null || '${proposed.day}' != day) {
+      return 'world:day must be a non-negative integer';
+    }
+    final currentDate = _parseDate(current.date);
+    final proposedDate = _parseDate(proposed.date);
+    if (currentDate == null || proposedDate == null) {
+      return 'the game clock requires a valid calendar date';
+    }
+    final dayDelta = proposed.day! - current.day!;
     if (dayDelta < 0) {
       return 'world:day cannot move backward';
     }
-    final delta = proposedMinutes - currentMinutes + dayDelta * 24 * 60;
+    if (proposedDate.difference(currentDate).inDays != dayDelta) {
+      return 'world:date and world:day must advance by the same number of days';
+    }
+    final delta =
+        _minutesOfDay(proposed.time!) -
+        _minutesOfDay(current.time!) +
+        dayDelta * 24 * 60;
     if (delta < 0) {
-      return 'world:time cannot move backward without an explicit day rollover';
+      return 'world:time cannot move backward without a consistent day rollover';
     }
-    if (delta <= 5) return null;
-    if (_hasExplicitAbsoluteTime(policy.evidence, proposed) ||
-        _hasSupportingDuration(policy.evidence, delta)) {
-      return null;
-    }
-    return 'clock advance over 5 minutes needs an explicit numeric time or duration';
+    return null;
   }
 
   int _minutesOfDay(String value) {
     final parts = value.split(':');
     return int.parse(parts[0]) * 60 + int.parse(parts[1]);
-  }
-
-  bool _hasSupportedRollover(
-    LedgerClockPolicy policy, {
-    required int? proposedDay,
-    required String? proposedDate,
-  }) {
-    final currentDay = policy.current.day;
-    final currentDate = _parseDate(policy.current.date);
-    final nextDate = _parseDate(proposedDate);
-    if (currentDay == null ||
-        proposedDay == null ||
-        currentDate == null ||
-        nextDate == null) {
-      return false;
-    }
-    final dayDelta = proposedDay - currentDay;
-    if (dayDelta <= 0 ||
-        nextDate != currentDate.add(Duration(days: dayDelta))) {
-      return false;
-    }
-    final timeOpEvidence = RegExp(
-      r'\d{1,2}:\d{2}',
-    ).allMatches(policy.evidence).isNotEmpty;
-    return timeOpEvidence || _hasAnyNumericDuration(policy.evidence);
   }
 
   DateTime? _parseDate(String? value) {
@@ -812,48 +733,6 @@ class StudioLedgerExportParser {
         ? date
         : null;
   }
-
-  bool _hasExplicitAbsoluteTime(String evidence, String proposed) {
-    for (final match in RegExp(r'\d{1,2}:\d{2}').allMatches(evidence)) {
-      if (match.group(0) != proposed) continue;
-      final previousIsDigit =
-          match.start > 0 && RegExp(r'\d').hasMatch(evidence[match.start - 1]);
-      final nextIsDigit =
-          match.end < evidence.length &&
-          RegExp(r'\d').hasMatch(evidence[match.end]);
-      if (!previousIsDigit && !nextIsDigit) return true;
-    }
-    return false;
-  }
-
-  bool _hasSupportingDuration(String evidence, int deltaMinutes) {
-    final duration = RegExp(
-      r'\b(\d{1,4})\s*(minutes?|mins?|hours?|hrs?|минут(?:а|ы)?|мин|час(?:а|ов)?)\b',
-      caseSensitive: false,
-      unicode: true,
-    );
-    for (final match in duration.allMatches(evidence)) {
-      final value = int.parse(match.group(1)!);
-      final unit = match.group(2)!.toLowerCase();
-      final minutes = unit.startsWith('h') || unit.startsWith('час')
-          ? value * 60
-          : value;
-      if ((minutes - deltaMinutes).abs() <= 5) return true;
-    }
-    return false;
-  }
-
-  bool _hasAnyNumericDuration(String evidence) => RegExp(
-    r'\b\d{1,4}\s*(?:minutes?|mins?|hours?|hrs?|минут(?:а|ы)?|мин|час(?:а|ов)?)\b',
-    caseSensitive: false,
-    unicode: true,
-  ).hasMatch(evidence);
-
-  bool _hasExplicitRpDay(String evidence, int day) => RegExp(
-    '\\b(?:rp[_ -]?day|рп[_ -]?день|day)\\s*$day\\b',
-    caseSensitive: false,
-    unicode: true,
-  ).hasMatch(evidence);
 
   bool _isFocalUserStateKey(String key, String focalUserName) {
     if (key.startsWith('npc:')) {
