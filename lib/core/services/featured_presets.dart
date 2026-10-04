@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../import/silly_tavern_preset_parser.dart';
@@ -23,6 +24,13 @@ class FeaturedPreset {
   final String? reasoningStart;
   final String? reasoningEnd;
 
+  /// Version of the bundled content, tracked independently for each preset.
+  final int revision;
+
+  /// Fingerprint of the previous shipped version. Only an unchanged copy may
+  /// be replaced automatically; edits and imported copies remain user-owned.
+  final String? previousContentHash;
+
   const FeaturedPreset({
     required this.id,
     required this.name,
@@ -33,6 +41,8 @@ class FeaturedPreset {
     this.reasoningEnabled = false,
     this.reasoningStart,
     this.reasoningEnd,
+    this.revision = 1,
+    this.previousContentHash,
   });
 }
 
@@ -48,6 +58,9 @@ const featuredPresets = <FeaturedPreset>[
     reasoningEnabled: true,
     reasoningStart: '<thinking>',
     reasoningEnd: '</thinking>',
+    revision: 2,
+    previousContentHash:
+        '3c2627d5d45cda9513a1a4d9f6c661505f73da7879378fd5528ca7d11e4b97cb',
   ),
   FeaturedPreset(
     id: 'default_fawnie',
@@ -73,7 +86,23 @@ const featuredPresets = <FeaturedPreset>[
     imageAsset: 'assets/presets/renri.jpg',
     createdAt: 4,
   ),
+  FeaturedPreset(
+    id: 'default_norimyn',
+    name: 'NoriMyn',
+    author: 'NoriMyn',
+    jsonAsset: 'assets/presets/norimyn.json',
+    imageAsset: 'assets/presets/norimyn.jpg',
+    createdAt: 5,
+    reasoningEnabled: true,
+    reasoningStart: '<think>',
+    reasoningEnd: '</think>',
+  ),
 ];
+
+/// Canonical model serialization includes every editable field. Metadata and
+/// block/regex order matter too: a renamed or reordered preset is customized.
+String featuredPresetContentHash(Preset preset) =>
+    sha256.convert(utf8.encode(jsonEncode(preset.toJson()))).toString();
 
 /// Cover-image asset for a preset id, or `null` when the id is not one of the
 /// bundled featured presets.

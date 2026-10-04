@@ -1,12 +1,23 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../features/presets/preset_list_provider.dart';
+import '../db/repositories/preset_repo.dart';
 import '../state/db_provider.dart';
 import '../state/shared_prefs_provider.dart';
 import 'featured_presets.dart';
 
 const _seededKey = 'defaultPresetsSeeded';
 const _featuredSeededKey = 'featuredPresetsSeeded_v1';
+
+// These shipped before per-preset tracking. An absent row on a v1 install
+// belongs to a deletion; newer ids can still be offered once on that install.
+const _legacyFeaturedIds = {
+  'default_shino',
+  'default_fawnie',
+  'default_microcot',
+  'default_renri',
+};
 
 /// The preset a first run lands on.
 ///
@@ -57,19 +68,63 @@ Future<void> applyFirstRunPresetChoice({SharedPreferences? preferences}) async {
   await prefs.setString('activePresetId', choice);
 }
 
-/// Seeds the standard "featured" presets from hydall/Glaze (Shino, Fawnie,
-/// MicroCot, Renri) with their cover images. Runs once (own storage key) so
-/// existing installs pick them up too, and never clobbers a copy the user may
-/// already have under the same id.
+/// Seeds new bundled presets and refreshes unchanged older copies. The v1
+/// marker stays authoritative for old deletions; adding a preset does not reset
+/// the library or active choice. Refresh a cached library only after DB writes.
 Future<void> seedFeaturedPresets(WidgetRef ref) async {
+  final context = ref.context;
   final prefs = await ref.read(sharedPreferencesProvider.future);
-  if (prefs.getBool(_featuredSeededKey) == true) return;
-
+  if (!context.mounted) return;
   final repo = ref.read(presetRepoProvider);
-  for (final f in featuredPresets) {
-    if (await repo.getById(f.id) != null) continue;
-    await repo.put(await loadFeaturedPreset(f));
+  final changed = await reconcileFeaturedPresets(
+    repo: repo,
+    preferences: prefs,
+  );
+  if (context.mounted && changed) {
+    ref.invalidate(presetListProvider);
   }
+}
 
-  await prefs.setBool(_featuredSeededKey, true);
+/// Independent of widget lifetime so accepted startup work can finish safely.
+Future<bool> reconcileFeaturedPresets({
+  required PresetRepo repo,
+  required SharedPreferences preferences,
+  List<FeaturedPreset> presets = featuredPresets,
+}) async {
+  final alreadySeeded = preferences.getBool(_featuredSeededKey) == true;
+  var changed = false;
+  for (final featured in presets) {
+    final revisionKey = 'featuredPresetRev_${featured.id}';
+    final hashKey = 'featuredPresetHash_${featured.id}';
+    final savedRevision = preferences.getInt(revisionKey);
+    if (savedRevision != null && savedRevision >= featured.revision) continue;
+
+    final existing = await repo.getById(featured.id);
+    final bundled = await loadFeaturedPreset(featured);
+    if (existing == null) {
+      final knownDeleted =
+          savedRevision != null ||
+          (alreadySeeded && _legacyFeaturedIds.contains(featured.id));
+      if (!knownDeleted) {
+        changed =
+            await repo.putIfUnchanged(bundled, insertIfMissing: true) ||
+            changed;
+      }
+    } else {
+      final previousHash =
+          preferences.getString(hashKey) ?? featured.previousContentHash;
+      if (previousHash != null &&
+          featuredPresetContentHash(existing) == previousHash) {
+        changed =
+            await repo.putIfUnchanged(bundled, expectedExisting: existing) ||
+            changed;
+      }
+    }
+    // Track the bundle, never a customized copy. Future updates compare with
+    // what was shipped; even a skipped/deleted preset has now been considered.
+    await preferences.setString(hashKey, featuredPresetContentHash(bundled));
+    await preferences.setInt(revisionKey, featured.revision);
+  }
+  await preferences.setBool(_featuredSeededKey, true);
+  return changed;
 }

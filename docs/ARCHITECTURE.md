@@ -513,6 +513,18 @@ to a detached, immutable `List<RuntimePromptBlock>` before entering core prompt
 code. The two core orchestrators still receive `Ref` for core providers; this is
 a dependency-direction boundary, not a claim that prompt collection is pure.
 
+### Bundled prompt presets
+
+`core/services/featured_presets.dart` describes Shino, Fawnie, MicroCoT, Renri,
+and NoriMyn; their SillyTavern JSON and covers live in `assets/presets/`.
+`preset_seeder.dart` tracks revisions and canonical model fingerprints per id.
+A bundle update replaces only an unchanged previous bundled copy, using
+`PresetRepo.putIfUnchanged` to protect concurrent edits, imports, and deletions.
+Customized copies remain user-owned. The original v1 seeding marker preserves
+old deletions, while newly introduced ids are offered once; a deleted tracked
+preset is not restored by a later revision. Seeding refreshes the cached preset
+library after writes and never changes the active preset selection.
+
 ### Prompt post-processing
 
 **Files:** `core/llm/converters/prompt_post_processing.dart`,

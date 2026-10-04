@@ -45,6 +45,23 @@ class PresetRepo implements SyncPresetStore {
     await _db.into(_db.presets).insertOnConflictUpdate(_toCompanion(preset));
   }
 
+  /// Startup seeding may race with an editor, import, sync, or deletion. Only
+  /// replace the exact copy the caller examined, or insert a still-missing row.
+  Future<bool> putIfUnchanged(
+    Preset preset, {
+    Preset? expectedExisting,
+    bool insertIfMissing = false,
+  }) => _db.transaction(() async {
+    final current = await getById(preset.id);
+    if (current == null) {
+      if (!insertIfMissing || expectedExisting != null) return false;
+    } else if (expectedExisting == null || current != expectedExisting) {
+      return false;
+    }
+    await put(preset);
+    return true;
+  });
+
   @override
   Future<void> delete(String id) async {
     await (_db.delete(_db.presets)..where((t) => t.presetId.equals(id))).go();
