@@ -15,6 +15,17 @@ Architecture: `docs/ARCHITECTURE.md`. Git and build workflow: `docs/WORKFLOW.md`
 - These rules apply to chat replies only, not to commit messages, PR bodies, or
   code comments.
 
+## Delegation
+
+- Subagents, delegation, and parallel agent work are explicitly authorized for
+  this project without separate approval. Use them when useful for independent
+  exploration, implementation, or review.
+- Keep every delegated task within the user's request and project rules.
+  Delegation does not expand permissions or authorize otherwise restricted actions.
+- Give subagents the relevant context and rules, coordinate edits to avoid
+  conflicts, and review their results before integrating them. The parent agent
+  remains responsible for the final changes and verification.
+
 ## Commands
 
 Flutter and Dart must be available on `PATH`. Alternatively, set
