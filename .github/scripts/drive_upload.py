@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Upload build artifacts to a Google Drive folder via a service account.
+"""Upload build artifacts to a Google Drive folder.
 
-Each run creates (or reuses) a subfolder in the target folder named after the
-build (VERSION_SLUG), shares the subfolder ("anyone with the link can view"),
-uploads every file from UPLOAD_DIR into it, then deletes the oldest subfolders
-so only the newest KEEP versions remain.
+Supports both:
+  1. OAuth2 user credentials JSON ("type": "authorized_user" with client_id,
+     client_secret, refresh_token) — required for personal Google Drive folders
+     because Google Service Accounts have 0 storage quota on personal My Drive.
+  2. Service Account JSON ("type": "service_account") — works with Shared Drives.
 
 Environment:
-  GOOGLE_SERVICE_ACCOUNT_JSON  service-account key JSON (raw string)   [required]
-  GDRIVE_FOLDER_ID             id of the parent folder                  [required]
-  UPLOAD_DIR                   directory with the files to upload      [default: artifacts]
-  VERSION_SLUG                 subfolder name for this build           [required]
-  KEEP                         number of version folders to retain     [default: 3]
-  LINK_OUTPUT                  markdown link list output file          [default: drive_links.md]
+  GOOGLE_SERVICE_ACCOUNT_JSON  OAuth authorized_user or service_account JSON [required]
+  GDRIVE_FOLDER_ID             id of the parent folder                       [required]
+  UPLOAD_DIR                   directory with the files to upload           [default: artifacts]
+  VERSION_SLUG                 subfolder name for this build                [required]
+  KEEP                         number of version folders to retain          [default: 3]
+  LINK_OUTPUT                  markdown link list output file               [default: drive_links.md]
 """
 
 import json
@@ -21,6 +22,7 @@ import sys
 
 import requests
 from google.auth.transport.requests import Request
+from google.oauth2 import credentials as oauth_credentials
 from google.oauth2 import service_account
 
 FILES_API = "https://www.googleapis.com/drive/v3/files"
@@ -41,7 +43,19 @@ def auth_headers():
         info = json.loads(raw)
     except json.JSONDecodeError as e:
         fail(f"GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON: {e}")
-    creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPE)
+
+    cred_type = info.get("type", "")
+    if cred_type == "service_account":
+        creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPE)
+    elif cred_type == "authorized_user" or "refresh_token" in info:
+        info.setdefault("type", "authorized_user")
+        creds = oauth_credentials.Credentials.from_authorized_user_info(info, scopes=SCOPE)
+    else:
+        fail(
+            f"Unsupported credential JSON type '{cred_type}'. "
+            "Provide an OAuth authorized_user JSON (client_id, client_secret, refresh_token)."
+        )
+
     creds.refresh(Request())
     return {
         "Authorization": f"Bearer {creds.token}",
@@ -162,7 +176,6 @@ def prune_folders(session, headers, parent_id, keep):
     if r.status_code != 200:
         fail(f"prune list failed: {r.status_code} {r.text}")
     folders = r.json().get("files", [])
-    pruned_any = False
     for f in folders[keep:]:
         d = session.delete(
             f"{FILES_API}/{f['id']}",
@@ -170,7 +183,6 @@ def prune_folders(session, headers, parent_id, keep):
             headers=headers,
         )
         if d.status_code not in (200, 204):
-            # Fall back to moving to trash if direct delete is restricted
             t = session.patch(
                 f"{FILES_API}/{f['id']}",
                 params={"supportsAllDrives": "true"},
@@ -179,15 +191,10 @@ def prune_folders(session, headers, parent_id, keep):
             )
             if t.status_code in (200, 204):
                 print(f"trashed old version folder: {f['name']}")
-                pruned_any = True
             else:
                 print(f"::warning::could not remove old folder {f['name']}: {d.status_code}")
         else:
             print(f"pruned old version folder: {f['name']}")
-            pruned_any = True
-
-    if pruned_any:
-        session.delete(f"{FILES_API}/trash", headers=headers)
 
 
 def main():
