@@ -146,7 +146,7 @@ jobs:
     if: ${{ github.event.inputs.build_android == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Free runner disk space
+      - name: Free runner disk space & add swap
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL || true
@@ -154,7 +154,10 @@ jobs:
           if [ -d "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}/ndk" ]; then
             find "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}/ndk" -mindepth 1 -maxdepth 1 ! -name '28.2.*' -exec sudo rm -rf {} + || true
           fi
+          # Add 8 GB swap so Gradle + Kotlin daemon + R8 + dual-ABI gen_snapshot never trigger Linux OOM killer
+          sudo fallocate -l 8G /swapfile-ci && sudo chmod 600 /swapfile-ci && sudo mkswap /swapfile-ci && sudo swapon /swapfile-ci || true
           df -h /
+          free -h
 
       - uses: actions/checkout@v4
         with:
@@ -290,6 +293,13 @@ jobs:
           BUILD_CHANNEL: ${{ needs.metadata.outputs.build_channel }}
         run: |
           set -euo pipefail
+          mkdir -p ~/.gradle
+          cat << 'EOF' > ~/.gradle/gradle.properties
+          org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1G -XX:ReservedCodeCacheSize=256m
+          kotlin.daemon.jvmargs=-Xmx1536m
+          org.gradle.workers.max=2
+          org.gradle.vfs.watch=false
+          EOF
           DEFINES=(
             "--dart-define=APP_VERSION=${{ needs.metadata.outputs.version }}"
             "--dart-define=BUILD_DATE=${{ needs.metadata.outputs.build_date }}"
@@ -300,6 +310,7 @@ jobs:
           # Universal: one file that runs on every ARM phone, 32- and 64-bit.
           flutter build apk --release --no-pub \
             --target-platform android-arm,android-arm64 "${DEFINES[@]}"
+          (cd android && ./gradlew --stop) || true
           # Per-ABI: same coverage, roughly half the download, for people who
           # pick their ABI (or use an updater that picks it for them).
           flutter build apk --release --no-pub --split-per-abi \
