@@ -146,6 +146,16 @@ jobs:
     if: ${{ github.event.inputs.build_android == 'true' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL || true
+          # Remove pre-installed older NDKs so installing 28.2.x does not exhaust the disk
+          if [ -d "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}/ndk" ]; then
+            find "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}/ndk" -mindepth 1 -maxdepth 1 ! -name '28.2.*' -exec sudo rm -rf {} + || true
+          fi
+          df -h /
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
