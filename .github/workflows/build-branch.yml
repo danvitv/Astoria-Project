@@ -63,9 +63,15 @@ on:
         required: false
         default: false
         type: boolean
+      reuse_run_id:
+        description: 'Skip building and distribute artifacts from an existing Run ID (optional)'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   # ── shared metadata ────────────────────────────────────────────────────────
@@ -142,7 +148,7 @@ jobs:
   # ── android ────────────────────────────────────────────────────────────────
   build-android:
     needs: metadata
-    if: ${{ github.event.inputs.build_android == 'true' }}
+    if: ${{ github.event.inputs.reuse_run_id == '' && github.event.inputs.build_android == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Free runner disk space & add swap
@@ -352,7 +358,7 @@ jobs:
   # ── windows ────────────────────────────────────────────────────────────────
   build-windows:
     needs: metadata
-    if: ${{ github.event.inputs.build_windows == 'true' }}
+    if: ${{ github.event.inputs.reuse_run_id == '' && github.event.inputs.build_windows == 'true' }}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -433,7 +439,7 @@ jobs:
   # ── ios ────────────────────────────────────────────────────────────────────
   build-ios:
     needs: metadata
-    if: ${{ github.event.inputs.build_ios == 'true' }}
+    if: ${{ github.event.inputs.reuse_run_id == '' && github.event.inputs.build_ios == 'true' }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -568,7 +574,7 @@ jobs:
   # ── linux ──────────────────────────────────────────────────────────────────
   build-linux:
     needs: metadata
-    if: ${{ github.event.inputs.build_linux == 'true' }}
+    if: ${{ github.event.inputs.reuse_run_id == '' && github.event.inputs.build_linux == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -717,11 +723,11 @@ jobs:
   distribute:
     needs: [metadata, build-android, build-windows, build-ios, build-linux]
     runs-on: ubuntu-latest
-    if: ${{ always() && github.event.inputs.distribute_to_drive == 'true' && !cancelled() && needs.metadata.result == 'success' && needs.build-android.result != 'failure' && needs.build-windows.result != 'failure' && needs.build-ios.result != 'failure' && needs.build-linux.result != 'failure' && (needs.build-android.result == 'success' || needs.build-windows.result == 'success' || needs.build-ios.result == 'success' || needs.build-linux.result == 'success') }}
+    if: ${{ always() && github.event.inputs.distribute_to_drive == 'true' && !cancelled() && needs.metadata.result == 'success' && needs.build-android.result != 'failure' && needs.build-windows.result != 'failure' && needs.build-ios.result != 'failure' && needs.build-linux.result != 'failure' && (github.event.inputs.reuse_run_id != '' || needs.build-android.result == 'success' || needs.build-windows.result == 'success' || needs.build-ios.result == 'success' || needs.build-linux.result == 'success') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
 
       - name: Download built artifacts
@@ -730,6 +736,8 @@ jobs:
           pattern: Astoria-release-*
           merge-multiple: true
           path: artifacts/
+          run-id: ${{ github.event.inputs.reuse_run_id != '' && github.event.inputs.reuse_run_id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
