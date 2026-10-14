@@ -16,6 +16,8 @@ set -euo pipefail
 
 : "${DISCORD_WEBHOOK_RU:?DISCORD_WEBHOOK_RU is required}"
 : "${DISCORD_WEBHOOK_EN:?DISCORD_WEBHOOK_EN is required}"
+DISCORD_WEBHOOK_RU=$(printf '%s' "$DISCORD_WEBHOOK_RU" | tr -d '[:space:]')
+DISCORD_WEBHOOK_EN=$(printf '%s' "$DISCORD_WEBHOOK_EN" | tr -d '[:space:]')
 : "${VERSION:?VERSION is required}"
 : "${BUILD_DATE:?BUILD_DATE is required}"
 : "${BUILD_BRANCH:?BUILD_BRANCH is required}"

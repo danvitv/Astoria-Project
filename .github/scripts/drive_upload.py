@@ -119,6 +119,30 @@ def find_or_create_folder(session, headers, parent_id, name):
 def upload_file(session, headers, folder_id, path):
     filename = os.path.basename(path)
     size = os.path.getsize(path)
+
+    # Reuse existing file if already uploaded in this version folder (idempotent rerun)
+    q = (
+        f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
+    )
+    existing = session.get(
+        FILES_API,
+        headers=headers,
+        params={
+            "q": q,
+            "fields": "files(id,size,webViewLink)",
+            "pageSize": 1,
+            "supportsAllDrives": "true",
+            "includeItemsFromAllDrives": "true",
+        },
+    )
+    if existing.status_code == 200:
+        found = existing.json().get("files", [])
+        if found:
+            item = found[0]
+            fid = item["id"]
+            view = item.get("webViewLink") or f"https://drive.google.com/file/d/{fid}/view?usp=sharing"
+            return filename, view, int(item.get("size", size))
+
     meta = {"name": filename, "parents": [folder_id]}
 
     init = session.post(
