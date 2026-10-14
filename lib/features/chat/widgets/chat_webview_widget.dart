@@ -662,6 +662,9 @@ class ChatWebViewWidgetState extends ConsumerState<ChatWebViewWidget>
   /// Tells the reader the chat view could not be brought up, once per widget.
   void _notifyWebViewFailure(Object message) {
     if (!mounted || _bridgeFailureNotified) return;
+    // Recoverable rebuilds retain drafts; terminal failure has no editor left
+    // to provide Save/Cancel, so it must release the generation guards.
+    ref.read(editingMessageIdProvider(widget.charId).notifier).state = null;
     _bridgeFailureNotified = true;
     GlazeErrorDialog.show(
       context,

@@ -76,7 +76,7 @@ class ApiSlotGroup extends ConsumerStatefulWidget {
 }
 
 class _ApiSlotGroupState extends ConsumerState<ApiSlotGroup> {
-  /// Fetched model ids keyed by `'<cacheTag>:<apiConfigId>|<endpoint>|<model>'`.
+  /// Models are scoped to the complete connection identity, including credentials.
   final Map<String, List<String>> _fetchedModels = {};
 
   /// Cache keys currently in flight, so a second tap does not refetch.
@@ -166,7 +166,7 @@ class _ApiSlotGroupState extends ConsumerState<ApiSlotGroup> {
     final config = _slotApiConfig(configs);
     final identity = config == null
         ? widget.apiConfigId
-        : '${config.id}|${config.endpoint}|${config.model}';
+        : '${config.id}|${config.endpoint}|${config.apiKey}|${config.protocol}|${config.model}|${config.useResponsesApi}';
     return '$cacheTag:$identity';
   }
 
@@ -189,10 +189,18 @@ class _ApiSlotGroupState extends ConsumerState<ApiSlotGroup> {
     try {
       final ids = await ModelFetcher.fetchModelIds(config);
       if (!mounted) return;
+      final currentConfigs =
+          ref.read(apiListProvider).value ?? const <ApiConfig>[];
+      final current = _slotApiConfig(currentConfigs);
+      if (current != config) return;
       setState(() => _fetchedModels[cacheKey] = ids);
     } catch (e) {
       if (mounted) {
-        GlazeErrorDialog.show(context, e, prefix: 'settings_err_failed'.tr());
+        final currentConfigs =
+            ref.read(apiListProvider).value ?? const <ApiConfig>[];
+        if (_slotApiConfig(currentConfigs) == config) {
+          GlazeErrorDialog.show(context, e, prefix: 'settings_err_failed'.tr());
+        }
       }
     } finally {
       if (mounted) setState(() => _fetching.remove(cacheKey));
@@ -206,12 +214,13 @@ class _ApiSlotGroupState extends ConsumerState<ApiSlotGroup> {
       await _fetchModels(cacheKey, configs);
       if (!mounted) return;
     }
-    final models =
-        <String>{
-          ...?_fetchedModels[cacheKey],
-          if (row.value.isNotEmpty) row.value,
-        }.toList()
-          ..sort();
+    final currentConfigs =
+        ref.read(apiListProvider).value ?? const <ApiConfig>[];
+    if (_cacheKey(row.cacheTag, currentConfigs) != cacheKey) return;
+    final models = <String>{
+      ...?_fetchedModels[cacheKey],
+      if (row.value.isNotEmpty) row.value,
+    }.toList()..sort();
     // "Automatic" is always offered, even when the fetch came back empty —
     // otherwise a slot pointed at a stale model id could never be reset.
     final items = <BottomSheetItem>[
@@ -221,6 +230,14 @@ class _ApiSlotGroupState extends ConsumerState<ApiSlotGroup> {
         iconColor: Theme.of(context).colorScheme.primary,
         onTap: () {
           Navigator.of(context, rootNavigator: true).pop();
+          if (!mounted ||
+              _cacheKey(
+                    row.cacheTag,
+                    ref.read(apiListProvider).value ?? const [],
+                  ) !=
+                  cacheKey) {
+            return;
+          }
           row.onChanged('');
         },
       ),
@@ -231,6 +248,14 @@ class _ApiSlotGroupState extends ConsumerState<ApiSlotGroup> {
           iconColor: Theme.of(context).colorScheme.primary,
           onTap: () {
             Navigator.of(context, rootNavigator: true).pop();
+            if (!mounted ||
+                _cacheKey(
+                      row.cacheTag,
+                      ref.read(apiListProvider).value ?? const [],
+                    ) !=
+                    cacheKey) {
+              return;
+            }
             row.onChanged(m);
           },
         ),

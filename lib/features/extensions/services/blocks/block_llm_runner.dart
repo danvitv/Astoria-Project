@@ -107,6 +107,9 @@ class BlockLlmRunner {
     });
 
     final completer = Completer<String>();
+    // Timeout can throw before we await the transport's cancellation error.
+    // Observe that future now without changing the error returned by run().
+    completer.future.ignore();
     final buffer = StringBuffer();
 
     try {

@@ -764,6 +764,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
         globalRegexScripts: globalRegexScripts,
         studioRegexScripts: studioRegexScripts,
         appSettings: appSettings,
+        chatLayout: SyncSerialization.readChatLayout(prefs),
       );
       final hash = SyncSerialization.computeSyncHash(payload);
       final key = entryKey(type, type);

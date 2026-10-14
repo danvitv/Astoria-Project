@@ -226,6 +226,10 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
     for (final c in _ctrls) {
       c.addListener(_scheduleSave);
     }
+    _endpointCtrl.addListener(_connectionEdited);
+    _keyCtrl.addListener(_connectionEdited);
+    _embEndpointCtrl.addListener(_connectionEdited);
+    _embApiKeyCtrl.addListener(_connectionEdited);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadActivePreset();
     });
@@ -324,8 +328,44 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
 
   void _scheduleSave() {
     if (_loading) return;
+    _connectionEdited();
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 800), _save);
+  }
+
+  Object? _modelConnection;
+  Object? _embeddingConnection;
+  int _modelsRequest = 0;
+  int _embeddingModelsRequest = 0;
+
+  Object get _llmModelIdentity => (
+    _loadedPresetId,
+    _endpointCtrl.text.trim(),
+    _keyCtrl.text.trim(),
+    _protocol,
+    _useResponsesApi,
+  );
+
+  void _connectionEdited() {
+    if (!mounted || _loading) return;
+    final llm = _llmModelIdentity;
+    final embedding = _embeddingModelSource();
+    final emb = (embedding?.endpoint, embedding?.apiKey, embedding?.protocol);
+    if (llm == _modelConnection && emb == _embeddingConnection) return;
+    setState(() {
+      if (llm != _modelConnection) {
+        _modelConnection = llm;
+        _modelsRequest++;
+        _fetchedModels = [];
+        _isLoadingModels = false;
+      }
+      if (emb != _embeddingConnection) {
+        _embeddingConnection = emb;
+        _embeddingModelsRequest++;
+        _embFetchedModels = [];
+        _isLoadingEmbModels = false;
+      }
+    });
   }
 
   void _persistActiveId(String? id) async {
@@ -413,6 +453,7 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
     });
 
     _loading = false;
+    _connectionEdited();
   }
 
   /// Loads the embedding half of the editor from the preset the Embeddings tab
@@ -443,6 +484,7 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
     });
 
     _loading = false;
+    _connectionEdited();
   }
 
   Future<void> _save() async {
@@ -1634,6 +1676,9 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
   }
 
   Future<void> _fetchEmbeddingModels() async {
+    _connectionEdited();
+    final identity = _embeddingConnection;
+    final request = ++_embeddingModelsRequest;
     final source = _embeddingModelSource();
     if (source == null || source.apiKey.isEmpty) {
       GlazeToast.show(context, 'settings_err_endpoint_key'.tr());
@@ -1642,7 +1687,9 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
     setState(() => _isLoadingEmbModels = true);
     try {
       final ids = await ModelFetcher.fetchModelIds(source);
-      if (!mounted) return;
+      if (!mounted || request != _embeddingModelsRequest) return;
+      _connectionEdited();
+      if (identity != _embeddingConnection) return;
       setState(() {
         _embFetchedModels = ids;
         _isLoadingEmbModels = false;
@@ -1651,7 +1698,9 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
         GlazeToast.show(context, 'settings_err_no_models'.tr());
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && request == _embeddingModelsRequest) {
+        _connectionEdited();
+        if (identity != _embeddingConnection) return;
         setState(() => _isLoadingEmbModels = false);
         GlazeErrorDialog.show(context, e, prefix: 'settings_err_failed'.tr());
       }
@@ -1659,11 +1708,15 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
   }
 
   Future<void> _openEmbeddingModelSelector() async {
+    _connectionEdited();
+    final identity = _embeddingConnection;
     if (_embFetchedModels.isEmpty) {
       await _fetchEmbeddingModels();
       if (_embFetchedModels.isEmpty) return;
     }
     if (!mounted) return;
+    _connectionEdited();
+    if (_embeddingConnection != identity) return;
     final models = List<String>.from(_embFetchedModels);
     final current = _embModelCtrl.text.trim();
     // A model typed by hand (or one the provider does not list) stays
@@ -1686,7 +1739,8 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
               iconColor: context.cs.primary,
               onTap: () {
                 Navigator.of(context, rootNavigator: true).pop();
-                _embModelCtrl.text = m;
+                _connectionEdited();
+                if (_embeddingConnection == identity) _embModelCtrl.text = m;
               },
             ),
           )
@@ -2127,11 +2181,15 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
   }
 
   Future<void> _openModelSelector() async {
+    _connectionEdited();
+    final identity = _modelConnection;
     if (_fetchedModels.isEmpty) {
       await _fetchModels();
       if (_fetchedModels.isEmpty) return;
     }
     if (!mounted) return;
+    _connectionEdited();
+    if (_modelConnection != identity) return;
     final models = _fetchedModels.map((m) => m['id'] as String).toList()
       ..sort();
     final current = _modelCtrl.text;
@@ -2153,7 +2211,8 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
               iconColor: context.cs.primary,
               onTap: () {
                 Navigator.of(context, rootNavigator: true).pop();
-                _modelCtrl.text = m;
+                _connectionEdited();
+                if (_modelConnection == identity) _modelCtrl.text = m;
               },
             ),
           )
@@ -2389,6 +2448,9 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
   }
 
   Future<void> _fetchModels() async {
+    _connectionEdited();
+    final identity = _llmModelIdentity;
+    final request = ++_modelsRequest;
     final endpoint = _endpointCtrl.text.trim();
     final apiKey = _keyCtrl.text.trim();
     final endpointRequired = _protocol != LlmProtocol.openrouter;
@@ -2408,7 +2470,9 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
       final models = await pickChatTransport(
         _protocol,
       ).fetchModels(endpoint: persistedEndpoint, apiKey: apiKey);
-      if (!mounted) return;
+      if (!mounted || request != _modelsRequest) return;
+      _connectionEdited();
+      if (identity != _llmModelIdentity) return;
       setState(() {
         _fetchedModels = models;
         _isLoadingModels = false;
@@ -2417,7 +2481,9 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
         GlazeToast.show(context, 'settings_err_no_models'.tr());
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && request == _modelsRequest) {
+        _connectionEdited();
+        if (identity != _llmModelIdentity) return;
         setState(() => _isLoadingModels = false);
         GlazeErrorDialog.show(context, e, prefix: 'settings_err_failed'.tr());
       }

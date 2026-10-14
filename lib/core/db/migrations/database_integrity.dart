@@ -1,6 +1,30 @@
 part of '../app_db.dart';
 
 extension _AppDatabaseIntegrityMigrations on AppDatabase {
+  /// Installs all declared indexes and current integrity triggers after the
+  /// last upgrade step (createTable alone does not install @TableIndex).
+  Future<void> _ensureSchemaIntegrity() async {
+    final existing = (await customSelect(
+      "SELECT name FROM sqlite_master WHERE type = 'index'",
+    ).get()).map((row) => row.read<String>('name')).toSet();
+    for (final index in allSchemaEntities.whereType<Index>()) {
+      if (existing.contains(index.entityName)) continue;
+      // Fail closed, including legacy duplicate keys: opening without a
+      // required unique index would silently weaken durable invariants. Do
+      // not swallow SQL/schema/storage failures as if they were duplicates.
+      await customStatement(
+        index.createStatementsByDialect[SqlDialect.sqlite]!,
+      );
+    }
+    await _createLorebookUseManifestImmutabilityTriggers();
+    await _createLorebookUseManifestIntegrityTriggers();
+    await _createLedgerReconciliationImmutabilityTriggers();
+    await _createCardEvolutionIntegrity();
+    await _createRewriteAuditIntegrity();
+    await _createSessionCanonIntegrity();
+    await _createLlmCallEventImmutabilityTrigger();
+  }
+
   Future<void> _createLorebookUseManifestImmutabilityTriggers() async {
     for (final table in const [
       'lorebook_use_manifests',
@@ -79,7 +103,6 @@ extension _AppDatabaseIntegrityMigrations on AppDatabase {
     for (final table in const [
       'rewrite_operation_revisions',
       'rewrite_evidence_rows',
-      'llm_request_capture_rows',
     ]) {
       await customStatement(
         'CREATE TRIGGER IF NOT EXISTS ${table}_no_update '
@@ -87,6 +110,27 @@ extension _AppDatabaseIntegrityMigrations on AppDatabase {
         "SELECT RAISE(ABORT, '$table is immutable'); END",
       );
     }
+    await _createRequestCaptureImmutabilityTrigger();
+  }
+
+  /// Captured payloads never change. Only a NULL message anchor may be bound
+  /// once, after the reply exists, with every other column unchanged.
+  Future<void> _createRequestCaptureImmutabilityTrigger() async {
+    const table = 'llm_request_capture_rows';
+    final unchanged = [
+      for (final column in llmRequestCaptureRows.$columns)
+        if (column.name != 'message_id')
+          'NEW.${column.name} IS OLD.${column.name}',
+    ].join(' AND ');
+    // IF NOT EXISTS would preserve the pre-v136 unconditional no-update body.
+    await customStatement('DROP TRIGGER IF EXISTS ${table}_no_update');
+    await customStatement(
+      'CREATE TRIGGER ${table}_no_update '
+      'BEFORE UPDATE ON $table '
+      'WHEN NOT (OLD.message_id IS NULL AND NEW.message_id IS NOT NULL '
+      'AND $unchanged) BEGIN '
+      "SELECT RAISE(ABORT, '$table is immutable'); END",
+    );
   }
 
   Future<void> _createLlmCallEventImmutabilityTrigger() async {

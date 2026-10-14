@@ -428,12 +428,19 @@ class _ChatInputBarState extends ConsumerState<ChatInputBar> {
     if (widget.focusNode != null &&
         widget.enterToSend &&
         event.logicalKey == LogicalKeyboardKey.enter &&
-        !HardwareKeyboard.instance.isShiftPressed) {
+        !HardwareKeyboard.instance.isShiftPressed &&
+        !_softKeyboardVisible) {
       _handleSend();
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
   }
+
+  // Scaffold may strip MediaQuery insets; the raw view still identifies the IME.
+  bool get _softKeyboardVisible =>
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS) &&
+      View.of(context).viewInsets.bottom > 0;
 
   static bool _isPasteShortcut(KeyEvent event) {
     if (event.logicalKey != LogicalKeyboardKey.keyV) return false;

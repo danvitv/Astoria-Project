@@ -1,15 +1,19 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../app.dart';
 import '../../core/services/backup/backup_cancel.dart';
+import '../../core/services/backup/backup_secrets.dart';
 import '../../core/services/onboarding_service.dart';
 import '../../shared/theme/app_colors.dart';
 import '../../shared/widgets/glaze_error_dialog.dart';
 import '../../shared/widgets/glaze_spinner.dart';
+import '../../shared/widgets/glaze_switch.dart';
 import '../../shared/widgets/glaze_toast.dart';
 import '../../shared/widgets/sheet_view.dart';
 import '../../shared/widgets/glaze_bottom_sheet.dart';
@@ -32,10 +36,53 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   bool _hasCleared = false;
   int _importStage = 0;
   String _importProgressText = '';
+  bool _includeApiKeys = false;
+  int _secretsChoiceRevision = 0;
+  late final Future<SharedPreferences> _preferences;
+  Future<void> _preferenceWrites = Future<void>.value();
 
   bool get _isBusy => _isExporting || (_isImporting && !_importComplete);
 
   bool get _canCancel => _isImporting && !_hasCleared;
+
+  @override
+  void initState() {
+    super.initState();
+    _preferences = SharedPreferences.getInstance();
+    unawaited(_loadSecretsChoice());
+  }
+
+  Future<void> _loadSecretsChoice() async {
+    final revision = _secretsChoiceRevision;
+    try {
+      final prefs = await _preferences;
+      // A tap or an export owns the choice, even if hydration finishes later.
+      if (!mounted || _isBusy || revision != _secretsChoiceRevision) return;
+      setState(() {
+        _includeApiKeys =
+            prefs.getBool(BackupSecrets.includeApiKeysPrefKey) ?? false;
+      });
+    } catch (_) {
+      // Failed preference reads must leave the safe, keyless default in place.
+    }
+  }
+
+  void _setSecretsChoice(bool value) {
+    if (_isBusy) return;
+    final revision = ++_secretsChoiceRevision;
+    setState(() => _includeApiKeys = value);
+    // Preserve tap order; an older write must not land after a newer choice.
+    _preferenceWrites = _preferenceWrites.then((_) async {
+      try {
+        final prefs = await _preferences;
+        await prefs.setBool(BackupSecrets.includeApiKeysPrefKey, value);
+      } catch (e) {
+        if (mounted && revision == _secretsChoiceRevision) {
+          GlazeErrorDialog.show(context, e, prefix: 'settings_err_failed'.tr());
+        }
+      }
+    });
+  }
 
   void _blockClose() {
     GlazeToast.show(
@@ -71,10 +118,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
               return Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  ...previousChildren,
-                  ?currentChild,
-                ],
+                children: [...previousChildren, ?currentChild],
               );
             },
             child: _buildContent(innerContext),
@@ -107,6 +151,8 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     return _NormalView(
       key: const ValueKey('normal'),
       isExporting: _isExporting,
+      includeApiKeys: _includeApiKeys,
+      onIncludeApiKeysChanged: _isBusy ? null : _setSecretsChoice,
       onExport: _performExport,
       onImport: _triggerImport,
       showExport: !widget.fromOnboarding,
@@ -114,10 +160,14 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   }
 
   Future<void> _performExport() async {
+    if (_isBusy) return;
+    final includeApiKeys = _includeApiKeys;
+    ++_secretsChoiceRevision;
     setState(() => _isExporting = true);
     try {
       final service = await ref.read(backupServiceProvider.future);
-      final path = await service.exportBackup();
+      if (!mounted) return;
+      final path = await service.exportBackup(includeApiKeys: includeApiKeys);
 
       if (path.isEmpty) return; // user cancelled the save dialog
       if (mounted) {
@@ -219,11 +269,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         _importComplete = false;
         _hasCleared = false;
       });
-      GlazeToast.show(
-        context,
-        'cancel_import_done'.tr(),
-        isError: false,
-      );
+      GlazeToast.show(context, 'cancel_import_done'.tr(), isError: false);
     } catch (e, st) {
       if (!mounted) return;
       setState(() {
@@ -231,7 +277,11 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         _importComplete = false;
         _hasCleared = false;
       });
-      GlazeErrorDialog.show(context, '$e\n\n$st', prefix: 'settings_err_failed'.tr());
+      GlazeErrorDialog.show(
+        context,
+        '$e\n\n$st',
+        prefix: 'settings_err_failed'.tr(),
+      );
     }
   }
 
@@ -255,6 +305,8 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
 
 class _NormalView extends StatelessWidget {
   final bool isExporting;
+  final bool includeApiKeys;
+  final ValueChanged<bool>? onIncludeApiKeysChanged;
   final VoidCallback onExport;
   final VoidCallback onImport;
 
@@ -266,6 +318,8 @@ class _NormalView extends StatelessWidget {
   const _NormalView({
     super.key,
     required this.isExporting,
+    required this.includeApiKeys,
+    required this.onIncludeApiKeysChanged,
     required this.onExport,
     required this.onImport,
     required this.showExport,
@@ -274,7 +328,12 @@ class _NormalView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.fromLTRB(16, 12 + MediaQuery.paddingOf(context).top, 16, 16),
+      padding: EdgeInsets.fromLTRB(
+        16,
+        12 + MediaQuery.paddingOf(context).top,
+        16,
+        16,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -306,6 +365,10 @@ class _NormalView extends StatelessWidget {
             _Section(
               title: 'menu_export'.tr(),
               children: [
+                _ExportSecretsOption(
+                  value: includeApiKeys,
+                  onChanged: onIncludeApiKeysChanged,
+                ),
                 _BsButton(
                   onPressed: isExporting ? null : onExport,
                   icon: Icons.file_download_outlined,
@@ -319,15 +382,45 @@ class _NormalView extends StatelessWidget {
                 ),
                 _Hint(
                   lines: [
-                    _HintLine(
-                      text: 'backup_hint_export'.tr(),
-                    ),
+                    _HintLine(text: 'backup_hint_export'.tr()),
+                    _HintLine(text: 'backup_include_api_keys_desc'.tr()),
                   ],
                 ),
               ],
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _ExportSecretsOption extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+
+  const _ExportSecretsOption({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return MergeSemantics(
+      child: Padding(
+        padding: const EdgeInsets.only(left: 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'backup_include_api_keys'.tr(),
+                style: TextStyle(
+                  fontSize: 14,
+                  color: context.cs.onSurfaceVariant,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            GlazeSwitch(value: value, onChanged: onChanged),
+          ],
+        ),
       ),
     );
   }
@@ -485,10 +578,7 @@ class _Separator extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16),
-      child: Container(
-        height: 1,
-        color: Colors.white.withValues(alpha: 0.1),
-      ),
+      child: Container(height: 1, color: Colors.white.withValues(alpha: 0.1)),
     );
   }
 }
@@ -513,7 +603,12 @@ class _ProgressView extends StatelessWidget {
   Widget build(BuildContext context) {
     final accent = context.cs.primary;
     return Padding(
-      padding: EdgeInsets.fromLTRB(16, 32 + MediaQuery.paddingOf(context).top, 16, 16),
+      padding: EdgeInsets.fromLTRB(
+        16,
+        32 + MediaQuery.paddingOf(context).top,
+        16,
+        16,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -606,7 +701,12 @@ class _SuccessView extends StatelessWidget {
   Widget build(BuildContext context) {
     final accent = context.cs.primary;
     return Padding(
-      padding: EdgeInsets.fromLTRB(16, 32 + MediaQuery.paddingOf(context).top, 16, 16),
+      padding: EdgeInsets.fromLTRB(
+        16,
+        32 + MediaQuery.paddingOf(context).top,
+        16,
+        16,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

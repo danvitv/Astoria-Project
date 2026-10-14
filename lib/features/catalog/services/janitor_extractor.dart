@@ -17,6 +17,7 @@ import 'janitor_provider.dart';
 import 'janitor_public_lorebook.dart';
 import 'janitor_separate.dart';
 import 'janitor_webview_proxy.dart';
+import 'janitor_lore_budget.dart';
 
 /// Result of the capture+separate pass: the recovered character (with the
 /// hidden card now in `description`), the isolated closed-lorebook text, and
@@ -234,18 +235,37 @@ class JanitorExtractor {
           ? null
           : PromptFields.fromPayload(probePayload, restore: macro);
       final cleanFields = definitionPublic ? PromptFields.fromMeta(meta) : null;
-      final separated = macro(sep.lorebookText);
-      final scan = scanInjectedFields(
+      final separated = mergeLorebookTexts([
+        macro(sep.lorebookText),
+        for (final extra in capture.extraPasses)
+          macro(
+            separate(extra, extractCard(extra), publicContents).lorebookText,
+          ),
+      ]);
+      final mainScan = scanInjectedFields(
         capture: PromptFields.fromPayload(payload, restore: macro),
         probe: probeFields,
         clean: cleanFields,
         publicContents: publicContents,
         existing: separated,
       );
-      final lorebookText = [
-        separated,
-        scan.text,
-      ].map((t) => t.trim()).where((t) => t.isNotEmpty).join('\n\n');
+      final injected = [...mainScan.blocks];
+      for (final extra in capture.extraPasses) {
+        injected.addAll(
+          scanInjectedFields(
+            capture: PromptFields.fromPayload(extra, restore: macro),
+            probe: probeFields,
+            clean: cleanFields,
+            publicContents: publicContents,
+            existing: mergeLorebookTexts([
+              separated,
+              InjectionScan(injected).text,
+            ]),
+          ).blocks,
+        );
+      }
+      final scan = InjectionScan(injected);
+      final lorebookText = mergeLorebookTexts([separated, scan.text]);
 
       // The trigger snapshot contains conditional lore inside card fields.
       // Import the probe baseline and remove recovered always-on injections.

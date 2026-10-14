@@ -20,6 +20,9 @@ import '../models/extension_preset.dart';
 import '../models/info_block.dart';
 import '../models/extension_context_policy.dart';
 import 'blocks/block_llm_runner.dart';
+import 'blocks/context_item_builder.dart';
+import '../../../core/state/active_selection_provider.dart';
+import '../../../core/state/active_regex_provider.dart';
 import 'block_content_extractor.dart';
 import 'block_context_builder.dart';
 import 'ext_blocks_prompt_injection.dart';
@@ -70,6 +73,14 @@ class InfoBlockService {
   final Ref _ref;
   final BlockLlmRunner _llmRunner;
 
+  Map<String, List<InfoBlock>> _groupBlocks(List<InfoBlock> blocks) {
+    final grouped = <String, List<InfoBlock>>{};
+    for (final block in blocks) {
+      (grouped[block.messageId] ??= []).add(block);
+    }
+    return grouped;
+  }
+
   /// Generates the text content for a single infoblock block.
   /// Returns `(content, error)` — on success `error` is null; on failure
   /// `content` is null and `error` describes what went wrong.
@@ -85,6 +96,8 @@ class InfoBlockService {
     ExtensionContextPolicy contextPolicy = const ExtensionContextPolicy(),
     MainModelContextSnapshot? mainModelContextSnapshot,
     Persona? personaModel,
+    Map<String, String> sessionVars = const {},
+    Map<String, String> globalVars = const {},
     ExtensionPreset? preset,
     int swipeId = 0,
     CancelToken? cancelToken,
@@ -95,13 +108,18 @@ class InfoBlockService {
     // Pull this block's own prior outputs (same name, earlier messages) so the
     // model can continue/update the existing state instead of regenerating from
     // scratch. Controlled per-block via [previousBlocksCount] (0 = disabled).
-    final previousBlocks = await _loadPreviousBlocks(
-      sessionId: sessionId,
-      currentMessageId: messageId,
-      currentSwipeId: swipeId,
-      messages: messages,
-      blockConfig: blockConfig,
+    final hasExplicitContext = blockConfig.context.any(
+      (item) => !item.disabled,
     );
+    final previousBlocks = hasExplicitContext
+        ? const <InfoBlock>[]
+        : await _loadPreviousBlocks(
+            sessionId: sessionId,
+            currentMessageId: messageId,
+            currentSwipeId: swipeId,
+            messages: messages,
+            blockConfig: blockConfig,
+          );
 
     // The template is the only thing that decides whether the reply is read
     // out of tags. A block that carries none — an image agent, a JS agent, a
@@ -126,7 +144,7 @@ class InfoBlockService {
         : mainModelContextSnapshot?.filterablePromptMessages != null;
     final needsReconstructedHistory =
         contextPolicy.legacyPromptSemantics || !canUseSnapshot;
-    final contextMessages = needsReconstructedHistory
+    final contextMessages = !hasExplicitContext && needsReconstructedHistory
         ? await _ref
               .read(extBlocksPromptInjectionProvider)
               .injectIntoHistory(sessionId: sessionId, messages: messages)
@@ -204,13 +222,49 @@ class InfoBlockService {
     if (cancelToken?.isCancelled == true) return (content: null, error: null);
 
     final callId = 'extblock:${blockConfig.id}:$messageId#$swipeId';
+    final requestMessages = hasExplicitContext
+        ? <Map<String, dynamic>>[
+            if (systemContent.isNotEmpty)
+              {
+                'role': 'system',
+                'content': expand(
+                  systemContent,
+                  MacroContext(
+                    character: character,
+                    persona: persona,
+                    personaDescription: personaModel?.prompt ?? personaPrompt,
+                  ),
+                ),
+              },
+            ...buildContextItemMessages(
+              blockConfig: blockConfig,
+              messages: messages,
+              anchorMessageId: messageId,
+              character: character,
+              persona:
+                  personaModel ??
+                  Persona(id: '', name: persona ?? '', prompt: personaPrompt),
+              sessionVars: sessionVars,
+              globalVars: globalVars,
+              promptRegexes: await _ref.read(activeRegexesProvider.future),
+              blocksByMessageId: _groupBlocks(
+                await _ref
+                    .read(infoBlocksRepoProvider)
+                    .getBySessionId(sessionId),
+              ),
+            ),
+          ]
+        : assembly.messages;
+    if (cancelToken?.isCancelled == true) return (content: null, error: null);
     String? rawResponse;
     try {
       rawResponse = await _callLLM(
         apiConfig: apiConfig,
         blockConfig: blockConfig,
-        model: blockConfig.model.isNotEmpty ? blockConfig.model : preset?.apiModel,
-        requestMessages: assembly.messages,
+        model: blockConfig.model.isNotEmpty
+            ? blockConfig.model
+            : preset?.apiModel,
+        requestMessages: requestMessages,
         charName: character?.name,
         userName: personaModel?.name ?? persona ?? 'User',
         cancelToken: cancelToken,

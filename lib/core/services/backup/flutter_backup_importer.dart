@@ -17,6 +17,9 @@ import '../image_storage_service.dart';
 import 'archive_stream.dart';
 import 'backup_cancel.dart';
 import 'backup_helpers.dart';
+import 'backup_secrets.dart';
+import 'backup_secret_routes.dart';
+import 'backup_secret_containers.dart';
 
 class FlutterBackupImporter extends BackupHelpers {
   static const int _batchSize = 500;
@@ -32,6 +35,10 @@ class FlutterBackupImporter extends BackupHelpers {
   final ImageStorageService imageStorage;
   final ImportCancellationToken _cancel;
   final List<Map<String, dynamic>> _legacyStudioRuntimeRows = [];
+  final _localRoutes = <String, Map<String, dynamic>>{};
+  final _restoredRoutes = <String, Map<String, dynamic>>{};
+  final _localRoutingPrefs = <String, dynamic>{};
+  final _restoredRoutingPrefs = <String, dynamic>{};
 
   FlutterBackupImporter(this.db, this.imageStorage, [this._cancel = noCancel]);
 
@@ -42,11 +49,22 @@ class FlutterBackupImporter extends BackupHelpers {
     void Function(String stage)? onProgress,
   }) async {
     _legacyStudioRuntimeRows.clear();
+    final input = InputFileStream(filePath);
+    Archive? archive;
     try {
-      final archive = ZipDecoder().decodeStream(InputFileStream(filePath));
-      await _importFromZip(archive, onProgress: onProgress);
+      archive = ZipDecoder().decodeStream(input);
+      await _importFromZip(archive, filePath, onProgress: onProgress);
     } finally {
       _legacyStudioRuntimeRows.clear();
+      _localRoutes.clear();
+      _restoredRoutes.clear();
+      _localRoutingPrefs.clear();
+      _restoredRoutingPrefs.clear();
+      try {
+        await archive?.clear();
+      } finally {
+        await input.close();
+      }
     }
   }
 
@@ -74,7 +92,8 @@ class FlutterBackupImporter extends BackupHelpers {
   }) => importFromLegacyJson(data, onProgress: onProgress);
 
   Future<void> _importFromZip(
-    Archive archive, {
+    Archive archive,
+    String filePath, {
     void Function(String stage)? onProgress,
   }) async {
     final manifestEntry = archive.files.firstWhere(
@@ -97,9 +116,128 @@ class FlutterBackupImporter extends BackupHelpers {
       );
     }
     if (schemaVersion > _maxSchemaVersion) {
-      throw const FormatException(
-        'Backup was created by a newer app version.',
-      );
+      throw const FormatException('Backup was created by a newer app version.');
+    }
+
+    // Absence means a legacy, keys-included archive. Capture credentials before
+    // destructive table replacement, then refill each bounded insert batch.
+    final keysStripped = manifestJson[BackupSecrets.manifestFlag] == false;
+    final localApiSecrets = <String, Map<String, dynamic>>{};
+    final localStudioSecrets = <String, Map<String, dynamic>>{};
+    final localPrefs = <String, dynamic>{};
+    if (keysStripped) {
+      _cancel.check();
+      final columns = [
+        ...BackupSecrets.tableColumns['api_configs']!,
+        ...BackupSecrets.tableJsonColumns['api_configs']!,
+        ...BackupSecretRoutes.apiColumns,
+      ];
+      final rows = await db
+          .customSelect(
+            'SELECT config_id, ${columns.join(', ')} FROM api_configs',
+          )
+          .get();
+      for (final row in rows) {
+        final routing = {
+          for (final column in BackupSecretRoutes.apiColumns)
+            column: row.data[column],
+        };
+        _localRoutes[row.read<String>('config_id')] = routing;
+        _restoredRoutes[row.read<String>('config_id')] = routing;
+        localApiSecrets[row.read<String>('config_id')] = {
+          ...row.data,
+          'extra_request_parameters_json': BackupSecrets.snapshotParameters(
+            row.data['extra_request_parameters_json'],
+          ),
+        };
+      }
+      final prefs = await SharedPreferences.getInstance();
+      for (final key in prefs.getKeys()) {
+        localPrefs[key] = prefs.get(key);
+      }
+      _localRoutingPrefs.addAll(localPrefs);
+      // Only archived routing selectors prove the restored fallback. Missing
+      // or malformed settings must not silently borrow the device's active id.
+      final preferenceEntry = archive.findFile('preferences.json');
+      if (preferenceEntry != null) {
+        try {
+          final values = jsonDecode(utf8.decode(preferenceEntry.readBytes()!));
+          if (values is Map<String, dynamic>) {
+            _restoredRoutingPrefs.addAll(values);
+          }
+        } on Object {
+          /* Unknown settings route => do not invent fallback. */
+        }
+      }
+      // Resolve every restored API destination before any credential refill.
+      // A pinned embedding source may occur after its consumer in JSONL.
+      final routesInput = InputFileStream(filePath);
+      Archive? routeArchive;
+      try {
+        routeArchive = ZipDecoder().decodeStream(routesInput);
+        final apiFile = routeArchive.findFile('tables/api_configs.jsonl');
+        if (apiFile != null) {
+          _restoredRoutes.clear();
+          await for (final line in _tableLines(apiFile)) {
+            _cancel.check();
+            try {
+              final row = jsonDecode(line) as Map<String, dynamic>;
+              _restoredRoutes[row['config_id'] as String] = {
+                for (final column in BackupSecretRoutes.apiColumns)
+                  column: row[column],
+              };
+            } on FormatException {
+              /* Invalid row has no proven route. */
+            }
+          }
+        }
+      } finally {
+        try {
+          await routeArchive?.clear();
+        } finally {
+          await routesInput.close();
+        }
+      }
+      // Select just the known live credential container, never giant inert
+      // runtime/block restore JSON. Page rows before retaining credential parts.
+      var offset = 0;
+      while (true) {
+        _cancel.check();
+        final rows = await db
+            .customSelect(
+              'SELECT preset_id, cleaner_api_config_id, '
+              "CASE WHEN json_valid(runtime_settings_json) THEN json_extract(runtime_settings_json, '\$.cleaner.postCleanerModel') END AS cleaner_model, "
+              "CASE WHEN json_valid(runtime_settings_json) THEN json_extract(runtime_settings_json, '\$.cleaner.postCleanerUseResponsesApi') END AS cleaner_responses, "
+              'CASE WHEN json_valid(runtime_settings_json) THEN '
+              "json_extract(runtime_settings_json, '\$.cleaner.postCleanerExtraRequestParameters') "
+              'END AS cleaner_parameters FROM studio_preset_rows '
+              'ORDER BY rowid LIMIT $_batchSize OFFSET $offset',
+            )
+            .get();
+        for (final row in rows) {
+          final parameters = BackupSecrets.snapshotParameters(
+            row.data['cleaner_parameters'],
+          );
+          if (parameters is List && parameters.isNotEmpty) {
+            localStudioSecrets[row.read<String>('preset_id')] = {
+              'cleaner_parameters': parameters,
+              'cleaner_destination': BackupSecretRoutes.cleaner(
+                row.data,
+                _localRoutes,
+                _localRoutingPrefs,
+              ),
+              'cleaner_protocol': BackupSecretRoutes.cleanerRoute(
+                row.data,
+                _localRoutes,
+                _localRoutingPrefs,
+              )?['protocol'],
+            };
+          }
+        }
+        if (rows.length < _batchSize) break;
+        offset += rows.length;
+      }
+      _cancel.check();
     }
 
     final tableFiles = archive.files
@@ -190,7 +328,18 @@ class FlutterBackupImporter extends BackupHelpers {
         final knownCols = existingColumns[tableName];
         if (knownCols == null) continue;
         onProgress?.call('Importing $tableName...');
-        await _importTableFromJsonl(f, tableName, knownCols);
+        await _importTableFromJsonl(
+          f,
+          tableName,
+          knownCols,
+          localSecrets: keysStripped
+              ? switch (tableName) {
+                  'api_configs' => localApiSecrets,
+                  'studio_preset_rows' => localStudioSecrets,
+                  _ => null,
+                }
+              : null,
+        );
         // Truncate WAL between tables to keep heap small.
         await db.customStatement('PRAGMA wal_checkpoint(TRUNCATE)');
       }
@@ -212,7 +361,11 @@ class FlutterBackupImporter extends BackupHelpers {
     await _restoreGalleryFromZip(galleryFiles);
 
     onProgress?.call('Restoring settings...');
-    await _restorePreferences(archive);
+    _cancel.check();
+    await _restorePreferences(
+      archive,
+      localSecrets: keysStripped ? localPrefs : null,
+    );
   }
 
   Future<void> _clearAgentOpsStateMissingFromLegacyBackup() =>
@@ -251,7 +404,24 @@ class FlutterBackupImporter extends BackupHelpers {
   /// Restores all SharedPreferences from [preferences.json] inside the ZIP.
   /// Keys are written as-is; missing file is silently ignored (v1 legacy or
   /// older backups that pre-date the preferences export).
-  Future<void> _restorePreferences(Archive archive) async {
+  Future<void> _restorePreferences(
+    Archive archive, {
+    Map<String, dynamic>? localSecrets,
+  }) async {
+    // Missing/malformed preferences must not leave old global auth overrides
+    // attached to API/Studio routes replaced by a partial keyless archive.
+    if (localSecrets != null && localSecrets['pipelineSettings'] is String) {
+      final prefs = await SharedPreferences.getInstance();
+      _cancel.check();
+      await prefs.setString(
+        'pipelineSettings',
+        BackupSecretContainers.discardGlobalOverrides(
+              localSecrets['pipelineSettings'],
+              BackupSecrets.isSecretField,
+            )
+            as String,
+      );
+    }
     final matches = archive.files
         .where((f) => f.isFile && f.name == 'preferences.json')
         .toList();
@@ -270,9 +440,25 @@ class FlutterBackupImporter extends BackupHelpers {
     }
 
     final prefs = await SharedPreferences.getInstance();
+    if (localSecrets != null) {
+      for (final entry in BackupSecretContainers.pairUpdates(
+        map,
+        localSecrets,
+        BackupSecrets.isSecretField,
+      ).entries) {
+        _cancel.check();
+        await prefs.setString(entry.key, entry.value as String);
+      }
+    }
     for (final entry in map.entries) {
+      _cancel.check();
       final key = entry.key;
-      final value = entry.value;
+      // Credential-only preferences are deliberately absent from keyless
+      // exports. Ignore them even in an incorrectly labelled archive.
+      if (localSecrets != null && BackupSecrets.isSecretPref(key)) continue;
+      final value = localSecrets == null
+          ? entry.value
+          : BackupSecrets.refillPref(entry.value, localSecrets[key], key: key);
       try {
         if (value is bool) {
           await prefs.setBool(key, value);
@@ -306,8 +492,9 @@ class FlutterBackupImporter extends BackupHelpers {
   Future<void> _importTableFromJsonl(
     ArchiveFile file,
     String tableName,
-    Set<String> knownCols,
-  ) async {
+    Set<String> knownCols, {
+    Map<String, Map<String, dynamic>>? localSecrets,
+  }) async {
     try {
       await db.customStatement('DELETE FROM $tableName');
     } catch (_) {}
@@ -340,11 +527,21 @@ class FlutterBackupImporter extends BackupHelpers {
       pending.add(line);
       if (pending.length >= _batchSize) {
         _cancel.check();
-        await _insertJsonlRows(tableName, knownCols, pending);
+        await _insertJsonlRows(
+          tableName,
+          knownCols,
+          pending,
+          localSecrets: localSecrets,
+        );
         pending = <String>[];
       }
     }
-    await _insertJsonlRows(tableName, knownCols, pending);
+    await _insertJsonlRows(
+      tableName,
+      knownCols,
+      pending,
+      localSecrets: localSecrets,
+    );
   }
 
   /// Streams the non-empty lines of a `.jsonl` archive entry.
@@ -393,7 +590,7 @@ class FlutterBackupImporter extends BackupHelpers {
       p.join(
         Directory.systemTemp.path,
         'glaze_restore_${DateTime.now().microsecondsSinceEpoch}_'
-            '${p.basename(file.name)}',
+        '${p.basename(file.name)}',
       ),
     );
     try {
@@ -428,9 +625,11 @@ class FlutterBackupImporter extends BackupHelpers {
   Future<void> _insertJsonlRows(
     String tableName,
     Set<String> knownCols,
-    List<String> lines,
-  ) async {
+    List<String> lines, {
+    Map<String, Map<String, dynamic>>? localSecrets,
+  }) async {
     if (lines.isEmpty) return;
+    _cancel.check();
     await db.batch((batch) {
       for (final line in lines) {
         Map<String, dynamic> row;
@@ -438,6 +637,69 @@ class FlutterBackupImporter extends BackupHelpers {
           row = jsonDecode(line) as Map<String, dynamic>;
           _stageLegacyStudioRuntimeRow(tableName, row);
           row = _canonicalizeRow(tableName, row);
+          if (localSecrets != null) {
+            if (tableName == 'api_configs') {
+              _restoredRoutes[row['config_id'] as String] = {
+                for (final column in BackupSecretRoutes.apiColumns)
+                  column: row[column],
+              };
+            }
+            final local =
+                localSecrets[row[BackupSecrets
+                    .tableIdentityColumns[tableName]]];
+            final runtime = BackupSecretContainers.document(
+              row['runtime_settings_json'],
+            );
+            final cleaner = runtime is Map ? runtime['cleaner'] : null;
+            row = BackupSecrets.refillRow(
+              tableName,
+              row,
+              local,
+              embeddingRouteMatches:
+                  BackupSecretRoutes.flag(row['embedding_use_same'], true) ==
+                      BackupSecretRoutes.flag(
+                        local?['embedding_use_same'],
+                        true,
+                      ) &&
+                  BackupSecretRoutes.same(
+                    BackupSecretRoutes.embedding(
+                      row,
+                      _restoredRoutes,
+                      _restoredRoutingPrefs,
+                    ),
+                    BackupSecretRoutes.embedding(
+                      local,
+                      _localRoutes,
+                      _localRoutingPrefs,
+                    ),
+                    BackupSecrets.isSecretField,
+                  ),
+              cleanerRouteMatches:
+                  local?['cleaner_protocol'] != null &&
+                  local?['cleaner_protocol'] ==
+                      BackupSecretRoutes.cleanerRoute(
+                        row,
+                        _restoredRoutes,
+                        _restoredRoutingPrefs,
+                      )?['protocol'] &&
+                  BackupSecretRoutes.same(
+                    BackupSecretRoutes.cleaner(
+                      {
+                        ...row,
+                        if (cleaner is Map)
+                          'cleaner_model': cleaner['postCleanerModel'],
+                        if (cleaner is Map)
+                          'cleaner_responses':
+                              cleaner['postCleanerUseResponsesApi'],
+                      },
+                      _restoredRoutes,
+                      _restoredRoutingPrefs,
+                    ),
+                    local?['cleaner_destination'] as String?,
+                    BackupSecrets.isSecretField,
+                  ),
+            );
+          }
         } catch (_) {
           continue;
         }

@@ -84,13 +84,17 @@ integrity helpers are split into these `app_db.dart` parts:
 - `migrations/upgrade_v2_v50.dart`
 - `migrations/upgrade_v51_v100.dart`
 - `migrations/upgrade_v101_v131.dart`
+- `migrations/upgrade_v132.dart` through `migrations/upgrade_v135.dart`
 - `migrations/database_integrity.dart`
 - `migrations/studio_legacy.dart`
 
 All schema changes must update the registration/migration path in
 `app_db.dart`. Bump the schema version and add a guarded `from -> to` migration
 step; never modify existing column types without a migration. The current
-schema is **v131** with **56 registered tables**.
+schema is **v136** with **56 registered tables**. Local v136 runs a complete
+declared-index and integrity-trigger pass after all historical upgrade steps
+(also after fresh creation). Required unique-index creation fails closed on
+duplicates or other SQL/storage errors; it never silently skips enforcement.
 
 Migration history:
 - v18: added `characters.picksHash`
@@ -235,6 +239,20 @@ Migration history:
   reconciliation mutual exclusion across processes.
 - v131: normalized saved LLM and embedding endpoints to their concrete request
   URLs.
+- v132: reset cadence-derived Collector journals and incomplete evolution claims.
+- v133: added `api_configs.embedding_llm_preset_id`.
+- v134: added `api_configs.history_trim_mode` (default `sliding`).
+- v135: added history trimming trigger/step percentages.
+- v136 (local): restores all declared indexes and integrity triggers after the
+  last upgrade, and replaces the request-capture update trigger. Captures allow
+  exactly one NULL → non-NULL `message_id` binding with every other column
+  unchanged (NULL-safe comparison); payload edits, rebinding and unbinding fail.
+
+Character `depthPrompt` / depth / role and `world` round-trip through the V2
+`extensions.depth_prompt` and `extensions.world` keys, not dedicated columns.
+Default model fields preserve the passed extensions for extension-only imports.
+Explicit editor clearing must both reset the field and remove its extension key;
+other extension metadata is preserved.
 
 ---
 

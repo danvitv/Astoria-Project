@@ -119,9 +119,14 @@ class SyncEngine {
 
   Future<void> pushEntities({
     required void Function(SyncProgress) onProgress,
-    bool includeApiKeys = false,
+    bool? includeApiKeys,
   }) async {
-    _includeApiKeys = includeApiKeys;
+    _includeApiKeys =
+        includeApiKeys ??
+        ((await SharedPreferences.getInstance()).getBool(
+              SyncSerialization.syncIncludeApiKeysPrefKey,
+            ) ??
+            false);
     await _adapter.ensureFolder(cloudBase);
     await _adapter.ensureFolder('$cloudBase/characters');
     await _adapter.ensureFolder('$cloudBase/personas');
@@ -167,6 +172,29 @@ class SyncEngine {
     var localManifest = await _manifestBuilder.buildLocalManifest(
       cloudManifest: cloudManifest,
     );
+    // Fingerprint the bytes that include keys, not an accepted keyless hash.
+    final apiPushSnapshot = (await _apiRepo.getAll()).map((a) {
+      return (_includeApiKeys ? a : a.copyWith(apiKey: '', embeddingApiKey: ''))
+          .toJson();
+    }).toList();
+    final apiSnapshotHash = SyncSerialization.computeSyncHash(apiPushSnapshot);
+    if (_includeApiKeys) {
+      final apiEntry =
+          localManifest.entries[entryKey('api_presets', 'api_presets')];
+      if (apiEntry != null && !apiEntry.deleted) {
+        final entriesWithKeys = Map<String, SyncManifestEntry>.from(
+          localManifest.entries,
+        );
+        entriesWithKeys[apiEntry.key] = SyncManifestEntry(
+          type: apiEntry.type,
+          id: apiEntry.id,
+          path: apiEntry.path,
+          updatedAt: DateTime.now().millisecondsSinceEpoch,
+          hash: apiSnapshotHash,
+        );
+        localManifest = localManifest.copyWith(entries: entriesWithKeys);
+      }
+    }
     if (missingAvatarKeys.isNotEmpty) {
       // A vanished local file cannot be uploaded, and a vanished cloud file
       // cannot be restored. Keep the last cloud entity instead of publishing a
@@ -237,6 +265,7 @@ class SyncEngine {
     final tasks = <Future<void> Function()>[];
     var processed = 0;
     final hashSkippedKeys = <String>[];
+    var apiPayloadUploaded = false;
 
     for (final entry in entries) {
       final cloudEntry = cloudManifest?.entries[entry.key];
@@ -269,7 +298,12 @@ class SyncEngine {
       // hash-matching entry was re-uploaded because file existence could not be
       // confirmed — producing a full-cloud re-push with no duplicates. See the
       // empty-body fall-through that this replaces.
-      if (cloudEntry != null &&
+      final keysMissing =
+          entry.type == 'api_presets' &&
+          _includeApiKeys &&
+          cloudManifest?.apiKeysIncluded != true;
+      if (!keysMissing &&
+          cloudEntry != null &&
           !cloudEntry.deleted &&
           cloudEntry.hash == entry.hash) {
         final listingVerifiedMissing =
@@ -295,7 +329,19 @@ class SyncEngine {
             message: 'Pushing ${entry.type}:${entry.id}',
           ),
         );
-        await _pushEntry(entry);
+        if (entry.type == 'api_presets') {
+          final payload = jsonEncode({
+            '__singleton': true,
+            'items': apiPushSnapshot,
+          });
+          if (payload.length > maxSyncPayloadBytes) {
+            throw StateError('API presets exceed sync payload limit');
+          }
+          await _adapter.upload(entry.path, payload);
+        } else {
+          await _pushEntry(entry);
+        }
+        if (entry.type == 'api_presets') apiPayloadUploaded = true;
       });
     }
 
@@ -326,6 +372,23 @@ class SyncEngine {
     final cleanedEntries = Map<String, SyncManifestEntry>.from(
       localManifest.entries,
     )..removeWhere((_, e) => e.deleted);
+    final acceptedLocalHashes = Map<String, String>.from(
+      localManifest.acceptedLocalHashes,
+    );
+    if (apiPayloadUploaded) {
+      final key = entryKey('api_presets', 'api_presets');
+      final entry = cleanedEntries[key];
+      if (entry != null) {
+        cleanedEntries[key] = SyncManifestEntry(
+          type: entry.type,
+          id: entry.id,
+          path: entry.path,
+          updatedAt: entry.updatedAt,
+          hash: apiSnapshotHash,
+        );
+        acceptedLocalHashes.remove(key);
+      }
+    }
     // A device that has not pulled a cloud chat yet must not erase its applied
     // history (or its owning chat) merely by pushing other local changes first.
     // Keep those cloud manifest entries until the normal pull imports the chat.
@@ -350,7 +413,10 @@ class SyncEngine {
       version: SyncManifest.currentVersion,
       lastSync: DateTime.now().millisecondsSinceEpoch,
       entries: cleanedEntries,
-      apiKeysIncluded: _includeApiKeys,
+      acceptedLocalHashes: acceptedLocalHashes,
+      apiKeysIncluded: apiPayloadUploaded
+          ? _includeApiKeys
+          : (cloudManifest?.apiKeysIncluded ?? false),
     );
     final manifestJson = jsonEncode(
       updatedManifest.toJson(includeLocalState: false),
@@ -634,10 +700,7 @@ class SyncEngine {
     // particular, this preserves additive local entities (such as Loom
     // presets) absent from an older cloud manifest.
     if (pushLocalChanges) {
-      await pushEntities(
-        onProgress: onProgress,
-        includeApiKeys: _includeApiKeys,
-      );
+      await pushEntities(onProgress: onProgress);
     }
 
     await _clearPendingPullManifest();
@@ -1867,6 +1930,7 @@ class SyncEngine {
       globalRegexScripts: globalRegexScripts,
       studioRegexScripts: studioRegexScripts,
       appSettings: appSettings,
+      chatLayout: SyncSerialization.readChatLayout(prefs),
     );
   }
 
@@ -1911,6 +1975,10 @@ class SyncEngine {
         Map<String, dynamic>.from(rawAppSettings),
       );
     }
+    final layout = data[SyncSerialization.chatLayoutKey];
+    if (layout is Map<String, dynamic>) {
+      await SyncSerialization.applyChatLayout(prefs, layout);
+    }
   }
 
   Future<void> _applyLocalStorageString(
@@ -1934,5 +2002,6 @@ class SyncEngine {
     await prefs.remove(SyncSerialization.globalRegexScriptsKey);
     await prefs.remove(SyncSerialization.studioRegexScriptsKey);
     await AppSettingsPreferences.removeAll(prefs);
+    await SyncSerialization.applyChatLayout(prefs, const {});
   }
 }

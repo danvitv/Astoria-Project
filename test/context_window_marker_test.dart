@@ -166,6 +166,32 @@ void main() {
   // and the marker is the only place in the chat that says where the prompt
   // begins.
   group('contextWindowStartProvider', () {
+    test(
+      'empty history marks after newest and rejects a different session cache',
+      () async {
+        final container = await _openChat(20);
+        container
+                .read(cachedTokenBreakdownSessionProvider('c1').notifier)
+                .state =
+            'c1_0';
+        container
+            .read(cachedTokenBreakdownProvider('c1').notifier)
+            .state = _run(
+          _history(20),
+          mode: HistoryTrimMode.sliding,
+          contextSize: 1000,
+        );
+        expect(
+          container.read(contextWindowBoundaryProvider('c1')),
+          const ContextWindowBoundary('m19', afterMessage: true),
+        );
+        container
+                .read(cachedTokenBreakdownSessionProvider('c1').notifier)
+                .state =
+            'other-session';
+        expect(container.read(contextWindowBoundaryProvider('c1')), isNull);
+      },
+    );
     test('draws the rule at the sliding cut', () async {
       final container = await _openChat(80);
       final breakdown = _run(_history(80), mode: HistoryTrimMode.sliding);

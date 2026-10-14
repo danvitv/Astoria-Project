@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 
 import '../image_gen_models.dart';
 import 'image_gen_http.dart';
+import 'comfyui_prompt_injector.dart';
 
 /// ComfyUI image generation.
 ///
@@ -133,6 +134,13 @@ class ComfyUiImageProvider {
     final decoded = jsonDecode(replaced);
     if (decoded is! Map<String, dynamic>) {
       throw const FormatException('ComfyUI workflow must be a JSON object');
+    }
+    if (!raw.contains('"%prompt%"')) {
+      injectComfyUiPrompts(
+        decoded,
+        prompt: values['prompt']! as String,
+        negativePrompt: values['negative_prompt']! as String,
+      );
     }
     return decoded;
   }

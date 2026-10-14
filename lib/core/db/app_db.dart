@@ -95,7 +95,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 135;
+  int get schemaVersion => 136;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -119,13 +119,7 @@ class AppDatabase extends _$AppDatabase {
           now,
         ],
       );
-      await _createLorebookUseManifestImmutabilityTriggers();
-      await _createLorebookUseManifestIntegrityTriggers();
-      await _createLedgerReconciliationImmutabilityTriggers();
-      await _createCardEvolutionIntegrity();
-      await _createRewriteAuditIntegrity();
-      await _createSessionCanonIntegrity();
-      await _createLlmCallEventImmutabilityTrigger();
+      await _ensureSchemaIntegrity();
     },
     onUpgrade: (Migrator m, int from, int to) async {
       await _upgradeV2ToV50(m, from);
@@ -135,6 +129,10 @@ class AppDatabase extends _$AppDatabase {
       await _upgradeV133(m, from);
       await _upgradeV134(m, from);
       await _upgradeV135(m, from);
+      // Local v136 repairs missing indexes/triggers and replaces the request
+      // capture trigger. Only install current-schema integrity after all
+      // historical table rebuilds and data normalization have finished.
+      await _ensureSchemaIntegrity();
     },
   );
 

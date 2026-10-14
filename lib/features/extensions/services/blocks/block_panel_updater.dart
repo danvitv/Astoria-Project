@@ -7,12 +7,13 @@ import '../../models/block_config.dart';
 import '../../models/block_run_status.dart';
 import '../../models/info_block.dart';
 import '../../../../core/state/character_provider.dart';
-import '../../../../core/state/persona_resolution.dart';
 import '../../providers/info_blocks_provider.dart';
 import '../../../chat/chat_provider.dart';
 import '../ext_blocks_panel_builder.dart';
 import '../macro_expander.dart';
 import '../../../../features/chat/bridge/chat_bridge_registry.dart';
+import '../../../../core/llm/regex_service.dart';
+import '../../../../core/state/active_selection_provider.dart';
 
 const _panelJsTimeout = Duration(seconds: 2);
 
@@ -44,6 +45,10 @@ class BlockPanelUpdater {
     int agentSwipeId,
   ) {
     _enqueuePanelJs(() async {
+      if (!_ref.mounted ||
+          _ref.read(chatProvider(charId)).value?.session?.id != sessionId) {
+        return;
+      }
       final bridge = _ref.read(chatBridgeRegistryProvider(charId));
       if (bridge == null) return;
       // Panels render only under assistant/character messages. afterUser
@@ -83,6 +88,10 @@ class BlockPanelUpdater {
     required String content,
     required String status,
   }) async {
+    if (!_ref.mounted ||
+        _ref.read(chatProvider(charId)).value?.session?.id != sessionId) {
+      return;
+    }
     final bridge = _ref.read(chatBridgeRegistryProvider(charId));
     if (bridge == null) return;
     final patched = await bridge.patchExtBlockContent(
@@ -103,6 +112,10 @@ class BlockPanelUpdater {
     required String content,
     bool force = false,
   }) {
+    if (!_ref.mounted ||
+        _ref.read(chatProvider(charId)).value?.session?.id != sessionId) {
+      return;
+    }
     final now = DateTime.now();
     if (!force &&
         _lastStreamPanelAt != null &&
@@ -157,9 +170,29 @@ class BlockPanelUpdater {
     final persona = _ref.read(
       effectivePersonaForChatProvider((charId: charId, sessionId: sessionId)),
     );
-    return expand(
+    final expanded = expand(
       content,
-      MacroContext(character: character, persona: persona?.name),
+      MacroContext(
+        character: character,
+        persona: persona?.name,
+        personaDescription: persona?.prompt,
+      ),
+    );
+    return applyRegexes(
+      expanded,
+      2,
+      2,
+      _ref.read(activeRegexesProvider).value ?? const [],
+      RegexApplyContext(
+        char: character,
+        persona: persona,
+        sessionVars:
+            _ref.read(chatProvider(charId)).value?.session?.sessionVars ??
+            const {},
+        globalVars: _ref.read(globalVarsProvider),
+        depth: 0,
+      ),
+      isMarkdown: true,
     );
   }
 
@@ -179,7 +212,6 @@ class BlockPanelUpdater {
     }
     return false;
   }
-
 
   void Function(String)? makeStreamHandler({
     required BlockConfig blockConfig,

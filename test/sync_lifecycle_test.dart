@@ -965,6 +965,73 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
+  test(
+    'API key switch affects automatic pushes, rotates keys and cloud flag describes uploaded bytes',
+    () async {
+      final world = SyncWorld();
+      await world.apiConfigs.put(
+        const ApiConfig(id: 'api', apiKey: 'one', embeddingApiKey: 'embed'),
+      );
+      Map<String, dynamic> api() =>
+          ((jsonDecode(
+                            world.cloud.files[cloudPath(
+                              'api_presets',
+                              'api_presets',
+                            )]!,
+                          )
+                          as Map)['items']
+                      as List)
+                  .first
+              as Map<String, dynamic>;
+      SyncManifest manifest() => SyncManifest.fromJson(
+        jsonDecode(world.cloud.files[cloudPath('manifest', 'manifest')]!)
+            as Map<String, dynamic>,
+      );
+      await world.engine.pushEntities(onProgress: (_) {});
+      expect(api()['apiKey'], '');
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(SyncSerialization.syncIncludeApiKeysPrefKey, true);
+      await world.engine.pushEntities(onProgress: (_) {});
+      expect(api()['apiKey'], 'one');
+      expect(manifest().apiKeysIncluded, isTrue);
+      final firstHash = manifest().entries['api_presets:api_presets']!.hash;
+      await world.apiConfigs.put(
+        world.apiConfigs.data['api']!.copyWith(apiKey: 'two'),
+      );
+      await world.engine.pushEntities(onProgress: (_) {});
+      expect(api()['apiKey'], 'two');
+      expect(
+        manifest().entries['api_presets:api_presets']!.hash,
+        isNot(firstHash),
+      );
+      await prefs.setBool(SyncSerialization.syncIncludeApiKeysPrefKey, false);
+      await world.engine.pushEntities(onProgress: (_) {});
+      final cloud = manifest();
+      expect(cloud.apiKeysIncluded, api()['apiKey'] != '');
+    },
+  );
+
+  test(
+    'chat layout sync uses an audited whitelist and preserves unrelated preferences',
+    () async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('composer_pins_v1', ['continue']);
+      await prefs.setString('quick_replies_list_v1', '["hello"]');
+      await prefs.setString('unrelated', 'keep');
+      final layout = SyncSerialization.readChatLayout(prefs)!;
+      expect(
+        layout.keys,
+        containsAll(['composer_pins_v1', 'quick_replies_list_v1']),
+      );
+      await SyncSerialization.applyChatLayout(prefs, {
+        'composer_pins_v1': ['send'],
+      });
+      expect(prefs.getStringList('composer_pins_v1'), ['send']);
+      expect(prefs.containsKey('quick_replies_list_v1'), isFalse);
+      expect(prefs.getString('unrelated'), 'keep');
+    },
+  );
+
   SyncProgress firstTaskProgress(List<SyncProgress> progressList) =>
       progressList.firstWhere(
         (p) => p.total > 0 || p.message?.contains('Nothing to push') == true,

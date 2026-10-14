@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/models/chat_message.dart';
 import '../../../core/models/memory_book.dart';
@@ -15,6 +16,46 @@ class SyncSerialization {
   static const globalRegexScriptsKey = 'gz_global_regex_scripts';
   static const studioRegexScriptsKey = 'gz_studio_regex_scripts';
   static const appSettingsKey = 'appSettings';
+  static const syncIncludeApiKeysPrefKey = 'gz_sync_include_api_keys';
+  static const chatLayoutKey = 'chatLayout';
+  static const chatLayoutPrefKeys = [
+    'composer_pins_v1',
+    'composer_actions_v1',
+    'composer_hidden_actions_v1',
+    'composer_empty_action_v1',
+    'quick_replies_list_v1',
+    'magic_drawer_items',
+    'magic_drawer_deleted_items',
+    'tools_layout_order',
+    'tools_layout_sizes',
+    'tools_layout_deleted',
+  ];
+
+  static Map<String, dynamic>? readChatLayout(SharedPreferences prefs) {
+    final values = <String, dynamic>{};
+    for (final key in chatLayoutPrefKeys) {
+      final value = prefs.get(key);
+      if (value is String || value is List<String>) values[key] = value;
+    }
+    // Empty is an intentional reset, not an absent legacy layout document.
+    return values;
+  }
+
+  static Future<void> applyChatLayout(
+    SharedPreferences prefs,
+    Map<String, dynamic> layout,
+  ) async {
+    for (final key in chatLayoutPrefKeys) {
+      final value = layout[key];
+      if (value is String) {
+        await prefs.setString(key, value);
+      } else if (value is List && value.every((e) => e is String)) {
+        await prefs.setStringList(key, value.cast<String>());
+      } else if (!layout.containsKey(key) || value == null) {
+        await prefs.remove(key);
+      }
+    }
+  }
 
   /// Content fingerprint for manifest conflict detection (not full session JSON).
   static String computeChatMetadataHash(SessionMetadata metadata) {
@@ -158,6 +199,7 @@ class SyncSerialization {
     String? globalRegexScripts,
     String? studioRegexScripts,
     Map<String, dynamic>? appSettings,
+    Map<String, dynamic>? chatLayout,
   }) {
     return {
       '__localStorage': true,
@@ -166,6 +208,7 @@ class SyncSerialization {
       globalRegexScriptsKey: ?globalRegexScripts,
       studioRegexScriptsKey: ?studioRegexScripts,
       appSettingsKey: ?appSettings,
+      chatLayoutKey: ?chatLayout,
     };
   }
 

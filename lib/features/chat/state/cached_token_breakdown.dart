@@ -8,3 +8,6 @@ final cachedTokenBreakdownProvider =
 final lastVectorLoreTokensProvider = StateProvider.family<int, String>(
   (ref, _) => 0,
 );
+
+final cachedTokenBreakdownSessionProvider =
+    StateProvider.family<String?, String>((ref, _) => null);

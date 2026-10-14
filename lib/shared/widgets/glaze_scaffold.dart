@@ -40,7 +40,7 @@ double glazeHeaderHideSlideFor({
 ///
 /// Screens inside the shell (history, character list, menu) build their own
 /// header inline in their body since they share the shell's bottom nav.
-class GlazeScaffold extends StatelessWidget {
+class GlazeScaffold extends StatefulWidget {
   final String? title;
   final Widget? titleWidget;
   final Widget body;
@@ -102,7 +102,9 @@ class GlazeScaffold extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  State<GlazeScaffold> createState() => _GlazeScaffoldState();
+
+  Widget _build(BuildContext context, GlobalKey contentKey) {
     final backHandler = onBack ?? () => Navigator.of(context).maybePop();
     final isIosLikeTargetPlatform =
         !kIsWeb &&
@@ -168,6 +170,7 @@ class GlazeScaffold extends StatelessWidget {
         : animatedHeader;
 
     final scaffold = PopScope(
+      key: contentKey,
       canPop: isIosLikeTargetPlatform ? navigatorCanPop : !showBack,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
@@ -216,6 +219,14 @@ class GlazeScaffold extends StatelessWidget {
       child: withBackground,
     );
   }
+}
+
+class _GlazeScaffoldState extends State<GlazeScaffold> {
+  // Reparent the existing subtree when background/theme wrappers change.
+  final _contentKey = GlobalKey();
+
+  @override
+  Widget build(BuildContext context) => widget._build(context, _contentKey);
 }
 
 /// Publishes a [ShellHeaderConfig] into [shellHeaderProvider] for as long as it

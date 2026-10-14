@@ -1,6 +1,7 @@
 import '../../core/llm/converters/prompt_post_processing.dart';
 import '../../core/llm/converters/reasoning_effort.dart';
 import '../../core/llm/history_trim.dart';
+import '../../core/llm/context_budget_guard.dart';
 import '../../core/llm/transport/llm_protocol.dart';
 import '../../core/models/api_config.dart';
 
@@ -150,6 +151,7 @@ class ApiConfigDraft {
   /// preset's embedding fields are left exactly as they are.
   ApiConfig applyLlmTo(ApiConfig base) {
     final normalized = normalizeValues(values);
+    final parsedContextSize = int.tryParse(contextSize) ?? base.contextSize;
     final parsedReasoningHistoryCount =
         int.tryParse(reasoningHistoryCount) ?? 0;
     return base.copyWith(
@@ -161,8 +163,11 @@ class ApiConfigDraft {
       endpoint: endpoint.trim(),
       apiKey: apiKey.trim(),
       model: model.trim(),
-      maxTokens: int.tryParse(maxTokens) ?? base.maxTokens,
-      contextSize: int.tryParse(contextSize) ?? base.contextSize,
+      maxTokens: clampMaxOutputTokens(
+        int.tryParse(maxTokens) ?? base.maxTokens,
+        parsedContextSize,
+      ),
+      contextSize: parsedContextSize,
       firstChunkTimeoutMs:
           (int.tryParse(firstChunkTimeoutSeconds) ?? 60) * 1000,
       temperature: normalized.temperature,

@@ -197,11 +197,19 @@ class ChatWebViewBuildListeners {
   /// (a delete, a changed connection): pushing the null through is what retires
   /// a rule the trim no longer draws.
   void _listenContextWindowStart() {
-    ref.listen<String?>(contextWindowStartProvider(charId), (prev, next) {
+    ref.listen<ContextWindowBoundary?>(contextWindowBoundaryProvider(charId), (
+      prev,
+      next,
+    ) {
       final b = bridge;
-      if (b == null || !ready()) return;
+      if (b == null || !ready() || isCurrentBridge?.call(b) == false) return;
       if (prev == next) return;
-      unawaited(b.setContextWindowStart(next));
+      unawaited(
+        b.setContextWindowStart(
+          next?.messageId,
+          afterMessage: next?.afterMessage ?? false,
+        ),
+      );
     });
   }
 

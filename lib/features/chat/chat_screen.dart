@@ -53,6 +53,7 @@ import '../settings/app_settings_provider.dart';
 import 'chat_drawer_controller.dart'
     show ChatDrawerController, kKeyboardHeightPref;
 import 'chat_provider.dart';
+import 'state/context_budget_notice.dart';
 import 'controllers/chat_message_selection_controller.dart';
 import 'chat_search_delegate.dart';
 import 'chat_state.dart';
@@ -322,6 +323,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final charId = widget.charId;
     final chatStateAsync = ref.watch(chatProvider(charId));
     final chatState = chatStateAsync.value;
+    ref.listen(contextBudgetNoticeProvider(charId), (previous, next) {
+      if (mounted && next != previous) {
+        GlazeToast.show(
+          context,
+          'chat_context_budget_exceeded'.tr(),
+          isError: true,
+        );
+      }
+    });
     if (chatState != null && !chatState.isGenerating) {
       _scheduleSearchRecount();
     }
@@ -399,6 +409,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       });
     }
 
+    // Decide whether the initial body can mount before choosing its background.
+    // Otherwise the first data frame changes the scaffold's parent next frame.
+    final awaitingInitialSession =
+        chatState != null &&
+        (_sessionSwitchPending ||
+            (!_sessionApplied &&
+                widget.initialSessionIndex != null &&
+                chatState.session?.sessionIndex != widget.initialSessionIndex));
+    if (chatState != null && !awaitingInitialSession) _everBuiltBody = true;
     return SessionLifecycleTracker(
       charId: charId,
       // Chat is always reached via `context.go('/chat/...')`, which replaces the

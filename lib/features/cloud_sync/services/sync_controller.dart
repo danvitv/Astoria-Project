@@ -30,6 +30,11 @@ import '../sync_models.dart';
 import 'sync_engine.dart';
 import 'sync_service.dart';
 import 'sync_conflict.dart';
+import '../../chat/composer_pins_provider.dart';
+import '../../chat/hidden_composer_actions_provider.dart';
+import '../../chat/composer_empty_action_provider.dart';
+import '../../chat/quick_replies_provider.dart';
+import '../../chat/state/magic_drawer_stats_cache.dart';
 
 /// Controller for cloud sync operations, separating business logic from UI.
 class SyncController {
@@ -393,6 +398,11 @@ class SyncController {
     _ref.invalidate(studioPresetListProvider);
     _ref.invalidate(globalRegexProvider);
     _ref.invalidate(studioRegexProvider);
+    _ref.invalidate(composerPinsProvider);
+    _ref.invalidate(hiddenComposerActionsProvider);
+    _ref.invalidate(composerEmptyActionProvider);
+    _ref.invalidate(quickRepliesProvider);
+    _ref.invalidate(magicDrawerLayoutCacheProvider);
     unawaited(_ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
     await _ref.read(themeProvider.notifier).reload();
 

@@ -243,8 +243,10 @@ class ChatWebViewInitializer {
     // message happens to share that id. Push this chat's boundary — usually
     // null — before the first paint, the same reason the search state above is
     // pushed early.
+    final boundary = ref.read(contextWindowBoundaryProvider(input.charId));
     await bridge.setContextWindowStart(
-      ref.read(contextWindowStartProvider(input.charId)),
+      boundary?.messageId,
+      afterMessage: boundary?.afterMessage ?? false,
     );
     // Seed the phase before rendering an active typing node. The renderer uses
     // this value while constructing the node, not only on later transitions.

@@ -12,6 +12,9 @@ import '../panel_host_service.dart';
 import 'block_context.dart';
 import 'block_handler.dart';
 import 'block_image_renderer.dart';
+import '../../../../core/llm/regex_service.dart';
+import '../../../../core/state/active_selection_provider.dart';
+import '../../../chat/chat_provider.dart';
 
 /// Runs a [BlockType.generated] block: everything that produces content for
 /// the reader rather than executing code.
@@ -52,6 +55,11 @@ class GeneratedBlockHandler implements BlockHandler {
     if (context.cancelToken.isCancelled) return _stopped(context);
 
     final blockConfig = context.blockConfig;
+    final session = ref.read(chatProvider(context.charId)).value?.session;
+    final sessionVars = session?.id == context.sessionId
+        ? session!.sessionVars
+        : const <String, String>{};
+    final globalVars = ref.read(globalVarsProvider);
 
     String content;
     if (blockConfig.source == BlockSource.carried) {
@@ -76,6 +84,8 @@ class GeneratedBlockHandler implements BlockHandler {
             contextPolicy: blockConfig.contextPolicy,
             mainModelContextSnapshot: context.mainModelContextSnapshot,
             personaModel: context.persona,
+            sessionVars: sessionVars,
+            globalVars: globalVars,
             preset: context.preset,
             swipeId: context.swipeId,
             cancelToken: context.cancelToken,
@@ -104,6 +114,27 @@ class GeneratedBlockHandler implements BlockHandler {
       _publish(context, content);
     }
 
+    if (blockConfig.applyRegex) {
+      final regexes = await ref.read(activeRegexesProvider.future);
+      if (!ref.mounted || context.cancelToken.isCancelled) {
+        return _stopped(context);
+      }
+      content = applyRegexes(
+        content,
+        2,
+        2,
+        regexes,
+        RegexApplyContext(
+          char: context.character,
+          persona: context.persona,
+          sessionVars: sessionVars,
+          globalVars: globalVars,
+          depth: 0,
+        ),
+        isPrompt: true,
+      );
+      _publish(context, content);
+    }
     // Pictures, if the content asks for any. A block with no image tag never
     // touches the image pipeline, so this costs an ordinary infoblock nothing.
     content = await BlockImageRenderer(
@@ -139,6 +170,7 @@ class GeneratedBlockHandler implements BlockHandler {
       MacroContext(
         character: context.character,
         persona: context.persona?.name,
+        personaDescription: context.persona?.prompt,
       ),
     );
     final opened = await ref
@@ -195,7 +227,9 @@ class GeneratedBlockHandler implements BlockHandler {
   }
 
   Future<InfoBlock> _settle(BlockContext context, InfoBlock block) async {
-    ref.read(infoBlocksProvider(context.sessionId).notifier).addOrReplace(block);
+    ref
+        .read(infoBlocksProvider(context.sessionId).notifier)
+        .addOrReplace(block);
     refreshPanelForMessage(
       context.charId,
       context.sessionId,

@@ -265,10 +265,8 @@ class ChatBridgeController {
   /// from the next start onwards — and stays broken across a restart, because
   /// the port is gone. Every text the WebView hands back is therefore put into
   /// its stored spelling first: the served file, relative to the data root.
-  String restoreImgResults(String text) => ImageTagMarkup.rewriteResultPaths(
-    text,
-    restoreChatWebViewLocalFilePath,
-  );
+  String restoreImgResults(String text) =>
+      ImageTagMarkup.rewriteResultPaths(text, restoreChatWebViewLocalFilePath);
 
   String? resolveLocalFileUrl(String? source) {
     return chatWebViewResolveLocalFileUrl(source);
@@ -706,11 +704,10 @@ class ChatBridgeController {
   Future<void> updateMessageContent(String id, String text, bool isUser) =>
       messages.updateMessageContent(id, text, isUser);
   Future<void> removeMessage(String id) => messages.removeMessage(id);
-  Future<void> retireTypingPlaceholder() =>
-      messages.retireTypingPlaceholder();
+  Future<void> retireTypingPlaceholder() => messages.retireTypingPlaceholder();
   Future<void> setLastMessage(String? id) => messages.setLastMessage(id);
-  Future<void> setContextWindowStart(String? id) =>
-      messages.setContextWindowStart(id);
+  Future<void> setContextWindowStart(String? id, {bool afterMessage = false}) =>
+      messages.setContextWindowStart(id, afterMessage: afterMessage);
   Future<void> clearAll({bool keepPlaceholder = true}) =>
       messages.clearAll(keepPlaceholder: keepPlaceholder);
   Future<void> scrollToBottom({bool smooth = false}) =>
@@ -766,11 +763,8 @@ class ChatBridgeController {
     required String query,
     int activeIndex = -1,
     bool scroll = true,
-  }) => layout.setSearch(
-    query: query,
-    activeIndex: activeIndex,
-    scroll: scroll,
-  );
+  }) =>
+      layout.setSearch(query: query, activeIndex: activeIndex, scroll: scroll);
   Future<void> setBottomPadding(double px, {double viewportHeight = 0}) =>
       layout.setBottomPadding(px, viewportHeight: viewportHeight);
   Future<void> setTopPadding(double px) => layout.setTopPadding(px);

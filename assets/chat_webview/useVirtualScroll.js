@@ -182,6 +182,9 @@ class UseVirtualScroll {
         this._selfPinTop = null;
         this._smartScrollUnlock = null;
         this._heightOffsetUnlock = null;
+        this._nativeScrollAnchoring = typeof CSS !== 'undefined' &&
+            typeof CSS.supports === 'function' && CSS.supports('overflow-anchor', 'auto');
+        this._awaitingFirstMeasure = new WeakSet();
         
         this.visibleIndices = new Set();
         this.realVisibleIndices = new Set();
@@ -878,6 +881,7 @@ class UseVirtualScroll {
                 this.container.insertBefore(item.el, insertBefore);
                 this.observer.observe(item.el);
                 this.realObserver.observe(item.el);
+                this._awaitingFirstMeasure.add(item.el);
                 this.resizeObserver?.observe(item.el);
             }
             insertBefore = item.el;
@@ -1070,12 +1074,14 @@ class UseVirtualScroll {
                     if (isNaN(idx) || height <= 0 ||
                         this.items[idx]?.el !== entry.target ||
                         entry.target.parentNode !== this.container) continue;
+                    const mountedJustNow = this._awaitingFirstMeasure.delete(entry.target) &&
+                        this._nativeScrollAnchoring;
                     const previous = this.cache.itemHeights.get(idx);
                     if (previous == null || Math.abs(previous - height) > 1) {
                         const editing = entry.target.classList.contains('editing');
                         // Zero is the updateMessage replacement sentinel, not
                         // a previous measurement suitable for compensation.
-                        if (!editing && previous > 0 && idx < anchorIndex) {
+                        if (!editing && !mountedJustNow && previous > 0 && idx < anchorIndex) {
                             anchorDelta += height - previous;
                         }
                         this.cache.setHeight(idx, height);

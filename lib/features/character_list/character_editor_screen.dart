@@ -189,6 +189,26 @@ class _CharacterEditorScreenState extends ConsumerState<CharacterEditorScreen> {
               .toList() ??
           [];
 
+      final depthPrompt = (item['depth_prompt'] as String?)?.trim() ?? '';
+      final worldValue = item['world'] as String?;
+      final world = worldValue == null || worldValue.trim().isEmpty
+          ? null
+          : worldValue;
+      final extensions = <String, dynamic>{
+        ...?_original?.extensions,
+        'talkativeness': item['talkativeness'] is num
+            ? (item['talkativeness'] as num).toDouble()
+            : 1.0,
+      };
+      // The repo preserves imported extension values for default model fields.
+      // An explicit editor clear must remove that fallback from the saved copy.
+      if (item.containsKey('depth_prompt') && depthPrompt.isEmpty) {
+        extensions.remove('depth_prompt');
+      }
+      if (item.containsKey('world') && world == null) {
+        extensions.remove('world');
+      }
+
       final updated =
           _original?.copyWith(
             name: (item['name'] as String).trim(),
@@ -236,16 +256,11 @@ class _CharacterEditorScreenState extends ConsumerState<CharacterEditorScreen> {
             alternateGreetings: alternateGreetings,
             updatedAt: currentTimestampSeconds(),
             createdAt: _original?.createdAt ?? currentTimestampSeconds(),
-            extensions: {
-              ...?_original?.extensions,
-              'talkativeness': item['talkativeness'] is num
-                  ? (item['talkativeness'] as num).toDouble()
-                  : 1.0,
-            },
-            depthPrompt: (item['depth_prompt'] as String?)?.trim() ?? '',
+            extensions: extensions,
+            depthPrompt: depthPrompt,
             depthPromptDepth: item['depth_prompt_depth'] as int? ?? 4,
             depthPromptRole: item['depth_prompt_role'] as String? ?? 'system',
-            world: item['world'] as String?,
+            world: world,
           ) ??
           Character(
             id: _effectiveId,
@@ -294,15 +309,11 @@ class _CharacterEditorScreenState extends ConsumerState<CharacterEditorScreen> {
             alternateGreetings: alternateGreetings,
             updatedAt: currentTimestampSeconds(),
             createdAt: currentTimestampSeconds(),
-            extensions: {
-              'talkativeness': item['talkativeness'] is num
-                  ? (item['talkativeness'] as num).toDouble()
-                  : 1.0,
-            },
-            depthPrompt: (item['depth_prompt'] as String?)?.trim() ?? '',
+            extensions: extensions,
+            depthPrompt: depthPrompt,
             depthPromptDepth: item['depth_prompt_depth'] as int? ?? 4,
             depthPromptRole: item['depth_prompt_role'] as String? ?? 'system',
-            world: item['world'] as String?,
+            world: world,
           );
 
       await ref.read(charactersProvider.notifier).save(updated);

@@ -28,7 +28,7 @@ export function createImageAttachments(sources, hidden, icon) {
     const img = document.createElement('img');
     img.src = src;
     img.alt = 'attachment';
-    img.loading = 'lazy';
+    img.loading = 'eager';
     wrap.appendChild(img);
   }
 

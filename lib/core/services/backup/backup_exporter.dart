@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../db/app_db.dart';
 import '../file_export_service.dart';
 import '../image_storage_service.dart';
+import 'backup_secrets.dart';
 
 class BackupExporter {
   // Schema version history:
@@ -99,8 +100,11 @@ class BackupExporter {
 
   BackupExporter(this._db, this._imageStorage);
 
-  Future<String> export() async {
-    final tempFile = await buildArchive(Directory.systemTemp);
+  Future<String> export({bool includeApiKeys = false}) async {
+    final tempFile = await buildArchive(
+      Directory.systemTemp,
+      includeApiKeys: includeApiKeys,
+    );
     final filename = p.basename(tempFile.path);
     try {
       return await FileExportService.exportFile(
@@ -120,7 +124,10 @@ class BackupExporter {
   /// Split out from [export] so tests can exercise the full serialization
   /// without going through the platform save/share dialog.
   @visibleForTesting
-  Future<File> buildArchive(Directory directory) async {
+  Future<File> buildArchive(
+    Directory directory, {
+    bool includeApiKeys = false,
+  }) async {
     final now = DateTime.now();
     final filename =
         'Astoria_backup_${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}_'
@@ -134,7 +141,7 @@ class BackupExporter {
     encoder.create(tempFile.path);
 
     try {
-      await _writeZip(encoder, stagingDir);
+      await _writeZip(encoder, stagingDir, includeApiKeys: includeApiKeys);
       await encoder.close();
       return tempFile;
     } catch (e) {
@@ -152,7 +159,11 @@ class BackupExporter {
     }
   }
 
-  Future<void> _writeZip(ZipFileEncoder encoder, Directory stagingDir) async {
+  Future<void> _writeZip(
+    ZipFileEncoder encoder,
+    Directory stagingDir, {
+    required bool includeApiKeys,
+  }) async {
     // 1. manifest.json
     final manifest = <String, dynamic>{
       '_isGlazeBackup': true,
@@ -161,6 +172,7 @@ class BackupExporter {
       'schemaVersion': schemaVersion,
       'exportedAt': DateTime.now().toIso8601String(),
       'tables': tableNames,
+      BackupSecrets.manifestFlag: includeApiKeys,
     };
     final manifestBytes = utf8.encode(jsonEncode(manifest));
     encoder.addArchiveFile(ArchiveFile.bytes('manifest.json', manifestBytes));
@@ -169,7 +181,11 @@ class BackupExporter {
     // into the archive so peak RAM stays bounded regardless of table size.
     for (final tableName in tableNames) {
       final staged = File(p.join(stagingDir.path, '$tableName.jsonl'));
-      await _writeTableAsNdjson(tableName, staged);
+      await _writeTableAsNdjson(
+        tableName,
+        staged,
+        includeApiKeys: includeApiKeys,
+      );
       await _addStagedTable(encoder, staged, 'tables/$tableName.jsonl');
     }
 
@@ -180,7 +196,11 @@ class BackupExporter {
       final value = prefs.get(key);
       if (value != null) prefsMap[key] = value;
     }
-    final prefsBytes = utf8.encode(jsonEncode(prefsMap));
+    final prefsBytes = utf8.encode(
+      jsonEncode(
+        includeApiKeys ? prefsMap : BackupSecrets.stripPrefs(prefsMap),
+      ),
+    );
     encoder.addArchiveFile(ArchiveFile.bytes('preferences.json', prefsBytes));
 
     // 4. avatars/characters/<id>.png and avatars/personas/<id>.png —
@@ -249,7 +269,11 @@ class BackupExporter {
   /// Drift doesn't support true row-streaming, so we page with LIMIT/OFFSET
   /// over a stable `rowid` order. Peak RAM is bounded by [_tablePageSize] rows
   /// plus the largest single row, instead of the entire table.
-  Future<void> _writeTableAsNdjson(String tableName, File out) async {
+  Future<void> _writeTableAsNdjson(
+    String tableName,
+    File out, {
+    required bool includeApiKeys,
+  }) async {
     final orderBy = tableName == 'lorebook_use_acceptance_records'
         ? " ORDER BY CASE acceptance_kind WHEN 'variation' THEN 0 ELSE 1 END, accepted_at, acceptance_id, rowid"
         : ' ORDER BY rowid';
@@ -265,7 +289,10 @@ class BackupExporter {
         if (rows.isEmpty) break;
         for (final row in rows) {
           try {
-            sink.add(utf8.encode(jsonEncode(row.data)));
+            final data = includeApiKeys
+                ? row.data
+                : BackupSecrets.stripRow(tableName, row.data);
+            sink.add(utf8.encode(jsonEncode(data)));
             sink.add(const [0x0A]); // '\n'
           } catch (_) {
             // skip unserializable rows

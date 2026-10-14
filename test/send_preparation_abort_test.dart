@@ -12,6 +12,7 @@ import 'package:glaze_flutter/core/db/repositories/lorebook_use_manifest_repo.da
 import 'package:glaze_flutter/core/db/repositories/tracker_snapshot_repo.dart';
 import 'package:glaze_flutter/core/llm/studio_turn_config_snapshot.dart';
 import 'package:glaze_flutter/core/models/character.dart';
+import 'package:glaze_flutter/core/models/api_config.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/tracker_snapshot.dart';
 import 'package:glaze_flutter/core/state/db_provider.dart';
@@ -20,6 +21,7 @@ import 'package:glaze_flutter/features/chat/chat_generation_service.dart';
 import 'package:glaze_flutter/features/chat/chat_provider.dart';
 import 'package:glaze_flutter/features/chat/chat_session_service.dart';
 import 'package:glaze_flutter/features/chat/chat_state.dart';
+import 'package:glaze_flutter/features/settings/api_list_provider.dart';
 
 class _Gate {
   final entered = Completer<void>();
@@ -135,6 +137,91 @@ class _ParkedGeneration extends ChatGenerationService {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  for (final action in ['send', 'regenerate', 'continue', 'stop-preflight']) {
+    test(
+      'context preflight $action preserves durable transcript and draft',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+        final db = AppDatabase.forTesting(NativeDatabase.memory());
+        final gate = _Gate();
+        late _ParkedGeneration generation;
+        final container = ProviderContainer(
+          overrides: [
+            appDbProvider.overrideWithValue(db),
+            characterRepoProvider.overrideWithValue(
+              _DelayedCharacter(db, gate),
+            ),
+            chatGenerationServiceProvider.overrideWith(
+              (ref) => generation = _ParkedGeneration(ref),
+            ),
+          ],
+        );
+        container.read(chatGenerationServiceProvider);
+        addTearDown(() async {
+          if (!gate.release.isCompleted) gate.release.complete();
+          if (!generation.release.isCompleted) generation.release.complete();
+          container.dispose();
+          ChatSessionService.clearCache();
+          await db.close();
+        });
+        await container
+            .read(characterRepoProvider)
+            .put(const Character(id: 'c', name: 'Alice'));
+        await container
+            .read(apiConfigRepoProvider)
+            .put(
+              const ApiConfig(
+                id: 'api',
+                endpoint: 'https://example.test/v1',
+                apiKey: 'fake',
+                model: 'test',
+                contextSize: 16,
+                maxTokens: 16,
+              ),
+            );
+        await container.read(apiListProvider.future);
+        const session = ChatSession(
+          id: 's',
+          characterId: 'c',
+          sessionIndex: 0,
+          draft: 'unsent draft',
+          messages: [ChatMessage(id: 'a', role: 'assistant', content: 'Hi')],
+        );
+        await container.read(chatRepoProvider).put(session);
+        await container.read(chatProvider('c').future);
+        final notifier = container.read(chatProvider('c').notifier);
+        if (action == 'stop-preflight') {
+          gate.armed = true;
+          final pending = notifier.trySendMessage('new message');
+          await gate.entered.future;
+          await notifier.abortGeneration();
+          gate.release.complete();
+          expect(await pending, isFalse);
+        } else if (action == 'send') {
+          expect(
+            await notifier.trySendMessage(
+              'new message',
+              imageDataUrls: ['attachment'],
+            ),
+            isFalse,
+          );
+        } else if (action == 'regenerate') {
+          await notifier.regenerateLastAssistant();
+        } else {
+          await notifier.continueMessage();
+        }
+        expect(generation.calls, 0);
+        final durable = await container.read(chatRepoProvider).getById('s');
+        expect(durable!.messages, session.messages);
+        expect(durable.draft, 'unsent draft');
+        expect(
+          container.read(chatProvider('c')).requireValue.messages,
+          session.messages,
+        );
+      },
+    );
+  }
 
   for (final checkpoint in ['append', 'snapshot', 'character']) {
     test('Stop during $checkpoint cannot restart the generation', () async {

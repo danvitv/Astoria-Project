@@ -18,6 +18,7 @@ import { parseImageResultElement, parseImagePendingPayload } from '../formatter/
  * still half under it. */
 const CARET_REVEAL_GUTTER_PX = 12;
 import { ICON } from '../renderer/icon_library.js';
+import { retryFailedLocalImages } from '../renderer/local_image_retry.js';
 import { applyTypingPhase } from '../renderer/typing_phase.js';
 
 /* Id of the virtual typing placeholder. It is not a persisted message: Flutter
@@ -169,6 +170,7 @@ export class Bridge {
         if (existingImg) existingImg.remove();
         avatar.textContent = (newName.charAt(0) || '?').toUpperCase();
       }
+      retryFailedLocalImages(avatar);
     });
   }
 
@@ -406,9 +408,28 @@ export class Bridge {
       this._sendToFlutter('onScrollToBottomVisibility', [show]);
     };
 
+    let headerRef = null;
+    let headerRefTop = 0;
+    const followHeaderRef = (st) => {
+      if (headerRef?.isConnected) {
+        this._headerLastTop += headerRef.offsetTop - headerRefTop;
+      }
+      headerRef = null;
+      const vl = this.virtualList;
+      const base = container.offsetTop;
+      for (let i = vl.renderStart; i < vl.renderEnd; i++) {
+        const el = vl.items[i]?.el;
+        if (el?.isConnected && el.offsetTop - base + el.offsetHeight > st) {
+          headerRef = el;
+          headerRefTop = el.offsetTop;
+          break;
+        }
+      }
+    };
     const updateHeader = () => {
       ticking = false;
       const st = container.scrollTop;
+      followHeaderRef(st);
       // Right after showHeader() the list is still being filled and scrolled to
       // the bottom programmatically. Follow the offset without deciding, so the
       // jump is never mistaken for the user scrolling down.
@@ -766,7 +787,9 @@ export class Bridge {
     this.flush();
     this._suppressLoadMore = true;
     const messages = JSON.parse(messagesJson);
-    const scrollBefore = this.virtualList.container.scrollHeight;
+    const container = this.virtualList.container;
+    const topBefore = container.scrollTop;
+    const scrollBefore = container.scrollHeight;
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       const rendered = this.renderer.renderMessage(msg);
@@ -776,8 +799,9 @@ export class Bridge {
         this.virtualList.prepend(id, el);
       }
     }
-    const scrollAfter = this.virtualList.container.scrollHeight;
-    this.virtualList.container.scrollTop += scrollAfter - scrollBefore;
+    const scrollAfter = container.scrollHeight;
+    container.scrollTop = topBefore + scrollAfter - scrollBefore;
+    this.virtualList.updateWindow();
     this._hideLoadingScreen();
     setTimeout(() => { this._suppressLoadMore = false; }, 500);
   }
@@ -793,11 +817,12 @@ export class Bridge {
   // every row element — so the rule is right whether or not the boundary is
   // currently mounted. The renderer keeps the id as well, which is what makes a
   // later full re-render draw the rule again without another call from Flutter.
-  setContextWindowStart(messageId) {
+  setContextWindowStart(messageId, afterMessage = false) {
     const next = messageId || null;
     const previous = this.renderer.contextStartId || null;
-    this.renderer.setContextWindowStart(next);
-    if (previous === next) return;
+    const previousAfter = this.renderer.contextStartAfter;
+    this.renderer.setContextWindowStart(next, afterMessage);
+    if (previous === next && previousAfter === afterMessage) return;
     if (previous) {
       const el = this.virtualList.itemMap?.get(previous)?.el;
       if (el) {
@@ -809,7 +834,9 @@ export class Bridge {
       const el = this.virtualList.itemMap?.get(next)?.el;
       if (el && !el.querySelector(':scope > .context-limit-marker')) {
         el.dataset.contextStart = '1';
-        el.insertBefore(this.renderer.createContextLimitMarker(), el.firstChild);
+        const marker = this.renderer.createContextLimitMarker();
+        if (afterMessage) el.appendChild(marker);
+        else el.insertBefore(marker, el.firstChild);
       }
     }
   }
@@ -2181,6 +2208,7 @@ export class Bridge {
       const wrapper = document.createElement('span');
       wrapper.innerHTML = sanitizeExtBlockHtml(this._renderExtBlockImageHtml(imgMatch[1]));
       body.appendChild(wrapper.firstElementChild);
+      retryFailedLocalImages(body);
       return;
     }
 
@@ -2201,6 +2229,7 @@ export class Bridge {
     htmlEl.className = 'ext-block-content';
     htmlEl.innerHTML = sanitizeExtBlockHtml(html);
     body.appendChild(htmlEl);
+    retryFailedLocalImages(body);
   }
 
   /**

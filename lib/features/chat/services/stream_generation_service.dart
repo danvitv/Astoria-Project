@@ -22,6 +22,7 @@ import '../../../core/llm/studio/studio_context_preparer.dart';
 import '../../../core/llm/prompt/prompt_payload.dart';
 import '../../../core/llm/prompt/prompt_result.dart';
 import '../../../core/llm/context_calculator.dart';
+import '../../../core/llm/context_budget_guard.dart';
 import '../../../core/llm/stream_accumulator.dart';
 import '../../../core/llm/studio_regex_applicator.dart';
 import '../../../core/llm/beauty_state_parser.dart';
@@ -215,6 +216,15 @@ class StreamGenerationService {
       final promptResult = studioConfig == null
           ? await buildPromptInIsolate(finalPayload)
           : _studioCompatibilityResult(finalStudioContext!);
+      if (_isAborted()) return currentState.copyWith(isGenerating: false);
+      if (studioConfig == null &&
+          !promptFitsContext(
+            apiConfig,
+            promptResult.breakdown,
+            requiredMessageId: inputs.history.lastOrNull?.id,
+          )) {
+        throw StateError('chat_context_budget_exceeded'.tr());
+      }
       await builder.ensureMemoryEntriesCurrent(
         sessionId: session.id,
         selection: inputs.memorySelection,
@@ -229,6 +239,8 @@ class StreamGenerationService {
       }
       _ref.read(cachedTokenBreakdownProvider(_charId).notifier).state =
           promptResult.breakdown;
+      _ref.read(cachedTokenBreakdownSessionProvider(_charId).notifier).state =
+          session.id;
 
       // A stepped trim anchors on the oldest message it kept. Persisting that
       // id is the whole mechanism: next turn reuses the same anchor, so the

@@ -28,8 +28,13 @@ class MessageBridgeCommands {
   /// A null id (sent as an empty string) clears the rule — which is what a
   /// chat that fits its window whole, and a chat with no calculated prompt yet,
   /// both look like.
-  Future<void> setContextWindowStart(String? messageId) {
-    return _host.callJs('setContextWindowStart', messageId ?? '');
+  Future<void> setContextWindowStart(
+    String? messageId, {
+    bool afterMessage = false,
+  }) {
+    return _host.evalJs(
+      'window.bridge?.setContextWindowStart(${jsonEncode(messageId ?? '')}, $afterMessage)',
+    );
   }
 
   Future<void> setMessages(

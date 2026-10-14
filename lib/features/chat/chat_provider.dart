@@ -8,6 +8,11 @@ import 'package:flutter_riverpod/legacy.dart';
 
 import '../../core/llm/generation_phase.dart';
 import '../../core/llm/tokenizer.dart';
+import '../../core/llm/context_budget_guard.dart';
+import '../../core/llm/prompt_isolate.dart';
+import '../../core/state/studio_turn_config_resolver.dart';
+import 'state/context_budget_notice.dart';
+import 'providers/prompt_build_providers.dart';
 import '../../core/models/chat_message.dart';
 import '../../core/db/repositories/lorebook_use_manifest_repo.dart';
 import '../../core/utils/id_generator.dart';
@@ -517,7 +522,6 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       // leaves its instruction pending instead — it belongs to the message
       // that impersonation wrote, which is this one.
       final pendingImpersonation = _pendingImpersonationGuidance;
-      _pendingImpersonationGuidance = null;
       final effectiveGuidance =
           (guidanceText != null && guidanceText.isNotEmpty)
           ? guidanceText
@@ -541,6 +545,19 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
         guidanceText: effectiveGuidance,
         guidanceType: effectiveGuidanceType,
       );
+
+      // Stop is available during read-only preflight, before persistence too.
+      _abortHandler.clearStreaming();
+      state = AsyncData(current.copyWith(isSendPending: true));
+      if (!await _checkContextBudget(
+            current.session!.copyWith(messages: [...current.messages, userMsg]),
+            genId: genId,
+            requiredMessageId: userMsg.id,
+          ) ||
+          !ownsSend()) {
+        return;
+      }
+      _pendingImpersonationGuidance = null;
 
       // Only the assistant *immediately* before the new message is accepted —
       // `ChatRepo.appendUserMessageAndAcceptCurrentVariation` enforces exactly
@@ -854,6 +871,20 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
 
     final lastMsg = current.messages[lastIdx];
 
+    final genId = _abortHandler.nextGenId();
+    final budgetSession = current.session!.copyWith(
+      messages: lastMsg.role == 'assistant'
+          ? current.messages.take(lastIdx).toList()
+          : current.messages,
+    );
+    if (!await _checkContextBudget(
+      budgetSession,
+      genId: genId,
+      requiredMessageId: budgetSession.messages.lastOrNull?.id,
+    )) {
+      return;
+    }
+
     if (lastMsg.role == 'user') {
       state = AsyncData(
         current.copyWith(
@@ -871,6 +902,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       await _runGeneration(
         promptSession,
         current,
+        genId: genId,
         saveSession: current.session!,
         guidanceText: guidanceText ?? lastMsg.guidanceText,
       );
@@ -950,6 +982,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     await _runGeneration(
       promptSession,
       current,
+      genId: genId,
       saveSession: current.session!,
       guidanceText: guidanceText,
       guidanceType: guidanceType,
@@ -1115,6 +1148,14 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       return;
     }
 
+    final genId = _abortHandler.nextGenId();
+    if (!await _checkContextBudget(
+      current.session!,
+      genId: genId,
+      requiredMessageId: lastMsg.id,
+    )) {
+      return;
+    }
     // Continuation never rolls a message back on abort; drop any restoration
     // snapshot a previous regenerate left behind so Stop cannot re-append it.
     _abortHandler.restorationMessage = null;
@@ -1130,7 +1171,57 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       messages: current.messages,
       updatedAt: currentTimestampSeconds(),
     );
-    await _runGeneration(promptSession, current, continueTargetId: lastMsg.id);
+    await _runGeneration(
+      promptSession,
+      current,
+      genId: genId,
+      continueTargetId: lastMsg.id,
+    );
+  }
+
+  /// Read-only preflight before appending a user turn or opening a new swipe.
+  /// It retains the same claim through preparation: Stop cannot restart it.
+  Future<bool> _checkContextBudget(
+    ChatSession session, {
+    required int genId,
+    String? requiredMessageId,
+  }) async {
+    final initial = state.value;
+    bool owns() =>
+        ref.mounted &&
+        _abortHandler.isCurrentGen(genId) &&
+        identical(state.value, initial) &&
+        state.value?.session?.id == session.id &&
+        ref.read(editingMessageIdProvider(arg)) == null;
+    try {
+      final turn = await ref
+          .read(studioTurnConfigResolverProvider)
+          .resolve(session.id);
+      if (!owns()) return false;
+      // Studio has independent final/agent budgets, not the ordinary preset.
+      if (turn.enabled) return true;
+      final inputs = await ref
+          .read(promptPayloadBuilderProvider)
+          .collectInputs(charId: arg, session: session);
+      if (!owns()) return false;
+      final result = await buildFromInputsInIsolate(inputs);
+      if (!owns()) return false;
+      if (promptFitsContext(
+        inputs.apiConfig,
+        result.breakdown,
+        requiredMessageId: requiredMessageId,
+      )) {
+        return true;
+      }
+      ref.read(contextBudgetNoticeProvider(arg).notifier).state++;
+      return false;
+    } catch (error) {
+      if (!owns()) return false;
+      // Existing pipeline owns missing configuration and other build errors.
+      // Only a proven budget failure rejects preparation here.
+      debugPrint('[ChatNotifier] context preflight unavailable: $error');
+      return true;
+    }
   }
 
   Future<void> _runGeneration(

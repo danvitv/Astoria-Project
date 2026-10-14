@@ -75,63 +75,86 @@ const _messages = [
 
 void main() {
   group('BlockLlmRunner first-chunk deadline', () {
-    test('a provider that accepts and then goes silent fails the block', () async {
-      // The provider opened the connection and never sent anything. Without a
-      // deadline of its own the block sat on a future nobody completed.
-      final transport = _FakeTransport(({
-        required request,
-        required cancelToken,
-        required onUpdate,
-        required onComplete,
-        required onError,
-      }) async {
-        final silence = Completer<void>();
-        unawaited(
-          cancelToken!.whenCancel.then((_) {
-            if (!silence.isCompleted) silence.complete();
-          }),
+    test(
+      'transport cancellation error is observed while deadline remains TimeoutException',
+      () async {
+        final transport = _FakeTransport(({
+          required request,
+          required cancelToken,
+          required onUpdate,
+          required onComplete,
+          required onError,
+        }) async {
+          await cancelToken!.whenCancel;
+          onError!('cancelled at deadline');
+        });
+        await expectLater(
+          BlockLlmRunner(
+            transportPicker: (_) => transport,
+          ).run(apiConfig: _config, messages: _messages, stream: false),
+          throwsA(isA<TimeoutException>()),
         );
-        await silence.future;
-      });
+      },
+    );
+    test(
+      'a provider that accepts and then goes silent fails the block',
+      () async {
+        // The provider opened the connection and never sent anything. Without a
+        // deadline of its own the block sat on a future nobody completed.
+        final transport = _FakeTransport(({
+          required request,
+          required cancelToken,
+          required onUpdate,
+          required onComplete,
+          required onError,
+        }) async {
+          final silence = Completer<void>();
+          unawaited(
+            cancelToken!.whenCancel.then((_) {
+              if (!silence.isCompleted) silence.complete();
+            }),
+          );
+          await silence.future;
+        });
 
-      await expectLater(
-        BlockLlmRunner(transportPicker: (_) => transport).run(
-          apiConfig: _config,
-          messages: _messages,
-          stream: false,
-        ),
-        throwsA(
-          isA<TimeoutException>().having(
-            (e) => e.message,
-            'message',
-            contains('60ms'),
+        await expectLater(
+          BlockLlmRunner(
+            transportPicker: (_) => transport,
+          ).run(apiConfig: _config, messages: _messages, stream: false),
+          throwsA(
+            isA<TimeoutException>().having(
+              (e) => e.message,
+              'message',
+              contains('60ms'),
+            ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
 
-    test('the deadline replaces the transport ceiling, not adds to it', () async {
-      final transport = _FakeTransport(({
-        required request,
-        required cancelToken,
-        required onUpdate,
-        required onComplete,
-        required onError,
-      }) async {
-        onComplete!('done', null, rawResponseJson: null);
-      });
+    test(
+      'the deadline replaces the transport ceiling, not adds to it',
+      () async {
+        final transport = _FakeTransport(({
+          required request,
+          required cancelToken,
+          required onUpdate,
+          required onComplete,
+          required onError,
+        }) async {
+          onComplete!('done', null, rawResponseJson: null);
+        });
 
-      await BlockLlmRunner(transportPicker: (_) => transport).run(
-        apiConfig: _config,
-        messages: _messages,
-        stream: false,
-      );
+        await BlockLlmRunner(
+          transportPicker: (_) => transport,
+        ).run(apiConfig: _config, messages: _messages, stream: false);
 
-      // 0 disables Dio's own receive timeout, so the guard above is the only
-      // deadline. Left at the transport default a non-streaming block died at
-      // 120s (180s on Anthropic/Gemini) whatever the reader configured.
-      expect(transport.lastRequest!.receiveTimeoutMs, 0);
-    });
+        // 0 disables Dio's own receive timeout, so the guard above is the only
+        // deadline. Left at the transport default a non-streaming block died at
+        // 120s (180s on Anthropic/Gemini) whatever the reader configured.
+        expect(transport.lastRequest!.receiveTimeoutMs, 0);
+      },
+    );
 
     test('a first chunk keeps a slow reply alive past the deadline', () async {
       final transport = _FakeTransport(({
@@ -177,11 +200,9 @@ void main() {
         onComplete!('finally', null, rawResponseJson: null);
       });
 
-      final text = await BlockLlmRunner(transportPicker: (_) => transport).run(
-        apiConfig: _config,
-        messages: _messages,
-        stream: false,
-      );
+      final text = await BlockLlmRunner(
+        transportPicker: (_) => transport,
+      ).run(apiConfig: _config, messages: _messages, stream: false);
 
       expect(text, 'finally');
     });
@@ -216,20 +237,20 @@ void main() {
     });
 
     test('a transport that ends without a callback does not hang', () async {
-      final transport = _FakeTransport(({
-        required request,
-        required cancelToken,
-        required onUpdate,
-        required onComplete,
-        required onError,
-      }) async {});
+      final transport = _FakeTransport(
+        ({
+          required request,
+          required cancelToken,
+          required onUpdate,
+          required onComplete,
+          required onError,
+        }) async {},
+      );
 
       await expectLater(
-        BlockLlmRunner(transportPicker: (_) => transport).run(
-          apiConfig: _config,
-          messages: _messages,
-          stream: false,
-        ),
+        BlockLlmRunner(
+          transportPicker: (_) => transport,
+        ).run(apiConfig: _config, messages: _messages, stream: false),
         throwsA(isA<StateError>()),
       );
     });
@@ -286,14 +307,16 @@ void main() {
         // A real transport reports the failure once the caller has begun
         // awaiting the stream, not synchronously inside `stream`.
         await Future<void>.delayed(Duration.zero);
-        onError!(DioException(
-          requestOptions: RequestOptions(path: '/chat/completions'),
-          type: DioExceptionType.badResponse,
-          response: Response(
+        onError!(
+          DioException(
             requestOptions: RequestOptions(path: '/chat/completions'),
-            statusCode: 500,
+            type: DioExceptionType.badResponse,
+            response: Response(
+              requestOptions: RequestOptions(path: '/chat/completions'),
+              statusCode: 500,
+            ),
           ),
-        ));
+        );
       });
 
       await expectLater(

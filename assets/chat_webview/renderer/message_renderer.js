@@ -3,6 +3,7 @@ import { ICON } from './icon_library.js';
 import { createImageAttachments, setImageAttachmentHidden } from './image_embed.js';
 import { isolateImgGenPlaceholders } from './imggen_placeholder.js';
 import { writeShadowContent } from './markdown.js';
+import { retryFailedLocalImages } from './local_image_retry.js';
 import { sanitizeMessageHtml } from '../bridge/html_sanitizer.js';
 import { rewriteTargetSelectors } from './target_toggle.js';
 import {
@@ -56,8 +57,9 @@ export class Renderer {
   }
 
   /** Sets which message opens the prompt window; '' or null clears the rule. */
-  setContextWindowStart(messageId) {
+  setContextWindowStart(messageId, afterMessage = false) {
     this.contextStartId = messageId || null;
+    this.contextStartAfter = afterMessage;
   }
 
   /* ----- Public: render a message ----- */
@@ -149,7 +151,7 @@ if (messageData.isEditing) classes.push('editing');
     section.addEventListener('animationend', () => section.classList.remove('msg-appear'), { once: true });
 
     /* --- Context-window rule: the chat above it is out of the prompt --- */
-    if (id && id === this.contextStartId) {
+    if (id && id === this.contextStartId && !this.contextStartAfter) {
       section.dataset.contextStart = '1';
       section.appendChild(this.createContextLimitMarker());
     }
@@ -213,6 +215,11 @@ if (messageData.isEditing) classes.push('editing');
     stack.appendChild(this._createFooter(messageData));
     section.appendChild(stack);
 
+    if (id && id === this.contextStartId && this.contextStartAfter) {
+      section.dataset.contextStart = '1';
+      section.appendChild(this.createContextLimitMarker());
+    }
+    retryFailedLocalImages(section);
     return section;
   }
 

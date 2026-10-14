@@ -199,9 +199,14 @@ class EndpointNormalizer {
         .map(_repairVersionSegment)
         .toList(growable: true);
 
+    final dropGeminiVersion = !gemini && insertVersion && stripped.geminiRoute;
+    if (dropGeminiVersion) segments.removeWhere(looksLikeVersion);
     var versionResolved = false;
     final knownPath = KnownApiHosts.basePathFor(host, gemini: gemini);
-    if (knownPath != null && _isReplaceablePath(segments, knownPath)) {
+    final openAiPath = gemini ? KnownApiHosts.basePathFor(host) : null;
+    if (knownPath != null &&
+        (_isReplaceablePath(segments, knownPath) ||
+            (openAiPath != null && _isReplaceablePath(segments, openAiPath)))) {
       segments = knownPath.isEmpty
           ? <String>[]
           : knownPath.split('/').toList(growable: true);
@@ -220,7 +225,7 @@ class EndpointNormalizer {
         !azure &&
         query.isEmpty &&
         version.isNotEmpty &&
-        (forceVersion || !stripped.hasExplicitRoute) &&
+        (forceVersion || dropGeminiVersion || !stripped.hasExplicitRoute) &&
         !segments.any(looksLikeVersion);
     if (needsVersion) {
       segments.addAll(version.split('/').where((s) => s.isNotEmpty));
@@ -487,6 +492,7 @@ class EndpointNormalizer {
   static _StrippedRoute _stripRoute(List<String> input) {
     final segments = List<String>.from(input);
     var hasExplicitRoute = false;
+    var geminiRoute = false;
     var changed = true;
 
     while (changed && segments.isNotEmpty) {
@@ -498,6 +504,10 @@ class EndpointNormalizer {
         segments.removeLast();
         hasExplicitRoute = true;
         changed = true;
+        if (segments.isNotEmpty && _canonicalWord(segments.last) == 'models') {
+          segments.removeLast();
+          geminiRoute = true;
+        }
         continue;
       }
 
@@ -521,7 +531,7 @@ class EndpointNormalizer {
       }
     }
 
-    return _StrippedRoute(segments, hasExplicitRoute);
+    return _StrippedRoute(segments, hasExplicitRoute, geminiRoute);
   }
 
   static String _canonicalWord(String segment) =>
@@ -595,6 +605,7 @@ class EndpointNormalizer {
 class _StrippedRoute {
   final List<String> segments;
   final bool hasExplicitRoute;
+  final bool geminiRoute;
 
-  const _StrippedRoute(this.segments, this.hasExplicitRoute);
+  const _StrippedRoute(this.segments, this.hasExplicitRoute, this.geminiRoute);
 }

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -82,6 +83,34 @@ void main() {
       final textField = tester.widget<TextField>(find.byType(TextField));
       expect(textField.textCapitalization, TextCapitalization.sentences);
     });
+
+    testWidgets(
+      'mobile IME Enter never sends even with Enter-to-send enabled',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+        addTearDown(tester.view.resetViewInsets);
+        final focus = FocusNode();
+        addTearDown(focus.dispose);
+        await tester.pumpWidget(
+          buildChatInputBar(focusNode: focus, initialDraft: 'unsent'),
+        );
+        await tester.pumpAndSettle();
+        focus.requestFocus();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+        expect(sentMessages, isEmpty);
+        expect(
+          tester.widget<TextField>(find.byType(TextField)).controller!.text,
+          contains('unsent'),
+        );
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump(const Duration(seconds: 1));
+        debugDefaultTargetPlatformOverride = null;
+      },
+    );
 
     testWidgets('cursor and composing updates do not postpone draft saves', (
       tester,

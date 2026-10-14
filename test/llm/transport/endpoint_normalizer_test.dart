@@ -4,6 +4,36 @@ import 'package:glaze_flutter/core/llm/transport/llm_protocol.dart';
 
 void main() {
   group('persisted endpoints', () {
+    test('switching Gemini routes replaces versions and native Google path', () {
+      expect(
+        EndpointNormalizer.persistedLlmEndpoint(
+          raw: 'https://example.com/v1beta/models/old:streamGenerateContent',
+          protocol: LlmProtocol.openai,
+          model: 'new',
+          stream: true,
+        ),
+        'https://example.com/v1/chat/completions',
+      );
+      expect(
+        EndpointNormalizer.persistedLlmEndpoint(
+          raw: 'https://example.com/v1beta/models/old:generateContent',
+          protocol: LlmProtocol.anthropic,
+          model: 'new',
+          stream: true,
+        ),
+        'https://example.com/v1/messages',
+      );
+      expect(
+        EndpointNormalizer.persistedLlmEndpoint(
+          raw:
+              'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+          protocol: LlmProtocol.gemini,
+          model: 'new',
+          stream: false,
+        ),
+        'https://generativelanguage.googleapis.com/v1beta/models/new:generateContent',
+      );
+    });
     test('stores the concrete generation route for every protocol', () {
       String endpoint(
         String protocol, {

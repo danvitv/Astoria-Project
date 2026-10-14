@@ -59,18 +59,23 @@ String getSystemContent(Map<String, dynamic> payload) {
 // including newline" (no /s flag needed) and supports inline-grouped flags via
 // RegExp(caseSensitive/multiLine).
 final _leadingJailbreak = RegExp(r'^\s*(?:\[[^\]]*\]\s*)+');
-final _personaBlock =
-    RegExp(r'<[^<>\n]*?Persona>[\s\S]*?</[^<>\n]*?Persona>', caseSensitive: false);
-final _scenarioBlock =
-    RegExp(r'<Scenario>[\s\S]*?</Scenario>', caseSensitive: false);
+final _personaBlock = RegExp(
+  r'<[^<>\n]*?Persona>[\s\S]*?</[^<>\n]*?Persona>',
+  caseSensitive: false,
+);
+final _scenarioBlock = RegExp(
+  r'<Scenario>[\s\S]*?</Scenario>',
+  caseSensitive: false,
+);
 final _exampleBlock = RegExp(
-    r'<Example[^<>\n]*>[\s\S]*?</Example[^<>\n]*>',
-    caseSensitive: false);
+  r'<Example[^<>\n]*>[\s\S]*?</Example[^<>\n]*>',
+  caseSensitive: false,
+);
 
 /// Removes leading bracketed jailbreak/system prefix and the
 /// `<...Persona>` / `<Scenario>` / `<Example>` blocks. Returns the stripped
 /// text plus the removed blocks (labelled).
-({String out, List<RemovedBlock> removed}) _stripWrappers(String text) {
+({String out, List<RemovedBlock> removed}) stripWrappers(String text) {
   final removed = <RemovedBlock>[];
   var out = text;
 
@@ -82,7 +87,8 @@ final _exampleBlock = RegExp(
 
   out = out.replaceAllMapped(_personaBlock, (m) {
     final block = m[0]!;
-    final label = RegExp(r'^<\s*userpersona', caseSensitive: false).hasMatch(block)
+    final label =
+        RegExp(r'^<\s*userpersona', caseSensitive: false).hasMatch(block)
         ? 'userPersona'
         : 'card';
     removed.add(RemovedBlock(label, block));
@@ -106,7 +112,9 @@ final _exampleBlock = RegExp(
 /// scrub any card text that survived wrapper stripping. Only lines >= 12 chars
 /// are considered (avoids dropping short shared phrases).
 ({String out, List<String> removed}) _subtractKnownCard(
-    String text, String knownCard) {
+  String text,
+  String knownCard,
+) {
   if (knownCard.trim().isEmpty) return (out: text, removed: const []);
   final known = <String>{};
   for (final line in knownCard.split('\n')) {
@@ -153,7 +161,9 @@ String loosePattern(String needle) => needle
 /// never triggered simply aren't found and are skipped. Port of separate.cjs
 /// `stripPublicEntries`.
 ({String out, List<String> removed}) _stripPublicEntries(
-    String text, List<String> publicContents) {
+  String text,
+  List<String> publicContents,
+) {
   if (publicContents.isEmpty) return (out: text, removed: const []);
   var out = text;
   final removed = <String>[];
@@ -186,8 +196,8 @@ String _tidy(String text) => text
 /// subtracts them from every block it recovers.
 String withoutPublicEntries(String text, List<String> publicContents) =>
     publicContents.isEmpty
-        ? text
-        : _tidy(_stripPublicEntries(text, publicContents).out);
+    ? text
+    : _tidy(_stripPublicEntries(text, publicContents).out);
 
 /// Splits the isolated lorebook text into discrete entry blocks on blank lines.
 List<String> splitEntries(String text) => text
@@ -201,8 +211,9 @@ List<String> splitEntries(String text) => text
 String extractCard(Map<String, dynamic> payload) {
   final sys = getSystemContent(payload);
   final re = RegExp(
-      r'<([^<>\n]*?)Persona>([\s\S]*?)</[^<>\n]*?Persona>',
-      caseSensitive: false);
+    r'<([^<>\n]*?)Persona>([\s\S]*?)</[^<>\n]*?Persona>',
+    caseSensitive: false,
+  );
   for (final m in re.allMatches(sys)) {
     if (RegExp(r'^\s*user', caseSensitive: false).hasMatch(m[1]!)) continue;
     return m[2]!.trim();
@@ -213,24 +224,32 @@ String extractCard(Map<String, dynamic> payload) {
 /// Pulls the character name from the persona tag (`<Name's Persona>`).
 String extractCharName(Map<String, dynamic> payload) {
   final sys = getSystemContent(payload);
-  final m = RegExp(r'<([^<>\n]*?)Persona>', caseSensitive: false).firstMatch(sys);
+  final m = RegExp(
+    r'<([^<>\n]*?)Persona>',
+    caseSensitive: false,
+  ).firstMatch(sys);
   if (m != null) {
-    final name = m[1]!.replaceAll(RegExp(r"['’]s\s*$", caseSensitive: false), '').trim();
+    final name = m[1]!
+        .replaceAll(RegExp(r"['’]s\s*$", caseSensitive: false), '')
+        .trim();
     if (name.toLowerCase() != 'user') return name;
   }
   return '';
 }
 
 String extractScenario(Map<String, dynamic> payload) {
-  final m = RegExp(r'<Scenario>([\s\S]*?)</Scenario>', caseSensitive: false)
-      .firstMatch(getSystemContent(payload));
+  final m = RegExp(
+    r'<Scenario>([\s\S]*?)</Scenario>',
+    caseSensitive: false,
+  ).firstMatch(getSystemContent(payload));
   return m != null ? m[1]!.trim() : '';
 }
 
 String extractExample(Map<String, dynamic> payload) {
-  final m = RegExp(r'<Example[^<>\n]*?>([\s\S]*?)</Example[^<>\n]*?>',
-          caseSensitive: false)
-      .firstMatch(getSystemContent(payload));
+  final m = RegExp(
+    r'<Example[^<>\n]*?>([\s\S]*?)</Example[^<>\n]*?>',
+    caseSensitive: false,
+  ).firstMatch(getSystemContent(payload));
   return m != null ? m[1]!.trim() : '';
 }
 
@@ -268,12 +287,13 @@ String restoreMacros(
   if (text.isEmpty) return text;
   var out = text;
   // Longest first: swapping "Anna" before "Anna Lee" would leave "{{char}} Lee".
-  final chars = charNames
-      .map((n) => n.trim())
-      .where((n) => n.length >= _minMacroNeedle)
-      .toSet()
-      .toList()
-    ..sort((a, b) => b.length.compareTo(a.length));
+  final chars =
+      charNames
+          .map((n) => n.trim())
+          .where((n) => n.length >= _minMacroNeedle)
+          .toSet()
+          .toList()
+        ..sort((a, b) => b.length.compareTo(a.length));
   for (final name in chars) {
     out = out.replaceAll(name, '{{char}}');
   }
@@ -294,7 +314,7 @@ SeparationResult separate(
   List<String> publicContents = const [],
 ]) {
   final systemContent = getSystemContent(payload);
-  final a = _stripWrappers(systemContent);
+  final a = stripWrappers(systemContent);
   final b = _subtractKnownCard(a.out, knownCard);
   final c = _stripPublicEntries(b.out, publicContents);
   final lorebookText = _tidy(c.out);
