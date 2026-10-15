@@ -104,13 +104,13 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   test(
-    'fresh v136 has every declared index and the capture contract',
+    'fresh v137 has every declared index and the historical capture contract',
     () async {
       final db = _memoryDb();
       addTearDown(db.close);
       final entities = await _integrityEntities(db);
-      expect(db.schemaVersion, 136);
-      expect(db.allTables, hasLength(56));
+      expect(db.schemaVersion, 137);
+      expect(db.allTables, hasLength(61));
       expect(
         entities.keys,
         containsAll(
@@ -157,7 +157,7 @@ void main() {
       expect(
         (await upgraded.customSelect('PRAGMA user_version').getSingle())
             .read<int>('user_version'),
-        136,
+        137,
       );
       expect(
         (await upgraded
@@ -303,6 +303,11 @@ class _HistoricalDatabase extends AppDatabase {
         'ledger_reconciliation_effects': 126,
         'card_evolution_writer_calls': 128,
         'ledger_reconciliation_leases': 130,
+        'support_sessions': 137,
+        'support_messages': 137,
+        'support_context_blocks': 137,
+        'support_mutation_journal': 137,
+        'support_reports': 137,
       };
       for (final table in allTables) {
         if ((introduced[table.actualTableName] ?? 1) > version) continue;

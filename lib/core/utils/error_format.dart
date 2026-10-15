@@ -3,6 +3,22 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:easy_localization/easy_localization.dart';
 
+import '../credentials/secret_redactor.dart';
+
+final SecretRedactor _defaultErrorRedactor = SecretRedactor();
+
+/// Optional secret redactor configured by trusted composition. When null,
+/// [formatError] falls back to a default pattern-based [SecretRedactor].
+SecretRedactor? activeErrorRedactor;
+
+SecretRedactor get _errorRedactor =>
+    activeErrorRedactor ?? _defaultErrorRedactor;
+
+final RegExp _querySecretPattern = RegExp(
+  r'''([?&](?:api[_-]?key|key|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|auth|password|passwd|sig|signature)=)([^&\s#"'\]]+)''',
+  caseSensitive: false,
+);
+
 /// Returns a short, human-readable error string.
 ///
 /// DioExceptions are translated to HTTP status codes or network descriptions.
@@ -14,7 +30,9 @@ import 'package:easy_localization/easy_localization.dart';
 ///     Unknown page - v1beta/v1
 ///
 /// instead of the full Dio verbose dump.
-String formatError(Object err) {
+String formatError(Object err) => _redactErrorText(_formatRawError(err));
+
+String _formatRawError(Object err) {
   if (err is DioException) {
     if (err.type == DioExceptionType.cancel) {
       return 'error_request_cancelled'.tr();
@@ -218,7 +236,23 @@ String _redirectHint(int? code, Response<dynamic> response) {
   final hint = '\n${'error_endpoint_redirect'.tr()}';
   final location = response.headers.value('location')?.trim();
   if (location == null || location.isEmpty) return hint;
-  return '$hint\n→ $location';
+  final sanitizedLocation = _sanitizeRedirectLocation(location);
+  return '$hint\n→ $sanitizedLocation';
+}
+
+String _sanitizeRedirectLocation(String location) {
+  if (location.startsWith('/') && !location.startsWith('//')) {
+    final sanitized = _errorRedactor.redactUrl(
+      'https://redirect.invalid$location',
+    );
+    const prefix = 'https://redirect.invalid';
+    if (sanitized.startsWith(prefix)) {
+      final path = sanitized.substring(prefix.length);
+      return path.isEmpty ? '/' : path;
+    }
+    return SecretRedactor.removed;
+  }
+  return _errorRedactor.redactUrl(location);
 }
 
 /// The server-supplied reason phrase, when it is not blank.
@@ -261,6 +295,17 @@ String? _defaultHttpMessage(int code) {
 /// dialog, in a toast, and on one line of a memory card; past this length it
 /// stops being a message and starts being a document.
 const _maxApiMessageChars = 300;
+const _maxErrorInspectChars = 400000;
+const _maxErrorInspectOutputChars = 800000;
+
+SecretRedactor get _inspectionErrorRedactor {
+  final base = _errorRedactor;
+  return base.withKnownSecrets(
+    const [],
+    maxInputLength: _maxErrorInspectChars,
+    maxOutputLength: _maxErrorInspectOutputChars,
+  );
+}
 
 /// Tries to pull a human-readable message out of common API error shapes.
 /// Returns null if nothing useful is found.
@@ -333,7 +378,50 @@ String? _proseMessage(String body) {
 }
 
 String _clamp(String message) {
-  final text = message.trim();
-  if (text.length <= _maxApiMessageChars) return text;
-  return '${text.substring(0, _maxApiMessageChars).trimRight()}…';
+  final raw = message.trim();
+  if (raw.isEmpty) return raw;
+  final redacted = _redactErrorText(raw).trim();
+  if (redacted == SecretRedactor.limited) {
+    return SecretRedactor.limited;
+  }
+  if (redacted.length <= _maxApiMessageChars && raw.length <= _maxApiMessageChars) {
+    return redacted;
+  }
+  final prefix = redacted.length <= _maxApiMessageChars
+      ? redacted
+      : redacted.substring(0, _maxApiMessageChars).trimRight();
+  return '$prefix…';
+}
+
+String _redactErrorText(String text) {
+  if (text.isEmpty) return text;
+  final redactor = _errorRedactor;
+  if (redactor.redactText('') == SecretRedactor.limited) {
+    return SecretRedactor.limited;
+  }
+  final String redacted;
+  final direct = redactor.redactText(text);
+  if (direct != SecretRedactor.limited) {
+    redacted = direct;
+  } else {
+    final inspected = _inspectionErrorRedactor.redactText(text);
+    if (inspected == SecretRedactor.limited) {
+      return SecretRedactor.limited;
+    }
+    final sanitized = inspected.replaceAllMapped(
+      _querySecretPattern,
+      (match) => '${match.group(1)}${SecretRedactor.removed}',
+    );
+    final clamped = sanitized.length <= _maxApiMessageChars
+        ? sanitized
+        : sanitized.substring(0, _maxApiMessageChars).trimRight();
+    return sanitized.length <= _maxApiMessageChars &&
+            text.length <= _maxApiMessageChars
+        ? clamped
+        : '$clamped…';
+  }
+  return redacted.replaceAllMapped(
+    _querySecretPattern,
+    (match) => '${match.group(1)}${SecretRedactor.removed}',
+  );
 }

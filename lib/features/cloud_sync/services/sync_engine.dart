@@ -7,9 +7,13 @@ import '../cloud_adapter.dart';
 import '../sync_models.dart';
 import 'sync_binary_asset_syncer.dart';
 import 'sync_conflict.dart';
+import 'sync_conflict_diagnostics.dart';
 import 'sync_queue.dart';
 import 'sync_image_stripper.dart';
 import 'sync_serialization.dart';
+import 'sync_character_hash.dart';
+import 'sync_character_world_equivalence.dart';
+import 'sync_unordered_aggregate_bridge.dart';
 import '../../../core/models/character.dart';
 import '../../../core/models/gallery_entry.dart';
 import '../../../core/models/memory_book.dart';
@@ -17,7 +21,13 @@ import '../../../core/models/persona.dart';
 import '../../../core/models/chat_message.dart';
 import '../../../core/models/lorebook.dart';
 import '../../../core/models/api_config.dart';
+import '../../../core/models/extra_request_parameter.dart';
 import '../../../core/models/preset.dart';
+import '../../../core/llm/transport/endpoint_normalizer.dart';
+import '../../../core/services/backup/backup_secret_routes.dart';
+import '../../../core/services/backup/backup_secret_runtime.dart';
+import '../../../core/services/backup/backup_secret_urls.dart';
+import '../../../core/services/backup/backup_secrets.dart';
 import '../../../core/models/studio_agent_codec.dart';
 import '../../../core/models/studio_preset_codec.dart';
 import '../../../core/application/session_deletion_store.dart';
@@ -72,6 +82,7 @@ class SyncEngine {
   final Duration _wipePollInterval;
   final SyncQueue _queue = SyncQueue();
   late final SyncBinaryAssetSyncer _binarySyncer;
+  late final SyncUnorderedAggregateBridge _unorderedBridge;
   bool _includeApiKeys = false;
 
   SyncEngine(
@@ -115,7 +126,20 @@ class SyncEngine {
       _presetRepo,
       _imageStorage,
     );
+    _unorderedBridge = SyncUnorderedAggregateBridge(
+      download: _adapter.download,
+      readLocal: _readLocalEntity,
+      isDeleted: _manifestBuilder.isDeleted,
+    );
   }
+
+  Future<SyncConflictDiagnosticReport> diagnoseConflicts(
+    List<SyncConflict> conflicts, {
+    required Future<String> Function(String) diagnosticDownload,
+  }) => SyncConflictDiagnostics(
+    readLocal: _readLocalEntity,
+    download: diagnosticDownload,
+  ).diagnose(conflicts);
 
   Future<void> pushEntities({
     required void Function(SyncProgress) onProgress,
@@ -172,6 +196,8 @@ class SyncEngine {
     var localManifest = await _manifestBuilder.buildLocalManifest(
       cloudManifest: cloudManifest,
     );
+    localManifest = await _bridgeCharacterHashes(localManifest, cloudManifest);
+    localManifest = await _unorderedBridge.bridge(localManifest, cloudManifest);
     // Fingerprint the bytes that include keys, not an accepted keyless hash.
     final apiPushSnapshot = (await _apiRepo.getAll()).map((a) {
       return (_includeApiKeys ? a : a.copyWith(apiKey: '', embeddingApiKey: ''))
@@ -218,11 +244,22 @@ class SyncEngine {
           cloudEntry,
         );
         if (localData != null &&
-            _sameEntityWithoutImagePaths(localData, cloudData)) {
+            _sameEntityWithoutImagePaths(
+              localData,
+              cloudData,
+              ignoreCharacterMetadata: cloudEntry.type == 'character',
+            )) {
           entries[key] = cloudEntry;
-          accepted[key] = localEntry.hash;
+          if (cloudEntry.type != 'character' ||
+              localEntry.hash != cloudEntry.hash) {
+            accepted[key] = localEntry.hash;
+          } else if (accepted[key] == cloudEntry.hash) {
+            // A published normalized card needs no self-referential marker;
+            // keep an existing distinct anchor for a legacy missing avatar.
+            accepted.remove(key);
+          }
         } else {
-          // A real text edit must still be pushed even if its old avatar is
+          // A real authored edit must still be pushed even if its old avatar is
           // gone; only unchanged entities may reuse the old cloud hash.
           accepted.remove(key);
         }
@@ -262,6 +299,7 @@ class SyncEngine {
       await _adapter.ensureFolder(dir);
     }
 
+    await _unorderedBridge.verifyAnchors(localManifest);
     final tasks = <Future<void> Function()>[];
     var processed = 0;
     final hashSkippedKeys = <String>[];
@@ -369,9 +407,13 @@ class SyncEngine {
       throw SyncQueueAggregateError(taskErrors);
     }
 
-    final cleanedEntries = Map<String, SyncManifestEntry>.from(
-      localManifest.entries,
-    )..removeWhere((_, e) => e.deleted);
+    final cleanedEntries = <String, SyncManifestEntry>{
+      ...?cloudManifest?.entries,
+      ...localManifest.entries,
+    };
+    for (final entry in localManifest.entries.values) {
+      if (entry.deleted) cleanedEntries.remove(entry.key);
+    }
     final acceptedLocalHashes = Map<String, String>.from(
       localManifest.acceptedLocalHashes,
     );
@@ -409,6 +451,7 @@ class SyncEngine {
       }
     }
 
+    await _unorderedBridge.verifyAnchors(localManifest);
     final updatedManifest = localManifest.copyWith(
       version: SyncManifest.currentVersion,
       lastSync: DateTime.now().millisecondsSinceEpoch,
@@ -422,6 +465,7 @@ class SyncEngine {
       updatedManifest.toJson(includeLocalState: false),
     );
     await _adapter.upload(cloudPath('manifest', 'manifest'), manifestJson);
+    await _unorderedBridge.verifyAnchors(localManifest);
     await _manifestBuilder.writeLocalManifest(updatedManifest);
     await _manifestBuilder.clearDeleted();
   }
@@ -471,8 +515,12 @@ class SyncEngine {
     if (cloudManifest == null) return;
     final previousManifest = await _manifestBuilder.readLocalManifest();
     final isFirstSync = previousManifest.lastSync == 0;
-    final localManifest = await _manifestBuilder.buildLocalManifest(
-      cloudManifest: cloudManifest,
+    final localManifest = await _unorderedBridge.bridge(
+      await _bridgeCharacterHashes(
+        await _manifestBuilder.buildLocalManifest(cloudManifest: cloudManifest),
+        cloudManifest,
+      ),
+      cloudManifest,
     );
 
     final entries = cloudManifest.entries.values.toList();
@@ -615,8 +663,12 @@ class SyncEngine {
         await _downloadCloudManifest();
     if (cloudManifest == null) return;
     final previousManifest = await _manifestBuilder.readLocalManifest();
-    final localManifest = await _manifestBuilder.buildLocalManifest(
-      cloudManifest: cloudManifest,
+    final localManifest = await _unorderedBridge.bridge(
+      await _bridgeCharacterHashes(
+        await _manifestBuilder.buildLocalManifest(cloudManifest: cloudManifest),
+        cloudManifest,
+      ),
+      cloudManifest,
     );
 
     final pullEntries = <SyncManifestEntry>[];
@@ -832,6 +884,7 @@ class SyncEngine {
       cloudManifest: cloudManifest,
       applyAcceptedHashes: false,
     );
+    await _unorderedBridge.verifyAnchors(localManifest);
     final entries = Map<String, SyncManifestEntry>.from(rebuilt.entries);
     final acceptedLocalHashes = <String, String>{};
 
@@ -1130,15 +1183,39 @@ class SyncEngine {
 
   bool _sameEntityWithoutImagePaths(
     Map<String, dynamic> local,
-    Map<String, dynamic> cloud,
-  ) {
+    Map<String, dynamic> cloud, {
+    bool ignoreCharacterMetadata = false,
+  }) {
+    if (ignoreCharacterMetadata) {
+      // Character.toJson retains GalleryEntry objects; cloud JSON has maps.
+      // Never discard an unrecognized item and mistake a gallery edit for
+      // equality. Keep the legacy persona comparison below unchanged.
+      for (final data in [local, cloud]) {
+        final gallery = data['gallery'];
+        if (gallery != null &&
+            (gallery is! List ||
+                gallery.any(
+                  (item) =>
+                      item is! GalleryEntry && item is! Map<String, dynamic>,
+                ))) {
+          return false;
+        }
+      }
+    }
     Map<String, dynamic> portable(Map<String, dynamic> data) {
       final result = Map<String, dynamic>.from(data)..remove('avatarPath');
+      if (ignoreCharacterMetadata) {
+        result.remove('currentSessionIndex');
+        result.remove('tokenCount');
+        result.remove('updatedAt');
+      }
       final gallery = result['gallery'];
       if (gallery is List) {
         result['gallery'] = [
           for (final item in gallery)
-            if (item is Map<String, dynamic>)
+            if (ignoreCharacterMetadata && item is GalleryEntry)
+              item.toJson()..remove('imagePath')
+            else if (item is Map<String, dynamic>)
               Map<String, dynamic>.from(item)..remove('imagePath'),
         ];
       }
@@ -1219,6 +1296,87 @@ class SyncEngine {
       default:
         return false;
     }
+  }
+
+  /// Prove equivalence against the payload, never infer it from hash drift.
+  /// The cloud fingerprint also verifies avatar size before accepting the
+  /// normalized card. Local-only markers remain anchored to that cloud entry.
+  Future<SyncManifest> _bridgeCharacterHashes(
+    SyncManifest localManifest,
+    SyncManifest? cloudManifest,
+  ) async {
+    if (cloudManifest == null) return localManifest;
+    final entries = Map<String, SyncManifestEntry>.from(localManifest.entries);
+    final accepted = Map<String, String>.from(
+      localManifest.acceptedLocalHashes,
+    );
+    for (final cloudEntry in cloudManifest.entries.values) {
+      final localEntry = entries[cloudEntry.key];
+      if (cloudEntry.type != 'character' ||
+          cloudEntry.deleted ||
+          localEntry == null ||
+          localEntry.deleted ||
+          cloudEntry.hash == localEntry.hash) {
+        continue;
+      }
+      final character = await _characterRepo.getById(cloudEntry.id);
+      if (character == null) continue;
+      final localData = character.toJson();
+      final cloudData = await SyncSerialization.readRequiredCloudEntity(
+        _adapter,
+        cloudEntry,
+      );
+      final size = SyncCharacterHash.avatarSize(localData, _imageStorage);
+      // Reject malformed world values before model parsing can erase evidence.
+      if (!SyncCharacterWorldEquivalence.isValid(localData) ||
+          !SyncCharacterWorldEquivalence.isValid(cloudData)) {
+        continue;
+      }
+      final cloudCard = Character.fromJson(cloudData).toJson();
+      if (cloudData.keys.any((key) => !cloudCard.containsKey(key))) continue;
+      final cloudHash = SyncCharacterHash.compute(cloudCard, size);
+      final legacyCloudHash = SyncCharacterHash.compute(
+        cloudCard,
+        size,
+        legacy: true,
+      );
+      final localHash = SyncCharacterHash.compute(localData, size);
+      // Authenticate the existing fingerprint BEFORE comparing repository
+      // materialization. Never publish the projected cloud fingerprint.
+      if ((cloudEntry.hash == cloudHash ||
+              cloudEntry.hash == legacyCloudHash) &&
+          SyncCharacterHash.compute(
+                SyncCharacterWorldEquivalence.project(localData)!,
+                size,
+              ) ==
+              SyncCharacterHash.compute(
+                SyncCharacterWorldEquivalence.project(cloudCard)!,
+                size,
+              )) {
+        // Downloading introduced a checkpoint: do not accept an older local
+        // snapshot if a card edit or binary replacement landed meanwhile.
+        final current = await _characterRepo.getById(cloudEntry.id);
+        if (current == null) continue;
+        final currentData = current.toJson();
+        if (SyncCharacterHash.compute(
+              currentData,
+              SyncCharacterHash.avatarSize(currentData, _imageStorage),
+            ) !=
+            localHash) {
+          throw StateError('Character changed during sync hash upgrade; retry');
+        }
+        entries[cloudEntry.key] = cloudEntry;
+        if (localHash != cloudEntry.hash) {
+          accepted[cloudEntry.key] = localHash;
+        } else {
+          accepted.remove(cloudEntry.key);
+        }
+      }
+    }
+    return localManifest.copyWith(
+      entries: entries,
+      acceptedLocalHashes: accepted,
+    );
   }
 
   Future<Map<String, dynamic>?> _readLocalEntity(String type, String id) async {
@@ -1674,8 +1832,10 @@ class SyncEngine {
   }
 
   /// Applies cloud api_presets while preserving local API keys and embedding
-  /// keys. Cloud payloads strip keys (empty string) when includeApiKeys=false;
-  /// blindly writing them would wipe the user's credentials on every pull.
+  /// keys only when the destination route and protocol still match. Cloud
+  /// payloads strip keys (empty string) when includeApiKeys=false; preserving
+  /// local credentials across a changed endpoint/protocol would allow a
+  /// keyless cloud update to reroute local secrets to a different host.
   Future<void> _applyApiConfigs(Map<String, dynamic> data) async {
     final List<Map<String, dynamic>> items;
     if (data['__singleton'] == true) {
@@ -1695,15 +1855,54 @@ class SyncEngine {
       cloudIds.add(cloudConfig.id);
 
       final local = localById[cloudConfig.id];
+      final llmRouteMatches =
+          local != null &&
+          BackupSecretRoutes.sameLlm(
+            _routeRow(cloudConfig),
+            _routeRow(local),
+            BackupSecrets.isSecretField,
+          );
+      final embeddingRouteMatches =
+          local != null &&
+          _embeddingRouteMatches(cloudConfig, local, llmRouteMatches);
+
       final merged = cloudConfig.copyWith(
-        // Preserve local keys: use cloud key only when it is non-empty
-        // (i.e. when includeApiKeys=true was used during push).
         apiKey: cloudConfig.apiKey.isNotEmpty
             ? cloudConfig.apiKey
-            : (local?.apiKey ?? ''),
+            : (llmRouteMatches ? local.apiKey : ''),
         embeddingApiKey: cloudConfig.embeddingApiKey.isNotEmpty
             ? cloudConfig.embeddingApiKey
-            : (local?.embeddingApiKey ?? ''),
+            : (embeddingRouteMatches ? local.embeddingApiKey : ''),
+        endpoint: llmRouteMatches
+            ? BackupSecretUrls.refill(
+                cloudConfig.endpoint,
+                local.endpoint,
+                BackupSecrets.isSecretField,
+              )
+            : (local != null && cloudConfig.apiKey.isEmpty
+                  ? BackupSecretUrls.strip(
+                      cloudConfig.endpoint,
+                      BackupSecrets.isSecretField,
+                    )
+                  : cloudConfig.endpoint),
+        embeddingEndpoint:
+            embeddingRouteMatches && !cloudConfig.embeddingUseSame
+            ? BackupSecretUrls.refill(
+                cloudConfig.embeddingEndpoint,
+                local.embeddingEndpoint,
+                BackupSecrets.isSecretField,
+              )
+            : (local != null && cloudConfig.embeddingApiKey.isEmpty
+                  ? BackupSecretUrls.strip(
+                      cloudConfig.embeddingEndpoint,
+                      BackupSecrets.isSecretField,
+                    )
+                  : cloudConfig.embeddingEndpoint),
+        extraRequestParameters: _mergeExtraRequestParameters(
+          cloudConfig,
+          local,
+          llmRouteMatches: llmRouteMatches,
+        ),
       );
       await _apiRepo.put(merged);
     }
@@ -1714,6 +1913,117 @@ class SyncEngine {
         await _apiRepo.delete(local.id);
       }
     }
+  }
+
+  static Map<String, dynamic> _routeRow(ApiConfig config) => {
+    'endpoint': config.endpoint,
+    'embedding_endpoint': config.embeddingEndpoint,
+    'protocol': config.protocol,
+    'model': config.model,
+    'stream': config.stream,
+    'use_responses_api': config.useResponsesApi,
+    'mode': config.mode,
+    'embedding_use_same': config.embeddingUseSame,
+    'embedding_llm_preset_id': config.embeddingLlmPresetId,
+  };
+
+  static bool _embeddingRouteMatches(
+    ApiConfig cloudConfig,
+    ApiConfig local,
+    bool llmRouteMatches,
+  ) {
+    if (cloudConfig.embeddingUseSame && local.embeddingUseSame) {
+      return llmRouteMatches &&
+          cloudConfig.embeddingLlmPresetId.trim() ==
+              local.embeddingLlmPresetId.trim();
+    }
+    if (!cloudConfig.embeddingUseSame &&
+        !local.embeddingUseSame &&
+        cloudConfig.embeddingEndpoint.trim().isNotEmpty &&
+        local.embeddingEndpoint.trim().isNotEmpty &&
+        EndpointNormalizer.parse(cloudConfig.embeddingEndpoint).isValid &&
+        EndpointNormalizer.parse(local.embeddingEndpoint).isValid) {
+      return BackupSecretRoutes.same(
+        EndpointNormalizer.persistedEmbeddingEndpoint(
+          cloudConfig.embeddingEndpoint,
+        ),
+        EndpointNormalizer.persistedEmbeddingEndpoint(local.embeddingEndpoint),
+        BackupSecrets.isSecretField,
+      );
+    }
+    return false;
+  }
+
+  static List<ExtraRequestParameter> _mergeExtraRequestParameters(
+    ApiConfig cloudConfig,
+    ApiConfig? local, {
+    required bool llmRouteMatches,
+  }) {
+    if (cloudConfig.extraRequestParameters.isEmpty) {
+      return cloudConfig.extraRequestParameters;
+    }
+    final cloudRaw = cloudConfig.extraRequestParameters
+        .map((p) => p.toJson())
+        .toList(growable: false);
+    final Object? transformed;
+    if (llmRouteMatches && local != null) {
+      final localRaw = local.extraRequestParameters
+          .map((p) => p.toJson())
+          .toList(growable: false);
+      transformed = BackupSecretRuntime.refillParameters(
+        cloudRaw,
+        localRaw,
+        BackupSecrets.isSecretField,
+      );
+    } else if (local != null && cloudConfig.apiKey.isEmpty) {
+      transformed = BackupSecretRuntime.stripParameters(
+        cloudRaw,
+        BackupSecrets.isSecretField,
+      );
+    } else {
+      return cloudConfig.extraRequestParameters;
+    }
+    if (transformed is! List) return cloudConfig.extraRequestParameters;
+    final stripNested = !llmRouteMatches && cloudConfig.apiKey.isEmpty;
+    return transformed
+        .whereType<Map<dynamic, dynamic>>()
+        .map((item) {
+          final param = ExtraRequestParameter.fromJson(
+            Map<String, dynamic>.from(item),
+          );
+          return stripNested
+              ? param.copyWith(value: _stripNestedSecretJson(param.value))
+              : param;
+        })
+        .toList(growable: false);
+  }
+
+  static String _stripNestedSecretJson(String raw) {
+    final trimmed = raw.trimLeft();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return raw;
+    try {
+      final decoded = jsonDecode(raw);
+      return jsonEncode(_stripJsonNode(decoded));
+    } on FormatException {
+      return raw;
+    }
+  }
+
+  static Object? _stripJsonNode(Object? node) {
+    if (node is Map) {
+      return {
+        for (final entry in node.entries)
+          entry.key:
+              entry.key is String &&
+                  BackupSecrets.isSecretField(entry.key as String)
+              ? (entry.value is String ? '' : null)
+              : _stripJsonNode(entry.value),
+      };
+    }
+    if (node is List) {
+      return node.map(_stripJsonNode).toList(growable: false);
+    }
+    return node;
   }
 
   Future<void> _applyUiThemes(Map<String, dynamic> data) async {

@@ -11,12 +11,20 @@ import '../../llm/transport/endpoint_normalizer.dart';
 
 class ApiConfigRepo implements SyncApiConfigStore {
   final AppDatabase _db;
-  ApiConfigRepo(this._db);
+  final void Function(ApiConfig)? onConfigObserved;
+  ApiConfigRepo(this._db, {this.onConfigObserved});
 
   @override
   Future<List<ApiConfig>> getAll() async {
     final rows = await _db.select(_db.apiConfigs).get();
-    return rows.map(_toModel).toList();
+    final configs = rows.map(_toModel).toList();
+    final observe = onConfigObserved;
+    if (observe != null) {
+      for (final config in configs) {
+        observe(config);
+      }
+    }
+    return configs;
   }
 
   @override
@@ -24,11 +32,15 @@ class ApiConfigRepo implements SyncApiConfigStore {
     final row = await (_db.select(
       _db.apiConfigs,
     )..where((t) => t.configId.equals(id))).getSingleOrNull();
-    return row != null ? _toModel(row) : null;
+    if (row == null) return null;
+    final config = _toModel(row);
+    onConfigObserved?.call(config);
+    return config;
   }
 
   @override
   Future<void> put(ApiConfig config) async {
+    onConfigObserved?.call(config);
     final persisted = config.copyWith(
       endpoint: EndpointNormalizer.persistedLlmEndpoint(
         raw: config.endpoint,
@@ -41,6 +53,7 @@ class ApiConfigRepo implements SyncApiConfigStore {
         config.embeddingEndpoint,
       ),
     );
+    onConfigObserved?.call(persisted);
     await _db
         .into(_db.apiConfigs)
         .insertOnConflictUpdate(_toCompanion(persisted));

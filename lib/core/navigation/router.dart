@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../utils/id_generator.dart';
+import '../constants/support_assistant_availability.dart';
 import '../../shared/shell/desktop/desktop_layout_provider.dart';
 import '../../features/character_list/character_detail_screen.dart';
 import '../../features/character_list/character_editor_screen.dart';
@@ -28,6 +29,7 @@ import '../../features/settings/app_settings_screen.dart';
 import '../../features/settings/theme_preset_screen.dart';
 import '../../features/tools/tools_screen.dart';
 import '../../features/glossary/glossary_sheet.dart';
+import '../../features/support_assistant/support_assistant_screen.dart';
 import '../../shared/shell/shell_screen.dart';
 import '../../shared/shell/desktop/desktop_shell.dart';
 
@@ -313,6 +315,20 @@ GoRouter buildRouter(
                     ? targetMsgId
                     : null,
               ),
+            );
+          },
+        ),
+        GoRoute(
+          path: '/support',
+          redirect: (_, _) =>
+              supportAssistantWorkspaceEnabled ? null : '/characters',
+          pageBuilder: (_, state) {
+            final topic = state.uri.queryParameters['topic'];
+            return _adaptivePage(
+              state: state,
+              child: topic == null
+                  ? const SupportAssistantScreen()
+                  : SupportAssistantScreen(initialTopic: topic),
             );
           },
         ),

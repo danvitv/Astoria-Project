@@ -15,9 +15,13 @@ import 'gdrive/gdrive_adapter.dart';
 import 'gdrive/gdrive_auth.dart';
 import 'sync_conflict.dart';
 import 'sync_engine.dart';
+import 'sync_conflict_diagnostics.dart';
+import 'sync_conflict_diagnostics_download.dart';
 import 'sync_manifest.dart';
 import '../cloud_adapter.dart';
 import '../sync_models.dart';
+
+export 'sync_conflict_diagnostics_report.dart';
 
 class SyncService {
   final SyncCharacterStore _characterRepo;
@@ -48,6 +52,9 @@ class SyncService {
   final CharacterDeletionStore _characterDeletionStore;
   final Future<void> Function(LorebookActivations) _saveLorebookActivations;
   final Future<void> Function(Set<String>)? _reconcilePulledSessions;
+  final Future<String> Function(String)? _diagnosticDownload;
+  // Trusted constructor seam; production defaults to the actual provider below.
+  final CloudAdapter Function(SyncProvider)? _selectAdapter;
 
   SyncProvider _provider = SyncProvider.dropbox;
   SyncStatus _status = SyncStatus.idle;
@@ -61,6 +68,7 @@ class SyncService {
   int _autoSyncMessageCount = 5;
   int _messageCounter = 0;
   bool _operationInProgress = false;
+  bool _isDiagnosingConflicts = false;
 
   final DropboxAuth _dropboxAuth = DropboxAuth();
   final GDriveAuth _gdriveAuth = GDriveAuth();
@@ -75,6 +83,7 @@ class SyncService {
   int get autoSyncMessageCount => _autoSyncMessageCount;
   bool get isSyncing => _status == SyncStatus.syncing;
   bool get operationInProgress => _operationInProgress;
+  bool get isDiagnosingConflicts => _isDiagnosingConflicts;
   bool get hasConflicts => _conflicts.isNotEmpty;
 
   String? get gdriveFolderId {
@@ -87,6 +96,10 @@ class SyncService {
   }
 
   Future<String?> resolveGDriveFolderId() async {
+    return _withAdapterOperation(_resolveGDriveFolderId);
+  }
+
+  Future<String?> _resolveGDriveFolderId() async {
     if (_provider != SyncProvider.gdrive) return null;
     final adapter = _adapter;
     if (adapter is GDriveAdapter) {
@@ -124,12 +137,18 @@ class SyncService {
     required CharacterDeletionStore characterDeletionStore,
     required Future<void> Function(LorebookActivations) saveLorebookActivations,
     Future<void> Function(Set<String>)? reconcilePulledSessions,
+    Future<String> Function(String)? diagnosticDownload,
+    CloudAdapter Function(SyncProvider)? selectAdapter,
   }) : _sessionDeletionStore = sessionDeletionStore,
        _characterDeletionStore = characterDeletionStore,
        _saveLorebookActivations = saveLorebookActivations,
-       _reconcilePulledSessions = reconcilePulledSessions;
+       _reconcilePulledSessions = reconcilePulledSessions,
+       _diagnosticDownload = diagnosticDownload,
+       _selectAdapter = selectAdapter;
 
   CloudAdapter get _adapter {
+    final selector = _selectAdapter;
+    if (selector != null) return selector(_provider);
     switch (_provider) {
       case SyncProvider.dropbox:
         return DropboxAdapter(_dropboxAuth);
@@ -200,6 +219,10 @@ class SyncService {
   );
 
   Future<void> init() async {
+    await _withAdapterOperation(_init);
+  }
+
+  Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
     final providerStr = prefs.getString('gz_sync_provider');
     if (providerStr == 'gdrive') _provider = SyncProvider.gdrive;
@@ -220,6 +243,10 @@ class SyncService {
   }
 
   Future<void> setProvider(SyncProvider p) async {
+    await _withAdapterOperation(() => _setProvider(p));
+  }
+
+  Future<void> _setProvider(SyncProvider p) async {
     _provider = p;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('gz_sync_provider', p.name);
@@ -313,6 +340,10 @@ class SyncService {
   }
 
   Future<void> wipeCloudData({void Function(SyncProgress)? onProgress}) async {
+    await _withAdapterOperation(() => _wipeCloudData(onProgress: onProgress));
+  }
+
+  Future<void> _wipeCloudData({void Function(SyncProgress)? onProgress}) async {
     if (_status == SyncStatus.syncing) return;
     await _withSyncForeground(() async {
       _status = SyncStatus.syncing;
@@ -334,6 +365,7 @@ class SyncService {
   }
 
   Future<void> resolveAllConflicts(String choice) async {
+    _rejectDuringDiagnosis();
     if (_conflicts.isEmpty) return;
     final conflicts = List<SyncConflict>.from(_conflicts);
     try {
@@ -475,18 +507,30 @@ class SyncService {
   }
 
   Future<void> connectDropbox() async {
+    await _withAdapterOperation(_connectDropbox);
+  }
+
+  Future<void> _connectDropbox() async {
     await _dropboxAuth.connect();
     await _saveTokens();
     _accountInfo = await _adapter.getAccountInfo();
   }
 
   Future<void> connectGDrive() async {
+    await _withAdapterOperation(_connectGDrive);
+  }
+
+  Future<void> _connectGDrive() async {
     await _gdriveAuth.connect();
     await _saveTokens();
     _accountInfo = await _adapter.getAccountInfo();
   }
 
   Future<void> disconnect() async {
+    await _withAdapterOperation(_disconnect);
+  }
+
+  Future<void> _disconnect() async {
     switch (_provider) {
       case SyncProvider.dropbox:
         await _dropboxAuth.disconnect();
@@ -505,6 +549,10 @@ class SyncService {
   }
 
   Future<void> setAutoSync(bool enabled, {int messageCount = 5}) async {
+    await _withAdapterOperation(() => _setAutoSync(enabled, messageCount));
+  }
+
+  Future<void> _setAutoSync(bool enabled, int messageCount) async {
     _autoSyncEnabled = enabled;
     _autoSyncMessageCount = messageCount;
     final prefs = await SharedPreferences.getInstance();
@@ -513,6 +561,7 @@ class SyncService {
   }
 
   Future<void> incrementMessageCounter() async {
+    if (_isDiagnosingConflicts) return;
     if (!_autoSyncEnabled) return;
     _messageCounter++;
     if (_messageCounter >= _autoSyncMessageCount) {
@@ -533,6 +582,57 @@ class SyncService {
         return _dropboxAuth.isConnected;
       case SyncProvider.gdrive:
         return _gdriveAuth.isConnected;
+    }
+  }
+
+  Future<T> _withAdapterOperation<T>(Future<T> Function() action) async {
+    if (_operationInProgress) {
+      throw StateError('Sync operation already in progress');
+    }
+    _operationInProgress = true;
+    try {
+      return await action();
+    } finally {
+      _operationInProgress = false;
+    }
+  }
+
+  void _rejectDuringDiagnosis() {
+    if (_isDiagnosingConflicts) {
+      throw StateError('Sync diagnostic operation already in progress');
+    }
+  }
+
+  /// No DB/manifest/preferences writes. Only the selected read-only capability
+  /// is allowed; unsupported adapters are refused before any local reads.
+  Future<SyncConflictDiagnosticReport> diagnoseConflicts(
+    List<SyncConflict> conflicts,
+  ) async {
+    if (_operationInProgress) {
+      throw StateError('Sync operation already in progress');
+    }
+    _operationInProgress = true;
+    _isDiagnosingConflicts = true;
+    try {
+      final downloader = SyncConflictDiagnosticDownload(_adapter);
+      if (!downloader.supported) {
+        return await SyncConflictDiagnostics(
+          readLocal: (_, _) => throw const SyncDiagnosticAdapterUnsupported(),
+          download: downloader.download,
+          adapterSupported: false,
+        ).diagnose(conflicts);
+      }
+      return await _engine.diagnoseConflicts(
+        conflicts,
+        diagnosticDownload: _diagnosticDownload ?? downloader.download,
+      );
+    } catch (_) {
+      return SyncConflictDiagnosticReport(
+        status: SyncDiagnosticStatus.unavailable,
+      );
+    } finally {
+      _isDiagnosingConflicts = false;
+      _operationInProgress = false;
     }
   }
 

@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../credentials/secret_redaction_patterns.dart';
+import '../../credentials/secret_redactor.dart';
 import 'chat_transport_request.dart';
 import 'llm_capture_context.dart';
 
@@ -52,6 +55,14 @@ class LlmRequestCapture {
   LlmRequestCapture._();
 
   static LlmRequestCaptureSink? sink;
+  static SecretRedactor? redactor;
+  static final SecretRedactor _defaultRedactor = SecretRedactor(
+    maxInputLength: _CaptureSanitizer._maxInspectionChars,
+    maxOutputLength: _CaptureSanitizer._maxInspectionChars * 2,
+    maxDepth: 32,
+    maxNodes: 4096,
+  );
+  static SecretRedactor get _activeRedactor => redactor ?? _defaultRedactor;
   static int _sequence = 0;
 
   static bool get hasSink => sink != null;
@@ -60,25 +71,35 @@ class LlmRequestCapture {
     ChatTransportRequest request, {
     String? protocol,
   }) {
-    final sanitized = sanitizeRequest(request);
+    final sanitizer = _CaptureSanitizer();
+    final sanitized = _sanitizeRequest(request, sanitizer);
+    final safeProtocol = protocol == null
+        ? null
+        : sanitizer.redactText(protocol);
+    final safeContext = _sanitizeContext(request.captureContext, sanitizer);
     return LlmRequestCaptureEvent(
       sequence: _sequence++,
       createdAt: DateTime.now().toUtc(),
-      protocol: protocol,
-      context: request.captureContext,
+      protocol: safeProtocol,
+      context: safeContext,
       request: sanitized.request,
-      truncated: sanitized.truncated,
+      truncated: sanitizer.truncated,
     );
   }
 
   /// Returns the same credential-free payload used by captures without
   /// allocating a capture sequence or dispatching diagnostics.
-  static SanitizedLlmRequest sanitizeRequest(ChatTransportRequest request) {
-    final sanitizer = _CaptureSanitizer();
+  static SanitizedLlmRequest sanitizeRequest(ChatTransportRequest request) =>
+      _sanitizeRequest(request, _CaptureSanitizer());
+
+  static SanitizedLlmRequest _sanitizeRequest(
+    ChatTransportRequest request,
+    _CaptureSanitizer sanitizer,
+  ) {
     return SanitizedLlmRequest(
       request: Map<String, dynamic>.unmodifiable({
-        'protocolEndpoint': _stripQuery(request.endpoint),
-        'model': request.model,
+        'protocolEndpoint': sanitizer.redactEndpoint(request.endpoint),
+        'model': sanitizer.sanitize(request.model),
         'stream': request.stream,
         'maxTokens': request.maxTokens,
         'temperature': request.omitTemperature ? null : request.temperature,
@@ -97,14 +118,17 @@ class LlmRequestCapture {
             ? null
             : request.reasoningEffort,
         'showNativeReasoning': request.showNativeReasoning,
-        'sessionId': request.sessionId,
+        'sessionId': request.sessionId == null
+            ? null
+            : sanitizer.sanitize(request.sessionId),
         'cacheControlTtl': request.cacheControlTtl,
         'cacheBreakpointMode': request.cacheBreakpointMode,
         'sessionIdMode': request.sessionIdMode,
         'messageCount': request.messages.length,
         'messages': sanitizer.sanitize(request.messages),
         if (request.tools != null) 'toolCount': request.tools!.length,
-        if (request.toolChoice != null) 'toolChoice': request.toolChoice,
+        if (request.toolChoice != null)
+          'toolChoice': sanitizer.sanitize(request.toolChoice),
       }),
       truncated: sanitizer.truncated,
     );
@@ -133,12 +157,10 @@ class LlmRequestCapture {
     if (!hasSink) return;
     final sanitizer = _CaptureSanitizer();
     final sanitizedMessages = sanitizer.sanitize(messages);
-    final event = LlmRequestCaptureEvent(
-      sequence: _sequence++,
-      createdAt: DateTime.now().toUtc(),
-      protocol: stage,
-      context:
-          context ??
+    final sanitizedParams = _sanitizeAuxiliaryParams(params, sanitizer);
+    final safeStage = sanitizer.redactText(stage);
+    final safeContext = _sanitizeContext(
+      context ??
           LlmCaptureContext(
             stage: stage,
             sessionId: sessionId,
@@ -146,77 +168,244 @@ class LlmRequestCapture {
             pipelineRunId: pipelineRunId,
             agentId: agentId,
           ),
+      sanitizer,
+    );
+    final event = LlmRequestCaptureEvent(
+      sequence: _sequence++,
+      createdAt: DateTime.now().toUtc(),
+      protocol: safeStage,
+      context: safeContext,
       request: Map<String, dynamic>.unmodifiable({
-        'protocolEndpoint': _stripQuery(endpoint),
-        'model': model,
+        ...sanitizedParams,
+        'protocolEndpoint': sanitizer.redactEndpoint(endpoint),
+        'model': sanitizer.sanitize(model),
         'messageCount': messages.length,
         'messages': sanitizedMessages,
-        ...params,
       }),
       truncated: sanitizer.truncated,
     );
     dispatch(event);
   }
 
+  static Map<String, dynamic> _sanitizeAuxiliaryParams(
+    Map<String, dynamic> params,
+    _CaptureSanitizer sanitizer,
+  ) {
+    if (params.isEmpty) return const {};
+    // The capture walk applies field/value/URL redaction before any fallback.
+    // A second whole-tree redactJson pass has smaller aggregate budgets than
+    // captures and can discard already-safe previews and normal diagnostics.
+    final preSanitized = sanitizer.sanitize(params);
+    if (preSanitized is Map<String, dynamic>) return preSanitized;
+    return const {};
+  }
+
   static void dispatch(LlmRequestCaptureEvent event) {
     final target = sink;
     if (target == null) return;
     try {
-      final result = target.record(event);
+      // Public construction cannot bypass the selected diagnostic metadata
+      // projection. The request retains its documented already-sanitized shape.
+      final sanitizer = _CaptureSanitizer();
+      final safeProtocol = event.protocol == null
+          ? null
+          : sanitizer.redactText(event.protocol!);
+      final safeContext = _sanitizeContext(event.context, sanitizer);
+      final result = target.record(
+        LlmRequestCaptureEvent(
+          sequence: event.sequence,
+          createdAt: event.createdAt,
+          protocol: safeProtocol,
+          context: safeContext,
+          request: event.request,
+          truncated: event.truncated || sanitizer.truncated,
+        ),
+      );
       if (result is Future<void>) {
         unawaited(
-          result.catchError((Object error) {
-            debugPrint('[LlmRequestCapture] sink failed: $error');
+          result.catchError((Object _) {
+            debugPrint('[LlmRequestCapture] sink failed (details omitted)');
           }),
         );
       }
-    } catch (error) {
-      debugPrint('[LlmRequestCapture] sink failed: $error');
+    } catch (_) {
+      debugPrint('[LlmRequestCapture] sink failed (details omitted)');
     }
   }
 
-  static String _stripQuery(String endpoint) {
-    final queryStart = endpoint.indexOf('?');
-    return queryStart < 0 ? endpoint : endpoint.substring(0, queryStart);
+  static LlmCaptureContext? _sanitizeContext(
+    LlmCaptureContext? context,
+    _CaptureSanitizer sanitizer,
+  ) {
+    if (context == null) return null;
+    String? text(String? value) =>
+        value == null ? null : sanitizer.redactText(value);
+    // Stable IDs are text values, not secret-named JSON fields. Preserve their
+    // join semantics unless their actual contents require redaction.
+    return LlmCaptureContext(
+      stage: sanitizer.redactText(context.stage),
+      sessionId: text(context.sessionId),
+      messageId: text(context.messageId),
+      pipelineRunId: text(context.pipelineRunId),
+      callId: text(context.callId),
+      parentCallId: text(context.parentCallId),
+      logicalCallId: text(context.logicalCallId),
+      relatedArtifactId: text(context.relatedArtifactId),
+      agentId: text(context.agentId),
+      stageOrdinal: context.stageOrdinal,
+      attempt: context.attempt,
+    );
   }
 }
 
 final class _CaptureSanitizer {
-  static const int _maxStringChars = 200000;
-  static const int _dataPreviewChars = 96;
+  _CaptureSanitizer([SecretRedactor? redactor])
+    : _redactor = _captureRedactor(
+        redactor ?? LlmRequestCapture._activeRedactor,
+      );
 
+  static SecretRedactor _captureRedactor(SecretRedactor source) {
+    if (identical(source, LlmRequestCapture._defaultRedactor)) return source;
+    // Extend only budgets, not secret visibility. Closed policies stay closed.
+    return source.withKnownSecrets(
+      const [],
+      maxInputLength: _maxInspectionChars,
+      maxOutputLength: _maxInspectionChars * 2,
+      maxDepth: _maxDepth,
+      maxNodes: _maxNodes,
+    );
+  }
+
+  static const int _maxStringChars = 200000;
+  static const int _maxInspectionChars = _maxStringChars * 2;
+  static const int _dataPreviewChars = 96;
+  static const int _maxDepth = 32;
+  static const int _maxNodes = 4096;
+  static final RegExp _defaultCandidatePattern = RegExp(
+    r'[:=?&]|bearer|basic|sk-|gh[pousr]_|github_pat_|aiza|hf_|eyj',
+    caseSensitive: false,
+  );
+  // Also cover fine-grained PATs when an older shared matcher is installed.
+  static final RegExp _githubPatPattern = RegExp(
+    r'\bgithub_pat_[A-Za-z0-9_]{22,}\b',
+  );
+  static final RegExp _querySecretPattern = RegExp(
+    r'''([?&](?:api[_-]?key|key|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|auth|password|passwd|sig|signature)=)([^&\s#"'\]]+)''',
+    caseSensitive: false,
+  );
+
+  final SecretRedactor _redactor;
+  final _visited = HashSet<Object>.identity();
+  var _nodes = 0;
   bool truncated = false;
 
-  dynamic sanitize(dynamic value) {
-    if (value is String) return _sanitizeString(value);
-    if (value is List) return List<dynamic>.unmodifiable(value.map(sanitize));
-    if (value is Map) {
-      return Map<String, dynamic>.unmodifiable({
-        for (final entry in value.entries)
-          entry.key.toString(): sanitize(entry.value),
-      });
+  String redactEndpoint(String value) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? '' : _redactor.redactUrl(trimmed);
+  }
+
+  dynamic sanitize(dynamic value, [int depth = 0]) {
+    if (++_nodes > _maxNodes || depth > _maxDepth) {
+      truncated = true;
+      return SecretRedactor.limited;
     }
-    if (value == null || value is num || value is bool) return value;
-    return value.toString();
+    if (value is String) return _sanitizeString(value);
+    if (value is Map || value is List) {
+      final container = value as Object;
+      if (!_visited.add(container)) {
+        truncated = true;
+        return SecretRedactor.limited;
+      }
+      try {
+        if (value is List) {
+          if (value.length > _maxNodes - _nodes) {
+            truncated = true;
+            return SecretRedactor.limited;
+          }
+          return List<dynamic>.unmodifiable(
+            value.map((item) => sanitize(item, depth + 1)),
+          );
+        }
+        final map = value as Map;
+        if (map.length > _maxNodes - _nodes) {
+          truncated = true;
+          return SecretRedactor.limited;
+        }
+        final safe = <String, dynamic>{};
+        for (final entry in map.entries) {
+          final key = entry.key;
+          if (key is! String) return SecretRedactor.removed;
+          final safeKey = redactText(key);
+          final field = entry.value;
+          if (SecretRedactor.isSecretField(key)) {
+            safe[safeKey] = SecretRedactor.removed;
+          } else if (SecretRedactionPatterns.isUrlField(key) &&
+              field is String &&
+              !field.startsWith('data:')) {
+            safe[safeKey] = _redactor.redactUrl(field);
+          } else {
+            safe[safeKey] = sanitize(field, depth + 1);
+          }
+        }
+        return Map<String, dynamic>.unmodifiable(safe);
+      } finally {
+        _visited.remove(container);
+      }
+    }
+    if (value == null || value is int || value is bool) return value;
+    if (value is double && value.isFinite) return value;
+    return SecretRedactor.removed;
   }
 
   dynamic _sanitizeString(String value) {
+    // Match against the complete bounded input BEFORE any visible cut. Neither
+    // chunk offsets nor finite lookahead can guarantee arbitrary known widths.
+    final redacted = redactText(value);
     if (value.startsWith('data:') && value.length > _dataPreviewChars) {
       truncated = true;
+      final prefix = redacted.length <= _dataPreviewChars
+          ? redacted
+          : redacted.substring(0, _dataPreviewChars);
       return <String, dynamic>{
         'kind': 'redacted_data_uri',
-        'prefix': value.substring(0, _dataPreviewChars),
+        'prefix': prefix,
         'charCount': value.length,
-        'sha256': sha256.convert(utf8.encode(value)).toString(),
+        // Never fingerprint unseen source bytes, which may contain secrets.
+        'sha256': sha256.convert(utf8.encode(prefix)).toString(),
       };
     }
-    if (value.length <= _maxStringChars) return value;
+    if (value.length <= _maxStringChars && redacted.length <= _maxStringChars) {
+      return redacted;
+    }
     truncated = true;
+    final preview = redacted.length <= _maxStringChars
+        ? redacted
+        : redacted.substring(0, _maxStringChars);
     return <String, dynamic>{
       'kind': 'truncated_text',
-      'text': value.substring(0, _maxStringChars),
+      'text': preview,
       'charCount': value.length,
-      'sha256': sha256.convert(utf8.encode(value)).toString(),
+      'sha256': sha256.convert(utf8.encode(preview)).toString(),
     };
+  }
+
+  String redactText(String value) {
+    if (value.length > _maxInspectionChars) {
+      truncated = true;
+      return SecretRedactor.limited;
+    }
+    if (value.isEmpty) return value;
+    if (identical(_redactor, LlmRequestCapture._defaultRedactor) &&
+        !_defaultCandidatePattern.hasMatch(value)) {
+      return value;
+    }
+    final redacted = _redactor.redactText(value);
+    if (redacted == SecretRedactor.limited) truncated = true;
+    return redacted
+        .replaceAll(_githubPatPattern, SecretRedactor.removed)
+        .replaceAllMapped(
+          _querySecretPattern,
+          (match) => '${match.group(1)}${SecretRedactor.removed}',
+        );
   }
 }

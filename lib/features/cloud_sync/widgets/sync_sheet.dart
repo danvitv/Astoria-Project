@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/utils/time_formatter.dart';
 import '../../../shared/widgets/glaze_error_dialog.dart';
+import '../../../shared/widgets/glaze_action_button.dart';
 import '../../../shared/widgets/glaze_toast.dart';
 import '../../../shared/widgets/sheet_view.dart';
 import '../../../shared/widgets/glaze_bottom_sheet.dart';
@@ -16,6 +17,7 @@ import '../services/sync_service.dart';
 import '../services/sync_controller.dart';
 import 'sync_icons.dart';
 import 'sync_sheet_widgets.dart';
+import 'sync_conflict_diagnostics_panel.dart';
 import 'package:easy_localization/easy_localization.dart';
 
 class SyncSheet extends ConsumerStatefulWidget {
@@ -27,6 +29,16 @@ class SyncSheet extends ConsumerStatefulWidget {
 
 class _SyncSheetState extends ConsumerState<SyncSheet> {
   late final SyncController _ctrl;
+  bool _diagnosticOpen = false;
+  bool _diagnosticBusy = false;
+  bool _closed = false;
+  int _diagnosticEpoch = 0;
+  int? _diagnosticReadEpoch;
+  Future<String> Function()? _diagnosticRunner;
+
+  bool get _diagnosticsLocked =>
+      _diagnosticBusy ||
+      (ref.read(syncServiceProvider).value?.isDiagnosingConflicts ?? false);
 
   @override
   void initState() {
@@ -55,7 +67,19 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
     final autoEnabled = ref.watch(syncAutoEnabledProvider);
     final service = ref.watch(syncServiceProvider).value;
 
-    final isSyncing = status == SyncStatus.syncing || _ctrl.isWiping;
+    final diagnosticBusy =
+        _diagnosticBusy || (service?.isDiagnosingConflicts ?? false);
+    final isSyncing =
+        status == SyncStatus.syncing || _ctrl.isWiping || diagnosticBusy;
+
+    if (_diagnosticOpen) {
+      return SyncConflictDiagnosticsPanel(
+        key: ValueKey(_diagnosticEpoch),
+        runner: _diagnosticRunner!,
+        syncBusy: status == SyncStatus.syncing || _ctrl.isWiping,
+        onBack: _goBack,
+      );
+    }
 
     return PopScope(
       canPop: false,
@@ -126,28 +150,37 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
                   const SizedBox(height: 16),
                   buildSyncSectionHeader(context, 'sync_manual'.tr()),
                   const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: buildSyncManualButton(
-                          context: context,
-                          onPressed: isSyncing ? null : () => _doSync('push'),
-                          icon: Icons.cloud_upload_outlined,
-                          label: 'sync_push'.tr(),
-                          primary: false,
+                  LayoutBuilder(
+                    builder: (context, constraints) => Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        SizedBox(
+                          width: constraints.maxWidth < 380
+                              ? constraints.maxWidth
+                              : (constraints.maxWidth - 10) / 2,
+                          child: buildSyncManualButton(
+                            context: context,
+                            onPressed: isSyncing ? null : () => _doSync('push'),
+                            icon: Icons.cloud_upload_outlined,
+                            label: 'sync_push'.tr(),
+                            primary: false,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: buildSyncManualButton(
-                          context: context,
-                          onPressed: isSyncing ? null : () => _doSync('pull'),
-                          icon: Icons.cloud_download_outlined,
-                          label: 'sync_pull'.tr(),
-                          primary: true,
+                        SizedBox(
+                          width: constraints.maxWidth < 380
+                              ? constraints.maxWidth
+                              : (constraints.maxWidth - 10) / 2,
+                          child: buildSyncManualButton(
+                            context: context,
+                            onPressed: isSyncing ? null : () => _doSync('pull'),
+                            icon: Icons.cloud_download_outlined,
+                            label: 'sync_pull'.tr(),
+                            primary: true,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 16),
                   buildSyncSectionHeader(context, 'section_sync_settings'.tr()),
@@ -165,7 +198,9 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
                   buildSyncDangerButton(
                     icon: Icons.logout_rounded,
                     label: 'sync_disconnect'.tr(),
-                    onPressed: _ctrl.isDisconnecting ? null : _disconnect,
+                    onPressed: _ctrl.isDisconnecting || diagnosticBusy
+                        ? null
+                        : _disconnect,
                   ),
                   const SizedBox(height: 8),
                   buildSyncDangerButton(
@@ -173,7 +208,9 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
                     label: _ctrl.isWiping
                         ? 'sync_wiping'.tr()
                         : 'sync_wipe_cloud'.tr(),
-                    onPressed: _ctrl.isWiping ? null : _wipeCloudData,
+                    onPressed: _ctrl.isWiping || diagnosticBusy
+                        ? null
+                        : _wipeCloudData,
                     light: true,
                   ),
                 ],
@@ -329,15 +366,28 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
                 size: 20,
               ),
               const SizedBox(width: 8),
-              Text(
-                "${'sync_conflicts_title'.tr()} (${conflicts.length})",
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.orangeAccent,
+              Expanded(
+                child: Text(
+                  "${'sync_conflicts_title'.tr()} (${conflicts.length})",
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orangeAccent,
+                  ),
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 10),
+          GlazeActionButton(
+            key: const Key('sync-conflict-diagnostics-open'),
+            icon: Icons.fact_check_outlined,
+            label: 'sync_diagnostics_title'.tr(),
+            onTap: isSyncing || _ctrl.isDisconnecting
+                ? null
+                : () => _openDiagnostics(conflicts),
+            busy: _diagnosticBusy,
+            expand: true,
           ),
           const SizedBox(height: 10),
           Row(
@@ -415,9 +465,8 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
     SyncService? service,
   ) {
     return GestureDetector(
-      onTap: () {
-        _setAutoSync(!autoEnabled);
-      },
+      key: const Key('sync-auto-setting'),
+      onTap: _diagnosticsLocked ? null : () => _setAutoSync(!autoEnabled),
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 8),
         color: Colors.transparent,
@@ -448,7 +497,7 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
             ),
             Switch(
               value: autoEnabled,
-              onChanged: _setAutoSync,
+              onChanged: _diagnosticsLocked ? null : _setAutoSync,
               activeThumbColor: context.colors.accent,
             ),
           ],
@@ -469,7 +518,7 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
           const SizedBox(width: 8),
           buildSyncCountButton(
             icon: Icons.remove,
-            onPressed: service.autoSyncMessageCount > 1
+            onPressed: !_diagnosticsLocked && service.autoSyncMessageCount > 1
                 ? () =>
                       _updateAutoSyncThreshold(service.autoSyncMessageCount - 1)
                 : null,
@@ -488,15 +537,20 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
           ),
           buildSyncCountButton(
             icon: Icons.add,
-            onPressed: service.autoSyncMessageCount < 50
+            onPressed: !_diagnosticsLocked && service.autoSyncMessageCount < 50
                 ? () =>
                       _updateAutoSyncThreshold(service.autoSyncMessageCount + 1)
                 : null,
           ),
           const SizedBox(width: 8),
-          Text(
-            ' ${'sync_messages'.tr()}',
-            style: TextStyle(fontSize: 14, color: context.cs.onSurfaceVariant),
+          Expanded(
+            child: Text(
+              ' ${'sync_messages'.tr()}',
+              style: TextStyle(
+                fontSize: 14,
+                color: context.cs.onSurfaceVariant,
+              ),
+            ),
           ),
         ],
       ),
@@ -505,9 +559,10 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
 
   Widget _buildIncludeApiKeysToggle(BuildContext context) {
     return GestureDetector(
-      onTap: () {
-        _setIncludeApiKeys(!_ctrl.syncIncludeApiKeys);
-      },
+      key: const Key('sync-include-keys-setting'),
+      onTap: _diagnosticsLocked
+          ? null
+          : () => _setIncludeApiKeys(!_ctrl.syncIncludeApiKeys),
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 8),
         color: Colors.transparent,
@@ -538,7 +593,7 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
             ),
             Switch(
               value: _ctrl.syncIncludeApiKeys,
-              onChanged: _setIncludeApiKeys,
+              onChanged: _diagnosticsLocked ? null : _setIncludeApiKeys,
               activeThumbColor: context.colors.accent,
             ),
           ],
@@ -548,11 +603,75 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
   }
 
   void _goBack() {
+    if (_diagnosticOpen) {
+      setState(() {
+        _diagnosticOpen = false;
+        _diagnosticRunner = null;
+        _diagnosticEpoch++;
+      });
+      return;
+    }
+    _closed = true;
+    _diagnosticEpoch++;
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     } else {
       context.go('/menu');
     }
+  }
+
+  void _openDiagnostics(List<SyncConflict> conflicts) {
+    final service = ref.read(syncServiceProvider).value;
+    if (_closed ||
+        _diagnosticOpen ||
+        _diagnosticsLocked ||
+        service == null ||
+        service.isSyncing ||
+        _ctrl.isWiping ||
+        _ctrl.isDisconnecting) {
+      return;
+    }
+    final snapshot = List<SyncConflict>.unmodifiable(conflicts);
+    final epoch = ++_diagnosticEpoch;
+    setState(() {
+      _diagnosticOpen = true;
+      _diagnosticRunner = () async {
+        if (!mounted ||
+            _closed ||
+            !_diagnosticOpen ||
+            epoch != _diagnosticEpoch ||
+            _diagnosticBusy ||
+            service.isDiagnosingConflicts ||
+            service.isSyncing ||
+            _ctrl.isWiping ||
+            _ctrl.isDisconnecting) {
+          throw StateError('Diagnostics unavailable');
+        }
+        setState(() {
+          _diagnosticBusy = true;
+          _diagnosticReadEpoch = epoch;
+        });
+        try {
+          final report = await service.diagnoseConflicts(snapshot);
+          // Only the panel owning this epoch may display the safe result.
+          if (!mounted ||
+              _closed ||
+              !_diagnosticOpen ||
+              epoch != _diagnosticEpoch) {
+            return '';
+          }
+          return report.toSafeText();
+        } finally {
+          // Keep controls locked even if the panel closes before the read ends.
+          if (mounted && !_closed && _diagnosticReadEpoch == epoch) {
+            setState(() {
+              _diagnosticBusy = false;
+              _diagnosticReadEpoch = null;
+            });
+          }
+        }
+      };
+    });
   }
 
   String _getStatusLabel(SyncStatus status, SyncService? service) {
@@ -589,6 +708,7 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
   }
 
   Future<void> _disconnect() async {
+    if (_diagnosticsLocked) return;
     final confirmed = await GlazeBottomSheet.show<bool>(
       context,
       title: 'sync_disconnect'.tr(),
@@ -611,7 +731,7 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
       ],
     );
 
-    if (confirmed != true) return;
+    if (!mounted || confirmed != true || _diagnosticsLocked) return;
 
     setState(() {});
     final error = await _ctrl.disconnect();
@@ -622,6 +742,7 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
   }
 
   Future<void> _wipeCloudData() async {
+    if (_diagnosticsLocked) return;
     final service = ref.read(syncServiceProvider).value;
     if (service == null) return;
 
@@ -651,7 +772,7 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
       ],
     );
 
-    if (confirmed != true) return;
+    if (!mounted || confirmed != true || _diagnosticsLocked) return;
 
     if (!mounted) return;
     await GlazeBottomSheet.show<void>(
@@ -665,6 +786,7 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
         placeholder: providerLabel,
         confirmLabel: 'btn_ok'.tr(),
         onConfirm: (typed) async {
+          if (!mounted || _diagnosticsLocked) return;
           if (typed.trim().toLowerCase() != providerLabel.toLowerCase()) {
             if (context.mounted) {
               GlazeErrorDialog.show(
@@ -703,6 +825,7 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
   }
 
   Future<void> _doSync(String mode) async {
+    if (_diagnosticsLocked) return;
     setState(() {});
     final result = await _ctrl.doSync(mode);
     if (mounted) {
@@ -718,6 +841,7 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
   }
 
   Future<void> _resolveConflict(SyncConflict conflict, String choice) async {
+    if (_diagnosticsLocked) return;
     final result = await _ctrl.resolveConflict(conflict, choice);
     if (mounted && result != null) {
       if (result.startsWith('Could not')) {
@@ -729,6 +853,7 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
   }
 
   Future<void> _resolveAllConflicts(String choice) async {
+    if (_diagnosticsLocked) return;
     final result = await _ctrl.resolveAllConflicts(choice);
     if (mounted && result != null) {
       if (result.startsWith('Could not')) {
@@ -740,17 +865,28 @@ class _SyncSheetState extends ConsumerState<SyncSheet> {
   }
 
   void _setAutoSync(bool val) async {
-    await _ctrl.setAutoSync(val);
+    if (!mounted || _closed || _diagnosticsLocked) return;
+    // Capture provider owners before awaiting; the host may close meanwhile.
+    final service = ref.read(syncServiceProvider).value;
+    if (service == null) return;
+    final autoEnabled = ref.read(syncAutoEnabledProvider.notifier);
+    await service.setAutoSync(val, messageCount: service.autoSyncMessageCount);
+    if (!mounted || _closed) return;
+    autoEnabled.state = val;
   }
 
   void _updateAutoSyncThreshold(int count) async {
-    await _ctrl.updateAutoSyncThreshold(count);
-    if (mounted) setState(() {});
+    if (!mounted || _closed || _diagnosticsLocked) return;
+    final controller = _ctrl;
+    await controller.updateAutoSyncThreshold(count);
+    if (mounted && !_closed) setState(() {});
   }
 
   void _setIncludeApiKeys(bool val) async {
-    await _ctrl.setIncludeApiKeys(val);
-    if (mounted) setState(() {});
+    if (!mounted || _closed || _diagnosticsLocked) return;
+    final controller = _ctrl;
+    await controller.setIncludeApiKeys(val);
+    if (mounted && !_closed) setState(() {});
   }
 }
 

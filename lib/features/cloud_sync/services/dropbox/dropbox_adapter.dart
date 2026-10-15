@@ -5,13 +5,18 @@ import 'package:dio/dio.dart';
 
 import '../../../../core/constants/build_channel.dart';
 import '../../cloud_adapter.dart';
+import '../../cloud_read_only_adapter.dart';
 import '../../sync_models.dart';
 import 'dropbox_auth.dart';
 
-class DropboxAdapter implements CloudAdapter {
+class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
   static const _apiBase = 'https://api.dropboxapi.com/2';
   static const _contentBase = 'https://content.dropboxapi.com/2';
   static const _deleteBatchPolls = 30;
+  static final _readOnlyPath = RegExp(
+    '${RegExp.escape(cloudBase)}/'
+    r'(characters|character_knowledge|memory_graphs)/[A-Za-z0-9_-]+\.json',
+  );
 
   // Dropbox hands the app its own App folder as the API root, so the app root
   // itself collapses to '' — that is why paths are stripped rather than used
@@ -228,6 +233,42 @@ class DropboxAdapter implements CloudAdapter {
         throw CloudFileNotFoundException(path);
       }
       rethrow;
+    }
+  }
+
+  @override
+  Future<String> downloadReadOnly(String path) async {
+    final match = _readOnlyPath.matchAsPrefix(path);
+    if (match == null || match.end != path.length) {
+      throw const CloudReadOnlyDownloadException(
+        CloudReadOnlyDownloadStatus.invalidPath,
+      );
+    }
+    final token = _auth.requireExistingTokenForReadOnlyDownload();
+    try {
+      final response = await _dio.post<String>(
+        '$_contentBase/files/download',
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Dropbox-API-Arg': jsonEncode({'path': _stripPrefix(path)}),
+          },
+          responseType: ResponseType.plain,
+          followRedirects: false,
+          validateStatus: (status) => status == 200,
+        ),
+      );
+      return response.data ?? '';
+    } on DioException catch (error) {
+      throw CloudReadOnlyDownloadException(switch (error.response?.statusCode) {
+        401 => CloudReadOnlyDownloadStatus.reauthenticate,
+        409 => CloudReadOnlyDownloadStatus.missing,
+        _ => CloudReadOnlyDownloadStatus.unreadable,
+      });
+    } catch (_) {
+      throw const CloudReadOnlyDownloadException(
+        CloudReadOnlyDownloadStatus.unreadable,
+      );
     }
   }
 

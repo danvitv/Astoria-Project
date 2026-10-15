@@ -28,6 +28,7 @@ part 'migrations/upgrade_v132.dart';
 part 'migrations/upgrade_v133.dart';
 part 'migrations/upgrade_v134.dart';
 part 'migrations/upgrade_v135.dart';
+part 'migrations/upgrade_v137.dart';
 
 @DriftDatabase(
   tables: [
@@ -87,6 +88,11 @@ part 'migrations/upgrade_v135.dart';
     CanonTransitionFactRefs,
     ExtensionPresets,
     InfoBlocks,
+    SupportSessions,
+    SupportMessages,
+    SupportContextBlocks,
+    SupportMutationJournal,
+    SupportReports,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -95,7 +101,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 136;
+  int get schemaVersion => 137;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -129,6 +135,7 @@ class AppDatabase extends _$AppDatabase {
       await _upgradeV133(m, from);
       await _upgradeV134(m, from);
       await _upgradeV135(m, from);
+      await _upgradeV137(m, from);
       // Local v136 repairs missing indexes/triggers and replaces the request
       // capture trigger. Only install current-schema integrity after all
       // historical table rebuilds and data normalization have finished.

@@ -17,9 +17,13 @@ import 'desktop_glossary_popup.dart';
 import 'desktop_layout_provider.dart';
 import 'desktop_left_sidebar.dart';
 import 'desktop_right_sidebar.dart';
+import 'desktop_sidebar_surface.dart';
 import 'desktop_window_view.dart';
+import 'sidebar_drag_handle.dart';
 import 'sidebar_resizer.dart';
 import 'sidebar_sheet_provider.dart';
+import '../../../features/support_assistant/widgets/support_sessions_panel.dart';
+import '../../../features/support_assistant/widgets/support_settings_panel.dart';
 
 class DesktopShell extends ConsumerStatefulWidget {
   final Widget child;
@@ -121,9 +125,16 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
         return 'tools';
       case 'menu':
         return 'menu';
+      case 'support':
+        return 'support';
       default:
         return '';
     }
+  }
+
+  bool _isSupportRoute(BuildContext context) {
+    final path = GoRouterState.of(context).uri.path;
+    return path == '/support' || path.startsWith('/support/');
   }
 
   /// Escape closes the topmost desktop overlay, innermost first.
@@ -203,6 +214,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     bool hasPanel,
   ) {
     final widths = _fitSidebars(availableWidth, hasPanel);
+    final isSupport = _isSupportRoute(context);
     return Focus(
       autofocus: true,
       canRequestFocus: false,
@@ -214,10 +226,13 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
             children: [
               Row(
                 children: [
-                  DesktopLeftSidebar(
-                    currentView: _currentView(context),
-                    width: widths.left,
-                  ),
+                  if (isSupport)
+                    _buildSupportLeftSidebar(widths.left)
+                  else
+                    DesktopLeftSidebar(
+                      currentView: _currentView(context),
+                      width: widths.left,
+                    ),
                   Expanded(
                     child: RepaintBoundary(
                       child: Stack(
@@ -233,13 +248,66 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
                       ),
                     ),
                   ),
-                  DesktopRightSidebar(width: widths.right),
+                  if (isSupport)
+                    _buildSupportRightSidebar(widths.right)
+                  else
+                    DesktopRightSidebar(width: widths.right),
                 ],
               ),
               // Floating window overlay
               const DesktopWindowView(),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSupportLeftSidebar(double width) {
+    final collapsed = width < kSidebarCollapseThreshold;
+    return ListenableBuilder(
+      listenable: _leftController,
+      builder: (context, _) => DesktopSidebarSurface(
+        width: width,
+        edge: SidebarEdge.left,
+        animate: !_leftController.dragging,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: SupportSessionsPanel(collapsed: collapsed),
+            ),
+            Positioned(
+              top: 0,
+              bottom: 0,
+              right: -SidebarDragHandle.width / 2,
+              child: SidebarDragHandle.left(leftController: _leftController),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSupportRightSidebar(double width) {
+    final collapsed = width < kSidebarCollapseThreshold;
+    return ListenableBuilder(
+      listenable: _rightController,
+      builder: (context, _) => DesktopSidebarSurface(
+        width: width,
+        edge: SidebarEdge.right,
+        animate: !_rightController.dragging,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: SupportSettingsPanel(collapsed: collapsed),
+            ),
+            Positioned(
+              top: 0,
+              bottom: 0,
+              left: -SidebarDragHandle.width / 2,
+              child: SidebarDragHandle.right(rightController: _rightController),
+            ),
+          ],
         ),
       ),
     );

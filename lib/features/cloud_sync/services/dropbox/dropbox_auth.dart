@@ -9,8 +9,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/services/deep_link_service.dart';
 import '../../../../core/services/oauth_state.dart';
-import '../oauth_local_server.dart';
+import '../../cloud_read_only_adapter.dart';
 import '../../sync_config.dart';
+import '../oauth_local_server.dart';
 
 class DropboxAuth {
   static const _authBase = 'https://www.dropbox.com/oauth2/authorize';
@@ -140,6 +141,22 @@ class DropboxAuth {
     _expiresAt = DateTime.now().millisecondsSinceEpoch + expiresIn * 1000;
     _accountId = body['account_id'] as String?;
     _uid = body['uid'] as String?;
+  }
+
+  /// Trusted HTTP transport only: never forward this credential to diagnostics.
+  /// Checks the current in-memory token synchronously, without refresh or I/O.
+  String requireExistingTokenForReadOnlyDownload() {
+    final token = _accessToken;
+    final expiresAt = _expiresAt;
+    if (token == null ||
+        token.isEmpty ||
+        expiresAt == null ||
+        DateTime.now().millisecondsSinceEpoch >= expiresAt) {
+      throw const CloudReadOnlyDownloadException(
+        CloudReadOnlyDownloadStatus.reauthenticate,
+      );
+    }
+    return token;
   }
 
   Future<String> getValidToken() async {

@@ -51,6 +51,7 @@ import '../db/repositories/extension_presets_repository.dart';
 import '../db/repositories/info_blocks_repository.dart';
 import '../db/repositories/session_deletion_repo.dart';
 import '../db/repositories/character_deletion_repo.dart';
+import '../db/repositories/support_repo.dart';
 import '../models/memory_book.dart';
 import '../llm/transport/llm_request_capture.dart';
 import '../llm/transport/llm_call_event.dart';
@@ -59,6 +60,8 @@ import '../services/image_storage_service.dart';
 import '../services/migration_service.dart';
 import '../services/card_rewriter/effective_canon_context_loader.dart';
 import '../services/card_rewriter/effective_canon_read_repository.dart';
+import '../support/support_payload_cipher.dart';
+import 'credential_vault_provider.dart';
 import 'studio_feature_provider.dart';
 
 // Re-export so existing call sites that `import db_provider.dart` can still
@@ -164,7 +167,22 @@ final presetsListProvider = FutureProvider<List<Preset>>((ref) {
 });
 
 final apiConfigRepoProvider = Provider<ApiConfigRepo>((ref) {
-  return ApiConfigRepo(ref.watch(appDbProvider));
+  final adapter = ref.watch(apiConfigCredentialAdapterProvider);
+  return ApiConfigRepo(
+    ref.watch(appDbProvider),
+    onConfigObserved: adapter.registerConfigSecrets,
+  );
+});
+
+final supportPayloadCipherProvider = Provider<SupportPayloadCipher>((ref) {
+  return SupportPayloadCipher(vault: ref.watch(credentialVaultProvider));
+});
+
+final supportRepoProvider = Provider<SupportRepo>((ref) {
+  return SupportRepo(
+    ref.watch(appDbProvider),
+    ref.watch(supportPayloadCipherProvider),
+  );
 });
 
 final personaRepoProvider = Provider<PersonaRepo>((ref) {

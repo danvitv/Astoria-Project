@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../core/constants/support_assistant_availability.dart';
 import '../../../core/models/character.dart';
 import '../../../core/models/character_folder.dart';
 import '../../../core/state/character_folder_provider.dart';
@@ -26,10 +28,14 @@ import '../../../shared/widgets/folder_name_dialog.dart';
 /// `fav` flag, so it can't be renamed, deleted, or hidden, and membership is
 /// only changed via the per-character favorite/unfavorite actions.
 class CharacterFoldersSection extends ConsumerWidget {
+  static const Key astoriaLauncherKey = ValueKey('astoria_assistant_launcher');
+
   final ValueChanged<String> onOpenFolder;
   final bool showOurPicks;
   final VoidCallback? onOpenPicks;
   final VoidCallback? onHidePicks;
+  final bool showAstoriaAssistant;
+  final VoidCallback? onOpenAstoriaAssistant;
   final bool showFavorites;
   final VoidCallback? onOpenFavorites;
 
@@ -39,6 +45,8 @@ class CharacterFoldersSection extends ConsumerWidget {
     this.showOurPicks = false,
     this.onOpenPicks,
     this.onHidePicks,
+    this.showAstoriaAssistant = supportAssistantWorkspaceEnabled,
+    this.onOpenAstoriaAssistant,
     this.showFavorites = false,
     this.onOpenFavorites,
   });
@@ -46,7 +54,10 @@ class CharacterFoldersSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final folders = ref.watch(characterFoldersProvider).value ?? const [];
-    if (folders.isEmpty && !showOurPicks && !showFavorites) {
+    if (folders.isEmpty &&
+        !showOurPicks &&
+        !showAstoriaAssistant &&
+        !showFavorites) {
       return const SizedBox.shrink();
     }
 
@@ -62,14 +73,18 @@ class CharacterFoldersSection extends ConsumerWidget {
         .toList();
 
     final tiles = <Widget>[
-      // Our Picks always leads the row, ahead of Favorites and real folders.
+      // Order: Our Picks → Astoria Assistant → Favorites → user folders.
       if (showOurPicks)
         _OurPicksCircle(
           onTap: () => onOpenPicks?.call(),
           onLongPress: () => _picksActions(context),
         ),
-      if (showFavorites)
-        _FavoritesCircle(onTap: () => onOpenFavorites?.call()),
+      if (showAstoriaAssistant)
+        _AstoriaAssistantCircle(
+          key: astoriaLauncherKey,
+          onTap: onOpenAstoriaAssistant ?? () => context.go('/support'),
+        ),
+      if (showFavorites) _FavoritesCircle(onTap: () => onOpenFavorites?.call()),
       for (final folder in folders)
         _FolderCircle(
           folder: folder,
@@ -80,7 +95,7 @@ class CharacterFoldersSection extends ConsumerWidget {
     ];
 
     return SizedBox(
-      height: 104,
+      height: 116,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
@@ -349,6 +364,93 @@ class _OurPicksCircle extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: context.cs.onSurface,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Circular launcher for the native Astoria Assistant support workspace.
+class _AstoriaAssistantCircle extends StatelessWidget {
+  static const double _diameter = 64;
+
+  final VoidCallback onTap;
+
+  const _AstoriaAssistantCircle({super.key, required this.onTap});
+
+  String _caption(BuildContext context) {
+    final easyLocale = EasyLocalization.of(context)?.locale;
+    if (easyLocale != null) {
+      return easyLocale.languageCode == 'en'
+          ? 'Astoria Assistant'
+          : 'Астория Ассистент';
+    }
+    final locale = Localizations.maybeLocaleOf(context);
+    if (locale != null &&
+        locale.languageCode == 'en' &&
+        (locale.countryCode == null || locale.countryCode!.isEmpty)) {
+      return 'Astoria Assistant';
+    }
+    return 'Астория Ассистент';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: SizedBox(
+        width: 72,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: _diameter,
+              height: _diameter,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: context.cs.surfaceContainerHighest,
+                border: Border.all(
+                  color: context.cs.primary.withValues(alpha: 0.45),
+                  width: 2,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.2),
+                    blurRadius: 6,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: ClipOval(
+                child: Image.asset(
+                  'assets/logos/astoria-sticker.png',
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => Image.asset(
+                    'assets/logos/astoria.png',
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => Icon(
+                      Icons.support_agent_rounded,
+                      size: 28,
+                      color: context.cs.primary,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              _caption(context),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                height: 1.15,
                 fontWeight: FontWeight.w600,
                 color: context.cs.onSurface,
               ),

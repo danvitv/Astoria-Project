@@ -10,6 +10,7 @@ import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
 import 'package:go_router/go_router.dart';
 
+import '../../core/constants/support_assistant_availability.dart';
 import '../../core/db/repositories/character_repo.dart';
 import '../../core/services/character_export_helper.dart';
 import '../../core/services/character_bulk_import_service.dart';
@@ -23,6 +24,7 @@ import '../../shared/shell/shell_header_provider.dart';
 import '../../shared/theme/app_colors.dart';
 import '../../shared/widgets/glass_surface.dart';
 import '../../shared/widgets/glaze_bottom_sheet.dart';
+import '../../shared/widgets/glaze_scaffold.dart' show GlazePillButton;
 import '../../shared/widgets/glaze_spinner.dart';
 import '../../shared/widgets/glaze_tab_bar.dart';
 import '../../shared/widgets/swipe_tab_switcher.dart';
@@ -438,7 +440,10 @@ class _CharacterListScreenState extends ConsumerState<CharacterListScreen>
     // Selecting Chub's Timeline feed locks the query out. If it lands while the
     // Discover search is open, close it; either way republish the header so the
     // loupe disables in step.
-    ref.listen(catalogProvider.select((s) => s.chubTimelineActive), (_, active) {
+    ref.listen(catalogProvider.select((s) => s.chubTimelineActive), (
+      _,
+      active,
+    ) {
       if (active && _tabIndex == 1 && _searchExpanded) {
         _closeSearch();
       } else {
@@ -649,7 +654,15 @@ class _CharacterListScreenState extends ConsumerState<CharacterListScreen>
           return CustomScrollView(
             slivers: [
               SliverToBoxAdapter(child: SizedBox(height: topPad)),
+              SliverToBoxAdapter(
+                child: _buildFoldersSection(
+                  context,
+                  showOurPicks: showOurPicks,
+                  showFavorites: showFavorites,
+                ),
+              ),
               SliverFillRemaining(
+                hasScrollBody: false,
                 child: EmptyCharacterState(
                   onImport: () => _importCharacter(context, ref),
                 ),
@@ -680,33 +693,10 @@ class _CharacterListScreenState extends ConsumerState<CharacterListScreen>
             // full unfiltered library instead of just the rendered cards.
             randomPool: () => ref.read(filteredCharactersProvider(_query())),
             headerSliver: SliverToBoxAdapter(
-              child: CharacterFoldersSection(
-                onOpenFolder: (id) {
-                  _showHeader();
-                  setState(() => _currentFolderId = id);
-                  refreshShellHeader();
-                },
-                showFavorites: showFavorites,
-                onOpenFavorites: () {
-                  _showHeader();
-                  setState(() => _currentFolderId = kFavoritesFolderId);
-                  refreshShellHeader();
-                },
+              child: _buildFoldersSection(
+                context,
                 showOurPicks: showOurPicks,
-                onOpenPicks: () {
-                  _showHeader();
-                  setState(() => _currentFolderId = kPicksFolderId);
-                  refreshShellHeader();
-                },
-                onHidePicks: () {
-                  final s = ref.read(appSettingsProvider).value;
-                  if (s != null) {
-                    ref
-                        .read(appSettingsProvider.notifier)
-                        .save(s.copyWith(showOurPicks: false));
-                    GlazeToast.show(context, 'our_picks_hidden_toast'.tr());
-                  }
-                },
+                showFavorites: showFavorites,
               ),
             ),
             onSortDirToggle: () => setState(() {
@@ -717,6 +707,43 @@ class _CharacterListScreenState extends ConsumerState<CharacterListScreen>
             hasMore: state.hasMore,
           ),
         );
+      },
+    );
+  }
+
+  Widget _buildFoldersSection(
+    BuildContext context, {
+    required bool showOurPicks,
+    required bool showFavorites,
+  }) {
+    return CharacterFoldersSection(
+      onOpenFolder: (id) {
+        _showHeader();
+        setState(() => _currentFolderId = id);
+        refreshShellHeader();
+      },
+      showAstoriaAssistant: supportAssistantWorkspaceEnabled,
+      onOpenAstoriaAssistant: () => context.go('/support'),
+      showFavorites: showFavorites,
+      onOpenFavorites: () {
+        _showHeader();
+        setState(() => _currentFolderId = kFavoritesFolderId);
+        refreshShellHeader();
+      },
+      showOurPicks: showOurPicks,
+      onOpenPicks: () {
+        _showHeader();
+        setState(() => _currentFolderId = kPicksFolderId);
+        refreshShellHeader();
+      },
+      onHidePicks: () {
+        final s = ref.read(appSettingsProvider).value;
+        if (s != null) {
+          ref
+              .read(appSettingsProvider.notifier)
+              .save(s.copyWith(showOurPicks: false));
+          GlazeToast.show(context, 'our_picks_hidden_toast'.tr());
+        }
       },
     );
   }
@@ -780,6 +807,14 @@ class _CharacterListScreenState extends ConsumerState<CharacterListScreen>
                             ),
                           ),
                         ),
+                      if (supportAssistantWorkspaceEnabled) ...[
+                        const SizedBox(height: 12),
+                        GlazePillButton(
+                          icon: Icons.support_agent_rounded,
+                          label: 'Астория Ассистент',
+                          onTap: () => context.go('/support'),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -796,6 +831,13 @@ class _CharacterListScreenState extends ConsumerState<CharacterListScreen>
           bottomPadding: navHeight + 20,
           filterCount: _filters.activeCount,
           onFilterTap: () => _showCharacterFilterSheet(context),
+          headerSliver: SliverToBoxAdapter(
+            child: _buildFoldersSection(
+              context,
+              showOurPicks: false,
+              showFavorites: false,
+            ),
+          ),
           onSortDirToggle: () => setState(() {
             _sortDir = _sortDir == SortDir.asc ? SortDir.desc : SortDir.asc;
           }),
@@ -1188,7 +1230,11 @@ class _CharacterListScreenState extends ConsumerState<CharacterListScreen>
     String? lastError;
     for (final c in chars) {
       try {
-        final path = await exportCharacterToFile(ref: ref, character: c, format: format);
+        final path = await exportCharacterToFile(
+          ref: ref,
+          character: c,
+          format: format,
+        );
         // Empty path = the user cancelled the save dialog — stop the loop
         // instead of counting the file as exported (or re-prompting).
         if (path.isEmpty) break;

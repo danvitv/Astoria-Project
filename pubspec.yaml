@@ -21,6 +21,8 @@ dependencies:
   collection: ^1.18.0
   path: ^1.9.0
   shared_preferences: ^2.3.0
+  flutter_secure_storage: ^10.3.4
+  cryptography: ^2.9.0
   gpt_markdown: ^1.1.6
   url_launcher: ^6.3.0
   archive: ^4.0.0

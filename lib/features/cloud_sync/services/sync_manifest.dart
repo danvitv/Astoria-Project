@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../settings/app_settings_provider.dart';
 import 'sync_serialization.dart';
+import 'sync_character_hash.dart';
 import '../sync_models.dart';
 import '../sync_repo_interfaces.dart';
 
@@ -88,11 +89,14 @@ class SyncManifestBuilder implements SyncManifestProvider {
     final entries = <String, SyncManifestEntry>{};
 
     final previous = await readLocalManifest();
+    final characterAcceptedHashes = <String, String>{};
 
     final characters = await _characterRepo.getAll();
     for (final c in characters) {
       final json = c.toJson();
-      final hash = SyncSerialization.computeSyncHash(_normalizeForHash(json));
+      final size = SyncCharacterHash.avatarSize(json, _imageStore);
+      final hash = SyncCharacterHash.compute(json, size);
+      final legacyHash = SyncCharacterHash.compute(json, size, legacy: true);
       final key = entryKey('character', c.id);
       final prevEntry = previous.entries[key];
       final cloudEntry = cloudManifest?.entries[key];
@@ -102,7 +106,35 @@ class SyncManifestBuilder implements SyncManifestProvider {
         cloudEntry: cloudEntry,
         now: now,
       );
-      if (c.updatedAt > updatedAt) updatedAt = c.updatedAt;
+      final acceptedHash = previous.acceptedLocalHashes[key];
+      // Legacy Character.toJson() contains GalleryEntry objects, which the old
+      // normalizer skipped. A nonempty gallery needs payload-level proof.
+      final legacyBaseline = c.gallery.isNotEmpty
+          ? null
+          : cloudEntry != null &&
+                !cloudEntry.deleted &&
+                cloudEntry.hash == legacyHash
+          ? cloudEntry
+          : prevEntry != null &&
+                !prevEntry.deleted &&
+                (prevEntry.hash == legacyHash || acceptedHash == legacyHash)
+          ? prevEntry
+          : null;
+      if (legacyBaseline != null) {
+        updatedAt = legacyBaseline.updatedAt;
+        if (applyAcceptedHashes) {
+          entries[key] = legacyBaseline;
+          characterAcceptedHashes[key] = hash;
+          continue;
+        }
+      } else if (hash != prevEntry?.hash &&
+          hash != cloudEntry?.hash &&
+          hash != acceptedHash) {
+        updatedAt = max(
+          updatedAt,
+          SyncCharacterHash.timestampMillis(c.updatedAt),
+        );
+      }
 
       entries[key] = SyncManifestEntry(
         type: 'character',
@@ -542,7 +574,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
     await _addSingletons(entries, previous, now, cloudManifest);
     await _addDeletedEntries(entries, now);
 
-    final acceptedLocalHashes = <String, String>{};
+    final acceptedLocalHashes = <String, String>{...characterAcceptedHashes};
     if (applyAcceptedHashes) {
       for (final accepted in previous.acceptedLocalHashes.entries) {
         if (previous.needsReconciliationRestore(accepted.key)) continue;
