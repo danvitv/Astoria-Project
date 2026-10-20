@@ -1011,6 +1011,10 @@ class CharacterKnowledgeFactRepo {
   }
 
   CharacterKnowledgeFact _fromRow(CharacterKnowledgeFactRow row) =>
+      fromRow(row);
+
+  /// Decode both live rows and immutable reconciliation effect rows identically.
+  static CharacterKnowledgeFact fromRow(CharacterKnowledgeFactRow row) =>
       CharacterKnowledgeFact(
         id: row.id,
         chatSessionId: row.chatSessionId,
@@ -1041,7 +1045,7 @@ class CharacterKnowledgeFactRepo {
         updatedAt: row.updatedAt,
       );
 
-  List<String> _decodeStrings(String json) {
+  static List<String> _decodeStrings(String json) {
     try {
       return (jsonDecode(json) as List).whereType<String>().toList();
     } catch (_) {

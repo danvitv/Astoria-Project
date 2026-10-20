@@ -13,6 +13,8 @@ import 'package:glaze_flutter/core/db/repositories/character_revision_repo.dart'
 import 'package:glaze_flutter/core/db/repositories/character_session_baseline_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/ledger_raw_tracker_state_reader.dart';
 import 'package:glaze_flutter/core/db/repositories/manual_rewrite_job_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/ledger_reconciliation_run_repo.dart';
+import 'package:glaze_flutter/core/utils/cast_helpers.dart';
 import 'package:glaze_flutter/core/models/character.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/card_rewriter_contracts.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/effective_canon_read_repository.dart';
@@ -69,6 +71,120 @@ void main() {
   });
 
   tearDown(() => db.close());
+
+  test(
+    'empty reconciliation delta retains boundary targets and ignores mutable tail',
+    () async {
+      final runs = LedgerReconciliationRunRepo(db);
+      final run = LedgerReconciliationRun(
+        id: 'boundary',
+        sessionId: 'session',
+        ordinal: 1,
+        anchors: [
+          for (final message in _messages.take(2))
+            ReconciliationAnchor(
+              messageId: message['id']!,
+              role: message['role']!,
+              swipeId: 0,
+              agentSwipeId: 0,
+              contentHash: computeHash(message['content']!),
+            ),
+        ],
+        acceptedManifestRefs: const [],
+        effectiveCanonStamp: 'stamp',
+        effectiveCanonRevision: 1,
+        effectiveCanonHash: 'canon',
+        canonicalResult: const {
+          'export': {'ops': <Object?>[]},
+        },
+        predecessorChainHash: '',
+        contractVersion: 1,
+        opsApplied: const [],
+        createdAt: 1,
+      );
+      expect(await runs.append(run), isA<ReconciliationRunAppended>());
+      await db.customStatement(
+        "INSERT INTO tracker_rows (session_id, name, value, scope) VALUES ('session', 'npc:alice.attitude', 'boundary value', 'ledger')",
+      );
+      final state = await runs.captureState('session');
+      await runs.recordEffect(
+        runId: run.id,
+        sessionId: 'session',
+        before: state,
+        after: state,
+        createdAt: 1,
+      );
+      final first = await evolution.claim(
+        sessionId: 'session',
+        ownerId: 'owner',
+        now: 10,
+        leaseSeconds: 30,
+      );
+      expect(first.kind, 'claimed', reason: first.detail);
+      final input = first.claim!.selectedInputJson;
+      final storedRun = (await runs.readSession('session')).single;
+      final collectorInput = (await evolution.buildObservationSnapshotForRun(
+        storedRun,
+      ))!.selectedInputJson;
+      expect(input, contains('boundary value'));
+      expect(
+        (jsonDecode(input) as Map)['availableObservationRetrievalTargets'],
+        contains(equals({'kind': 'ledger_tracker', 'key': 'npc:alice'})),
+      );
+      await db.customStatement(
+        "UPDATE tracker_rows SET value = 'MUTABLE TAIL' WHERE session_id = 'session'",
+      );
+      await db.customStatement(
+        'UPDATE chat_sessions SET messages_json = ? WHERE session_id = ?',
+        [
+          jsonEncode([..._messages, _nextAssistant]),
+          'session',
+        ],
+      );
+      final second = await evolution.claim(
+        sessionId: 'session',
+        ownerId: 'owner',
+        now: 11,
+        leaseSeconds: 30,
+      );
+      expect(second.claim?.selectedInputJson, input);
+      expect(
+        (await evolution.buildObservationSnapshot(
+          'session',
+        ))?.selectedInputJson,
+        input,
+      );
+      expect(
+        (await evolution.buildObservationSnapshotForRun(
+          storedRun,
+        ))?.selectedInputJson,
+        collectorInput,
+      );
+      await db.customStatement(
+        'UPDATE chat_sessions SET messages_json = ? WHERE session_id = ?',
+        [jsonEncode(_messages.take(2).toList()), 'session'],
+      );
+      final third = await evolution.claim(
+        sessionId: 'session',
+        ownerId: 'owner',
+        now: 12,
+        leaseSeconds: 30,
+      );
+      expect(third.claim?.selectedInputJson, input);
+      expect(
+        (await evolution.buildObservationSnapshot(
+          'session',
+        ))?.selectedInputJson,
+        input,
+      );
+      expect(
+        (await evolution.buildObservationSnapshotForRun(
+          storedRun,
+        ))?.selectedInputJson,
+        collectorInput,
+      );
+    },
+  );
 
   test('uses chat history without reconciliation runs', () async {
     expect(await evolution.isEligible('session'), isTrue);

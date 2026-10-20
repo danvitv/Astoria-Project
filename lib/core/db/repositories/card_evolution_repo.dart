@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../models/character.dart';
+import '../../models/tracker.dart';
 import '../../services/card_rewriter/card_rewrite_operation_parser.dart';
 import '../../services/card_rewriter/card_rewriter_contracts.dart';
 import '../../services/card_rewriter/effective_canon_assembler.dart';
@@ -13,6 +14,8 @@ import '../../utils/cast_helpers.dart';
 import '../../utils/id_generator.dart';
 import '../app_db.dart';
 import 'card_evolution_collector_run_repo.dart';
+import 'character_knowledge_fact_repo.dart';
+import 'ledger_reconciliation_run_repo.dart';
 import 'manual_rewrite_job_repo.dart';
 import 'session_lorebook_evolution_repo.dart';
 
@@ -1103,7 +1106,75 @@ class CardEvolutionRepo {
           CardEvolutionSelectionFailure.messagesMalformed,
         );
       }
-      final assembled = await _assemble(sessionId, session.characterId);
+      final runRepo = LedgerReconciliationRunRepo(db);
+      final validRuns = await runRepo.readSession(sessionId);
+      if (validRuns.isEmpty &&
+          (await runRepo.readPhysicalSession(sessionId)).isNotEmpty) {
+        return const CardEvolutionSelection.failed(
+          CardEvolutionSelectionFailure.reconciliationRunsMissing,
+        );
+      }
+      if (reconciliationRun == null && reconciliationRunIds.isEmpty) {
+        // Manual runs use the same durable boundary as the automated lane.
+        // Never infer a Ledger snapshot from today's mutable transcript tail.
+        reconciliationRunIds = validRuns
+            .skip(
+                  (validRuns.length - _writerReconciliationRunCount).clamp(
+                0,
+                validRuns.length,
+              ),
+            )
+            .map((run) => run.id)
+            .toList();
+      }
+      final requestedIds = reconciliationRun != null
+          ? [reconciliationRun.id]
+          : reconciliationRunIds;
+      final selectedRuns = validRuns
+          .where((run) => requestedIds.contains(run.id))
+          .toList();
+      if (selectedRuns.length != requestedIds.length) {
+        return const CardEvolutionSelection.failed(
+          CardEvolutionSelectionFailure.reconciliationRunsMissing,
+        );
+      }
+      final effect = selectedRuns.isEmpty
+          ? null
+          : await runRepo.validateEffect(selectedRuns.last);
+      if (effect != null && effect is! ReconciliationEffectValid) {
+        return const CardEvolutionSelection.failed(
+          CardEvolutionSelectionFailure.canonUnavailable,
+        );
+      }
+      final fallbackHistory = selectedRuns.isEmpty
+          ? _selectChatHistory(messages: messages)
+          : null;
+      final endId = fallbackHistory?.lastOrNull is Map
+          ? (fallbackHistory!.last as Map)['messageId']
+          : null;
+      final endIndex = messages.indexWhere(
+        (message) => message is Map && message['id'] == endId,
+      );
+      final excludedId = endIndex >= 0 && endIndex + 1 < messages.length
+          ? (messages[endIndex + 1] as Map)['id'] as String?
+          : messages.isNotEmpty &&
+                messages.last is Map &&
+                (messages.last as Map)['role'] == 'user'
+          ? (messages.last as Map)['id'] as String?
+          : null;
+      if (selectedRuns.isEmpty && excludedId == null) {
+        return CardEvolutionSelection.failed(
+          (fallbackHistory?.length ?? 0) < 2
+              ? CardEvolutionSelectionFailure.historyTooShort
+              : CardEvolutionSelectionFailure.historyUnresolved,
+        );
+      }
+      final assembled = await _assemble(
+        sessionId,
+        session.characterId,
+        boundary: effect is ReconciliationEffectValid ? effect.after : null,
+        excludeSnapshotMessageId: excludedId,
+      );
       if (assembled == null) {
         return const CardEvolutionSelection.failed(
           CardEvolutionSelectionFailure.canonUnavailable,
@@ -1193,6 +1264,14 @@ class CardEvolutionRepo {
             ).whereType<String>(),
         },
       );
+      // An empty reconciliation delta does not mean an empty boundary state.
+      for (final tracker in assembled.$1.committedTrackers) {
+        final group = _ledgerGroupKey(tracker.name);
+        if (group != null) rangeTrackerKeys.add(group);
+        if (tracker.name == 'scene.present_entities') {
+          rangeTrackerKeys.addAll(_presentEntityGroups(tracker.value));
+        }
+      }
       final availableRetrievalTargets = _retrievalTargets(
         input: assembled.$1,
         history: history,
@@ -1645,19 +1724,71 @@ class CardEvolutionRepo {
 
   Future<(EffectiveCanonAssemblyInput, EffectiveCanonAssembly)?> _assemble(
     String sessionId,
-    String characterId,
-  ) async {
+    String characterId, {
+    ReconciliationStateSnapshot? boundary,
+    String? excludeSnapshotMessageId,
+  }) async {
     try {
-      final input = await canonReader.readInTransaction(
+      var input = await canonReader.readInTransaction(
         sessionId: sessionId,
         characterId: characterId,
       );
       // Older imported cards may not have a persisted source revision yet.
       // Match the read-only effective-canon loader's initial reconciliation
       // without writing a revision inside the claim/eligibility transaction.
-      final effectiveInput = EffectiveCanonReadRepository.withInitialLineage(
+      var effectiveInput = EffectiveCanonReadRepository.withInitialLineage(
         input,
       );
+      if (excludeSnapshotMessageId != null) {
+        input = await canonReader.readFromSource(
+          sessionId: sessionId,
+          sourceCharacter: input.sourceCharacter,
+          excludeSnapshotMessageId: excludeSnapshotMessageId,
+        );
+      }
+      if (boundary != null) {
+        final trackers = (jsonDecode(boundary.ledgerJson) as List)
+            .map(
+              (raw) =>
+                  TrackerRow.fromJson(Map<String, dynamic>.from(raw as Map)),
+            )
+            .where((row) => row.scope == 'ledger')
+            .map(
+              (row) => Tracker(
+                sessionId: row.sessionId,
+                name: row.name,
+                value: row.value,
+                scope: row.scope,
+                provenance: row.provenance,
+                basisRevisionNumber: row.basisRevision,
+                basisRevisionHash: row.basisRevisionHash,
+                updatedAt: row.updatedAt,
+              ),
+            )
+            .toList();
+        final facts = (jsonDecode(boundary.knowledgeJson) as List)
+            .map(
+              (raw) => CharacterKnowledgeFactRow.fromJson(
+                Map<String, dynamic>.from(raw as Map),
+              ),
+            )
+            .where(
+              (row) =>
+                  row.lifecycle == 'active' || row.lifecycle == 'tentative',
+            )
+            .map(CharacterKnowledgeFactRepo.fromRow)
+            .toList();
+        effectiveInput = EffectiveCanonAssemblyInput(
+          sourceCharacter: effectiveInput.sourceCharacter,
+          lineage: effectiveInput.lineage,
+          baseline: effectiveInput.baseline,
+          facts: facts,
+          committedTrackers: trackers,
+          manualControls: const [],
+          transitions: effectiveInput.transitions,
+          transitionFactRefs: effectiveInput.transitionFactRefs,
+        );
+      }
       // The automated evolution lane stamps canon with the stable identity:
       // the per-turn Ledger mutates committed trackers and facts every turn,
       // which would invalidate every automated proposal within a minute.
