@@ -1594,6 +1594,8 @@ class SyncEngine {
           type == 'extension_preset' ||
           type == 'tracker_snapshot' ||
           type == 'tracker_value' ||
+          type == 'memory_graph' ||
+          type == 'character_knowledge' ||
           type == 'reconciliation_state' ||
           type == 'rewrite_job_history' ||
           type == 'session_lorebook_overlays') {

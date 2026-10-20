@@ -282,6 +282,55 @@ class _Unsupported {
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+  for (final type in ['memory_graph', 'character_knowledge']) {
+    test(
+      '$type failed conflict resolution preserves rows and manifest',
+      () async {
+        final rig = _Rig();
+        addTearDown(rig.db.close);
+        await rig.seed();
+        final before = await rig.payload(type);
+        final local = await rig.builder.buildLocalManifest();
+        await rig.builder.writeLocalManifest(local);
+        final prefs = await SharedPreferences.getInstance();
+        final manifestBefore = prefs.getString('gz_sync_manifest_v2');
+        final malformed =
+            jsonDecode(jsonEncode(before)) as Map<String, dynamic>;
+        if (type == 'memory_graph') {
+          // Earlier tables are already replaced when this last table fails.
+          (malformed['catalog'] as List).first['memoryEntryId'] = 'replacement';
+          (malformed['consolidation'] as List).last['createdAt'] = 'invalid';
+        } else {
+          (malformed['facts'] as List).first['object'] = 'replacement';
+          (malformed['baseline'] as Map)['createdAt'] = 'invalid';
+        }
+        final key = entryKey(type, _session);
+        final localEntry = local.entries[key]!;
+        final cloudEntry = localEntry.copyWith(
+          hash: SyncSerialization.computeSyncHash(malformed),
+          updatedAt: localEntry.updatedAt + 1,
+        );
+        rig.cloud.files[cloudEntry.path] = jsonEncode(malformed);
+
+        await expectLater(
+          rig.engine.resolveConflict(
+            SyncConflict(
+              key: key,
+              type: type,
+              id: _session,
+              localEntry: localEntry,
+              cloudEntry: cloudEntry,
+              name: 'Synthetic aggregate',
+            ),
+            'cloud',
+          ),
+          throwsA(anything),
+        );
+        expect(await rig.payload(type), before);
+        expect(prefs.getString('gz_sync_manifest_v2'), manifestBefore);
+      },
+    );
+  }
   test(
     'two devices keep legacy cloud through three alternating cycles',
     () async {

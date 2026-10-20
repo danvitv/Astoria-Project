@@ -374,6 +374,15 @@ class MemoryGraphSyncStore implements SyncMemoryGraphStore {
     String sessionId,
     Map<String, dynamic> data,
   ) async {
+    await _db.transaction(() async {
+      await _applyBySessionId(sessionId, data);
+    });
+  }
+
+  Future<void> _applyBySessionId(
+    String sessionId,
+    Map<String, dynamic> data,
+  ) async {
     await deleteBySessionId(sessionId);
 
     final catalog =
@@ -498,10 +507,10 @@ class CharacterKnowledgeSyncStore implements SyncCharacterKnowledgeStore {
     String sessionId,
     Map<String, dynamic> data,
   ) async {
-    await deleteBySessionId(sessionId);
     final facts = (data['facts'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final baseline = data['baseline'] as Map<String, dynamic>?;
     await _db.transaction(() async {
+      await deleteBySessionId(sessionId);
       for (final fact in facts) {
         await _db
             .into(_db.characterKnowledgeFactRows)
