@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -10,6 +11,7 @@ import 'reasoning_stripper.dart';
 import 'stream_accumulator.dart';
 import 'transport/call_attempt_outcome.dart';
 import 'transport/chat_transport.dart';
+import 'transport/chat_stream_exception.dart';
 import 'transport/chat_transport_request.dart';
 import 'transport/llm_call_event.dart';
 import 'transport/llm_capture_context.dart';
@@ -28,6 +30,8 @@ import 'studio_controller_ontology.dart';
 /// config resolution, or per-agent failure wrapping — those stay in
 /// [AgentRunner]. Behavior preserved verbatim.
 class AgentStreamRunner {
+  // Studio shares one cancellation token across controllers and the final call.
+  static final _pipelineIds = Expando<String>('studio pipeline');
   final AgentTransportPicker _pickTransport;
 
   AgentStreamRunner(this._pickTransport);
@@ -72,7 +76,8 @@ class AgentStreamRunner {
     // successful response appear empty and trigger a retry.
     final hasInlineTags =
         agent.reasoningMode != 'think-replacement' &&
-        effectiveTagStart.isNotEmpty && effectiveTagEnd.isNotEmpty;
+        effectiveTagStart.isNotEmpty &&
+        effectiveTagEnd.isNotEmpty;
 
     final accumulator = StreamAccumulator(
       tagStart: effectiveTagStart,
@@ -90,6 +95,7 @@ class AgentStreamRunner {
         if (visible.isNotEmpty) visible,
       ].join('\n\n---\n\n');
     }
+
     var lastIntermediateUpdate = '';
     void reportIntermediateUpdate() {
       if (onIntermediateUpdate == null) return;
@@ -109,7 +115,8 @@ class AgentStreamRunner {
     final captureContext = captureActive
         ? baseCaptureContext
               .withCallIdentity(
-                pipelineRunId: 'studio-pipeline-${generateId()}',
+                pipelineRunId: _pipelineIds[cancelToken] ??=
+                    'studio-pipeline-${generateId()}',
                 callId: 'studio-call-${generateId()}',
               )
               .withAttempt(1)
@@ -138,7 +145,13 @@ class AgentStreamRunner {
     int? firstChunkMs;
     int? lastChunkAtMs;
     var maxChunkGapMs = 0;
+    var contentOffset = 0;
+    var reasoningOffset = 0;
+    final chunkTrace = <Map<String, int>>[];
+    Map<String, int>? longestGap;
     var outcomeRecorded = false;
+    String? streamTermination;
+    String? providerFinishReason;
 
     void recordOutcome({
       String? responseText,
@@ -164,6 +177,11 @@ class AgentStreamRunner {
               'firstChunkMs': ?firstChunkMs,
               'maxChunkGapMs': maxChunkGapMs,
               'completionReason': completionReason,
+              'chunkTrace': chunkTrace,
+              'chunkTraceTruncated': chunkCount > chunkTrace.length,
+              'longestGap': ?longestGap,
+              'streamTermination': ?streamTermination,
+              'providerFinishReason': ?providerFinishReason,
             },
           ),
         ),
@@ -205,6 +223,16 @@ class AgentStreamRunner {
     agentCancelToken = CancelToken();
     unawaited(
       cancelToken.whenCancel.then((_) {
+        if (!completer.isCompleted) {
+          idleTimer?.cancel();
+          final error = cancelToken.cancelError!;
+          recordOutcome(
+            responseText: accumulator.text,
+            error: error,
+            completionReason: 'cancelled',
+          );
+          completer.completeError(error);
+        }
         if (!(agentCancelToken?.isCancelled ?? true)) {
           agentCancelToken?.cancel('Studio pipeline cancelled');
         }
@@ -217,14 +245,34 @@ class AgentStreamRunner {
         request: request,
         cancelToken: agentCancelToken,
         onUpdate: (delta, reasoningDelta) {
+          if (completer.isCompleted) return;
           if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
             final nowMs = DateTime.now().millisecondsSinceEpoch;
             chunkCount++;
             firstChunkMs ??= nowMs - startedAtMs;
             if (lastChunkAtMs != null) {
               final gap = nowMs - lastChunkAtMs!;
-              if (gap > maxChunkGapMs) maxChunkGapMs = gap;
+              if (gap > maxChunkGapMs) {
+                maxChunkGapMs = gap;
+                longestGap = {
+                  'gapMs': gap,
+                  'contentOffset': contentOffset,
+                  'reasoningOffset': reasoningOffset,
+                  'chunk': chunkCount,
+                };
+              }
             }
+            if (captureActive && chunkTrace.length < 2048) {
+              chunkTrace.add({
+                'elapsedMs': nowMs - startedAtMs,
+                'contentOffset': contentOffset,
+                'contentLength': delta.length,
+                'reasoningOffset': reasoningOffset,
+                'reasoningLength': reasoningDelta?.length ?? 0,
+              });
+            }
+            contentOffset += delta.length;
+            reasoningOffset += reasoningDelta?.length ?? 0;
             lastChunkAtMs = nowMs;
           }
           accumulator.consumeDelta(delta, reasoningDelta: reasoningDelta);
@@ -246,6 +294,20 @@ class AgentStreamRunner {
           }
         },
         onComplete: (text, finalReasoning, {rawResponseJson}) {
+          if (completer.isCompleted) return;
+          if (rawResponseJson != null) {
+            try {
+              final raw = jsonDecode(rawResponseJson) as Map<String, dynamic>;
+              streamTermination = raw['astoria_stream_termination'] as String?;
+              final choices = raw['choices'] as List?;
+              if (choices != null && choices.isNotEmpty) {
+                providerFinishReason =
+                    choices.first['finish_reason'] as String?;
+              }
+            } catch (_) {
+              // Other transports can return a different raw payload shape.
+            }
+          }
           idleTimer?.cancel();
           if (accumulator.text.isEmpty && text.isNotEmpty) {
             accumulator.consumeDelta(text, reasoningDelta: finalReasoning);
@@ -298,6 +360,7 @@ class AgentStreamRunner {
           }
         },
         onError: (error) {
+          if (completer.isCompleted) return;
           final elapsed = DateTime.now().difference(startedAt).inMilliseconds;
           idleTimer?.cancel();
           if (shouldStream &&
@@ -306,11 +369,15 @@ class AgentStreamRunner {
             completeWithAccumulated('cancel_with_streamed_text');
             return;
           }
-          final partialText = accumulator.text.trim();
+          final partialText = error is ChatStreamException
+              ? error.partialText
+              : accumulator.text.trim();
           recordOutcome(
             responseText: partialText.isNotEmpty ? partialText : null,
             error: error,
-            completionReason: 'error',
+            completionReason: error is ChatStreamException
+                ? error.reason
+                : 'error',
           );
           debugPrint(
             '[AgentRunner] agent error session=$sessionId '

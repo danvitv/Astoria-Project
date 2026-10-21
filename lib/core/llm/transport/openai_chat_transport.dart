@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../../utils/error_format.dart';
 import '../converters/reasoning_effort.dart';
 import '../converters/structured_response.dart';
+import 'chat_stream_exception.dart';
 import 'chat_transport.dart';
 import 'chat_transport_request.dart';
 import 'endpoint_normalizer.dart';
@@ -278,9 +279,14 @@ class OpenAiChatTransport implements ChatTransport {
     var fullText = '';
     var fullReasoning = '';
     var doneReceived = false;
+    var stopping = false;
+    var errorEvent = false;
+    String? finishReason;
     String? lastRawJsonPayload;
 
     Future<void> finishAfterCancel([Object? error, StackTrace? stack]) async {
+      if (stopping) return;
+      stopping = true;
       await subscription?.cancel();
       if (completer.isCompleted) return;
       if (error == null) {
@@ -290,10 +296,73 @@ class OpenAiChatTransport implements ChatTransport {
       }
     }
 
+    ChatStreamException failure(String reason, String message) =>
+        ChatStreamException(
+          reason: reason,
+          message: message,
+          partialText: fullText,
+          partialReasoning: fullReasoning,
+        );
+
+    void consumeLine(String line) {
+      if (line.trim().isEmpty) {
+        errorEvent = false;
+        return;
+      }
+      if (line.startsWith('event:')) {
+        errorEvent = line.substring(6).trim() == 'error';
+        return;
+      }
+      final data = _sseData(line);
+      if (data == null) return;
+      if (data == '[DONE]') {
+        doneReceived = true;
+        return;
+      }
+
+      String contentDelta;
+      String? reasoningDelta;
+      try {
+        final json = jsonDecode(data) as Map<String, dynamic>;
+        if (errorEvent || json['error'] != null) {
+          final error = json['error'] ?? json;
+          final message = error is Map ? error['message'] : error;
+          throw failure(
+            'provider_error',
+            message?.toString() ?? 'Provider reported a streaming error',
+          );
+        }
+        final choices = json['choices'] as List?;
+        final choice = choices != null && choices.isNotEmpty
+            ? choices.first as Map<String, dynamic>
+            : null;
+        final delta = choice?['delta'] as Map<String, dynamic>?;
+        final reason = choice?['finish_reason'] as String?;
+        if (reason != null && reason.isNotEmpty) finishReason = reason;
+        contentDelta = delta?['content'] as String? ?? '';
+        // Respect the response-side native reasoning display control.
+        reasoningDelta = omitReasoning
+            ? null
+            : (delta?['reasoning_content'] as String? ??
+                  delta?['reasoning'] as String?);
+        lastRawJsonPayload = data;
+      } on ChatStreamException {
+        rethrow;
+      } catch (_) {
+        throw failure('malformed_event', 'Malformed JSON stream event');
+      }
+      fullText += contentDelta;
+      if (reasoningDelta != null) fullReasoning += reasoningDelta;
+      if (contentDelta.isNotEmpty || reasoningDelta != null) {
+        onUpdate?.call(contentDelta, reasoningDelta);
+      }
+    }
+
     subscription = utf8.decoder
         .bind(responseStream)
         .listen(
           (chunk) {
+            if (stopping) return;
             if (cancelToken?.isCancelled == true) {
               debugPrint(
                 '[SSE] cancel detected in listen callback, stopping stream',
@@ -314,62 +383,32 @@ class OpenAiChatTransport implements ChatTransport {
                 unawaited(finishAfterCancel());
                 return;
               }
-              final data = _sseData(line);
-              if (data == null) continue;
-              if (data == '[DONE]') {
-                if (cancelToken != null && cancelToken.isCancelled) {
-                  debugPrint(
-                    '[SSE] cancel detected at [DONE], suppressing onComplete',
-                  );
-                } else {
-                  onComplete?.call(
-                    fullText,
-                    fullReasoning.isNotEmpty ? fullReasoning : null,
-                    rawResponseJson: _buildAggregatedRawResponse(
-                      fullText: fullText,
-                      fullReasoning: fullReasoning,
-                      fallbackRawJsonPayload: lastRawJsonPayload,
-                    ),
-                  );
-                  doneReceived = true;
-                }
+              try {
+                consumeLine(line);
+              } catch (error, stack) {
+                unawaited(finishAfterCancel(error, stack));
+                return;
+              }
+              if (doneReceived) {
                 unawaited(finishAfterCancel());
                 return;
               }
-
-              lastRawJsonPayload = data;
-
-              try {
-                final json = jsonDecode(data) as Map<String, dynamic>;
-                final choice = json['choices']?[0];
-                final delta = choice?['delta'];
-
-                final contentDelta = delta?['content'] as String? ?? '';
-                // When omitReasoning is set, skip native reasoning_content so
-                // inline <think> parsing in StreamAccumulator is not suppressed
-                // by _hasExternalReasoning. The provider may still emit the
-                // field, but we discard it on the response side.
-                final reasoningDelta = omitReasoning
-                    ? null
-                    : (delta?['reasoning_content'] as String? ??
-                          delta?['reasoning'] as String?);
-
-                if (contentDelta.isNotEmpty) {
-                  fullText += contentDelta;
-                }
-                if (reasoningDelta != null && reasoningDelta.isNotEmpty) {
-                  fullReasoning += reasoningDelta;
-                }
-
-                if (contentDelta.isNotEmpty || reasoningDelta != null) {
-                  onUpdate?.call(contentDelta, reasoningDelta);
-                }
-              } catch (_) {}
             }
           },
           onDone: () => unawaited(finishAfterCancel()),
-          onError: (Object e, StackTrace stack) =>
-              unawaited(finishAfterCancel(e, stack)),
+          onError: (Object e, StackTrace stack) => unawaited(
+            finishAfterCancel(
+              cancelToken?.isCancelled == true
+                  ? null
+                  : failure(
+                      e is FormatException
+                          ? 'malformed_event'
+                          : 'transport_error',
+                      e.toString(),
+                    ),
+              stack,
+            ),
+          ),
           cancelOnError: true,
         );
 
@@ -393,26 +432,26 @@ class OpenAiChatTransport implements ChatTransport {
       return;
     }
 
-    if (doneReceived) return;
-
-    // Server dropped connection without [DONE] — treat as normal completion
-    // if any text was accumulated (provider returned 200 but omitted [DONE]).
-    if (fullText.isNotEmpty || fullReasoning.isNotEmpty) {
+    // Some compatible providers omit the final newline as well as [DONE].
+    if (!doneReceived && buffer.isNotEmpty) consumeLine(buffer);
+    if (cancelToken?.isCancelled == true) return;
+    if (doneReceived || finishReason != null) {
       onComplete?.call(
         fullText,
         fullReasoning.isNotEmpty ? fullReasoning : null,
         rawResponseJson: _buildAggregatedRawResponse(
           fullText: fullText,
           fullReasoning: fullReasoning,
+          finishReason: finishReason,
+          termination: doneReceived ? 'done' : 'finish_reason_eof',
           fallbackRawJsonPayload: lastRawJsonPayload,
         ),
       );
       return;
     }
-    throw DioException(
-      requestOptions: RequestOptions(path: url),
-      message: 'Stream ended without [DONE] (server dropped connection)',
-      type: DioExceptionType.connectionError,
+    throw failure(
+      'unexpected_eof',
+      'Stream ended without [DONE] or finish_reason (server dropped connection)',
     );
   }
 
@@ -537,9 +576,11 @@ class OpenAiChatTransport implements ChatTransport {
   String? _buildAggregatedRawResponse({
     required String fullText,
     required String fullReasoning,
+    String? finishReason,
+    String? termination,
     String? fallbackRawJsonPayload,
   }) {
-    if (fullText.isEmpty && fullReasoning.isEmpty) {
+    if (fullText.isEmpty && fullReasoning.isEmpty && finishReason == null) {
       return fallbackRawJsonPayload;
     }
 
@@ -563,17 +604,25 @@ class OpenAiChatTransport implements ChatTransport {
             if (entry.key == 0) {
               choice.remove('delta');
               choice['message'] = message;
+              if (finishReason != null) choice['finish_reason'] = finishReason;
             }
             return choice;
           }).toList();
         } else {
           newChoices = [
-            {'index': 0, 'message': message, 'finish_reason': 'stop'},
+            {
+              'index': 0,
+              'message': message,
+              'finish_reason': finishReason ?? 'stop',
+            },
           ];
         }
 
         final merged = Map<String, dynamic>.from(base);
         merged['choices'] = newChoices;
+        if (termination != null) {
+          merged['astoria_stream_termination'] = termination;
+        }
         merged['object'] = merged['object'] ?? 'chat.completion';
 
         return jsonEncode(merged);
@@ -581,9 +630,14 @@ class OpenAiChatTransport implements ChatTransport {
     }
 
     return jsonEncode({
+      'astoria_stream_termination': ?termination,
       'object': 'chat.completion',
       'choices': [
-        {'index': 0, 'message': message, 'finish_reason': 'stop'},
+        {
+          'index': 0,
+          'message': message,
+          'finish_reason': finishReason ?? 'stop',
+        },
       ],
     });
   }
