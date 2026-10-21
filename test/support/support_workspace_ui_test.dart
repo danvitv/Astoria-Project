@@ -43,6 +43,7 @@ class _Workspace extends SupportWorkspaceNotifier {
     activeSessionId: 'fake-session',
     messagesBySession: const {},
     settings: const SupportAssistantSettings(),
+    isLoading: false,
   );
 
   @override

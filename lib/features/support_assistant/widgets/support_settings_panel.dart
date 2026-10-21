@@ -101,7 +101,7 @@ class SupportSettingsPanel extends ConsumerWidget {
             items: [
               MenuSelectorItem(
                 key: const ValueKey('support_connection_selector'),
-                label: 'Подключение API (независимое)',
+                label: 'API',
                 currentValue:
                     activeConnection?.displayName ??
                     'Не выбрано (Автономный режим)',
@@ -113,7 +113,7 @@ class SupportSettingsPanel extends ConsumerWidget {
               ),
               MenuSelectorItem(
                 key: const ValueKey('support_model_selector'),
-                label: 'Модель Астории',
+                label: 'Модель',
                 currentValue:
                     (settings.modelId != null && settings.modelId!.isNotEmpty)
                     ? settings.modelId!
@@ -145,7 +145,7 @@ class SupportSettingsPanel extends ConsumerWidget {
               ),
               MenuSelectorItem(
                 key: const ValueKey('support_reasoning_selector'),
-                label: 'Reasoning Effort',
+                label: 'Reason',
                 currentValue: settings.reasoningEffort.label,
                 onTap: () =>
                     SupportSettingsPickers.reasoning(context, notifier),

@@ -28,6 +28,16 @@ class FlutterBackupImporter extends BackupHelpers {
   /// back from disk instead of being materialised in memory.
   static const int _spillToDiskBytes = 8 * 1024 * 1024;
   static const int _maxSchemaVersion = 13;
+  // Support-assistant state is device-local and encrypted. The exporter
+  // intentionally omits these tables; do not trust hand-crafted archives to
+  // restore them through the generic table importer.
+  static const Set<String> _excludedArchiveTables = {
+    'support_sessions',
+    'support_messages',
+    'support_context_blocks',
+    'support_mutation_journal',
+    'support_reports',
+  };
 
   @override
   final AppDatabase db;
@@ -245,7 +255,12 @@ class FlutterBackupImporter extends BackupHelpers {
           (f) =>
               f.isFile &&
               f.name.startsWith('tables/') &&
-              f.name.endsWith('.jsonl'),
+              f.name.endsWith('.jsonl') &&
+              !_excludedArchiveTables.contains(
+                f.name
+                    .substring('tables/'.length)
+                    .replaceAll(RegExp(r'\.jsonl$'), ''),
+              ),
         )
         .toList();
     final avatarFiles = archive.files

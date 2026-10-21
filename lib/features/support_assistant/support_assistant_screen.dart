@@ -218,9 +218,8 @@ class _SupportAssistantScreenState
           SupportComposerBar(
             controller: _composerCtrl,
             sessionId: workspace.activeSessionId,
-            // The persistence integration was paused for the launch checkpoint.
-            // Never accept a draft into the old in-memory mock.
-            onSend: (_) async => false,
+            busy: workspace.isBusy || workspace.isLoading,
+            onSend: notifier.sendUserMessage,
             onRunQuickDiagnostics: () =>
                 _handleSetupCardAction('connection_diagnostics'),
           ),
