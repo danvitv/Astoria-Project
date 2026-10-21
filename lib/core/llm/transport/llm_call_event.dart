@@ -51,6 +51,7 @@ final class LlmCallEvent {
     required LlmCaptureContext context,
     required AgentOperationAttempt attempt,
     String? responseText,
+    Map<String, dynamic> extraPayload = const {},
   }) {
     final bounded = _boundedText(responseText);
     final boundedError = _boundedText(attempt.error);
@@ -69,6 +70,7 @@ final class LlmCallEvent {
       payload: {
         'startedAtMs': attempt.startedAtMs,
         'elapsedMs': attempt.elapsedMs,
+        ...extraPayload,
       },
       truncated: bounded.truncated || boundedError.truncated,
     );

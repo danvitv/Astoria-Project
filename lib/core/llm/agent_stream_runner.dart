@@ -4,12 +4,16 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/studio_config.dart';
+import '../utils/id_generator.dart';
 import 'agent_runner.dart' show AgentRunResult, ResolvedAgentConfig;
 import 'reasoning_stripper.dart';
 import 'stream_accumulator.dart';
+import 'transport/call_attempt_outcome.dart';
 import 'transport/chat_transport.dart';
 import 'transport/chat_transport_request.dart';
+import 'transport/llm_call_event.dart';
 import 'transport/llm_capture_context.dart';
+import 'transport/llm_request_capture.dart';
 import 'studio_controller_ontology.dart';
 
 /// The streaming state machine for a single Studio agent run, extracted
@@ -95,6 +99,22 @@ class AgentStreamRunner {
       onIntermediateUpdate(update);
     }
 
+    final baseCaptureContext = _defaultCaptureContext(
+      agent: agent,
+      sessionId: sessionId,
+      isFinalResponse: isFinalResponse,
+    );
+    final captureActive =
+        LlmRequestCapture.sink != null || LlmCallEventCapture.sink != null;
+    final captureContext = captureActive
+        ? baseCaptureContext
+              .withCallIdentity(
+                pipelineRunId: 'studio-pipeline-${generateId()}',
+                callId: 'studio-call-${generateId()}',
+              )
+              .withAttempt(1)
+        : baseCaptureContext;
+
     final request = buildRequest(
       agent: agent,
       messages: messages,
@@ -106,18 +126,60 @@ class AgentStreamRunner {
       charName: charName,
       userName: userName,
       responseJsonSchema: responseJsonSchema,
+      captureContext: captureContext,
     );
     final transport = _pickTransport(resolved.protocol);
     final startedAt = DateTime.now();
+    final startedAtMs = startedAt.millisecondsSinceEpoch;
     Timer? idleTimer;
     CancelToken? agentCancelToken;
     var streamStarted = false;
+    var chunkCount = 0;
+    int? firstChunkMs;
+    int? lastChunkAtMs;
+    var maxChunkGapMs = 0;
+    var outcomeRecorded = false;
+
+    void recordOutcome({
+      String? responseText,
+      Object? error,
+      required String completionReason,
+    }) {
+      if (!captureActive || outcomeRecorded) return;
+      outcomeRecorded = true;
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      unawaited(
+        LlmCallEventCapture.record(
+          LlmCallEvent.transport(
+            context: captureContext,
+            attempt: describeCallAttempt(
+              attempt: 1,
+              startedAtMs: startedAtMs,
+              elapsedMs: nowMs - startedAtMs,
+              error: error,
+            ),
+            responseText: responseText,
+            extraPayload: {
+              'chunkCount': chunkCount,
+              'firstChunkMs': ?firstChunkMs,
+              'maxChunkGapMs': maxChunkGapMs,
+              'completionReason': completionReason,
+            },
+          ),
+        ),
+      );
+    }
+
     void completeWithAccumulated(String reason) {
       if (completer.isCompleted) return;
       final text = accumulator.text.trim();
       final reasoningText = isFinalResponse || isThinkController
           ? accumulator.reasoning
           : '';
+      recordOutcome(
+        responseText: text.isNotEmpty ? text : null,
+        completionReason: reason,
+      );
       completer.complete(AgentRunResult(text: text, reasoning: reasoningText));
     }
 
@@ -130,11 +192,11 @@ class AgentStreamRunner {
           completeWithAccumulated('idle_timeout');
           agentCancelToken?.cancel('Studio agent idle timeout');
         } else if (!completer.isCompleted) {
-          completer.completeError(
-            TimeoutException(
-              'Studio agent "${agent.name}" timed out after ${timeoutMs}ms',
-            ),
+          final timeoutError = TimeoutException(
+            'Studio agent "${agent.name}" timed out after ${timeoutMs}ms',
           );
+          recordOutcome(error: timeoutError, completionReason: 'timeout');
+          completer.completeError(timeoutError);
           agentCancelToken?.cancel('Studio agent timeout');
         }
       });
@@ -155,6 +217,16 @@ class AgentStreamRunner {
         request: request,
         cancelToken: agentCancelToken,
         onUpdate: (delta, reasoningDelta) {
+          if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
+            final nowMs = DateTime.now().millisecondsSinceEpoch;
+            chunkCount++;
+            firstChunkMs ??= nowMs - startedAtMs;
+            if (lastChunkAtMs != null) {
+              final gap = nowMs - lastChunkAtMs!;
+              if (gap > maxChunkGapMs) maxChunkGapMs = gap;
+            }
+            lastChunkAtMs = nowMs;
+          }
           accumulator.consumeDelta(delta, reasoningDelta: reasoningDelta);
           final effectiveText = accumulator.text.trimLeft();
           if (isFinalResponse) {
@@ -212,6 +284,10 @@ class AgentStreamRunner {
                       ? accumulator.reasoning
                       : finalReasoning?.trim() ?? '')
                 : '';
+            recordOutcome(
+              responseText: rawResponseJson ?? finalText,
+              completionReason: 'complete',
+            );
             completer.complete(
               AgentRunResult(
                 text: finalText,
@@ -230,6 +306,12 @@ class AgentStreamRunner {
             completeWithAccumulated('cancel_with_streamed_text');
             return;
           }
+          final partialText = accumulator.text.trim();
+          recordOutcome(
+            responseText: partialText.isNotEmpty ? partialText : null,
+            error: error,
+            completionReason: 'error',
+          );
           debugPrint(
             '[AgentRunner] agent error session=$sessionId '
             'name="${agent.name}" elapsedMs=$elapsed error=$error',
@@ -244,6 +326,20 @@ class AgentStreamRunner {
     });
   }
 
+  static LlmCaptureContext _defaultCaptureContext({
+    required StudioAgent agent,
+    required String sessionId,
+    required bool isFinalResponse,
+  }) => LlmCaptureContext(
+    stage: isFinalResponse
+        ? 'studio.final'
+        : agent.phase == 'post_processing'
+        ? 'studio.post_processing'
+        : 'studio.controller',
+    sessionId: sessionId,
+    agentId: agent.id,
+  );
+
   /// Builds the exact provider-neutral request used by [run] without invoking
   /// a transport. Prompt Inspector uses this pure seam for current previews.
   static ChatTransportRequest buildRequest({
@@ -257,6 +353,7 @@ class AgentStreamRunner {
     String? charName,
     String? userName,
     Map<String, dynamic>? responseJsonSchema,
+    LlmCaptureContext? captureContext,
   }) {
     final hasInlineReasoningTags =
         resolved.reasoningTagStart?.isNotEmpty == true &&
@@ -305,15 +402,13 @@ class AgentStreamRunner {
       userName: userName,
       responseJsonSchema: responseJsonSchema,
       extraRequestParameters: resolved.extraRequestParameters,
-      captureContext: LlmCaptureContext(
-        stage: isFinalResponse
-            ? 'studio.final'
-            : agent.phase == 'post_processing'
-            ? 'studio.post_processing'
-            : 'studio.controller',
-        sessionId: sessionId,
-        agentId: agent.id,
-      ),
+      captureContext:
+          captureContext ??
+          _defaultCaptureContext(
+            agent: agent,
+            sessionId: sessionId,
+            isFinalResponse: isFinalResponse,
+          ),
     );
   }
 }

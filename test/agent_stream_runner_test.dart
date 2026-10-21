@@ -6,6 +6,7 @@ import 'package:glaze_flutter/core/llm/agent_runner.dart';
 import 'package:glaze_flutter/core/llm/agent_stream_runner.dart';
 import 'package:glaze_flutter/core/llm/transport/chat_transport.dart';
 import 'package:glaze_flutter/core/llm/transport/chat_transport_request.dart';
+import 'package:glaze_flutter/core/llm/transport/llm_call_event.dart';
 import 'package:glaze_flutter/core/models/studio_config.dart';
 
 class _FakeTransport implements ChatTransport {
@@ -51,6 +52,15 @@ class _FakeTransport implements ChatTransport {
     required String endpoint,
     required String apiKey,
   }) async => const [];
+}
+
+class _FakeCallEventSink implements LlmCallEventSink {
+  final events = <LlmCallEvent>[];
+
+  @override
+  void recordCallEvent(LlmCallEvent event) {
+    events.add(event);
+  }
 }
 
 const _agent = StudioAgent(id: 'final', name: 'Final');
@@ -322,5 +332,54 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     expect(transport.cancelled, isTrue);
+  });
+
+  test('records transport outcome and stream chunk telemetry when capture sink is active', () async {
+    final sink = _FakeCallEventSink();
+    final previousSink = LlmCallEventCapture.sink;
+    LlmCallEventCapture.sink = sink;
+    addTearDown(() {
+      LlmCallEventCapture.sink = previousSink;
+    });
+
+    final transport = _FakeTransport(
+      delay: Duration.zero,
+      completedText: 'first chunk second chunk',
+      chunks: const [
+        ('first chunk ', null),
+        ('second chunk', null),
+      ],
+    );
+    final runner = AgentStreamRunner((_) => transport);
+
+    final result = await runner.run(
+      agent: _agent,
+      messages: const [
+        {'role': 'user', 'content': 'hi'},
+      ],
+      resolved: const ResolvedAgentConfig(
+        endpoint: 'https://example.com',
+        apiKey: 'key',
+        model: 'model',
+        protocol: 'custom_chat_completion',
+        stream: true,
+      ),
+      sessionId: 'session',
+      isFinalResponse: true,
+      cancelToken: CancelToken(),
+      timeoutMs: 100,
+    );
+
+    expect(result.text, 'first chunk second chunk');
+    expect(transport.request?.captureContext?.pipelineRunId, isNotEmpty);
+    expect(transport.request?.captureContext?.callId, isNotEmpty);
+    expect(transport.request?.captureContext?.attempt, 1);
+    expect(sink.events, hasLength(1));
+    expect(sink.events.single.kind, 'transport_succeeded');
+    expect(sink.events.single.status, 'ok');
+    expect(sink.events.single.responseText, 'first chunk second chunk');
+    expect(sink.events.single.payload['chunkCount'], 2);
+    expect(sink.events.single.payload['completionReason'], 'complete');
+    expect(sink.events.single.payload['maxChunkGapMs'], isA<int>());
   });
 }

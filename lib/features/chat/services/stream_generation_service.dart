@@ -582,7 +582,7 @@ class StreamGenerationService {
               isAborted: _isAborted,
               pendingSessionVars: beautyApplied.vars,
               genTime: '${(elapsed / 1000).toStringAsFixed(1)}s',
-              tokens: estimateTokens(studioResult.response),
+              tokens: estimateTokens(wrappedStudioText),
               time: openingClock,
               rawResponse:
                   studioResult.rawResponseJson ?? studioResult.response,
