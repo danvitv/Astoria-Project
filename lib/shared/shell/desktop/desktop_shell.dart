@@ -61,6 +61,13 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     });
   }
 
+  @override
+  void dispose() {
+    _leftController.dispose();
+    _rightController.dispose();
+    super.dispose();
+  }
+
   /// On desktop the `/` branch (chat history) is already the left sidebar, so a
   /// window that grows past the breakpoint — or a user turning "force mobile
   /// layout" off — would be left staring at a duplicate list in the middle
@@ -82,6 +89,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     // layout rather than build, where `ref.watch` does not register a
     // dependency and the layout would not react to the panel opening.
     final hasPanel = ref.watch(rightSidebarPanelProvider) != null;
+    final floatingOpen = ref.watch(desktopFloatingStackProvider).isNotEmpty;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -103,7 +111,14 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
                 _rightController,
               ),
             ],
-            child: _buildDesktopLayout(context, width, hasPanel),
+            child: ListenableBuilder(
+              // Fitting depends on BOTH widths: dragging the left edge can
+              // collapse the right rail, and vice versa. Recompute together on
+              // the actual controller notification, not an unrelated rebuild.
+              listenable: Listenable.merge([_leftController, _rightController]),
+              builder: (_, _) =>
+                  _buildDesktopLayout(context, width, hasPanel, floatingOpen),
+            ),
           ),
         );
       },
@@ -112,8 +127,8 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
 
   /// Which sidebar entry should read as active, derived from the route (plus
   /// the floating-window state, which does not change the route).
-  String _currentView(BuildContext context) {
-    if (ref.watch(desktopFloatingStackProvider).isNotEmpty) return 'menu';
+  String _currentView(BuildContext context, bool floatingOpen) {
+    if (floatingOpen) return 'menu';
     final segments = GoRouterState.of(context).uri.pathSegments;
     if (segments.isEmpty) return 'dialogs';
     switch (segments.first) {
@@ -156,7 +171,10 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
       ref.read(glossaryPopupVisibleProvider.notifier).state = false;
       return KeyEventResult.handled;
     }
-    if (ref.read(rightSidebarPanelProvider) != null) {
+    // The regular tool panel is retained, but not visible on support. Escape
+    // must not silently erase it while closing overlays in this workspace.
+    if (!_isSupportRoute(context) &&
+        ref.read(rightSidebarPanelProvider) != null) {
       ref.read(rightSidebarPanelProvider.notifier).state = null;
       return KeyEventResult.handled;
     }
@@ -212,9 +230,10 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     BuildContext context,
     double availableWidth,
     bool hasPanel,
+    bool floatingOpen,
   ) {
-    final widths = _fitSidebars(availableWidth, hasPanel);
     final isSupport = _isSupportRoute(context);
+    final widths = _fitSidebars(availableWidth, hasPanel && !isSupport);
     return Focus(
       autofocus: true,
       canRequestFocus: false,
@@ -230,7 +249,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
                     _buildSupportLeftSidebar(widths.left)
                   else
                     DesktopLeftSidebar(
-                      currentView: _currentView(context),
+                      currentView: _currentView(context, floatingOpen),
                       width: widths.left,
                     ),
                   Expanded(
@@ -265,50 +284,62 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
 
   Widget _buildSupportLeftSidebar(double width) {
     final collapsed = width < kSidebarCollapseThreshold;
-    return ListenableBuilder(
-      listenable: _leftController,
-      builder: (context, _) => DesktopSidebarSurface(
-        width: width,
-        edge: SidebarEdge.left,
-        animate: !_leftController.dragging,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: SupportSessionsPanel(collapsed: collapsed),
+    return DesktopSidebarSurface(
+      width: width,
+      edge: SidebarEdge.left,
+      // Either grip can refit the opposite column. Both edges must track that
+      // fit immediately during a drag so the center keeps its width floor.
+      animate: !_leftController.dragging && !_rightController.dragging,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: LayoutBuilder(
+              // The animated surface still has its previous width on the
+              // first expansion frame. Do not put full rows into a 64px rail;
+              // retain accessible rail controls until the real column can
+              // accommodate the controller's minimum expanded width.
+              builder: (_, constraints) => SupportSessionsPanel(
+                collapsed:
+                    collapsed ||
+                    constraints.maxWidth < LeftSidebarController.minWidth,
+              ),
             ),
-            Positioned(
-              top: 0,
-              bottom: 0,
-              right: -SidebarDragHandle.width / 2,
-              child: SidebarDragHandle.left(leftController: _leftController),
-            ),
-          ],
-        ),
+          ),
+          Positioned(
+            top: 0,
+            bottom: 0,
+            right: -SidebarDragHandle.width / 2,
+            child: SidebarDragHandle.left(leftController: _leftController),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildSupportRightSidebar(double width) {
     final collapsed = width < kSidebarCollapseThreshold;
-    return ListenableBuilder(
-      listenable: _rightController,
-      builder: (context, _) => DesktopSidebarSurface(
-        width: width,
-        edge: SidebarEdge.right,
-        animate: !_rightController.dragging,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: SupportSettingsPanel(collapsed: collapsed),
+    return DesktopSidebarSurface(
+      width: width,
+      edge: SidebarEdge.right,
+      animate: !_leftController.dragging && !_rightController.dragging,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: LayoutBuilder(
+              builder: (_, constraints) => SupportSettingsPanel(
+                collapsed:
+                    collapsed ||
+                    constraints.maxWidth < RightSidebarController.expandedMin,
+              ),
             ),
-            Positioned(
-              top: 0,
-              bottom: 0,
-              left: -SidebarDragHandle.width / 2,
-              child: SidebarDragHandle.right(rightController: _rightController),
-            ),
-          ],
-        ),
+          ),
+          Positioned(
+            top: 0,
+            bottom: 0,
+            left: -SidebarDragHandle.width / 2,
+            child: SidebarDragHandle.right(rightController: _rightController),
+          ),
+        ],
       ),
     );
   }
