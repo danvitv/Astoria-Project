@@ -18,38 +18,86 @@ final class _SupportContextStore {
           _requireSameSession(existing.sessionId, block.sessionId);
           _requireUnlocked((await mapper.context(existing)).isLocked);
         }
-        final summary = await cipher.encrypt(
-          plaintext: block.summary,
-          table: 'support_context_blocks',
-          rowId: block.id,
-          sessionId: block.sessionId,
-          field: 'summary_ciphertext',
-        );
-        final facts = block.protectedFactsJson.isEmpty
-            ? ''
-            : await cipher.encrypt(
-                plaintext: block.protectedFactsJson,
-                table: 'support_context_blocks',
-                rowId: block.id,
-                sessionId: block.sessionId,
-                field: 'protected_facts_ciphertext',
-              );
-        await db
-            .into(db.supportContextBlocks)
-            .insertOnConflictUpdate(
-              SupportContextBlocksCompanion(
-                id: Value(block.id),
-                sessionId: Value(block.sessionId),
-                startMessageId: Value(block.startMessageId),
-                endMessageId: Value(block.endMessageId),
-                summaryCiphertext: Value(summary),
-                protectedFactsCiphertext: Value(facts),
-                isActive: Value(block.isActive),
-                createdAt: Value(block.createdAt),
-              ),
-            );
-        return mapper.context((await row(block.id))!);
+        return write(block);
       });
+
+  Future<SupportContextBlock?> mutate(
+    String id,
+    String sessionId,
+    SupportContextBlock? Function(SupportContextBlock? latest) mutate,
+    bool Function()? isCurrent,
+  ) => db.transaction(() async {
+    if (isCurrent?.call() == false) return null;
+    await sessions.requireParent(sessionId);
+    if (isCurrent?.call() == false) return null;
+    final existing = await row(id);
+    SupportContextBlock? latest;
+    if (existing != null) {
+      _requireSameSession(existing.sessionId, sessionId);
+      latest = await mapper.context(existing);
+      _requireUnlocked(latest.isLocked);
+    }
+    if (isCurrent?.call() == false) return null;
+    final next = mutate(latest);
+    if (next == null || isCurrent?.call() == false) return null;
+    if (next.id != id) throw StateError('Support context identity changed.');
+    _requireSameSession(next.sessionId, sessionId);
+    _requireUnlocked(next.isLocked);
+    return write(next, isCurrent: isCurrent, requireReadableResult: true);
+  });
+
+  /// Caller owns the transaction. Recheck ownership after encryption and after
+  /// result mapping; throwing rolls back any provisional write, never history.
+  Future<SupportContextBlock> write(
+    SupportContextBlock block, {
+    bool Function()? isCurrent,
+    bool requireReadableResult = false,
+  }) async {
+    void requireCurrent() {
+      if (isCurrent?.call() == false) {
+        throw StateError('Support context operation is no longer current.');
+      }
+    }
+
+    final summary = await cipher.encrypt(
+      plaintext: block.summary,
+      table: 'support_context_blocks',
+      rowId: block.id,
+      sessionId: block.sessionId,
+      field: 'summary_ciphertext',
+    );
+    requireCurrent();
+    final facts = block.protectedFactsJson.isEmpty
+        ? ''
+        : await cipher.encrypt(
+            plaintext: block.protectedFactsJson,
+            table: 'support_context_blocks',
+            rowId: block.id,
+            sessionId: block.sessionId,
+            field: 'protected_facts_ciphertext',
+          );
+    requireCurrent();
+    await db
+        .into(db.supportContextBlocks)
+        .insertOnConflictUpdate(
+          SupportContextBlocksCompanion(
+            id: Value(block.id),
+            sessionId: Value(block.sessionId),
+            startMessageId: Value(block.startMessageId),
+            endMessageId: Value(block.endMessageId),
+            summaryCiphertext: Value(summary),
+            protectedFactsCiphertext: Value(facts),
+            isActive: Value(block.isActive),
+            createdAt: Value(block.createdAt),
+          ),
+        );
+    requireCurrent();
+    final durable = await mapper.context((await row(block.id))!);
+    if (requireReadableResult) _requireUnlocked(durable.isLocked);
+    requireCurrent();
+    return durable;
+  }
+
   Future<SupportContextBlock?> get(String id) async {
     final found = await row(id);
     return found == null ? null : mapper.context(found);

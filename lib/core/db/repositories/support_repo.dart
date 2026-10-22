@@ -79,6 +79,15 @@ class SupportRepo {
   Future<void> deleteMessage(String messageId) => _messages.delete(messageId);
   Future<SupportContextBlock> putContextBlock(SupportContextBlock block) =>
       _context.put(block);
+
+  /// Latest-row decision and write share one transaction. A null candidate is
+  /// a no-op; callbacks are synchronous and must not perform external work.
+  Future<SupportContextBlock?> mutateContextBlock({
+    required String blockId,
+    required String sessionId,
+    required SupportContextBlock? Function(SupportContextBlock? latest) mutate,
+    bool Function()? isCurrent,
+  }) => _context.mutate(blockId, sessionId, mutate, isCurrent);
   Future<SupportContextBlock?> getContextBlockById(String id) =>
       _context.get(id);
   Future<List<SupportContextBlock>> getContextBlocksForSession(
