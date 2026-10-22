@@ -49,7 +49,14 @@ import 'widgets/widgets.dart';
 class CharacterListScreen extends ConsumerStatefulWidget {
   final String? initialCharacterId;
 
-  const CharacterListScreen({super.key, this.initialCharacterId});
+  /// Composition-only availability; ordinary screens retain the disabled gate.
+  final bool supportAssistantAvailable;
+
+  const CharacterListScreen({
+    super.key,
+    this.initialCharacterId,
+    this.supportAssistantAvailable = supportAssistantWorkspaceEnabled,
+  });
 
   @override
   ConsumerState<CharacterListScreen> createState() =>
@@ -642,9 +649,15 @@ class _CharacterListScreenState extends ConsumerState<CharacterListScreen>
     final infinite = ref.watch(infiniteCharactersProvider(key));
 
     return infinite.when(
-      loading: () => Center(child: GlazeSpinner(color: context.cs.primary)),
-      error: (e, _) => Center(
-        child: Text(
+      loading: () => _buildLibraryStatus(
+        context,
+        topPad,
+        GlazeSpinner(color: context.cs.primary),
+      ),
+      error: (e, _) => _buildLibraryStatus(
+        context,
+        topPad,
+        Text(
           '${'title_error'.tr()}: $e',
           style: TextStyle(color: context.cs.onSurfaceVariant),
         ),
@@ -722,7 +735,7 @@ class _CharacterListScreenState extends ConsumerState<CharacterListScreen>
         setState(() => _currentFolderId = id);
         refreshShellHeader();
       },
-      showAstoriaAssistant: supportAssistantWorkspaceEnabled,
+      showAstoriaAssistant: widget.supportAssistantAvailable,
       onOpenAstoriaAssistant: () => context.go('/support'),
       showFavorites: showFavorites,
       onOpenFavorites: () {
@@ -772,9 +785,15 @@ class _CharacterListScreenState extends ConsumerState<CharacterListScreen>
   ) {
     final chars = ref.watch(charactersProvider);
     return chars.when(
-      loading: () => Center(child: GlazeSpinner(color: context.cs.primary)),
-      error: (e, _) => Center(
-        child: Text(
+      loading: () => _buildLibraryStatus(
+        context,
+        topPad,
+        GlazeSpinner(color: context.cs.primary),
+      ),
+      error: (e, _) => _buildLibraryStatus(
+        context,
+        topPad,
+        Text(
           '${'title_error'.tr()}: $e',
           style: TextStyle(color: context.cs.onSurfaceVariant),
         ),
@@ -807,13 +826,9 @@ class _CharacterListScreenState extends ConsumerState<CharacterListScreen>
                             ),
                           ),
                         ),
-                      if (supportAssistantWorkspaceEnabled) ...[
+                      if (widget.supportAssistantAvailable) ...[
                         const SizedBox(height: 12),
-                        GlazePillButton(
-                          icon: Icons.support_agent_rounded,
-                          label: 'Астория Ассистент',
-                          onTap: () => context.go('/support'),
-                        ),
+                        _buildAssistantHelpEntry(context),
                       ],
                     ],
                   ),
@@ -844,6 +859,48 @@ class _CharacterListScreenState extends ConsumerState<CharacterListScreen>
           onSortTypeChanged: (t) => setState(() => _sortBy = t),
         );
       },
+    );
+  }
+
+  Widget _buildAssistantHelpEntry(BuildContext context) {
+    final label = astoriaAssistantEntryLabel(context);
+    void openAssistant() => context.go('/support');
+    return AstoriaAssistantEntryButton(
+      key: const ValueKey('astoria_assistant_help_entry'),
+      label: label,
+      onTap: openAssistant,
+      child: GlazePillButton(
+        icon: Icons.support_agent_rounded,
+        label: label,
+        onTap: openAssistant,
+      ),
+    );
+  }
+
+  /// Keep top-level help reachable when library data cannot yet render a strip.
+  Widget _buildLibraryStatus(
+    BuildContext context,
+    double topPad,
+    Widget status,
+  ) {
+    if (!widget.supportAssistantAvailable) return Center(child: status);
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(child: SizedBox(height: topPad)),
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                status,
+                const SizedBox(height: 12),
+                _buildAssistantHelpEntry(context),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 

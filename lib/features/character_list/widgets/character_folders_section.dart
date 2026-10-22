@@ -54,9 +54,15 @@ class CharacterFoldersSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final folders = ref.watch(characterFoldersProvider).value ?? const [];
+    final openAssistant =
+        onOpenAstoriaAssistant ??
+        (GoRouter.maybeOf(context) == null
+            ? null
+            : () => context.go('/support'));
+    final assistantVisible = showAstoriaAssistant && openAssistant != null;
     if (folders.isEmpty &&
         !showOurPicks &&
-        !showAstoriaAssistant &&
+        !assistantVisible &&
         !showFavorites) {
       return const SizedBox.shrink();
     }
@@ -79,11 +85,8 @@ class CharacterFoldersSection extends ConsumerWidget {
           onTap: () => onOpenPicks?.call(),
           onLongPress: () => _picksActions(context),
         ),
-      if (showAstoriaAssistant)
-        _AstoriaAssistantCircle(
-          key: astoriaLauncherKey,
-          onTap: onOpenAstoriaAssistant ?? () => context.go('/support'),
-        ),
+      if (assistantVisible)
+        _AstoriaAssistantCircle(key: astoriaLauncherKey, onTap: openAssistant),
       if (showFavorites) _FavoritesCircle(onTap: () => onOpenFavorites?.call()),
       for (final folder in folders)
         _FolderCircle(
@@ -94,8 +97,15 @@ class CharacterFoldersSection extends ConsumerWidget {
         ),
     ];
 
+    final captionGrowth =
+        (MediaQuery.textScalerOf(context).scale(11) - 11).clamp(
+          0.0,
+          double.infinity,
+        ) *
+        2 *
+        1.15;
     return SizedBox(
-      height: 116,
+      height: 116 + captionGrowth,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
@@ -383,25 +393,10 @@ class _AstoriaAssistantCircle extends StatelessWidget {
 
   const _AstoriaAssistantCircle({super.key, required this.onTap});
 
-  String _caption(BuildContext context) {
-    final easyLocale = EasyLocalization.of(context)?.locale;
-    if (easyLocale != null) {
-      return easyLocale.languageCode == 'en'
-          ? 'Astoria Assistant'
-          : 'Астория Ассистент';
-    }
-    final locale = Localizations.maybeLocaleOf(context);
-    if (locale != null &&
-        locale.languageCode == 'en' &&
-        (locale.countryCode == null || locale.countryCode!.isEmpty)) {
-      return 'Astoria Assistant';
-    }
-    return 'Астория Ассистент';
-  }
-
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return AstoriaAssistantEntryButton(
+      label: astoriaAssistantEntryLabel(context),
       onTap: onTap,
       child: SizedBox(
         width: 72,
@@ -444,7 +439,7 @@ class _AstoriaAssistantCircle extends StatelessWidget {
             ),
             const SizedBox(height: 5),
             Text(
-              _caption(context),
+              astoriaAssistantEntryLabel(context),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
@@ -460,6 +455,52 @@ class _AstoriaAssistantCircle extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Shared name for both entry variants, including non-EasyLocalization hosts.
+String astoriaAssistantEntryLabel(BuildContext context) {
+  if (EasyLocalization.of(context) != null) {
+    return 'support_assistant_entry'.tr(context: context);
+  }
+  return Localizations.maybeLocaleOf(context)?.languageCode == 'en'
+      ? 'Astoria Assistant'
+      : 'Астория Ассистент';
+}
+
+/// Adds Material's native focus/Enter/Space activation without replacing the
+/// existing cat cover or Glaze pill design. Presentation below it is inert.
+class AstoriaAssistantEntryButton extends StatelessWidget {
+  const AstoriaAssistantEntryButton({
+    super.key,
+    required this.label,
+    required this.onTap,
+    required this.child,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: label,
+    excludeFromSemantics: true,
+    child: Semantics(
+      label: label,
+      button: true,
+      onTap: onTap,
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: onTap,
+          excludeFromSemantics: true,
+          borderRadius: BorderRadius.circular(20),
+          focusColor: context.cs.primary.withValues(alpha: 0.2),
+          child: ExcludeSemantics(child: IgnorePointer(child: child)),
+        ),
+      ),
+    ),
+  );
 }
 
 /// Special circle for the virtual "Favorites" collection. Shaped like a folder

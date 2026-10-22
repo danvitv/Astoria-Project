@@ -124,9 +124,12 @@ Page<void> _adaptivePage({
 /// Extracted so tests can call `buildRouter(GlobalKey())` to get a fresh
 /// router with a fresh key per test — sharing [rootNavigatorKey] across
 /// tests causes GoRouter to silently skip navigation after the first test.
+/// Support availability is an optional composition input shared by its route
+/// gate and character entry. Omitting it preserves the production constant.
 GoRouter buildRouter(
   GlobalKey<NavigatorState> navigatorKey, {
   bool Function()? isForceMobile,
+  bool Function()? isSupportAssistantAvailable,
 }) => GoRouter(
   navigatorKey: navigatorKey,
   redirect: (context, state) {
@@ -174,6 +177,9 @@ GoRouter buildRouter(
                   path: '/characters',
                   builder: (_, state) => CharacterListScreen(
                     initialCharacterId: state.uri.queryParameters['open'],
+                    supportAssistantAvailable:
+                        isSupportAssistantAvailable?.call() ??
+                        supportAssistantWorkspaceEnabled,
                   ),
                 ),
               ],
@@ -321,7 +327,10 @@ GoRouter buildRouter(
         GoRoute(
           path: '/support',
           redirect: (_, _) =>
-              supportAssistantWorkspaceEnabled ? null : '/characters',
+              (isSupportAssistantAvailable?.call() ??
+                  supportAssistantWorkspaceEnabled)
+              ? null
+              : '/characters',
           pageBuilder: (_, state) {
             final topic = state.uri.queryParameters['topic'];
             return _adaptivePage(
