@@ -62,6 +62,7 @@ import '../services/card_rewriter/effective_canon_context_loader.dart';
 import '../services/card_rewriter/effective_canon_read_repository.dart';
 import '../support/support_payload_cipher.dart';
 import 'credential_vault_provider.dart';
+import 'connection_revision_provider.dart';
 import 'studio_feature_provider.dart';
 
 // Re-export so existing call sites that `import db_provider.dart` can still
@@ -171,6 +172,9 @@ final apiConfigRepoProvider = Provider<ApiConfigRepo>((ref) {
   return ApiConfigRepo(
     ref.watch(appDbProvider),
     onConfigObserved: adapter.registerConfigSecrets,
+    onMutationStarted: ref
+        .watch(connectionRevisionRegistryProvider)
+        .beginMutation,
   );
 });
 

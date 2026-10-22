@@ -12,7 +12,9 @@ import '../../llm/transport/endpoint_normalizer.dart';
 class ApiConfigRepo implements SyncApiConfigStore {
   final AppDatabase _db;
   final void Function(ApiConfig)? onConfigObserved;
-  ApiConfigRepo(this._db, {this.onConfigObserved});
+  // Feature-free fence: no settings, credentials or feature models cross it.
+  final void Function() Function()? onMutationStarted;
+  ApiConfigRepo(this._db, {this.onConfigObserved, this.onMutationStarted});
 
   @override
   Future<List<ApiConfig>> getAll() async {
@@ -40,6 +42,15 @@ class ApiConfigRepo implements SyncApiConfigStore {
 
   @override
   Future<void> put(ApiConfig config) async {
+    final finish = onMutationStarted?.call();
+    try {
+      await _put(config);
+    } finally {
+      finish?.call();
+    }
+  }
+
+  Future<void> _put(ApiConfig config) async {
     onConfigObserved?.call(config);
     final persisted = config.copyWith(
       endpoint: EndpointNormalizer.persistedLlmEndpoint(
@@ -61,14 +72,24 @@ class ApiConfigRepo implements SyncApiConfigStore {
 
   @override
   Future<void> delete(String id) async {
-    await (_db.delete(
-      _db.apiConfigs,
-    )..where((t) => t.configId.equals(id))).go();
+    final finish = onMutationStarted?.call();
+    try {
+      await (_db.delete(
+        _db.apiConfigs,
+      )..where((t) => t.configId.equals(id))).go();
+    } finally {
+      finish?.call();
+    }
   }
 
   Future<void> putFromMap(Map<String, dynamic> m) async {
-    final config = ApiConfig.fromJson(m);
-    await put(config);
+    final finish = onMutationStarted?.call();
+    try {
+      final config = ApiConfig.fromJson(m);
+      await _put(config);
+    } finally {
+      finish?.call();
+    }
   }
 
   ApiConfig _toModel(ApiConfigRow c) => ApiConfig(

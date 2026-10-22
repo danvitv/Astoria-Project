@@ -35,14 +35,23 @@ class BackupService {
 
   final AppDatabase _db;
   final ImageStorageService _imageStorage;
+  final void Function() Function()? _onImportStarted;
   final _CancelFlag _cancelFlag = _CancelFlag();
   late final ImportCancellationToken _cancel = ImportCancellationToken.wrap(
     isCancelled: _cancelFlag.isCancelled,
     check: _cancelFlag.check,
   );
 
-  BackupService(this._db, ImageStorageService _imageStorage)
-    : _imageStorage = _imageStorage;
+  /// Optional native mutation fence, shared with ordinary connection writes.
+  /// Begin must be synchronous; its idempotent callback settles every outcome.
+  /// No registry is created implicitly for directly constructed services.
+  BackupService(
+    this._db,
+    this._imageStorage, {
+    void Function() Function()? onImportStarted,
+  }) : // Keep the optional injection public and its storage private.
+       // ignore: prefer_initializing_formals
+       _onImportStarted = onImportStarted;
 
   Future<String> exportBackup({bool includeApiKeys = false}) =>
       BackupExporter(_db, _imageStorage).export(includeApiKeys: includeApiKeys);
@@ -66,36 +75,41 @@ class BackupService {
     void Function(String stage)? onProgress,
     void Function(BackupFormat format)? onDetected,
   }) async {
-    _cancelFlag.reset();
-    final format = await _detectFormat(filePath);
-    onDetected?.call(format);
-    switch (format) {
-      case BackupFormat.sillyTavernZip:
-        await StBackupImporter(
-          _db,
-          _imageStorage,
-          _cancel,
-        ).importFromFile(filePath, onProgress: onProgress);
-        break;
-      case BackupFormat.tavoZip:
-        await TavoBackupImporter(
-          _db,
-          _imageStorage,
-          _cancel,
-        ).importFromFile(filePath, onProgress: onProgress);
-        break;
-      case BackupFormat.flutterZip:
-        await FlutterBackupImporter(
-          _db,
-          _imageStorage,
-          _cancel,
-        ).importFromZipFile(filePath, onProgress: onProgress);
-        break;
-      case BackupFormat.legacyJsonGlaze:
-        await _importLegacyJsonGlaze(filePath, onProgress: onProgress);
-        break;
+    final settle = _onImportStarted?.call();
+    try {
+      _cancelFlag.reset();
+      final format = await _detectFormat(filePath);
+      onDetected?.call(format);
+      switch (format) {
+        case BackupFormat.sillyTavernZip:
+          await StBackupImporter(
+            _db,
+            _imageStorage,
+            _cancel,
+          ).importFromFile(filePath, onProgress: onProgress);
+          break;
+        case BackupFormat.tavoZip:
+          await TavoBackupImporter(
+            _db,
+            _imageStorage,
+            _cancel,
+          ).importFromFile(filePath, onProgress: onProgress);
+          break;
+        case BackupFormat.flutterZip:
+          await FlutterBackupImporter(
+            _db,
+            _imageStorage,
+            _cancel,
+          ).importFromZipFile(filePath, onProgress: onProgress);
+          break;
+        case BackupFormat.legacyJsonGlaze:
+          await _importLegacyJsonGlaze(filePath, onProgress: onProgress);
+          break;
+      }
+      await _db.purgeRetiredAgenticMicroMemory();
+    } finally {
+      settle?.call();
     }
-    await _db.purgeRetiredAgenticMicroMemory();
   }
 
   Future<BackupFormat> _detectFormat(String filePath) async {
