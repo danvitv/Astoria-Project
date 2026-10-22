@@ -9,6 +9,7 @@ class SupportComposerBar extends StatefulWidget {
   final TextEditingController controller;
   final Future<bool> Function(String) onSend;
   final bool busy;
+  final bool available;
   final String? sessionId;
   final VoidCallback? onRunQuickDiagnostics;
 
@@ -17,6 +18,7 @@ class SupportComposerBar extends StatefulWidget {
     required this.controller,
     required this.onSend,
     this.busy = false,
+    this.available = true,
     this.sessionId,
     this.onRunQuickDiagnostics,
   });
@@ -28,13 +30,31 @@ class SupportComposerBar extends StatefulWidget {
 class _SupportComposerBarState extends State<SupportComposerBar> {
   bool _sending = false;
   String? _error;
+  int _ownership = 0;
+
+  @override
+  void didUpdateWidget(covariant SupportComposerBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sessionId != widget.sessionId ||
+        !identical(oldWidget.controller, widget.controller)) {
+      _ownership++;
+      _error = null;
+    }
+  }
 
   Future<void> _submit() async {
-    if (_sending || widget.busy) return;
+    if (_sending || widget.busy || !widget.available) return;
     final controller = widget.controller;
     final draft = controller.text;
     if (draft.trim().isEmpty) return;
     final sessionId = widget.sessionId;
+    final ownership = _ownership;
+    bool ownsDraft() =>
+        mounted &&
+        ownership == _ownership &&
+        identical(controller, widget.controller) &&
+        widget.sessionId == sessionId &&
+        controller.text == draft;
     setState(() {
       _sending = true;
       _error = null;
@@ -42,17 +62,14 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
     try {
       final accepted = await widget.onSend(draft.trim());
       if (!mounted) return;
-      if (accepted &&
-          identical(controller, widget.controller) &&
-          widget.sessionId == sessionId &&
-          controller.text == draft) {
+      if (accepted && ownsDraft()) {
         controller.clear();
-      } else if (!accepted) {
+      } else if (!accepted && ownsDraft()) {
         _error =
             'Сообщение не сохранено. Черновик оставлен для повторной отправки.';
       }
     } catch (_) {
-      if (!mounted) return;
+      if (!ownsDraft()) return;
       _error =
           'Не удалось сохранить сообщение. Черновик сохранён в поле ввода.';
     } finally {
@@ -97,7 +114,9 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
                     ),
                     IconButton(
                       key: const ValueKey('support_composer_send_btn'),
-                      tooltip: 'Сохранить сообщение',
+                      tooltip: widget.available
+                          ? 'Сохранить сообщение'
+                          : 'Отправка недоступна',
                       icon: busy
                           ? const SizedBox(
                               width: 20,
@@ -105,7 +124,7 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.send_rounded, size: 20),
-                      onPressed: busy ? null : _submit,
+                      onPressed: busy || !widget.available ? null : _submit,
                     ),
                   ],
                 ),

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../shared/shell/desktop/desktop_layout_provider.dart';
 import '../../shared/theme/app_colors.dart';
 import '../../shared/widgets/glaze_scaffold.dart';
+import '../../shared/widgets/glaze_error_block.dart';
 import '../../shared/widgets/glaze_toast.dart';
 import '../../shared/widgets/sheet_view.dart';
 import 'state/support_workspace_provider.dart';
@@ -193,7 +194,9 @@ class _SupportAssistantScreenState
             padding: const EdgeInsets.only(right: 8),
             child: Center(
               child: Text(
-                workspace.settings.mode.shortLabel,
+                workspace.settingsAvailable
+                    ? workspace.settings.mode.shortLabel
+                    : 'Настройки недоступны',
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -205,6 +208,21 @@ class _SupportAssistantScreenState
       ],
       body: Column(
         children: [
+          if (workspace.error != null)
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: GlazeErrorBlock(
+                message: workspace.error!,
+                label: 'Астория',
+              ),
+            ),
+          if (!workspace.settingsAvailable)
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text(
+                'Настройки сессии недоступны. Отправка заблокирована; открой настройки Астории.',
+              ),
+            ),
           Expanded(
             child: SupportMessageList(
               messages: workspace.activeMessages,
@@ -219,6 +237,9 @@ class _SupportAssistantScreenState
             controller: _composerCtrl,
             sessionId: workspace.activeSessionId,
             busy: workspace.isBusy || workspace.isLoading,
+            available:
+                workspace.settingsAvailable &&
+                workspace.activeSessionId.isNotEmpty,
             onSend: notifier.sendUserMessage,
             onRunQuickDiagnostics: () =>
                 _handleSetupCardAction('connection_diagnostics'),

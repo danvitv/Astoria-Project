@@ -3,6 +3,11 @@ import '../../../core/credentials/secret_redactor.dart';
 import '../../../core/models/support_models.dart';
 import '../models/support_workspace_models.dart';
 
+class SupportSettingsUnavailable extends StateError {
+  SupportSettingsUnavailable(this.availability) : super('Settings unavailable');
+  final SupportSettingsAvailability availability;
+}
+
 /// Dedicated encrypted context row; preferences never enter plaintext metadata.
 class SupportWorkspaceSettingsCodec {
   const SupportWorkspaceSettingsCodec();
@@ -34,7 +39,9 @@ class SupportWorkspaceSettingsCodec {
   );
   SupportAssistantSettings decode(SupportContextBlock? block) {
     if (block == null) return const SupportAssistantSettings();
-    if (block.isLocked) throw StateError('Settings unavailable');
+    if (block.isLocked) {
+      throw SupportSettingsUnavailable(SupportSettingsAvailability.locked);
+    }
     try {
       if (block.summary != 'workspace-settings-v1') {
         throw const FormatException();
@@ -62,7 +69,7 @@ class SupportWorkspaceSettingsCodec {
         dcpCompressionEnabled: m['dcpCompressionEnabled'] as bool,
       );
     } catch (_) {
-      throw StateError('Settings unavailable');
+      throw SupportSettingsUnavailable(SupportSettingsAvailability.corrupt);
     }
   }
 }

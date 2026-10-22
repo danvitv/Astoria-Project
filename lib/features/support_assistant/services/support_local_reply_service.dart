@@ -1,5 +1,4 @@
 import '../../../core/utils/id_generator.dart';
-import '../../../core/credentials/api_connection_metadata.dart';
 import '../models/support_workspace_models.dart';
 
 /// Explanatory offline responses only. No transport, repair or export claims.
@@ -22,11 +21,7 @@ class SupportLocalReplyService {
     return 'help';
   }
 
-  SupportMessageItem reply(
-    String sessionId,
-    String topic,
-    ApiConnectionMetadata? connection,
-  ) {
+  SupportMessageItem reply(String sessionId, String topic) {
     const disclaimer = 'Сетевые запросы и исправления не выполнялись.';
     final cards = <SupportCard>[];
     String body;
@@ -62,7 +57,6 @@ class SupportLocalReplyService {
               'Введи ключ в предназначенное для него поле.',
             ],
             primaryActionLabel: 'Открыть настройки',
-            credentialMetadata: connection?.llmCredential,
           ),
         );
       case 'memory_books_setup':
@@ -83,23 +77,16 @@ class SupportLocalReplyService {
           ),
         );
       case 'connection_diagnostics':
-        body = 'Показаны только метаданные выбранного подключения. $disclaimer';
+        body =
+            'Это общая инструкция. Приватные результаты, если чтение разрешено, доступны только в текущей нативной панели. $disclaimer';
         cards.add(
           DiagnosticCheckCard(
             checkId: 'selected-connection-metadata',
             title: 'Метаданные подключения',
-            summary: connection == null
-                ? 'Подключение не выбрано или отсутствует.'
-                : 'Это конфигурация, не доказательство работоспособности API.',
+            summary:
+                'Данные подключения в историю не включены; проверка API не выполнялась.',
             status: SupportCheckStatus.missingEvidence,
-            findings: connection == null
-                ? const []
-                : [
-                    'Подключение: ${connection.displayName}',
-                    'Протокол: ${connection.protocol}',
-                    'Endpoint: ${connection.endpoint}',
-                    'Ключ настроен: ${connection.configured}; символов: ${connection.characterCount}',
-                  ],
+            findings: const [],
           ),
         );
       case 'support_report':
@@ -114,7 +101,7 @@ class SupportLocalReplyService {
         );
       default:
         body =
-            'Могу объяснить настройки или показать метаданные выбранного подключения. Генерация через LLM пока недоступна. $disclaimer';
+            'Могу объяснить настройки. Чтение данных требует отдельного разрешения; генерация через LLM пока недоступна. $disclaimer';
         cards.add(
           const QuickActionChipsCard(
             title: 'Локальная помощь',

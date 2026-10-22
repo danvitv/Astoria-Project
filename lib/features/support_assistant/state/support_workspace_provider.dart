@@ -1,136 +1,213 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../core/credentials/api_connection_metadata.dart';
-import '../../../core/state/credential_vault_provider.dart';
-import '../../../core/state/db_provider.dart';
 import '../models/support_workspace_models.dart';
-import '../services/support_connection_metadata_service.dart';
-import '../services/support_local_reply_service.dart';
+import '../services/support_native_runtime.dart';
+import '../services/support_workspace_send_service.dart';
 import '../services/support_workspace_store.dart';
+import 'support_workspace_lifecycle.dart';
 import 'support_workspace_state.dart';
+import 'support_workspace_topic_coordinator.dart';
+import 'support_workspace_dependencies.dart';
+import 'support_native_provider.dart';
 
 export '../models/support_workspace_models.dart';
 export 'support_workspace_state.dart';
+export 'support_workspace_dependencies.dart';
 
-final supportConnectionMetadataProvider = FutureProvider(
-  (ref) => SupportConnectionMetadataService(
-    ref.watch(apiConfigRepoProvider),
-    () => ref.read(secretRedactorProvider),
-  ).load(),
-);
-final supportConnectionsProvider = Provider<List<ApiConnectionMetadata>>(
-  (ref) =>
-      ref.watch(supportConnectionMetadataProvider).asData?.value ?? const [],
-);
-final supportSessionStoreProvider = Provider(
-  (ref) => SupportWorkspaceStore(
-    ref.watch(supportRepoProvider),
-    () => ref.read(secretRedactorProvider),
-  ),
-);
-
-/// Serial durable writes; selection stays synchronous and owns reply completion.
+/// Serial durable writes; each build and selection own their completions.
 class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
-  Future<void> _tail = Future.value();
-  int _selection = 0;
-  bool _alive = true;
-  late SupportWorkspaceStore _store;
-  final _replies = const SupportLocalReplyService();
+  int _epoch = 0, _selection = 0;
+  late SupportWorkspaceLifecycle _owner;
+  SupportNativeRuntime? _native;
+  late final _topics = SupportWorkspaceTopicCoordinator(
+    capture: () => SupportWorkspaceSendContext(
+      _owner,
+      _selection,
+      state.activeSessionId,
+      ready:
+          !state.isLoading &&
+          !state.isBusy &&
+          (state.activeSessionId.isEmpty ||
+              (state.settingsAvailable &&
+                  state.activeSession?.isLocked != true)),
+    ),
+    isCurrent: (context) =>
+        _current(context.owner) && context.selection == _selection,
+    enqueue: _enqueue,
+    reload: _reload,
+    inspectConnection: (id, current) =>
+        _native!.inspectSelectedConnection(id, current),
+    invalidateNative: () => _native?.invalidateLease(),
+    selectCreatedSession: (id) {
+      _native!.selectSession(id);
+      state = state.copyWith(activeSessionId: id);
+    },
+    publish: _publishDurable,
+    publishHandledTopic: (topic) =>
+        state = state.copyWith(lastHandledTopic: topic),
+  );
 
   @override
   SupportWorkspaceState build() {
-    _alive = true;
-    _store = ref.watch(supportSessionStoreProvider);
-    ref.onDispose(() => _alive = false);
-    unawaited(Future.microtask(() => _enqueue(_reload)));
-    return const SupportWorkspaceState();
+    _native?.selectSession('', force: true);
+    final native = ref.watch(supportNativeRuntimeProvider);
+    _native = native;
+    native.selectSession('', force: true);
+    final owner = _owner = SupportWorkspaceLifecycle(
+      ++_epoch,
+      ref.watch(supportSessionStoreProvider),
+    );
+    _selection++;
+    ref.onDispose(() {
+      native.invalidateBindings();
+      owner.alive = false;
+    });
+    unawaited(
+      Future<void>.microtask(() async {
+        if (_current(owner)) await _enqueue(owner, () => _reload(owner));
+      }),
+    );
+    return SupportWorkspaceState(lastHandledTopic: _topics.handledTopic);
   }
 
-  Future<bool> _enqueue(Future<void> Function() work) {
+  bool _current(SupportWorkspaceLifecycle owner) =>
+      owner.alive && owner.epoch == _epoch && identical(owner, _owner);
+
+  Future<bool> _enqueue(
+    SupportWorkspaceLifecycle owner,
+    Future<void> Function() work, {
+    bool Function()? ownsError,
+  }) {
+    if (!_current(owner)) return Future.value(false);
+    owner.pending++;
     final result = Completer<bool>();
-    _tail = _tail.then((_) async {
-      if (!_alive) {
-        result.complete(false);
-        return;
-      }
-      state = state.copyWith(isBusy: true, clearError: true);
-      try {
-        await work();
-        result.complete(true);
-      } catch (_) {
-        if (_alive) {
-          state = state.copyWith(
-            error:
-                'Не удалось прочитать или сохранить историю помощника. Проверь доступ к защищённому хранилищу.',
-          );
+    owner.tail = owner.tail.then((_) async {
+      var success = false;
+      if (_current(owner)) {
+        state = state.copyWith(isBusy: true, clearError: true);
+        try {
+          await work();
+          success = _current(owner);
+        } catch (error) {
+          if (_current(owner) && ownsError?.call() != false) {
+            state = state.copyWith(
+              error: error is SupportReplyUnavailable
+                  ? 'Сообщение сохранено, но ответ помощника не удалось сохранить. Не отправляй сообщение повторно; попробуй обновить историю.'
+                  : 'Не удалось прочитать или сохранить историю помощника. Проверь доступ к защищённому хранилищу.',
+            );
+          }
         }
-        result.complete(false);
-      } finally {
-        if (_alive) state = state.copyWith(isBusy: false, isLoading: false);
       }
+      owner.pending--;
+      if (_current(owner)) {
+        state = state.copyWith(isBusy: owner.pending > 0, isLoading: false);
+        if (success) _topics.resume();
+      }
+      result.complete(success);
     });
     return result.future;
   }
 
-  Future<void> _reload() async {
-    final snapshot = await _store.load();
-    if (!_alive) return;
+  Future<void> _reload(SupportWorkspaceLifecycle owner) async {
+    final SupportWorkspaceSnapshot snapshot;
+    try {
+      snapshot = await owner.store.load();
+    } catch (_) {
+      if (_current(owner)) {
+        state = state.copyWith(
+          settingsAvailability: SupportSettingsAvailability.unavailable,
+        );
+      }
+      rethrow;
+    }
+    if (!_current(owner)) return;
     final active = snapshot.sessions.any((s) => s.id == state.activeSessionId)
         ? state.activeSessionId
         : snapshot.sessions.firstOrNull?.id ?? '';
+    _native!.selectSession(active);
     state = state.copyWith(
       sessions: snapshot.sessions,
       messagesBySession: snapshot.messages,
       activeSessionId: active,
       settings: snapshot.settings[active] ?? const SupportAssistantSettings(),
+      settingsBySession: snapshot.settings,
+      settingsAvailabilityBySession: snapshot.settingsAvailability,
+      settingsAvailability:
+          snapshot.settingsAvailability[active] ??
+          (active.isEmpty
+              ? SupportSettingsAvailability.available
+              : SupportSettingsAvailability.unavailable),
       isLoading: false,
     );
   }
 
-  Future<bool> refresh() => _enqueue(_reload);
+  Future<bool> refresh() {
+    final owner = _owner;
+    return _enqueue(owner, () => _reload(owner));
+  }
+
   void setSessionSearchQuery(String query) {
     state = state.copyWith(sessionSearchQuery: query);
   }
 
   Future<String?> createNewSession({String? title}) async {
-    final selection = ++_selection;
+    _native!.invalidateBindings();
+    final owner = _owner, selection = ++_selection;
     String? id;
-    await _enqueue(() async {
-      await ref.read(supportConnectionMetadataProvider.future);
-      if (!_alive) return;
-      id = await _store.create(title);
-      if (!_alive) return;
-      if (_selection == selection) state = state.copyWith(activeSessionId: id);
-      await _reload();
+    await _enqueue(owner, () async {
+      final created = await owner.store.create(title);
+      if (!_current(owner)) return;
+      id = created;
+      if (_selection == selection) {
+        _native!.selectSession(created);
+        state = state.copyWith(activeSessionId: id);
+      }
+      await _reload(owner);
     });
-    return id;
+    return _current(owner) ? id : null;
   }
 
   void selectSession(String sessionId) {
     if (!state.sessions.any((s) => s.id == sessionId)) return;
+    _native!.selectSession(sessionId, force: true);
     _selection++;
     state = state.copyWith(
       activeSessionId: sessionId,
-      settings: const SupportAssistantSettings(),
+      settings:
+          state.settingsBySession[sessionId] ??
+          const SupportAssistantSettings(),
+      settingsAvailability:
+          state.settingsAvailabilityBySession[sessionId] ??
+          SupportSettingsAvailability.unavailable,
     );
-    unawaited(_enqueue(_reload));
+    unawaited(refresh());
   }
 
-  Future<bool> renameSession(String id, String title) => _enqueue(() async {
-    await ref.read(supportConnectionMetadataProvider.future);
-    if (!_alive) return;
-    await _store.rename(id, title);
-    if (_alive) await _reload();
-  });
-  Future<bool> togglePinSession(String id) => _enqueue(() async {
-    await _store.togglePin(id);
-    if (_alive) await _reload();
-  });
+  Future<bool> renameSession(String id, String title) {
+    return _editSession((store, current) async {
+      if (current()) await store.rename(id, title);
+    });
+  }
+
+  Future<bool> togglePinSession(String id) =>
+      _editSession((store, current) => store.togglePin(id, isCurrent: current));
+
   Future<bool> deleteSession(String id) {
-    if (id == state.activeSessionId) _selection++;
-    return _enqueue(() async {
-      await _store.repo.deleteSession(id);
-      if (_alive) await _reload();
+    if (id == state.activeSessionId) {
+      _native!.invalidateBindings();
+      _selection++;
+    }
+    return _editSession((store, _) => store.deleteSession(id));
+  }
+
+  Future<bool> _editSession(
+    Future<void> Function(SupportWorkspaceStore, bool Function()) edit,
+  ) {
+    final owner = _owner;
+    return _enqueue(owner, () async {
+      await edit(owner.store, () => _current(owner));
+      if (!_current(owner)) return;
+      await _reload(owner);
     });
   }
 
@@ -138,13 +215,64 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     SupportAssistantSettings Function(SupportAssistantSettings) change,
   ) {
     final id = state.activeSessionId;
-    if (id.isEmpty || state.isLoading) return Future.value(false);
-    return _enqueue(() async {
-      await ref.read(supportConnectionMetadataProvider.future);
-      if (!_alive) return;
-      await _store.changeSettings(id, change);
-      if (_alive) await _reload();
-    });
+    if (id.isEmpty || state.isLoading || !state.settingsAvailable) {
+      return Future.value(false);
+    }
+    return _editPreferences(
+      (store, current) => store.changeSettings(id, change, isCurrent: current),
+    );
+  }
+
+  Future<bool> _editPreferences(
+    Future<void> Function(SupportWorkspaceStore, bool Function()) edit,
+  ) {
+    final native = _native!;
+    final settleNative = native.beginSettingsChange();
+    final owner = _owner, selection = _selection;
+    final nativeOwner = native.writeOwner, id = state.activeSessionId;
+    bool current() => _current(owner) && selection == _selection;
+    return _enqueue(
+      owner,
+      () async {
+        if (!current()) return;
+        try {
+          await edit(owner.store, current);
+        } finally {
+          // Separate transactions: failures never restore old native authority.
+          if (current() && native.owns(id, nativeOwner)) {
+            try {
+              await native.permissions.selectRecipientFromNative(
+                id,
+                null,
+                isCurrent: () => current() && native.owns(id, nativeOwner),
+              );
+            } catch (_) {
+              /* Native authority remains denied even on clear failure. */
+            }
+          }
+        }
+        if (!_current(owner)) return;
+        await _reload(owner);
+      },
+      ownsError: current,
+    ).then((success) => success && current()).whenComplete(settleNative);
+  }
+
+  Future<bool> recoverSettings({
+    required String sessionId,
+    required bool confirmed,
+  }) {
+    if (!confirmed ||
+        sessionId != state.activeSessionId ||
+        state.isLoading ||
+        state.isBusy ||
+        state.settingsAvailability != SupportSettingsAvailability.corrupt) {
+      return Future.value(false);
+    }
+    return _editPreferences(
+      (store, current) =>
+          store.recoverSettings(sessionId, confirmed: true, isCurrent: current),
+    );
   }
 
   Future<bool> setMode(SupportAssistantMode mode) =>
@@ -170,75 +298,35 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
       _settings((s) => s.copyWith(reasoningEffort: effort));
   Future<bool> setDcpCompression(bool enabled) =>
       _settings((s) => s.copyWith(dcpCompressionEnabled: enabled));
-  void applyInitialTopic(String? topic) {
-    if (topic == null ||
-        topic.trim().isEmpty ||
-        state.lastHandledTopic == topic ||
-        state.isLoading) {
-      return;
-    }
-    state = state.copyWith(lastHandledTopic: topic);
-    unawaited(
-      triggerQuickAction(switch (topic.trim().toLowerCase()) {
-        'theme' => 'theme_setup',
-        'provider' || 'api' => 'provider_setup',
-        'memory' => 'memory_books_setup',
-        'diagnostics' => 'connection_diagnostics',
-        'report' => 'support_report',
-        _ => topic.trim(),
+
+  Future<bool> deleteMessage(String messageId) {
+    final id = state.activeSessionId;
+    return _editSession(
+      (store, current) =>
+          store.deleteMessage(id, messageId, isCurrent: current),
+    );
+  }
+
+  void _publishDurable(
+    SupportWorkspaceLifecycle owner,
+    SupportMessageItem message,
+  ) {
+    if (!_current(owner)) return;
+    final messages = state.messagesBySession[message.sessionId] ?? const [];
+    state = state.copyWith(
+      messagesBySession: Map.unmodifiable({
+        ...state.messagesBySession,
+        message.sessionId: List<SupportMessageItem>.unmodifiable([
+          ...messages.where((m) => m.id != message.id),
+          message,
+        ]),
       }),
     );
   }
 
-  Future<bool> sendUserMessage(String text) => _send(text: text);
-  Future<bool> triggerQuickAction(String topic) => _send(topic: topic);
-  Future<bool> _send({String? text, String? topic}) async {
-    final id = state.activeSessionId;
-    if (id.isEmpty ||
-        state.isLoading ||
-        state.isBusy ||
-        state.activeSession?.isLocked == true ||
-        (text != null && text.trim().isEmpty)) {
-      return false;
-    }
-    final selection = _selection;
-    var accepted = false;
-    await _enqueue(() async {
-      final connections = await ref.read(
-        supportConnectionMetadataProvider.future,
-      );
-      if (!_alive || _selection != selection) return;
-      final settings = await _store.settingsFor(id);
-      if (!_alive || _selection != selection) return;
-      if (text != null) {
-        await _store.appendUser(id, text);
-        accepted =
-            true; // Acceptance means the user row is durable, even if reply fails.
-        if (!_alive || _selection != selection) {
-          if (_alive) await _reload();
-          return;
-        }
-      }
-      final connection = connections
-          .where((c) => c.connectionId == settings.apiConfigId)
-          .firstOrNull;
-      await _store.append(
-        _replies.reply(id, topic ?? _replies.topicForText(text!), connection),
-      );
-      accepted = true;
-      if (_alive) await _reload();
-    });
-    return accepted;
-  }
-
-  Future<bool> deleteMessage(String messageId) {
-    final id = state.activeSessionId;
-    return _enqueue(() async {
-      await _store.deleteMessage(id, messageId);
-      if (_alive) await _reload();
-    });
-  }
-
+  Future<bool> sendUserMessage(String text) => _topics.send(text: text);
+  Future<bool> triggerQuickAction(String topic) => _topics.send(topic: topic);
+  void applyInitialTopic(String? topic) => _topics.applyInitialTopic(topic);
   // No executor/exporter exists in this phase.
   Future<bool> applyMutationPlan(String planId) async => false;
   Future<bool> rollbackMutation(String journalId) async => false;
