@@ -61,12 +61,19 @@ class _SupportSessionsPanelState extends ConsumerState<SupportSessionsPanel> {
             title: 'История сессий Астории',
             showBack: true,
             onBack: () => Navigator.of(sheetContext).pop(),
-            body: SupportSessionsPanel(
-              onSessionSelected: () => Navigator.of(sheetContext).pop(),
-              onBackToCharacters: () {
-                Navigator.of(sheetContext).pop();
-                _goBack(context);
-              },
+            body: Builder(
+              builder: (bodyContext) => Padding(
+                padding: EdgeInsets.only(
+                  top: MediaQuery.paddingOf(bodyContext).top,
+                ),
+                child: SupportSessionsPanel(
+                  onSessionSelected: () => Navigator.of(sheetContext).pop(),
+                  onBackToCharacters: () {
+                    Navigator.of(sheetContext).pop();
+                    _goBack(context);
+                  },
+                ),
+              ),
             ),
           ),
         ),

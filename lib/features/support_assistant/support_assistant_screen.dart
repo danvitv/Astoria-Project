@@ -98,14 +98,18 @@ class _SupportAssistantScreenState
           showBack: true,
           onBack: () => Navigator.of(sheetCtx).pop(),
           startExpanded: false,
-          body: Padding(
-            padding: EdgeInsets.only(top: MediaQuery.paddingOf(sheetCtx).top),
-            child: SupportSessionsPanel(
-              onSessionSelected: () => Navigator.of(sheetCtx).pop(),
-              onBackToCharacters: () {
-                Navigator.of(sheetCtx).pop();
-                _navigateBackToCharacters();
-              },
+          body: Builder(
+            builder: (bodyContext) => Padding(
+              padding: EdgeInsets.only(
+                top: MediaQuery.paddingOf(bodyContext).top,
+              ),
+              child: SupportSessionsPanel(
+                onSessionSelected: () => Navigator.of(sheetCtx).pop(),
+                onBackToCharacters: () {
+                  Navigator.of(sheetCtx).pop();
+                  _navigateBackToCharacters();
+                },
+              ),
             ),
           ),
         ),
@@ -129,10 +133,14 @@ class _SupportAssistantScreenState
           showBack: true,
           onBack: () => Navigator.of(sheetCtx).pop(),
           startExpanded: false,
-          body: Padding(
-            padding: EdgeInsets.only(top: MediaQuery.paddingOf(sheetCtx).top),
-            child: SupportSettingsPanel(
-              onActionTriggered: () => Navigator.of(sheetCtx).pop(),
+          body: Builder(
+            builder: (bodyContext) => Padding(
+              padding: EdgeInsets.only(
+                top: MediaQuery.paddingOf(bodyContext).top,
+              ),
+              child: SupportSettingsPanel(
+                onActionTriggered: () => Navigator.of(sheetCtx).pop(),
+              ),
             ),
           ),
         ),

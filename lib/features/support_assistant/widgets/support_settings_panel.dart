@@ -1,3 +1,4 @@
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -5,8 +6,11 @@ import '../../../shared/theme/app_colors.dart';
 import '../../../shared/widgets/glaze_toast.dart';
 import '../../../shared/widgets/glaze_tab_bar.dart';
 import '../../../shared/widgets/menu_group.dart';
+import '../../../shared/widgets/sheet_view.dart';
 import '../state/support_workspace_provider.dart';
 import 'support_settings_pickers.dart';
+import 'support_settings_unavailable.dart';
+import 'support_privacy_group.dart';
 
 /// Right panel for Astoria Assistant: mode selector (`Onboarding / Diagnostics / Hybrid`),
 /// independent API connection & model selector using safe `CredentialMetadata`
@@ -31,6 +35,30 @@ class SupportSettingsPanel extends ConsumerWidget {
 
     if (collapsed) {
       return _CollapsedSettingsStrip(
+        onSettings: () => showModalBottomSheet<void>(
+          context: context,
+          useRootNavigator: true,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (sheetContext) => SheetView(
+            title: 'Настройки Астории',
+            showBack: true,
+            onBack: () => Navigator.of(sheetContext).pop(),
+            body: Builder(
+              builder: (bodyContext) => Padding(
+                padding: EdgeInsets.only(
+                  top: MediaQuery.paddingOf(bodyContext).top,
+                ),
+                child: SupportSettingsPanel(
+                  onActionTriggered: () {
+                    Navigator.of(sheetContext).pop();
+                    onActionTriggered?.call();
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
         onDiagnostics: () {
           GlazeToast.show(context, 'Исполнитель диагностики пока недоступен.');
           onActionTriggered?.call();
@@ -42,15 +70,13 @@ class SupportSettingsPanel extends ConsumerWidget {
       );
     }
 
+    if (!workspace.settingsAvailable) {
+      return const SupportSettingsUnavailableView();
+    }
+
     final activeConnection = connections
         .where((c) => c.connectionId == settings.apiConfigId)
         .firstOrNull;
-    final credMeta = activeConnection?.llmCredential;
-    final credStatusText = credMeta == null
-        ? 'Метаданные ключа: не выбрано подключение'
-        : (credMeta.configured
-              ? 'Ключ настроен (символов: ${credMeta.characterCount})'
-              : 'Ключ не задан (configured: false, символов: 0)');
 
     return Material(
       type: MaterialType.transparency,
@@ -97,7 +123,7 @@ class SupportSettingsPanel extends ConsumerWidget {
           ),
           MenuGroup(
             header: 'Профиль Астории (запуск LLM пока недоступен)',
-            description: credStatusText,
+            description: 'support_privacy_chooser_not_consent'.tr(),
             items: [
               MenuSelectorItem(
                 key: const ValueKey('support_connection_selector'),
@@ -159,6 +185,7 @@ class SupportSettingsPanel extends ConsumerWidget {
               ),
             ],
           ),
+          const SupportPrivacyGroup(),
           MenuGroup(
             header: 'Быстрая диагностика и действия',
             items: [
@@ -194,10 +221,12 @@ class SupportSettingsPanel extends ConsumerWidget {
 }
 
 class _CollapsedSettingsStrip extends StatelessWidget {
+  final VoidCallback onSettings;
   final VoidCallback onDiagnostics;
   final VoidCallback onReport;
 
   const _CollapsedSettingsStrip({
+    required this.onSettings,
     required this.onDiagnostics,
     required this.onReport,
   });
@@ -209,6 +238,12 @@ class _CollapsedSettingsStrip extends StatelessWidget {
       child: Column(
         children: [
           const SizedBox(height: 8),
+          IconButton(
+            key: const ValueKey('support_collapsed_settings_btn'),
+            tooltip: 'Настройки Астории',
+            icon: Icon(Icons.tune_rounded, size: 20, color: context.cs.primary),
+            onPressed: onSettings,
+          ),
           IconButton(
             tooltip: 'Диагностика подключения',
             icon: Icon(

@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,6 +16,7 @@ import 'package:glaze_flutter/shared/shell/desktop/desktop_left_sidebar.dart';
 import 'package:glaze_flutter/shared/shell/desktop/desktop_right_sidebar.dart';
 import 'package:glaze_flutter/shared/shell/desktop/desktop_shell.dart';
 import 'package:glaze_flutter/shared/widgets/sheet_view.dart';
+import 'helpers/support_native_widget_fixture.dart';
 
 class _Settings extends AppSettingsNotifier {
   @override
@@ -53,8 +53,8 @@ class _Workspace extends SupportWorkspaceNotifier {
   }
 }
 
-Widget _scope(Widget child, _Workspace workspace) => ProviderScope(
-  overrides: [
+Widget _scope(Widget child, _Workspace workspace) => NativeWidgetIsolation(
+  overrides: (_) => [
     appSettingsProvider.overrideWith(_Settings.new),
     supportWorkspaceProvider.overrideWith(() => workspace),
     supportConnectionsProvider.overrideWithValue(const []),
@@ -88,6 +88,7 @@ GoRouter _router({bool desktop = false}) => GoRouter(
 );
 
 void main() {
+  setUpAll(initializeNativeWidgetLocalization);
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   testWidgets('rejected send retains draft and concurrent send is blocked', (

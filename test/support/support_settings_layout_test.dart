@@ -1,19 +1,20 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:glaze_flutter/features/support_assistant/state/support_workspace_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_settings_panel.dart';
+import 'package:glaze_flutter/features/settings/app_settings_provider.dart';
+import 'helpers/support_native_widget_fixture.dart';
 
 class _FakeWorkspace extends SupportWorkspaceNotifier {
   @override
-  SupportWorkspaceState build() => const SupportWorkspaceState(
-    settings: SupportAssistantSettings(),
-  );
+  SupportWorkspaceState build() =>
+      const SupportWorkspaceState(settings: SupportAssistantSettings());
 }
 
-Widget _panel() => ProviderScope(
-  overrides: [
+Widget _panel() => NativeWidgetIsolation(
+  overrides: (_) => [
+    appSettingsProvider.overrideWith(NativeWidgetAppSettings.new),
     supportWorkspaceProvider.overrideWith(_FakeWorkspace.new),
     supportConnectionsProvider.overrideWithValue(const []),
   ],
@@ -21,21 +22,31 @@ Widget _panel() => ProviderScope(
 );
 
 void main() {
-  testWidgets('settings controls fit the narrow desktop sidebar', (tester) async {
+  setUpAll(initializeNativeWidgetLocalization);
+  testWidgets('settings controls fit the narrow desktop sidebar', (
+    tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(236, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     await tester.pumpWidget(
-      const MaterialApp(
-        home: SizedBox(width: 236, child: _PanelHost()),
-      ),
+      const MaterialApp(home: SizedBox(width: 236, child: _PanelHost())),
     );
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
-    expect(find.byKey(const ValueKey('support_connection_selector')), findsOneWidget);
-    expect(find.byKey(const ValueKey('support_model_selector')), findsOneWidget);
-    expect(find.byKey(const ValueKey('support_reasoning_selector')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('support_connection_selector')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('support_model_selector')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('support_reasoning_selector')),
+      findsOneWidget,
+    );
     expect(find.text('Temperature'), findsOneWidget);
     expect(find.text('Max Tokens'), findsOneWidget);
   });
