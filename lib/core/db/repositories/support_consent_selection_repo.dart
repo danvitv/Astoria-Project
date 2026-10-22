@@ -1,0 +1,50 @@
+import 'package:drift/drift.dart';
+
+import '../../credentials/secret_redactor.dart';
+import '../../models/support_consent_selection.dart';
+import '../app_db.dart';
+import 'support_repo.dart';
+
+part 'support_consent_selection/roleplay_selection_projection.dart';
+part 'support_consent_selection/support_selection_projection.dart';
+part 'support_consent_selection/selection_projection_values.dart';
+
+/// Owns read-only, allowlisted selector projections. No providers, startup,
+/// caches, writes, whole body models, or assistant-read authorization.
+final class SupportConsentSelectionRepo {
+  SupportConsentSelectionRepo({
+    required AppDatabase db,
+    required SupportRepo supportRepo,
+    required SecretRedactor Function() currentRedactor,
+  }) : _roleplay = _RoleplaySelectionProjection(db, currentRedactor),
+       _support = _SupportSelectionProjection(db, supportRepo, currentRedactor);
+
+  static const maxSessionPageSize = 50;
+  static const maxMessagePageSize = 100;
+  static const maxSourceMessages = 2000;
+  static const maxRoleplaySourceChars = 2 * 1024 * 1024;
+  static const maxOffset = 10000;
+
+  final _RoleplaySelectionProjection _roleplay;
+  final _SupportSelectionProjection _support;
+
+  Future<SupportConsentSessionPage> listRoleplaySessions({
+    int offset = 0,
+    int limit = maxSessionPageSize,
+  }) => _roleplay.sessions(offset, limit);
+
+  Future<SupportConsentMessagePage> listRoleplayMessages({
+    required String? sessionId,
+    int offset = 0,
+    int limit = maxMessagePageSize,
+  }) => _roleplay.messages(sessionId, offset, limit);
+
+  Future<SupportConsentMessagePage> listSupportMessages({
+    required String? sessionId,
+    int offset = 0,
+    int limit = maxMessagePageSize,
+  }) => _support.messages(sessionId, offset, limit);
+
+  @override
+  String toString() => 'SupportConsentSelectionRepo';
+}
