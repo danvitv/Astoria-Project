@@ -735,11 +735,15 @@ class _ToolTile extends StatelessWidget {
                       _heroIconBox(context, _isSmall ? 28 : 36),
                       const SizedBox(width: 12),
                     ],
-                    Text(
-                      def.title.toUpperCase(),
-                      style: _labelStyle.copyWith(fontSize: _isSmall ? 11 : 13),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    Flexible(
+                      child: Text(
+                        def.title.toUpperCase(),
+                        style: _labelStyle.copyWith(
+                          fontSize: _isSmall ? 11 : 13,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                 ),
