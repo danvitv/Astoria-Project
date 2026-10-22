@@ -94,11 +94,10 @@ void main() {
   for (final showPicks in [false, true]) {
     for (final nonempty in [false, true]) {
       testWidgets(
-        'enabled root entry: Picks=$showPicks, nonempty=$nonempty, no configured model',
+        'default-enabled root entry: Picks=$showPicks, nonempty=$nonempty, no configured model',
         (tester) async {
           final harness = EntryRouteTestHarness(
             prefs: await SharedPreferences.getInstance(),
-            available: true,
             showOurPicks: showPicks,
             characters: nonempty ? _rows : const [],
           );
@@ -109,7 +108,13 @@ void main() {
               showPicks ? findsOneWidget : findsNothing,
             );
             expect(harness.workspace.topics, isEmpty);
-            expect(supportAssistantWorkspaceEnabled, isFalse);
+            expect(supportAssistantWorkspaceEnabled, isTrue);
+            expect(
+              tester
+                  .widget<CharacterListScreen>(find.byType(CharacterListScreen))
+                  .supportAssistantAvailable,
+              isTrue,
+            );
             await _openEntry(
               tester,
               harness,
@@ -269,11 +274,12 @@ void main() {
   }
 
   for (final state in [EntryDataState.loading, EntryDataState.error]) {
-    testWidgets('production-disabled initial $state has no support startup', (
+    testWidgets('explicitly disabled initial $state has no support startup', (
       tester,
     ) async {
       final harness = EntryRouteTestHarness(
         prefs: await SharedPreferences.getInstance(),
+        available: false,
         initialState: state,
       );
       await harness.runOffline(tester, () async {
@@ -567,6 +573,7 @@ void main() {
   ) async {
     final harness = EntryRouteTestHarness(
       prefs: await SharedPreferences.getInstance(),
+      available: false,
       characters: _rows,
     );
     await harness.runOffline(tester, () async {

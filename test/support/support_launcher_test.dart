@@ -7,7 +7,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:glaze_flutter/core/models/character.dart';
 import 'package:glaze_flutter/core/models/character_folder.dart';
-import 'package:glaze_flutter/core/constants/support_assistant_availability.dart';
 import 'package:glaze_flutter/features/character_list/character_list_screen.dart';
 import 'package:glaze_flutter/features/character_list/widgets/character_folders_section.dart';
 import 'package:glaze_flutter/features/character_list/widgets/character_grid.dart';
@@ -26,7 +25,9 @@ class _HeaderHost extends ConsumerWidget {
       children: [
         if (header?.actions != null) Row(children: header!.actions!),
         if (header?.titleWidget != null) header!.titleWidget!,
-        const Expanded(child: CharacterListScreen()),
+        const Expanded(
+          child: CharacterListScreen(supportAssistantAvailable: false),
+        ),
       ],
     );
   }
@@ -59,7 +60,13 @@ void _offlineTest(
 }
 
 void _expectDisabledEntries() {
-  expect(supportAssistantWorkspaceEnabled, isFalse);
+  expect(
+    find.byWidgetPredicate(
+      (widget) =>
+          widget is CharacterListScreen && !widget.supportAssistantAvailable,
+    ),
+    findsOneWidget,
+  );
   expect(find.byKey(CharacterFoldersSection.astoriaLauncherKey), findsNothing);
   expect(
     find.byWidgetPredicate(
@@ -155,7 +162,11 @@ void main() {
   _offlineTest(
     'disabled screen with hidden Picks and empty library has no launcher',
     (tester, harness) async {
-      await tester.pumpWidget(harness.scope(home: const CharacterListScreen()));
+      await tester.pumpWidget(
+        harness.scope(
+          home: const CharacterListScreen(supportAssistantAvailable: false),
+        ),
+      );
       await tester.pumpAndSettle();
       expect(find.text('Our Picks'), findsNothing);
       expect(find.text('No characters yet'), findsOneWidget);
@@ -189,7 +200,11 @@ void main() {
   _offlineTest(
     'disabled screen with visible Picks and empty library has no launcher',
     (tester, harness) async {
-      await tester.pumpWidget(harness.scope(home: const CharacterListScreen()));
+      await tester.pumpWidget(
+        harness.scope(
+          home: const CharacterListScreen(supportAssistantAvailable: false),
+        ),
+      );
       await tester.pumpAndSettle();
       expect(find.text('Our Picks'), findsOneWidget);
       final grid = tester.widget<CharacterGrid>(find.byType(CharacterGrid));

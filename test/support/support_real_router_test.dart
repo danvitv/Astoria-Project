@@ -21,10 +21,14 @@ void main() {
     '/support?topic=',
   ]) {
     testWidgets(
-      'production default redirects $location without support startup',
+      'explicitly disabled actual route redirects $location without support startup',
       (tester) async {
         final prefs = await SharedPreferences.getInstance();
-        final harness = EntryRouteTestHarness(prefs: prefs, location: location);
+        final harness = EntryRouteTestHarness(
+          prefs: prefs,
+          available: false,
+          location: location,
+        );
         await harness.runOffline(tester, () async {
           tester.view.physicalSize = const Size(600, 900);
           tester.view.devicePixelRatio = 1;
@@ -32,7 +36,6 @@ void main() {
           addTearDown(tester.view.resetDevicePixelRatio);
           await tester.pumpWidget(harness.scope());
           await tester.pumpAndSettle();
-          expect(supportAssistantWorkspaceEnabled, isFalse);
           expect(
             harness.router.routeInformationProvider.value.uri.path,
             '/characters',
@@ -61,11 +64,10 @@ void main() {
   };
   for (final topic in topics.entries) {
     testWidgets(
-      'actual enabled route forwards ${topic.key} and explicit back exits',
+      'actual default-enabled route forwards ${topic.key} and explicit back exits',
       (tester) async {
         final harness = EntryRouteTestHarness(
           prefs: await SharedPreferences.getInstance(),
-          available: true,
           location: topic.key,
         );
         await harness.runOffline(tester, () async {
@@ -76,6 +78,11 @@ void main() {
           addTearDown(tester.view.resetDevicePixelRatio);
           await tester.pumpWidget(harness.scope());
           await tester.pumpAndSettle();
+          expect(supportAssistantWorkspaceEnabled, isTrue);
+          expect(
+            harness.router.routeInformationProvider.value.uri,
+            Uri.parse(topic.key),
+          );
           expect(find.byType(DesktopShell), findsOneWidget);
           expect(find.byType(SupportAssistantScreen), findsOneWidget);
           final screen = tester.widget<SupportAssistantScreen>(

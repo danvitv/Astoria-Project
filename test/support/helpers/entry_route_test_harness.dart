@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:glaze_flutter/core/constants/support_assistant_availability.dart';
 import 'package:glaze_flutter/core/db/repositories/support_consent_selection_repo.dart';
 import 'package:glaze_flutter/core/models/character.dart';
 import 'package:glaze_flutter/core/models/character_folder.dart';
@@ -57,7 +58,7 @@ class EntryRouteTestHarness {
     EntryDataState charactersState = EntryDataState.data,
     String location = '/characters',
   }) {
-    final supportAllowed = available == true;
+    final supportAllowed = available ?? supportAssistantWorkspaceEnabled;
     workspace = EntryWorkspace(() {
       if (!supportAllowed) block('disabled support workspace startup');
       supportStarts++;

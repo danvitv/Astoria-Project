@@ -1,3 +1,3 @@
-/// Production stays disabled until the complete activation review is accepted.
-/// Explicit composition fixtures may exercise entry/routes without changing this.
-const supportAssistantWorkspaceEnabled = false;
+/// User-authorized testing access to the current offline/local workspace stage.
+/// This does not complete network/model calls, actions, undo, or reports.
+const supportAssistantWorkspaceEnabled = true;

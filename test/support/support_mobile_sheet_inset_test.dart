@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
-import 'package:glaze_flutter/core/constants/support_assistant_availability.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_workspace_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/support_assistant_screen.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_sessions_panel.dart';
@@ -52,7 +51,6 @@ Future<void> _mount(
   final context = tester.element(find.byType(SupportAssistantScreen));
   expect(MediaQuery.sizeOf(context), viewport);
   expect(isDesktopLayout(context), isFalse);
-  expect(supportAssistantWorkspaceEnabled, isFalse);
   fixture.expectNoExternalWork();
   expect(tester.takeException(), isNull);
 }
