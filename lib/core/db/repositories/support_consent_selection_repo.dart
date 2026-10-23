@@ -8,6 +8,7 @@ import 'support_repo.dart';
 part 'support_consent_selection/roleplay_selection_projection.dart';
 part 'support_consent_selection/support_selection_projection.dart';
 part 'support_consent_selection/selection_projection_values.dart';
+part 'support_consent_selection/session_metadata_projection.dart';
 
 /// Owns read-only, allowlisted selector projections. No providers, startup,
 /// caches, writes, whole body models, or assistant-read authorization.
@@ -24,9 +25,20 @@ final class SupportConsentSelectionRepo {
   static const maxSourceMessages = 2000;
   static const maxRoleplaySourceChars = 2 * 1024 * 1024;
   static const maxOffset = 10000;
+  // Same bounded parent envelope as the explicit text reader. No body is read.
+  static const maxSessionParentEnvelopeChars =
+      512 * 256 + 4 * ((4 * 65536 + 2) ~/ 3);
 
   final _RoleplaySelectionProjection _roleplay;
   final _SupportSelectionProjection _support;
+
+  /// Exact target, never a paginated-catalog search or message-body read.
+  Future<SupportConsentSessionMetadata> readSessionMetadata({
+    required SupportConsentSelectionSource source,
+    required String? sessionId,
+  }) => source == SupportConsentSelectionSource.roleplay
+      ? _roleplay.sessionMetadata(sessionId)
+      : _support.sessionMetadata(sessionId);
 
   Future<SupportConsentSessionPage> listRoleplaySessions({
     int offset = 0,

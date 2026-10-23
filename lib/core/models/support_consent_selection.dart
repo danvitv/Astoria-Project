@@ -11,6 +11,62 @@ enum SupportConsentSelectionSource { roleplay, support }
 
 enum SupportConsentSelectionRole { user, assistant, system }
 
+/// Exact-target native metadata. Local row identities are observation fences,
+/// not persistent incarnation IDs. No title, body, config, key or attachment.
+final class SupportConsentSessionMetadata {
+  const SupportConsentSessionMetadata({
+    required this.source,
+    required this.sessionId,
+    required this.status,
+    this.roleplaySession,
+    this.nativeIdentity,
+    this.parentNativeIdentity,
+    this.createdAt,
+    this.updatedAt,
+    this.messageCount,
+  });
+  final SupportConsentSelectionSource source;
+  final String? sessionId;
+  final SupportConsentSelectionStatus status;
+  final SupportConsentSessionOption? roleplaySession;
+  final int? nativeIdentity, parentNativeIdentity;
+  final int? createdAt, updatedAt, messageCount;
+  bool get bodiesRead => false;
+  bool get attachmentsIncluded => false;
+  bool get isAvailable =>
+      status == SupportConsentSelectionStatus.available &&
+      sessionId != null &&
+      nativeIdentity != null &&
+      messageCount != null &&
+      (source == SupportConsentSelectionSource.support ||
+          (parentNativeIdentity != null && roleplaySession != null));
+
+  bool sameAs(SupportConsentSessionMetadata other) {
+    final a = roleplaySession, b = other.roleplaySession;
+    return source == other.source &&
+        sessionId == other.sessionId &&
+        status == other.status &&
+        nativeIdentity == other.nativeIdentity &&
+        parentNativeIdentity == other.parentNativeIdentity &&
+        createdAt == other.createdAt &&
+        updatedAt == other.updatedAt &&
+        messageCount == other.messageCount &&
+        (a == null
+            ? b == null
+            : b != null &&
+                  a.sessionId == b.sessionId &&
+                  a.characterId == b.characterId &&
+                  a.sessionIndex == b.sessionIndex &&
+                  a.variantGroupId == b.variantGroupId &&
+                  a.variantOrder == b.variantOrder &&
+                  a.characterLabel == b.characterLabel &&
+                  a.variantLabel == b.variantLabel);
+  }
+
+  @override
+  String toString() => 'SupportConsentSessionMetadata(${status.name})';
+}
+
 final class SupportConsentSessionOption {
   const SupportConsentSessionOption({
     required this.sessionId,

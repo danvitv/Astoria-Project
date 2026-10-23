@@ -9,7 +9,8 @@ bool _validPage(int offset, int limit, int cap) =>
 bool _validIdentity(String? value, SecretRedactor redactor) =>
     value != null &&
     value.length <= 256 &&
-    RegExp(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$').hasMatch(value) &&
+    (RegExp(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}').matchAsPrefix(value)?.end ==
+        value.length) &&
     redactor.redactJson(value) == value;
 
 String _safeLabel(String? value, String fallback, SecretRedactor redactor) {

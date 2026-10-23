@@ -43,6 +43,9 @@ final class _SupportTextReader {
     );
     checkpoint?.call();
     _textBytes(title); // Readable parent only; never retained or returned.
+    // Confirmed readable empty whole history: keep parent/count observations.
+    // Exact public APIs never reach this branch with an empty selection.
+    if (ids.isEmpty) return _TextRead(header, const [], const []);
     final slots = List.filled(ids.length, '?').join(',');
     final variables = [
       Variable.withString(sessionId),

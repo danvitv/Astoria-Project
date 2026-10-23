@@ -3,6 +3,10 @@ enum SupportTextContextSource { support, roleplay }
 
 enum SupportTextContextFailure { invalidSelection, unavailable, limited, stale }
 
+/// Opaque native current-input boundary. Only its original issuing repository
+/// accepts it. No tuple, pagination/exclusion DTO, serializer or authority.
+abstract interface class SupportSessionHistoryBoundary {}
+
 /// Fixed diagnostics only: no database errors, envelopes or source text.
 final class SupportTextContextException implements Exception {
   const SupportTextContextException(this.failure);
@@ -54,4 +58,9 @@ abstract interface class SupportTextContextSnapshot {
   List<String> get messageIds;
   List<SupportTextContextMessage> get messages;
   List<SupportTextContextProvenance> get provenance;
+
+  /// Whole source membership is retained privately and rediscovered at admission.
+  /// Even a confirmed readable empty source has an owned whole-session snapshot.
+  bool get isWholeSession;
+  SupportSessionHistoryBoundary? get currentInput;
 }

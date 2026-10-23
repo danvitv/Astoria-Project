@@ -10,6 +10,7 @@ part 'support/support_session_store.dart';
 part 'support/support_message_store.dart';
 part 'support/support_native_input_store.dart';
 part 'support/support_guarded_reply_store.dart';
+part 'support/support_native_local_reply_store.dart';
 part 'support/support_context_store.dart';
 part 'support/support_journal_store.dart';
 part 'support/support_mutation_journal_contract.dart';
@@ -128,6 +129,23 @@ class SupportRepo {
     String? body,
     required bool Function() isCurrent,
   }) => _messages.replies.settle(expected, status, body, isCurrent);
+
+  /// Fixed native LOCAL response only. Reuses the exact-user reservation and
+  /// settlement port, adding its cards in the SAME outer transaction. A refusal
+  /// or any failure rolls back both the reply and dedicated encrypted recipe.
+  /// The trusted caller supplies sanitized fixed text/cards and origin facts;
+  /// this method does not classify old replies or authorize model disclosure.
+  Future<SupportMessage?> appendNativeLocalReply({
+    required SupportMessage message,
+    required SupportMessage originatingUser,
+    required String provenanceJson,
+    required bool Function() isCurrent,
+  }) => _messages.appendNativeLocalReply(
+    message,
+    originatingUser,
+    provenanceJson,
+    isCurrent,
+  );
 
   Future<SupportMessage?> mutateMessage({
     required String messageId,

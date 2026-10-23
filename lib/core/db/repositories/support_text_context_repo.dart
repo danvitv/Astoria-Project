@@ -10,6 +10,10 @@ part 'support_text_context/roleplay_text_reader.dart';
 part 'support_text_context/text_context_observation.dart';
 part 'support_text_context/support_text_provenance_reader.dart';
 part 'support_text_context/text_context_admission.dart';
+part 'support_text_context/session_text_context.dart';
+part 'support_text_context/session_history_boundary.dart';
+part 'support_text_context/roleplay_session_text_reader.dart';
+part 'support_text_context/support_session_text_reader.dart';
 
 /// Trusted native-only structural/identity check, NOT origin rights or egress
 /// approval. Must be pure, synchronous and bounded: no reads/writes/publication,
@@ -23,7 +27,8 @@ typedef SupportNativeProvenanceValidator =
       SecretRedactor currentRedactor,
     );
 
-/// Owns exact selected text reads, never consent, UI state or all-chat caches.
+/// Owns bounded exact/whole-session text projections, never consent, UI state
+/// or all-chat caches.
 final class SupportTextContextRepo {
   SupportTextContextRepo({
     required AppDatabase db,
@@ -62,8 +67,8 @@ final class SupportTextContextRepo {
   final SupportTextAdmissionContract? _admissionContract;
   final SupportNativeProvenanceValidator? _nativeProvenanceValidator;
   // Private immutable read-to-target association. Keeps the exact session
-  // available to the existing ROOT callsite without changing reader projections
-  // or snapshot/observation APIs. Expando does not retain discarded reads.
+  // available to the existing ROOT callsite without exporting native suppliers
+  // or arbitrary reader observations. Expando does not retain discarded reads.
   final _nativeProvenanceSessions = Expando<String>();
   bool _admissionOwnerRevoked = false;
 
@@ -134,19 +139,28 @@ final class SupportTextContextRepo {
       final before = await _stamp();
       checkpoint?.call();
       if (before != snapshot._stamp) return snapshot._revoke();
-      final read = await _read(
-        snapshot.source,
-        snapshot.sessionId,
-        snapshot.messageIds,
-        checkpoint: checkpoint,
-      );
+      final whole = snapshot._wholeSession;
+      final result = whole == null
+          ? (
+              await _read(
+                snapshot.source,
+                snapshot.sessionId,
+                snapshot.messageIds,
+                checkpoint: checkpoint,
+              ),
+              snapshot.messageIds,
+            )
+          : await _readSession(whole, checkpoint: checkpoint);
+      final (read, ids) = result;
       checkpoint?.call();
       final after = await _stamp();
       checkpoint?.call();
-      if (after != snapshot._stamp || !read._same(snapshot._observation)) {
+      if (after != snapshot._stamp ||
+          !_sameIds(ids, snapshot.messageIds) ||
+          !read._same(snapshot._observation)) {
         return snapshot._revoke();
       }
-      final messages = _sanitize(read, snapshot.sessionId, snapshot.messageIds);
+      final messages = _sanitize(read, snapshot.sessionId, ids);
       if (!_sameMessages(messages, snapshot.messages)) {
         return snapshot._revoke();
       }

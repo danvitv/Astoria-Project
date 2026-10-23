@@ -81,6 +81,9 @@ final class _RoleplayTextReader {
         header.readNullable<int>('session_index') == null) {
       _fail(SupportTextContextFailure.unavailable);
     }
+    // Private empty projection is used only after whole-source confirmation.
+    // The public exact-selection APIs still reject empty IDs before this reader.
+    if (ids.isEmpty) return _TextRead(header, const [], const []);
     final slots = List.filled(ids.length, '?').join(',');
     final variables = [
       Variable.withString(sessionId),

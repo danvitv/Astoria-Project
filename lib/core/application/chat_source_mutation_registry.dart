@@ -30,9 +30,19 @@ final class ChatSourceMutationChange {
 final class ChatSourceMutationRegistry {
   final _pending = <Object, ChatSourceMutationChange>{};
   final _listeners = <Object, void Function(ChatSourceMutationChange)>{};
+  final _sessionEvents = <String, Object>{};
+  final Object _initialSessionEvent = Object();
   bool _disposed = false;
 
   bool get isDisposed => _disposed;
+
+  /// Original process-local admission checkpoint, including mutations that have
+  /// already settled. It neither reads a source nor restores old authority.
+  Object? sessionCheckpoint(String sessionId) =>
+      _disposed ? null : _sessionEvents[sessionId] ?? _initialSessionEvent;
+
+  bool isSessionPending(String sessionId) =>
+      _disposed || _pending.values.any((c) => c.sessionId == sessionId);
 
   /// Fail closed for an expired lifetime, including retained old references.
   bool isPending({
@@ -75,6 +85,7 @@ final class ChatSourceMutationRegistry {
       phase: ChatSourceMutationPhase.began,
     );
     _pending[key] = change;
+    _sessionEvents[sessionId] = Object();
     _notify(change);
     var settled = false;
     return () {
@@ -99,6 +110,7 @@ final class ChatSourceMutationRegistry {
     _disposed = true;
     _listeners.clear();
     _pending.clear();
+    _sessionEvents.clear();
   }
 
   void _notify(ChatSourceMutationChange change) {
