@@ -7,8 +7,16 @@ import '../app_db.dart';
 part 'support/support_row_mapper.dart';
 part 'support/support_session_store.dart';
 part 'support/support_message_store.dart';
+part 'support/support_native_input_store.dart';
+part 'support/support_guarded_reply_store.dart';
 part 'support/support_context_store.dart';
 part 'support/support_journal_store.dart';
+
+/// Exact committed snapshots, retained only by the native run owner.
+typedef SupportReplyReservation = ({
+  SupportMessage message,
+  SupportContextBlock provenance,
+});
 
 /// Stable entry point; each specialist owns its narrow DB transactions.
 class SupportRepo {
@@ -63,6 +71,49 @@ class SupportRepo {
       _messages.put(message, append: true, sessionUpdatedAt: sessionUpdatedAt);
   Future<SupportMessage> putMessage(SupportMessage message) =>
       _messages.put(message);
+
+  /// Create-only sanitized native user input. Null is a refusal; failures throw
+  /// without committing. createdAt is a clock floor, not the stored timestamp.
+  /// The returned durable row is custody, not permission to disclose its text.
+  Future<SupportMessage?> appendCurrentUser({
+    required SupportMessage message,
+    required bool Function() isCurrent,
+  }) => _messages.nativeInput.append(message, isCurrent);
+
+  /// Create-only preparing reply and dedicated inactive encrypted provenance.
+  /// Null means refused/missing; cipher/storage failures throw without commits.
+  /// Text/provenance must already be sanitized by the trusted caller.
+  Future<SupportReplyReservation?> reserveReply({
+    required SupportMessage message,
+    required String provenanceJson,
+    required bool Function() isCurrent,
+  }) => _messages.replies.reserve(message, provenanceJson, isCurrent);
+
+  /// Opt-in native reservation: compare the exact same-run durable user and
+  /// allocate later than all session message metadata and the supplied floor.
+  /// Like reserveReply, this does not authorize a model request.
+  Future<SupportReplyReservation?> reserveOrderedReply({
+    required SupportMessage message,
+    required SupportMessage originatingUser,
+    required String provenanceJson,
+    required bool Function() isCurrent,
+  }) => _messages.replies.reserve(
+    message,
+    provenanceJson,
+    isCurrent,
+    originatingUser: originatingUser,
+  );
+
+  /// Only body/status may change; exact prior snapshots are compared inside the
+  /// transaction. The guard can represent original-session settlement ownership
+  /// independently of UI/transport ownership (and must remain synchronous).
+  Future<SupportMessage?> settleReply({
+    required SupportReplyReservation expected,
+    required String status,
+    String? body,
+    required bool Function() isCurrent,
+  }) => _messages.replies.settle(expected, status, body, isCurrent);
+
   Future<SupportMessage?> mutateMessage({
     required String messageId,
     required SupportMessage Function(SupportMessage latest) mutate,

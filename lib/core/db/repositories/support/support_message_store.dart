@@ -6,6 +6,14 @@ final class _SupportMessageStore {
   final SupportPayloadCipher cipher;
   final _SupportRowMapper mapper;
   final _SupportSessionStore sessions;
+  late final nativeInput = _SupportNativeInputStore(db, mapper, sessions, this);
+  late final replies = _SupportGuardedReplyStore(
+    db,
+    cipher,
+    mapper,
+    sessions,
+    this,
+  );
   Future<SupportMessageRow?> row(String id) => (db.select(
     db.supportMessages,
   )..where((t) => t.id.equals(id))).getSingleOrNull();

@@ -9,6 +9,7 @@ import '../credentials/credential_vault.dart';
 
 part 'support_cipher_key_store.dart';
 part 'support_cipher_envelope.dart';
+part 'support_cipher_read_gate.dart';
 
 enum SupportCipherFailure {
   vaultUnavailable,
@@ -44,7 +45,28 @@ final class SupportPayloadCipher {
     // ignore: prefer_initializing_formals
   }) : _keys = _SupportCipherKeyStore(vault),
        _cipher = cipher ?? Xchacha20.poly1305Aead(),
-       _envelope = _SupportCipherEnvelope(maxPlaintextBytes, maxEnvelopeChars);
+       _envelope = _SupportCipherEnvelope(maxPlaintextBytes, maxEnvelopeChars),
+       _readOnly = null;
+
+  /// Trusted read-only composition over the SAME installation-key owner.
+  /// The gate wraps all original decrypt work, including vault/FIFO waits, and
+  /// must race only this pure crypto future, never a SQL-owning reader callback.
+  /// It is not a permission grant or a sandbox for arbitrary Dart callbacks.
+  factory SupportPayloadCipher.readOnly({
+    required SupportPayloadCipher delegate,
+    required SupportCipherReadGate gate,
+  }) => SupportPayloadCipher._readOnly(delegate, gate);
+
+  SupportPayloadCipher._readOnly(
+    SupportPayloadCipher delegate,
+    SupportCipherReadGate gate,
+  ) : _keys = delegate._keys,
+      _cipher = delegate._cipher,
+      _envelope = delegate._envelope,
+      maxPlaintextBytes = delegate.maxPlaintextBytes,
+      maxEnvelopeChars = delegate.maxEnvelopeChars,
+      maxIdentifierBytes = delegate.maxIdentifierBytes,
+      _readOnly = _SupportCipherReadDelegate(delegate, gate);
 
   static final CredentialSlot installKeySlot = CredentialSlot(
     domain: 'support.install_key',
@@ -60,6 +82,7 @@ final class SupportPayloadCipher {
   final _SupportCipherKeyStore _keys;
   final Cipher _cipher;
   final _SupportCipherEnvelope _envelope;
+  final _SupportCipherReadDelegate? _readOnly;
   final int maxPlaintextBytes;
   final int maxEnvelopeChars;
   final int maxIdentifierBytes;
@@ -71,6 +94,9 @@ final class SupportPayloadCipher {
     required String field,
     String? sessionId,
   }) async {
+    if (_readOnly != null) {
+      throw const SupportCipherException(SupportCipherFailure.invalidContext);
+    }
     final aad = _buildAad(
       table: table,
       rowId: rowId,
@@ -134,6 +160,18 @@ final class SupportPayloadCipher {
     required String field,
     String? sessionId,
   }) async {
+    final readOnly = _readOnly;
+    if (readOnly != null) {
+      return readOnly.run(
+        () => readOnly.delegate.decrypt(
+          envelopeText: envelopeText,
+          table: table,
+          rowId: rowId,
+          field: field,
+          sessionId: sessionId,
+        ),
+      );
+    }
     final aad = _buildAad(
       table: table,
       rowId: rowId,
@@ -176,12 +214,7 @@ final class SupportPayloadCipher {
     required String field,
     String? sessionId,
   }) {
-    for (final identifier in [
-      table,
-      rowId,
-      field,
-      ?sessionId,
-    ]) {
+    for (final identifier in [table, rowId, field, ?sessionId]) {
       if (identifier.length > maxIdentifierBytes) {
         throw const SupportCipherException(SupportCipherFailure.invalidContext);
       }
@@ -204,7 +237,6 @@ final class SupportPayloadCipher {
       'astoria.support.v1|$table|$rowId|${sessionId ?? ""}|$field',
     );
   }
-
 }
 
 /// Matches Dart's UTF-8 replacement behavior for unpaired surrogates.
