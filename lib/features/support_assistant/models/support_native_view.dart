@@ -46,13 +46,17 @@ final class SupportNativeView {
     this.gameMessageCount = 0,
     this.supportMessageCount = 0,
     this.connectionsSelected = false,
+    this.themeSelected = false,
     this.error,
     this.inspection,
     this.displayedIntent,
   }) : rights = List.unmodifiable(rights);
   final String sessionId;
   final SupportPermissionAvailability availability;
-  final bool busy, needsRecipientConfirmation, connectionsSelected;
+  final bool busy,
+      needsRecipientConfirmation,
+      connectionsSelected,
+      themeSelected;
   final SupportRecipientResolution recipient;
   final List<SupportNativeRightView> rights;
   final String? gameSessionId, error;

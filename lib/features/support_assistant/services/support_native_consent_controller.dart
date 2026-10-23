@@ -91,6 +91,8 @@ final class SupportNativeConsentController {
       connectionsSelected:
           p?.scope?.safeCategories.contains(SupportSafeCategory.connections) ==
           true,
+      themeSelected:
+          p?.scope?.safeCategories.contains(SupportSafeCategory.theme) == true,
       rights: SupportPermission.values.map((right) {
         final available =
             contextAvailable &&
@@ -99,8 +101,9 @@ final class SupportNativeConsentController {
             runtime.settingsPending == 0 &&
             p!.hasScopeFor(right) &&
             _implementedSelection(right, p.scope) &&
-            ((right != SupportPermission.readSafeSettings &&
-                    right != SupportPermission.modelSafeSettingsDiagnostics) ||
+            (right != SupportPermission.readSafeSettings ||
+                p.scope!.safeCategories.any(_implementedSafeCategory)) &&
+            (right != SupportPermission.modelSafeSettingsDiagnostics ||
                 p.scope!.safeCategories.contains(
                   SupportSafeCategory.connections,
                 )) &&
@@ -145,8 +148,11 @@ final class SupportNativeConsentController {
             : a!.recipient!.sameAs(b?.recipient));
   }
 
+  /// Local scope/read reviews skip recipient/settings/API resolution explicitly.
+  /// This does not relax recipient-dependent grants or their resolver checkpoints.
   Future<SupportNativeReview?> prepareReview({
     SupportNativeDisplayedIntent? displayedIntent,
+    bool resolveRecipient = true,
   }) async {
     runtime.checkConfiguration();
     if (!runtime.alive ||
@@ -156,7 +162,7 @@ final class SupportNativeConsentController {
       return null;
     }
     final lifetime = runtime.lifetime, id = runtime.sessionId;
-    if (!await runtime.refresh(resolve: true)) return null;
+    if (!await runtime.refresh(resolve: resolveRecipient)) return null;
     if (!runtime.alive ||
         runtime.pending > 0 ||
         runtime.sessionId.isEmpty ||
@@ -353,6 +359,10 @@ final class SupportNativeConsentController {
     }
     return success;
   }
+
+  static bool _implementedSafeCategory(SupportSafeCategory category) =>
+      category == SupportSafeCategory.connections ||
+      category == SupportSafeCategory.theme;
 
   static bool _implementedSelection(
     SupportPermission right,

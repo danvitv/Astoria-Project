@@ -22,7 +22,18 @@ typedef SupportNativeMessageReader =
 
 /// Exact native metadata selection, separate from grant/recipient orchestration.
 extension SupportNativeSelectionIntents on SupportNativeConsentController {
-  Future<bool> selectConnections(SupportNativeReview review, bool selected) {
+  Future<bool> selectConnections(SupportNativeReview review, bool selected) =>
+      _selectSafeCategory(review, SupportSafeCategory.connections, selected);
+
+  /// Explicit local theme scope only, not a grant or an Apply/Undo approval.
+  Future<bool> selectTheme(SupportNativeReview review, bool selected) =>
+      _selectSafeCategory(review, SupportSafeCategory.theme, selected);
+
+  Future<bool> _selectSafeCategory(
+    SupportNativeReview review,
+    SupportSafeCategory category,
+    bool selected,
+  ) {
     final p = review._policy;
     if (!_current(review) || p == null) return Future.value(false);
     final s = p.scope;
@@ -33,8 +44,13 @@ extension SupportNativeSelectionIntents on SupportNativeConsentController {
         gameSessionId: s?.gameSessionId,
         gameHistory: s?.gameHistory,
         supportHistory: s?.supportHistory,
-        // Only current implemented category; no fabricated private/file handles.
-        safeCategories: selected ? [SupportSafeCategory.connections] : const [],
+        // Preserve implemented categories independently; no private/file handles.
+        safeCategories: {
+          ...?s?.safeCategories.where(
+            SupportNativeConsentController._implementedSafeCategory,
+          ),
+          if (selected) category,
+        }..removeWhere((c) => c == category && !selected),
       ),
     );
   }
@@ -112,7 +128,7 @@ extension SupportNativeSelectionIntents on SupportNativeConsentController {
             : s?.supportHistory,
         safeCategories:
             s?.safeCategories.where(
-              (c) => c == SupportSafeCategory.connections,
+              SupportNativeConsentController._implementedSafeCategory,
             ) ??
             const [],
       ),
