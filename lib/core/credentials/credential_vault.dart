@@ -16,6 +16,15 @@ final class CredentialVaultException implements Exception {
   String toString() => 'CredentialVaultException(${failure.name})';
 }
 
+/// A queued native operation lost its admission before storage invocation.
+/// Separate from storage failures: this refusal started no write.
+final class CredentialVaultAdmissionDenied implements Exception {
+  const CredentialVaultAdmissionDenied();
+
+  @override
+  String toString() => 'Credential vault admission denied';
+}
+
 /// Feature-free, trusted secret owner; never expose it to model-facing tools.
 ///
 /// Create one owner per storage/build-channel namespace in the composition root.
@@ -44,9 +53,33 @@ final class CredentialVault {
         return CredentialMetadata.fromSecret(secret);
       });
 
+  /// Trusted native presence inspection; a physically stored empty value is
+  /// present, not permission to seed, replace or fall back to another source.
+  /// No value or envelope length escapes this serialized read.
+  Future<bool> hasStoredValue(CredentialSlot slot) =>
+      _serialize(slot, (key) async => await _read(key) != null);
+
   /// Native secret-entry path. This is an explicit replacement, not migration.
   Future<CredentialMetadata> store(CredentialSlot slot, String secret) =>
       _serialize(slot, (key) => _writeVerified(key, secret));
+
+  /// Revalidates inside the actual slot FIFO, not before a queued await. Once
+  /// backend write invocation starts, original readback settles even if its UI
+  /// retires. The caller separately fences publication of that original result.
+  Future<CredentialMetadata> storeGuarded(
+    CredentialSlot slot,
+    String secret, {
+    required bool Function() isCurrent,
+  }) => _serialize(slot, (key) {
+    var current = false;
+    try {
+      current = isCurrent();
+    } catch (_) {
+      // A callback failure is admission denial, never its arbitrary exception.
+    }
+    if (!current) throw const CredentialVaultAdmissionDenied();
+    return _writeVerified(key, secret);
+  });
 
   /// Foundation for a later migration; no legacy/runtime data is read here.
   /// A failed read MUST NOT be interpreted as absence. Existing values, even an
