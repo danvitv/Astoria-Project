@@ -25,8 +25,10 @@ class WorkspaceGate {
 
 /// Synthetic ports only; every persisted fake row and awaited stage is visible.
 class ControlledWorkspaceStore extends SupportWorkspaceStore {
-  ControlledWorkspaceStore(SupportRepo repo)
-    : super(repo, () => SecretRedactor()) {
+  ControlledWorkspaceStore(SupportRepo repo) : this._(repo, SecretRedactor());
+
+  ControlledWorkspaceStore._(SupportRepo repo, SecretRedactor snapshot)
+    : super(repo, () => snapshot) {
     addSession('a');
     addSession('b');
   }
@@ -94,13 +96,31 @@ class ControlledWorkspaceStore extends SupportWorkspaceStore {
   }
 
   @override
-  Future<SupportMessageItem> appendUser(String id, String text) async {
+  Future<SupportMessageItem> appendUser(String id, String text) =>
+      _appendControlledUser(id, text);
+
+  @override
+  Future<SupportMessageItem> appendNativeLocalUser(
+    String id,
+    String text, {
+    required String runId,
+    required bool Function() isCurrent,
+  }) => _appendControlledUser(id, text, runId: runId, isCurrent: isCurrent);
+
+  Future<SupportMessageItem> _appendControlledUser(
+    String id,
+    String text, {
+    String? runId,
+    bool Function()? isCurrent,
+  }) async {
     await stage('user-before');
+    if (isCurrent?.call() == false) throw StateError('Stale input');
     final user = SupportMessageItem(
       id: 'user-${++nextId}',
       sessionId: id,
       role: SupportMessageRole.user,
       body: text,
+      runId: runId,
       createdAt: DateTime.utc(2026),
     );
     _commit(user);
@@ -119,6 +139,45 @@ class ControlledWorkspaceStore extends SupportWorkspaceStore {
     _commit(item);
     await stage('reply-after');
     return item;
+  }
+
+  @override
+  Future<SupportMessageItem> appendNativeLocalReply(
+    SupportMessageItem item, {
+    required SupportMessageItem originatingUser,
+    required bool Function() isCurrent,
+  }) async {
+    // This fixture owns its in-memory rows, not actual SQLite parents. Keep the
+    // new ports on that same backend; real origin/AAD atomicity is tested by the
+    // session-model repository suites, never simulated here as database proof.
+    await stage('reply-before');
+    if (!isCurrent() ||
+        originatingUser.runId == null ||
+        originatingUser.role != SupportMessageRole.user ||
+        item.role != SupportMessageRole.assistant ||
+        item.sessionId != originatingUser.sessionId ||
+        !(messages[item.sessionId]?.any(
+              (row) =>
+                  row.id == originatingUser.id &&
+                  row.runId == originatingUser.runId,
+            ) ??
+            false)) {
+      throw StateError('Stale origin');
+    }
+    final reply = SupportMessageItem(
+      id: item.id,
+      sessionId: item.sessionId,
+      role: item.role,
+      body: item.body,
+      cards: item.cards,
+      createdAt: item.createdAt,
+      isLocked: item.isLocked,
+      runId: originatingUser.runId,
+      status: item.status,
+    );
+    _commit(reply);
+    await stage('reply-after');
+    return reply;
   }
 
   @override

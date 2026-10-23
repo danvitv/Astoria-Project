@@ -22,6 +22,7 @@ import 'package:glaze_flutter/shared/widgets/glaze_switch.dart';
 import 'package:glaze_flutter/shared/widgets/sheet_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'helpers/support_legacy_history_widget_driver.dart';
 import 'helpers/support_native_fixture.dart';
 import 'helpers/support_native_widget_fixture.dart';
 import 'synthetic_consent_selection_fixture.dart';
@@ -31,7 +32,11 @@ Future<void> _pump(
   NativeFixture f, {
   String language = 'ru',
   bool panel = false,
+  bool legacyHistory = false,
 }) async {
+  final privacy = panel
+      ? const SupportSettingsPanel()
+      : ListView(children: const [SupportPrivacyGroup()]);
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
@@ -41,9 +46,9 @@ Future<void> _pump(
         if (panel) supportConnectionsProvider.overrideWithValue(const []),
       ],
       child: localizedNativeWidget(
-        panel
-            ? const SupportSettingsPanel()
-            : ListView(children: const [SupportPrivacyGroup()]),
+        legacyHistory
+            ? SupportLegacyHistoryWidgetDriver(child: privacy)
+            : privacy,
         language: language,
       ),
     ),
@@ -119,6 +124,53 @@ Future<void> _grant(
 Future<void> _confirm(WidgetTester tester) async {
   await _tap(tester, 'support_privacy_recipient');
   await _tap(tester, 'support_privacy_review_confirm');
+}
+
+Future<void> _openLegacyHistory(
+  WidgetTester tester,
+  NativeFixture f,
+  SupportConsentSelectionSource source,
+) async {
+  final settingsReads = f.settingsReads;
+  final apiIds = [...f.api.ids];
+  await _tap(tester, 'support_legacy_history_${source.name}');
+  expect(find.byType(SupportHistorySelectionSheet), findsOneWidget);
+  expect(f.settingsReads, settingsReads);
+  expect(f.api.ids, apiIds);
+  expect(f.api.bulkReads, 0);
+  expect(f.selectedLoads, 0);
+  expect(f.runtime.recipientConfirmed, false);
+  for (final canary in [
+    NativeFixture.canary,
+    SyntheticConsentSelectionFixture.bodyCanary,
+    SyntheticConsentSelectionFixture.cardCanary,
+    SyntheticConsentSelectionFixture.reasoningCanary,
+    SyntheticConsentSelectionFixture.pathCanary,
+    'SYNTHETIC_PERMISSION_CANARY history',
+  ]) {
+    expect(find.textContaining(canary), findsNothing);
+  }
+}
+
+Future<void> _saveLegacyHistory(WidgetTester tester) async {
+  final driver = tester.state<SupportLegacyHistoryWidgetDriverState>(
+    find.byType(SupportLegacyHistoryWidgetDriver),
+  );
+  final calls = driver.selectionCalls;
+  await _tap(tester, 'support_privacy_select_messages');
+  expect(await _native(tester, () => driver.completion!), true);
+  expect(driver.selectionCalls, calls + 1);
+  expect(find.byType(SupportHistorySelectionSheet), findsNothing);
+}
+
+Future<void> _backLegacyHistory(WidgetTester tester) async {
+  await tester.tap(
+    find.descendant(
+      of: find.byType(SheetView),
+      matching: find.byIcon(Icons.arrow_back),
+    ),
+  );
+  await tester.pumpAndSettle();
 }
 
 Future<T> _native<T>(
@@ -219,6 +271,17 @@ void main() {
         await _pump(tester, f, panel: true);
         expect(find.text('Передать историю игровой сессии'), findsOneWidget);
         expect(find.text('Передать историю чата Астории'), findsOneWidget);
+        expect(find.text('Выбрать игровую сессию для доступа'), findsOneWidget);
+        expect(
+          find.text('Выбрать текущую сессию Астории для доступа'),
+          findsOneWidget,
+        );
+        expect(
+          find.text(
+            'Выбрано ссылок на сообщения: игровая сессия — 0; чат Астории — 1.',
+          ),
+          findsOneWidget,
+        );
         for (final right in SupportPermission.values) {
           expect(_switch(tester, right.name).value, false);
         }
@@ -239,6 +302,17 @@ void main() {
     await _pump(tester, f, language: 'en');
     expect(find.text('Share game-session history'), findsOneWidget);
     expect(find.text('Share Astoria chat history'), findsOneWidget);
+    expect(find.text('Choose a roleplay session for access'), findsOneWidget);
+    expect(
+      find.text('Choose the current Astoria session for access'),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'Selected message references: game session — 0; Astoria chat — 1.',
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -319,15 +393,19 @@ void main() {
   );
 
   testWidgets(
-    'explicit one-session exact message rows preserve native order and omit hidden body data',
+    'legacy exact-message compatibility preserves native order and omits hidden body data',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(360, 800));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await _game(f);
       await _game(f, id: 'hidden-session', hidden: true);
-      await _pump(tester, f);
+      await _pump(tester, f, legacyHistory: true);
       final before = await f.database.preserved();
-      await _tap(tester, 'support_privacy_game_scope');
+      await _openLegacyHistory(
+        tester,
+        f,
+        SupportConsentSelectionSource.roleplay,
+      );
       expect(
         find.byKey(const ValueKey('support_privacy_session_hidden-session')),
         findsNothing,
@@ -355,10 +433,11 @@ void main() {
       }
       await _tap(tester, 'support_privacy_message_game-3');
       await _tap(tester, 'support_privacy_message_game-0');
-      await _tap(tester, 'support_privacy_select_messages');
+      await _saveLegacyHistory(tester);
       final p = await _policy(tester, f);
       expect(p.scope!.gameSessionId, 'game-session');
       expect(p.scope!.gameHistory!.messageIds, ['game-0', 'game-3']);
+      expect(p.scope!.gameHistoryExtent, SupportHistoryExtent.selectedMessages);
       expect(p.grants, isEmpty);
       expect(f.runtime.recipientConfirmed, false);
       expect(await f.database.preserved(), before);
@@ -367,11 +446,15 @@ void main() {
   );
 
   testWidgets(
-    'message pagination replaces checks, never silently unions pages',
+    'legacy exact-message pagination replaces checks, never silently unions pages',
     (tester) async {
       await _game(f, count: 103);
-      await _pump(tester, f);
-      await _tap(tester, 'support_privacy_game_scope');
+      await _pump(tester, f, legacyHistory: true);
+      await _openLegacyHistory(
+        tester,
+        f,
+        SupportConsentSelectionSource.roleplay,
+      );
       await _tap(tester, 'support_privacy_session_game-session');
       await _tap(tester, 'support_privacy_message_game-0');
       await _tap(tester, 'support_privacy_next_messages');
@@ -384,32 +467,48 @@ void main() {
         findsNothing,
       );
       await _tap(tester, 'support_privacy_message_game-102');
-      await _tap(tester, 'support_privacy_select_messages');
+      await _saveLegacyHistory(tester);
       final p = await _policy(tester, f);
       expect(p.scope!.gameHistory!.messageIds, ['game-102']);
+      expect(p.scope!.gameHistoryExtent, SupportHistoryExtent.selectedMessages);
+      expect(p.grants, isEmpty);
+      expect(f.runtime.recipientConfirmed, false);
+      expect(f.selectedLoads, 0);
+      expect(f.api.bulkReads, 0);
     },
   );
 
   testWidgets(
-    'cancel/back grants nothing and valid empty page selection clears only that source',
+    'legacy exact-message cancel/back grants nothing and empty selection clears only that source',
     (tester) async {
       await _game(f);
-      await _pump(tester, f);
+      await _pump(tester, f, legacyHistory: true);
       final before = await _policy(tester, f);
-      await _tap(tester, 'support_privacy_game_scope');
+      await _openLegacyHistory(
+        tester,
+        f,
+        SupportConsentSelectionSource.roleplay,
+      );
       await _tap(tester, 'support_privacy_session_game-session');
       await _tap(tester, 'support_privacy_message_game-0');
-      tester.widget<SheetView>(find.byType(SheetView)).onBack!();
-      await tester.pumpAndSettle();
+      await _backLegacyHistory(tester);
       expect(
         find.byKey(const ValueKey('support_privacy_session_game-session')),
         findsOneWidget,
       );
-      tester.widget<SheetView>(find.byType(SheetView)).onBack!();
-      await tester.pumpAndSettle();
+      await _backLegacyHistory(tester);
+      final driver = tester.state<SupportLegacyHistoryWidgetDriverState>(
+        find.byType(SupportLegacyHistoryWidgetDriver),
+      );
+      expect(await _native(tester, () => driver.completion!), isNull);
+      expect(driver.selectionCalls, 0);
       var p = await _policy(tester, f);
       expect(p.scope!.sameAs(before.scope), true);
-      await _tap(tester, 'support_privacy_support_scope');
+      await _openLegacyHistory(
+        tester,
+        f,
+        SupportConsentSelectionSource.support,
+      );
       expect(
         find.byKey(const ValueKey('support_privacy_message_synthetic-message')),
         findsOneWidget,
@@ -418,10 +517,12 @@ void main() {
         tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
         false,
       );
-      await _tap(tester, 'support_privacy_select_messages');
+      await _saveLegacyHistory(tester);
       p = await _policy(tester, f);
       expect(p.scope!.supportHistory, isNull);
       expect(p.scope!.safeCategories, {SupportSafeCategory.connections});
+      expect(p.grants, isEmpty);
+      expect(f.runtime.recipientConfirmed, false);
     },
   );
 
@@ -468,7 +569,7 @@ void main() {
   }
 
   testWidgets(
-    'message preparation completion after disposal cannot publish or write',
+    'legacy exact-message preparation after disposal cannot publish or write',
     (tester) async {
       final delayed = Completer<SupportConsentMessagePage>();
       final entered = Completer<void>();
@@ -476,14 +577,18 @@ void main() {
         if (!entered.isCompleted) entered.complete();
         return delayed.future;
       };
-      await _pump(tester, f);
+      await _pump(tester, f, legacyHistory: true);
+      final row = await f.database.row();
+      final before = await f.database.preserved();
       // pumpAndSettle cannot finish while the loader's progress indicator runs.
-      await _show(tester, 'support_privacy_support_scope');
+      await _show(tester, 'support_legacy_history_support');
       await tester.tap(
-        find.byKey(const ValueKey('support_privacy_support_scope')),
+        find.byKey(const ValueKey('support_legacy_history_support')),
       );
       await _native(tester, () => entered.future);
       expect(find.byType(SupportHistorySelectionSheet), findsOneWidget);
+      expect(f.settingsReads, 0);
+      expect(f.api.ids, isEmpty);
       await tester.pumpWidget(const SizedBox.shrink());
       delayed.complete(
         SupportConsentMessagePage(
@@ -496,22 +601,45 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       expect(f.runtime.recipientConfirmed, false);
+      expect(await f.database.row(), row);
+      expect(await f.database.preserved(), before);
+      expect(f.selectedLoads, 0);
+      expect(f.api.bulkReads, 0);
     },
   );
 
   testWidgets(
-    'missing permission row displays deny and initializes only through explicit native scope choice',
+    'legacy exact-message choice initializes missing deny policy without granting rights',
     (tester) async {
       final row = await f.database.row();
       await (f.database.db.delete(
         f.database.db.supportContextBlocks,
       )..where((t) => t.id.equals(row!.id))).go();
-      await _native(tester, () => f.runtime.refresh());
-      await _pump(tester, f);
+      await _native(tester, () => f.runtime.refresh(resolve: false));
+      await _pump(tester, f, legacyHistory: true);
       for (final right in SupportPermission.values) {
         expect(_switch(tester, right.name).value, false);
       }
       expect(await f.database.row(), isNull);
+      final before = await f.database.preserved();
+      await _openLegacyHistory(
+        tester,
+        f,
+        SupportConsentSelectionSource.support,
+      );
+      expect(await f.database.row(), isNull);
+      await _tap(tester, 'support_privacy_message_synthetic-message');
+      await _saveLegacyHistory(tester);
+      final selected = await _policy(tester, f);
+      expect(selected.scope!.supportHistory!.messageIds, ['synthetic-message']);
+      expect(
+        selected.scope!.supportHistoryExtent,
+        SupportHistoryExtent.selectedMessages,
+      );
+      expect(selected.scope!.safeCategories, isEmpty);
+      expect(selected.grants, isEmpty);
+      expect(f.runtime.recipientConfirmed, false);
+      // The current Privacy category toggle remains a real independent control.
       final committed = Completer<void>();
       final stop = f.runtime.listen(() {
         if (f.controller.view.connectionsSelected &&
@@ -526,7 +654,11 @@ void main() {
       await tester.pumpAndSettle();
       final p = await _policy(tester, f);
       expect(p.scope!.safeCategories, {SupportSafeCategory.connections});
+      expect(p.scope!.supportHistory!.messageIds, ['synthetic-message']);
       expect(p.grants, isEmpty);
+      expect(await f.database.preserved(), before);
+      expect(f.selectedLoads, 0);
+      expect(f.api.bulkReads, 0);
     },
   );
 
@@ -556,7 +688,7 @@ void main() {
   );
 
   testWidgets(
-    'locked message metadata cannot mint a choice or clear another source',
+    'legacy exact-message locked metadata cannot mint a choice or clear another source',
     (tester) async {
       f.messagesPort = (source, id, offset) async => SupportConsentMessagePage(
         source: source,
@@ -564,9 +696,13 @@ void main() {
         items: [],
         status: SupportConsentSelectionStatus.parentLocked,
       );
-      await _pump(tester, f);
+      await _pump(tester, f, legacyHistory: true);
       final before = await _policy(tester, f);
-      await _tap(tester, 'support_privacy_support_scope');
+      await _openLegacyHistory(
+        tester,
+        f,
+        SupportConsentSelectionSource.support,
+      );
       expect(
         find.textContaining('Метаданные недоступны или выбор устарел'),
         findsOneWidget,
@@ -575,8 +711,12 @@ void main() {
         find.byKey(const ValueKey('support_privacy_select_messages')),
         findsNothing,
       );
-      tester.widget<SheetView>(find.byType(SheetView)).onBack!();
-      await tester.pumpAndSettle();
+      await _backLegacyHistory(tester);
+      final driver = tester.state<SupportLegacyHistoryWidgetDriverState>(
+        find.byType(SupportLegacyHistoryWidgetDriver),
+      );
+      expect(await _native(tester, () => driver.completion!), isNull);
+      expect(driver.selectionCalls, 0);
       expect((await _policy(tester, f)).scope!.sameAs(before.scope), true);
       expect(f.selectedLoads, 0);
     },

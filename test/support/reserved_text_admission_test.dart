@@ -800,4 +800,8 @@ final class _ForgedSnapshot implements SupportTextContextSnapshot {
   List<SupportTextContextMessage> get messages => delegate.messages;
   @override
   List<SupportTextContextProvenance> get provenance => delegate.provenance;
+  @override
+  bool get isWholeSession => delegate.isWholeSession;
+  @override
+  SupportSessionHistoryBoundary? get currentInput => delegate.currentInput;
 }
