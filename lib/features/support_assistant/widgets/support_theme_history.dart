@@ -22,7 +22,20 @@ class SupportThemeHistory extends StatelessWidget {
       key: const ValueKey('support_theme_history'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('support_theme_history_notice'.tr()),
+        for (final operation in SupportThemeOperation.values)
+          SupportThemeButton(
+            key: ValueKey('support_theme_history_kind_${operation.name}'),
+            label: 'support_theme_history_kind_${operation.name}'.tr(),
+            onTap: c.current && !c.busy && c.historyOperation != operation
+                ? () => c.selectHistoryOperation(operation)
+                : null,
+          ),
+        Text(
+          (c.historyOperation == SupportThemeOperation.mode
+                  ? 'support_theme_mode_history_notice'
+                  : 'support_theme_history_notice')
+              .tr(),
+        ),
         SupportThemeButton(
           key: const ValueKey('support_theme_history_refresh'),
           label: 'support_theme_history_refresh'.tr(),

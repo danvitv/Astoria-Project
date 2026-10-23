@@ -6,6 +6,7 @@ import '../../../shared/widgets/sheet_view.dart';
 import '../state/support_theme_provider.dart';
 import 'support_theme_controls.dart';
 import 'support_theme_history.dart';
+import 'support_theme_mode_choices.dart';
 import 'support_theme_screen_controller.dart';
 
 /// One owned route: choice, exact review, original outcome, separately reviewed
@@ -119,7 +120,12 @@ class _SupportThemeSheetState extends ConsumerState<SupportThemeSheet> {
               if (preview == null)
                 Text('support_theme_unavailable'.tr())
               else ...[
-                Text('support_theme_exact_review'.tr()),
+                Text(
+                  (preview.operation == SupportThemeOperation.mode
+                          ? 'support_theme_mode_exact_review'
+                          : 'support_theme_exact_review')
+                      .tr(),
+                ),
                 SupportThemeValueBlock(
                   key: const ValueKey('support_theme_before'),
                   value: preview.before,
@@ -143,7 +149,7 @@ class _SupportThemeSheetState extends ConsumerState<SupportThemeSheet> {
                     ? () => c.confirm(review)
                     : null,
               ),
-            ] else if (installed != null)
+            ] else if (installed != null) ...[
               for (final choice in installed.choices)
                 if (choice.value case final value?)
                   _InstalledChoice(
@@ -152,6 +158,8 @@ class _SupportThemeSheetState extends ConsumerState<SupportThemeSheet> {
                   )
                 else
                   Text('support_theme_unavailable'.tr()),
+              SupportThemeModeChoices(controller: c),
+            ],
             if (fact != null)
               if (result == null)
                 Text('support_theme_unavailable'.tr())

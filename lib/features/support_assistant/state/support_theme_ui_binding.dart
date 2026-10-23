@@ -133,6 +133,17 @@ final class SupportThemeUiIntent {
     return view;
   }
 
+  /// Mode authority is minted only from THIS emitted intent's observation.
+  /// A string mode, a safe value or another UI's choice cannot authorize a write.
+  SupportThemeInstalledView? modeChoices(SupportThemeObservation observation) {
+    if (_observations[observation] != true) return null;
+    final view = _owner.service.projectModeChoices(observation);
+    for (final choice in view?.choices ?? <SupportThemeChoice>[]) {
+      _choices[choice] = true;
+    }
+    return view;
+  }
+
   Future<SupportThemeReview?> prepareApply(SupportThemeChoice choice) async {
     if (_choices[choice] != true) return null;
     final review = await _owner.service.prepareApply(choice);
@@ -161,18 +172,25 @@ final class SupportThemeUiIntent {
       _reviews[review] == true ? _owner._confirm(review, _session) : null;
   SupportThemeActionResult? result(SupportThemeActionResult result) =>
       _owner.service.projectResult(_intent, result);
-  Future<SupportThemeRecovery> recover(String operationId) =>
-      _owner.service.recover(_intent, operationId);
+  Future<SupportThemeRecovery> recover(
+    String operationId, {
+    SupportThemeOperation operation = SupportThemeOperation.selection,
+  }) => _owner.service.recover(_intent, operationId, operation: operation);
 
   Future<SupportThemeHistoryPage?> discoverHistory({
     SupportThemeHistoryCursor? cursor,
+    SupportThemeOperation operation = SupportThemeOperation.selection,
   }) async {
     // P ownership is independent of S ownership: another emitted UI intent
     // cannot transplant a native cursor even within the same service.
     if (cursor != null && _historyCursors[cursor] != true) {
       return null; // Explicit foreign continuation refusal before S/SQL.
     }
-    final page = await _owner.service.discoverHistory(_intent, cursor: cursor);
+    final page = await _owner.service.discoverHistory(
+      _intent,
+      cursor: cursor,
+      operation: operation,
+    );
     _historyPages[page] = true;
     return page;
   }

@@ -57,7 +57,11 @@ class SupportThemeValueBlock extends StatelessWidget {
         if (heading != null) Text(heading!),
         Text('support_theme_name'.tr(args: [value.name])),
         Text('support_theme_id'.tr(args: [value.id])),
-        Text('support_theme_mode'.tr(args: [value.mode])),
+        Text(
+          'support_theme_mode'.tr(
+            args: ['support_theme_mode_${value.mode}'.tr()],
+          ),
+        ),
         Text('support_theme_accent'.tr(args: [value.accent])),
       ],
     ),
@@ -76,7 +80,11 @@ class SupportThemeSample extends StatelessWidget {
     );
     final scheme = ColorScheme.fromSeed(
       seedColor: accent,
-      brightness: value.mode == 'dark' ? Brightness.dark : Brightness.light,
+      brightness: switch (value.mode) {
+        'dark' => Brightness.dark,
+        'light' => Brightness.light,
+        _ => MediaQuery.platformBrightnessOf(context),
+      },
     );
     return DecoratedBox(
       decoration: BoxDecoration(

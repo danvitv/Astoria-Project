@@ -37,6 +37,7 @@ final class SupportThemeScreenController extends ChangeNotifier {
   Future<SupportThemeActionResult>? originalJob;
   final pages = <SupportThemeHistoryPage>[];
   bool historyRequested = false;
+  SupportThemeOperation historyOperation = SupportThemeOperation.selection;
   String? notice;
 
   bool get current =>
@@ -161,6 +162,15 @@ final class SupportThemeScreenController extends ChangeNotifier {
     );
   }
 
+  void selectHistoryOperation(SupportThemeOperation operation) {
+    if (!current || busy || operation == historyOperation) return;
+    _read++;
+    historyOperation = operation;
+    pages.clear();
+    historyRequested = false;
+    _changed();
+  }
+
   Future<void> discover({SupportThemeHistoryCursor? cursor}) async {
     final original = intent;
     if (!current || original == null || busy) return;
@@ -170,7 +180,10 @@ final class SupportThemeScreenController extends ChangeNotifier {
     if (cursor == null) pages.clear();
     _changed();
     try {
-      final page = await original.discoverHistory(cursor: cursor);
+      final page = await original.discoverHistory(
+        cursor: cursor,
+        operation: historyOperation,
+      );
       if (!current || read != _read) return;
       if (page == null) {
         notice = 'support_theme_history_unavailable';
