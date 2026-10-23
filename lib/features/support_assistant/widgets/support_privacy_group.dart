@@ -12,7 +12,7 @@ import '../models/support_permission_preferences.dart';
 import '../models/support_recipient_resolution.dart';
 import '../services/support_native_consent_controller.dart';
 import '../state/support_native_provider.dart';
-import 'support_history_selection_sheet.dart';
+import 'support_session_scope_sheet.dart';
 import 'support_privacy_review_sheet.dart';
 
 typedef _PrivacyAction =
@@ -25,7 +25,13 @@ typedef _RunDisplayed = void Function(_PrivacyAction action);
 
 /// Shared desktop/mobile native controls. Toggles store prerequisites, not actions.
 class SupportPrivacyGroup extends ConsumerStatefulWidget {
-  const SupportPrivacyGroup({super.key});
+  const SupportPrivacyGroup({
+    super.key,
+    this.focusedPermission,
+    this.initialSessionSource,
+  });
+  final SupportPermission? focusedPermission;
+  final SupportConsentSelectionSource? initialSessionSource;
   @override
   ConsumerState<SupportPrivacyGroup> createState() => _PrivacyGroupState();
 }
@@ -39,6 +45,7 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
   Object _panelToken = Object();
   String? _failureSession;
   int? _failureLifetime;
+  bool _initialSessionOpened = false;
 
   @override
   void initState() {
@@ -202,23 +209,22 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
   ) {
     run((controller, review, current) async {
       if (!current()) return false;
-      final selection =
-          await showModalBottomSheet<SupportHistorySelectionResult>(
-            context: context,
-            useRootNavigator: true,
-            isScrollControlled: true,
-            backgroundColor: Colors.transparent,
-            builder: (_) => SupportHistorySelectionSheet(
-              controller: controller,
-              review: review,
-              repo: repo,
-              source: source,
-              isCurrent: current,
-            ),
-          );
+      final selection = await showModalBottomSheet<SupportNativeSessionChoice>(
+        context: context,
+        useRootNavigator: true,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => SupportSessionScopeSheet(
+          controller: controller,
+          review: review,
+          repo: repo,
+          source: source,
+          isCurrent: current,
+        ),
+      );
       if (!current()) return false;
       if (selection == null) return null;
-      return controller.selectMessages(selection.choice, selection.ids);
+      return controller.selectSessionHistory(selection);
     });
   }
 
@@ -264,6 +270,16 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
         controller.runtime.settingsPending > 0 ||
         !controller.runtime.configurationStable();
     final inspection = view.inspection;
+    final initial = widget.initialSessionSource;
+    if (!_initialSessionOpened && initial != null && available && !busy) {
+      _initialSessionOpened = true;
+      // A contextual card opens this native proposal; it does not select it.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && identical(panelToken, _panelToken)) {
+          _history(runLocal, repo, initial);
+        }
+      });
+    }
     return MenuCollapsibleSection(
       key: const ValueKey('support_privacy_group'),
       label: 'support_privacy_title'.tr(),
@@ -274,21 +290,30 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
           items: [
             if (!available) _Notice(_availabilityKey(view.availability).tr()),
             _Notice(
-              'support_privacy_saved_counts'.tr(
-                args: [
-                  '${view.gameMessageCount}',
-                  '${view.supportMessageCount}',
-                ],
-              ),
+              view.gameSessionSelected || view.supportSessionSelected
+                  ? 'support_privacy_session_scope_counts'.tr(
+                      args: [
+                        view.gameSessionSelected ? '✓' : '—',
+                        view.supportSessionSelected ? '✓' : '—',
+                      ],
+                    )
+                  : view.gameMessageCount == 0 && view.supportMessageCount == 0
+                  ? 'support_privacy_session_scope_empty'.tr()
+                  : 'support_privacy_saved_counts'.tr(
+                      args: [
+                        '${view.gameMessageCount}',
+                        '${view.supportMessageCount}',
+                      ],
+                    ),
             ),
-            _Notice('support_privacy_saved_links'.tr()),
+            _Notice('support_privacy_session_scope_notice'.tr()),
             _Action(
               'support_privacy_game_scope',
               'support_privacy_game_picker',
               busy || !available
                   ? null
                   : () => _history(
-                      run,
+                      runLocal,
                       repo,
                       SupportConsentSelectionSource.roleplay,
                     ),
@@ -299,7 +324,7 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
               busy || !available
                   ? null
                   : () => _history(
-                      run,
+                      runLocal,
                       repo,
                       SupportConsentSelectionSource.support,
                     ),
@@ -324,7 +349,7 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
               value: view.connectionsSelected,
               onChanged: busy || !available
                   ? null
-                  : (selected) => run(
+                  : (selected) => runLocal(
                       (c, r, current) => current()
                           ? c.selectConnections(r, selected)
                           : Future.value(false),
@@ -355,21 +380,22 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
           ],
         ),
         for (final section in _sections)
-          MenuGroup(
-            header: 'support_privacy_section_${section.$1}'.tr(),
-            description: 'support_privacy_section_${section.$1}_notice'.tr(),
-            items: [
-              for (final right in section.$2)
-                _right(
-                  view.rights.firstWhere((v) => v.right == right),
-                  busy,
-                  right == SupportPermission.readSafeSettings ||
-                          right == SupportPermission.confirmedSettingsChanges
-                      ? runLocal
-                      : run,
-                ),
-            ],
-          ),
+          if (widget.focusedPermission == null ||
+              section.$2.contains(widget.focusedPermission))
+            MenuGroup(
+              header: 'support_privacy_section_${section.$1}'.tr(),
+              description: 'support_privacy_section_${section.$1}_notice'.tr(),
+              items: [
+                for (final right in section.$2)
+                  if (widget.focusedPermission == null ||
+                      widget.focusedPermission == right)
+                    _right(
+                      view.rights.firstWhere((v) => v.right == right),
+                      busy,
+                      _localRight(right) ? runLocal : run,
+                    ),
+              ],
+            ),
         if (inspection != null)
           MenuGroup(
             key: const ValueKey('support_privacy_transient_inspection'),
@@ -427,6 +453,16 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
           'support_privacy_policy_corrupt',
         _ => 'support_privacy_policy_unavailable',
       };
+  static bool _localRight(SupportPermission right) => switch (right) {
+    SupportPermission.readSafeSettings ||
+    SupportPermission.readGameData ||
+    SupportPermission.readDiagnostics ||
+    SupportPermission.confirmedSettingsChanges ||
+    SupportPermission.reportGameHistory ||
+    SupportPermission.reportSupportHistory ||
+    SupportPermission.reportPersonalDataAttachments => true,
+    _ => false,
+  };
   static const _sections = [
     (
       'local',

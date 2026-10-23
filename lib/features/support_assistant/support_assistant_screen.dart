@@ -17,6 +17,13 @@ import 'widgets/support_settings_panel.dart';
 import 'widgets/support_model_screen_controller.dart';
 import 'widgets/support_theme_entry.dart';
 import 'widgets/support_provider_entry.dart';
+import 'widgets/support_guidance_sheet.dart';
+import 'widgets/support_card_view.dart';
+import 'services/support_guidance_planner.dart';
+import 'models/support_permission_scope.dart';
+import 'state/support_native_provider.dart';
+
+part 'support_screen_guidance.dart';
 
 /// Center workspace screen for Astoria Assistant (`/support`).
 ///
@@ -50,6 +57,10 @@ class _SupportAssistantScreenState
   final TextEditingController _composerCtrl = TextEditingController();
   final SupportModelScreenController _modelUi = SupportModelScreenController();
   final _providerEntry = GlobalKey<SupportProviderEntryState>();
+  final _themeEntry = GlobalKey<SupportThemeEntryState>();
+  List<SupportGuidanceTarget> _guidance = const [];
+  SupportComposerDraft? _guidanceDraft;
+  String? _guidanceSession;
   bool _sheetOpen = false;
 
   @override
@@ -61,6 +72,18 @@ class _SupportAssistantScreenState
 
   void _modelUiChanged() {
     if (mounted) setState(() {});
+  }
+
+  void _publishGuidance(
+    List<SupportGuidanceTarget> targets,
+    SupportComposerDraft draft,
+    String session,
+  ) {
+    setState(() {
+      _guidance = targets;
+      _guidanceDraft = draft;
+      _guidanceSession = session;
+    });
   }
 
   @override
@@ -175,7 +198,7 @@ class _SupportAssistantScreenState
       case 'provider_setup':
         _providerEntry.currentState?.open();
       case 'theme_setup':
-        context.push('/menu/themes');
+        _themeEntry.currentState?.open();
       case 'memory_books_setup':
         GlazeToast.show(
           context,
@@ -213,7 +236,7 @@ class _SupportAssistantScreenState
       showBackground: !isDesktop,
       flushHeader: isDesktop,
       actions: [
-        const SupportThemeEntry(),
+        SupportThemeEntry(key: _themeEntry),
         SupportProviderEntry(
           key: _providerEntry,
           onOpenPermissions: _openSettingsSheet,
@@ -288,26 +311,32 @@ class _SupportAssistantScreenState
               welcomeAvatar: widget.welcomeAvatar,
               // Full capability copy scrolls with the feed instead of crowding
               // out the composer on narrow screens with large text.
-              notice: const Padding(
-                key: ValueKey('support_text_only_notice'),
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  'Модель отвечает только текстом после отдельного подтверждения '
-                  'точного prompt. Выбор установленной темы, режим dark/light/system '
-                  'и условный Undo доступны только через отдельное нативное '
-                  'подтверждение. Подготовка профиля провайдера и отдельный '
-                  'защищённый ввод ключа доступны в нативном окне провайдера; '
-                  'они не выбирают активное подключение и не проверяют провайдера. '
-                  'Memory, инструменты, DCP, '
-                  'диагностика и экспорт отчётов '
-                  'пока недоступны. Локальная помощь — отдельно, без сети.',
-                  style: TextStyle(fontSize: 12),
-                ),
+              notice: Column(
+                children: [
+                  const Padding(
+                    key: ValueKey('support_text_only_notice'),
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      'Модель отвечает только текстом после отдельного подтверждения '
+                      'точного prompt. Выбор установленной темы, режим dark/light/system '
+                      'и условный Undo доступны только через отдельное нативное '
+                      'подтверждение. Подготовка профиля провайдера и отдельный '
+                      'защищённый ввод ключа доступны в нативном окне провайдера; '
+                      'они не выбирают активное подключение и не проверяют провайдера. '
+                      'Memory, инструменты, DCP, '
+                      'диагностика и экспорт отчётов '
+                      'пока недоступны. Локальная помощь — отдельно, без сети.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  ..._pendingGuidance(workspace.activeSessionId),
+                ],
               ),
               onQuickAction: _handleSetupCardAction,
               onApplyPlan: notifier.applyMutationPlan,
               onRollback: notifier.rollbackMutation,
               onSetupAction: _handleSetupCardAction,
+              onGuidance: _openGuidance,
             ),
           ),
           SupportComposerBar(
@@ -323,9 +352,8 @@ class _SupportAssistantScreenState
                 workspace.activeSessionId.isNotEmpty,
             onSend: notifier.sendUserMessage,
             nativeOwner: emitter,
-            onNativeSend: emitter == null
-                ? (_) => _modelUi.rejectNoModel()
-                : (draft) => _modelUi.send(emitter, draft, context),
+            onNativeSend: (draft) =>
+                _sendWithGuidance(emitter, draft, workspace.activeSessionId),
             onLocalHelp: notifier.sendLocalHelp,
             onStop: activeSend?.stop,
             onRunQuickDiagnostics: () =>

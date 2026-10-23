@@ -20,6 +20,7 @@ class SupportMessageList extends ConsumerWidget {
   final ValueChanged<String> onApplyPlan;
   final ValueChanged<String> onRollback;
   final ValueChanged<String>? onSetupAction;
+  final ValueChanged<SupportGuidanceTarget>? onGuidance;
   final double topPadding;
   final double bottomPadding;
   final SupportModelRunView run;
@@ -34,6 +35,7 @@ class SupportMessageList extends ConsumerWidget {
     required this.onApplyPlan,
     required this.onRollback,
     this.onSetupAction,
+    this.onGuidance,
     this.topPadding = 16,
     this.bottomPadding = 16,
     this.run = const SupportModelRunView(),
@@ -82,6 +84,7 @@ class SupportMessageList extends ConsumerWidget {
             onApplyPlan: onApplyPlan,
             onRollback: onRollback,
             onSetupAction: onSetupAction,
+            onGuidance: onGuidance,
           ),
         );
       },
@@ -105,12 +108,16 @@ class _AstoriaWelcomeBanner extends StatelessWidget {
     final welcomeCard = QuickActionChipsCard(
       title: 'Астория Ассистент',
       subtitle:
-          'История сессий хранится зашифрованной. Модель отвечает только текстом после подтверждения получателя и точного prompt. Только выбор установленной темы и условный Undo доступны через отдельный нативный обзор. Изменение режима, провайдера, Memory, инструменты, DCP, диагностика и экспорт отчёта пока недоступны. Ролевые профили не меняются.',
+          'Астория предлагает нужные настройки и разрешения прямо в чате. '
+          'Выбор сессии — область доступа, а не автоматическое разрешение. '
+          'Перед запросом модели подтверждаются получатель и точный prompt. '
+          'Тема и подключение настраиваются в отдельных нативных окнах. '
+          'Исполнители Memory, инструментов, DCP, диагностики и экспорта пока недоступны.',
       actions: const [
         QuickActionItem(
           id: 'theme_setup',
           label: 'Сменить тему',
-          subtitle: 'Открыть существующие настройки оформления',
+          subtitle: 'Получить предложение и точный нативный план',
         ),
         QuickActionItem(
           id: 'provider_setup',
@@ -190,6 +197,7 @@ class _SupportMessageBubble extends StatelessWidget {
   final ValueChanged<String> onApplyPlan;
   final ValueChanged<String> onRollback;
   final ValueChanged<String>? onSetupAction;
+  final ValueChanged<SupportGuidanceTarget>? onGuidance;
   final SupportModelRunView run;
 
   const _SupportMessageBubble({
@@ -199,6 +207,7 @@ class _SupportMessageBubble extends StatelessWidget {
     required this.onApplyPlan,
     required this.onRollback,
     this.onSetupAction,
+    this.onGuidance,
     required this.run,
   });
 
@@ -288,6 +297,7 @@ class _SupportMessageBubble extends StatelessWidget {
                         onApplyPlan: onApplyPlan,
                         onRollback: onRollback,
                         onSetupAction: onSetupAction,
+                        onGuidance: onGuidance,
                       ),
                     ),
                 ],

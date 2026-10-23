@@ -10,34 +10,36 @@ class SupportSettingsPickers {
   static void connection(
     BuildContext context,
     SupportWorkspaceNotifier notifier,
-    List<ApiConnectionMetadata> connections,
-  ) {
+    List<ApiConnectionMetadata> connections, {
+    required SupportWorkspaceSettingsIntent intent,
+  }) {
+    if (!intent.isCurrent) return;
+    final confirmation = _SettingsPickerConfirmation(intent);
     GlazeBottomSheet.show<void>(
       context,
       title: 'Подключение Астории',
-      items: [
-        BottomSheetItem(
-          label: 'Не выбрано',
-          onTap: () {
-            Navigator.of(context, rootNavigator: true).pop();
-            notifier.selectConnection(null);
-          },
-        ),
-        for (final connection in connections)
-          BottomSheetItem(
-            label: connection.displayName,
-            hint: connection.configured
-                ? 'Ключ: ${connection.characterCount} симв. • ${connection.protocol}'
-                : 'Ключ не задан • ${connection.protocol}',
-            onTap: () {
-              Navigator.of(context, rootNavigator: true).pop();
-              notifier.selectConnection(
-                connection.connectionId,
-                defaultModelId: connection.model,
-              );
-            },
+      itemCount: connections.length + 1,
+      itemBuilder: (pickerContext, index) {
+        final route = ModalRoute.of<void>(pickerContext);
+        final connection = index == 0 ? null : connections[index - 1];
+        return BottomSheetItem(
+          label: connection?.displayName ?? 'Не выбрано',
+          hint: connection == null
+              ? null
+              : connection.configured
+              ? 'Ключ: ${connection.characterCount} симв. • ${connection.protocol}'
+              : 'Ключ не задан • ${connection.protocol}',
+          onTap: () => confirmation.confirm(
+            pickerContext,
+            route,
+            () => notifier.selectConnection(
+              connection?.connectionId,
+              defaultModelId: connection?.model,
+              intent: intent,
+            ),
           ),
-      ],
+        );
+      },
     );
   }
 
@@ -45,17 +47,26 @@ class SupportSettingsPickers {
     BuildContext context,
     SupportWorkspaceNotifier notifier,
     ApiConnectionMetadata? connection,
-    SupportAssistantSettings settings,
-  ) {
+    SupportAssistantSettings settings, {
+    required SupportWorkspaceSettingsIntent intent,
+  }) {
+    if (!intent.isCurrent) return;
+    final confirmation = _SettingsPickerConfirmation(intent);
     GlazeBottomSheet.show<void>(
       context,
       title: 'Модель Астории',
-      child: _ManualModelForm(
-        initialModel: settings.modelId ?? '',
-        connectionModel: connection?.model,
-        onSelect: (model) {
-          Navigator.of(context, rootNavigator: true).pop();
-          notifier.selectModel(model);
+      child: Builder(
+        builder: (pickerContext) {
+          final route = ModalRoute.of<void>(pickerContext);
+          return _ManualModelForm(
+            initialModel: settings.modelId ?? '',
+            connectionModel: connection?.model,
+            onSelect: (model) => confirmation.confirm(
+              pickerContext,
+              route,
+              () => notifier.selectModel(model, intent: intent),
+            ),
+          );
         },
       ),
     );
@@ -63,22 +74,56 @@ class SupportSettingsPickers {
 
   static void reasoning(
     BuildContext context,
-    SupportWorkspaceNotifier notifier,
-  ) {
+    SupportWorkspaceNotifier notifier, {
+    required SupportWorkspaceSettingsIntent intent,
+  }) {
+    if (!intent.isCurrent) return;
+    final confirmation = _SettingsPickerConfirmation(intent);
     GlazeBottomSheet.show<void>(
       context,
       title: 'Reasoning Effort',
-      items: [
-        for (final effort in SupportReasoningEffort.values)
-          BottomSheetItem(
-            label: effort.label,
-            onTap: () {
-              Navigator.of(context, rootNavigator: true).pop();
-              notifier.setReasoningEffort(effort);
-            },
+      itemCount: SupportReasoningEffort.values.length,
+      itemBuilder: (pickerContext, index) {
+        final route = ModalRoute.of<void>(pickerContext);
+        final effort = SupportReasoningEffort.values[index];
+        return BottomSheetItem(
+          label: effort.label,
+          onTap: () => confirmation.confirm(
+            pickerContext,
+            route,
+            () => notifier.setReasoningEffort(effort, intent: intent),
           ),
-      ],
+        );
+      },
     );
+  }
+}
+
+/// Validate the original top modal BEFORE starting the original settings job.
+/// Closing this picker is not retirement of its parent's already-admitted job.
+final class _SettingsPickerConfirmation {
+  _SettingsPickerConfirmation(this.intent);
+  final SupportWorkspaceSettingsIntent intent;
+  bool _used = false;
+
+  void confirm(
+    BuildContext context,
+    ModalRoute<void>? route,
+    Future<bool> Function() save,
+  ) {
+    if (_used ||
+        !context.mounted ||
+        route?.isCurrent != true ||
+        !intent.isCurrent ||
+        !context.mounted ||
+        route?.isCurrent != true) {
+      return;
+    }
+    _used = true;
+    save();
+    if (context.mounted && route?.isCurrent == true) {
+      Navigator.of(context).pop();
+    }
   }
 }
 

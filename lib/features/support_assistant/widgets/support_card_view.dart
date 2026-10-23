@@ -10,6 +10,7 @@ class SupportCardView extends StatelessWidget {
   final ValueChanged<String>? onApplyPlan;
   final ValueChanged<String>? onRollback;
   final ValueChanged<String>? onSetupAction;
+  final ValueChanged<SupportGuidanceTarget>? onGuidance;
 
   const SupportCardView({
     super.key,
@@ -18,11 +19,25 @@ class SupportCardView extends StatelessWidget {
     this.onApplyPlan,
     this.onRollback,
     this.onSetupAction,
+    this.onGuidance,
   });
 
   @override
   Widget build(BuildContext context) {
     final children = switch (card) {
+      final SupportGuidanceCard c => <Widget>[
+        _title(context, c.target.title),
+        Text(c.target.reason),
+        const Text(
+          'Ничего не включено автоматически. Настройка или разрешение '
+          'подтверждаются отдельно в нативном окне.',
+        ),
+        _CardAction(
+          key: ValueKey('support_guidance_${c.target.name}'),
+          label: c.target.actionLabel,
+          onTap: onGuidance == null ? null : () => onGuidance!(c.target),
+        ),
+      ],
       final QuickActionChipsCard c => <Widget>[
         _title(context, c.title),
         Text(c.subtitle),

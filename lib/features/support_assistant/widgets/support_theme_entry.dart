@@ -16,14 +16,35 @@ class SupportThemeEntry extends ConsumerStatefulWidget {
   const SupportThemeEntry({super.key});
 
   @override
-  ConsumerState<SupportThemeEntry> createState() => _SupportThemeEntryState();
+  SupportThemeEntryState createState() => SupportThemeEntryState();
 }
 
-class _SupportThemeEntryState extends ConsumerState<SupportThemeEntry> {
+class SupportThemeEntryState extends ConsumerState<SupportThemeEntry> {
   SupportThemeScreenController? _displayed;
   final _owners = <SupportThemeScreenController>[];
   Object _lifetime = Object();
   bool _open = false;
+
+  /// Contextual chat cards use the SAME emitted native theme owner as the header.
+  Future<void> open() async {
+    if (!mounted || _open) return;
+    final original = _displayed;
+    if (original != null && original.current) {
+      return _show(original);
+    }
+    _open = true;
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        useRootNavigator: true,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => const _PermissionSheet(),
+      );
+    } finally {
+      _open = false;
+    }
+  }
 
   @override
   void initState() {
