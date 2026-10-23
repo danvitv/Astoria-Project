@@ -322,11 +322,7 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
     final themeSettings = ref.watch(themeProvider);
     final uiFont = ref.watch(uiFontFamilyProvider).value;
     final preset = themeSettings.activePreset;
-    final mode = preset.themeMode == 'light'
-        ? ThemeMode.light
-        : preset.themeMode == 'dark'
-        ? ThemeMode.dark
-        : themeSettings.mode;
+    final mode = themeSettings.resolvedMode;
     return DynamicColorBuilder(
       builder: (lightDynamic, darkDynamic) {
         // Material You dynamic colors are sourced from the system only on

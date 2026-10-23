@@ -8,12 +8,15 @@ Future<ThemeSelectionResult> _runThemeSelectionEffect({
   required int revision,
   required ThemePreset before,
   required ThemePreset after,
+  required _ThemeModeSnapshots? mode,
   required bool Function() isCurrent,
-  required void Function(ThemePreset) publish,
+  required void Function(ThemePreset, List<ThemePreset>?) publish,
 }) async {
   var acceptance = ThemeSelectionWriteAcceptance.unknown;
   try {
-    final accepted = await store.setActiveChecked(after.id);
+    final accepted = await (mode == null
+        ? store.setActiveChecked(after.id)
+        : (store as ThemeModeStore).saveAllChecked(mode.after));
     acceptance = accepted
         ? ThemeSelectionWriteAcceptance.accepted
         : ThemeSelectionWriteAcceptance.rejected;
@@ -30,7 +33,9 @@ Future<ThemeSelectionResult> _runThemeSelectionEffect({
     final contentMatches =
         fresh.installed(before.id) == before &&
         fresh.installed(after.id) == after;
-    observed = !contentMatches
+    observed = mode != null
+        ? mode.observe(fresh)
+        : !contentMatches
         ? ThemeSelectionFreshObservation.other
         : fresh.activeId == after.id
         ? ThemeSelectionFreshObservation.after
@@ -46,7 +51,7 @@ Future<ThemeSelectionResult> _runThemeSelectionEffect({
       observed == ThemeSelectionFreshObservation.after;
   if (applied && current) {
     try {
-      publish(after);
+      publish(after, mode?.after);
       current = isCurrent(); // synchronous listeners can admit newer work too
     } catch (_) {
       // A publication/listener failure cannot erase the observed external effect
@@ -70,7 +75,7 @@ Future<ThemeSelectionResult> _runThemeSelectionEffect({
     freshObserved: observed,
     ownerCurrent: current,
     receipt: applied
-        ? ThemeSelectionReceipt._(owner, revision, before, after)
+        ? ThemeSelectionReceipt._(owner, revision, before, after, mode)
         : null,
   );
 }

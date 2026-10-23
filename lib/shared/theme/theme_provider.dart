@@ -13,6 +13,7 @@ export 'theme_selection.dart'
         ThemeSelectionDisplay,
         ThemeSelectionFreshObservation,
         ThemeSelectionObservation,
+        ThemeSelectionOperation,
         ThemeSelectionPlan,
         ThemeSelectionReadResult,
         ThemeSelectionReceipt,
@@ -39,6 +40,13 @@ class ThemeSettings {
     ],
     this.ignoreCustomFont = false,
   });
+
+  ThemeMode get resolvedMode => switch (activePreset.themeMode) {
+    'light' => ThemeMode.light,
+    'dark' => ThemeMode.dark,
+    'system' => ThemeMode.system,
+    _ => mode,
+  };
 
   ThemeSettings copyWith({
     ThemeMode? mode,
@@ -76,9 +84,10 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
         ? _storage as ThemeSelectionStore
         : null,
     active: () => state.activePreset,
-    publish: (preset) => state = state.copyWith(
+    publish: (preset, presets) => state = state.copyWith(
       activePreset: preset,
-      accentColor: preset.accent,
+      accentColor: presets == null ? preset.accent : state.accentColor,
+      presets: presets,
     ),
   );
 

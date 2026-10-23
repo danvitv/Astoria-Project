@@ -2,6 +2,7 @@ import 'theme_preset.dart';
 
 part 'theme_selection_owner.dart';
 part 'theme_selection_effect.dart';
+part 'theme_selection_mode.dart';
 
 /// Optional capability: legacy ThemePresetStore implementations remain valid.
 /// Reads must refresh their backing-store cache and reject malformed data.
@@ -10,6 +11,12 @@ part 'theme_selection_effect.dart';
 abstract interface class ThemeSelectionStore {
   Future<ThemeSelectionStoredState> readSelectionFresh();
   Future<bool> setActiveChecked(String id);
+}
+
+/// Additive mode capability. Invocation must synchronously start the full-list
+/// write; completion reports API acceptance, not disk durability or CAS.
+abstract interface class ThemeModeStore {
+  Future<bool> saveAllChecked(List<ThemePreset> presets);
 }
 
 /// Native storage-only projection, never an assistant payload or journal codec.
@@ -73,6 +80,8 @@ enum ThemeSelectionCode {
 
 enum ThemeSelectionWriteAcceptance { notStarted, accepted, rejected, unknown }
 
+enum ThemeSelectionOperation { selection, mode }
+
 enum ThemeSelectionFreshObservation {
   notRead,
   before,
@@ -115,14 +124,36 @@ class ThemeSelectionObservation {
         ? null
         : ThemeSelectionPlan._(_owner, _revision, _stored.active, target);
   }
+
+  ThemeSelectionPlan? planForMode(String mode) {
+    if (mode != 'dark' && mode != 'light' && mode != 'system') return null;
+    final snapshots = _ThemeModeSnapshots.propose(_stored, mode);
+    return ThemeSelectionPlan._(
+      _owner,
+      _revision,
+      _stored.active,
+      _stored.active.copyWith(themeMode: mode),
+      snapshots,
+    );
+  }
 }
 
 class ThemeSelectionPlan {
-  ThemeSelectionPlan._(this._owner, this._revision, this._before, this._after);
+  ThemeSelectionPlan._(
+    this._owner,
+    this._revision,
+    this._before,
+    this._after, [
+    this._mode,
+  ]);
   final Object _owner;
   final int _revision;
   final ThemePreset _before;
   final ThemePreset _after;
+  final _ThemeModeSnapshots? _mode;
+  ThemeSelectionOperation get operation => _mode == null
+      ? ThemeSelectionOperation.selection
+      : ThemeSelectionOperation.mode;
   ThemeSelectionDisplay get before => ThemeSelectionDisplay._(_before);
   ThemeSelectionDisplay get after => ThemeSelectionDisplay._(_after);
 }
@@ -135,12 +166,17 @@ class ThemeSelectionReceipt {
     this._owner,
     this._revision,
     this._before,
-    this._after,
-  );
+    this._after, [
+    this._mode,
+  ]);
   final Object _owner;
   final int _revision;
   final ThemePreset _before;
   final ThemePreset _after;
+  final _ThemeModeSnapshots? _mode;
+  ThemeSelectionOperation get operation => _mode == null
+      ? ThemeSelectionOperation.selection
+      : ThemeSelectionOperation.mode;
   ThemeSelectionDisplay get before => ThemeSelectionDisplay._(_before);
   ThemeSelectionDisplay get after => ThemeSelectionDisplay._(_after);
 }

@@ -15,7 +15,7 @@ class ThemeSelectionOwner {
   final Future<T> Function<T>(Future<T> Function()) sequence;
   final ThemeSelectionStore? Function() storage;
   final ThemePreset Function() active;
-  final void Function(ThemePreset) publish;
+  final void Function(ThemePreset, List<ThemePreset>?) publish;
   final Object _identity = Object();
   final Expando<bool> _consumed = Expando<bool>();
   int _revision = 0;
@@ -104,6 +104,7 @@ class ThemeSelectionOwner {
     revision: plan._revision,
     before: plan._before,
     after: plan._after,
+    mode: plan._mode,
     isCurrent: isCurrent,
   );
 
@@ -116,6 +117,7 @@ class ThemeSelectionOwner {
     revision: receipt._revision,
     before: receipt._after,
     after: receipt._before,
+    mode: receipt._mode?.reversed,
     isCurrent: isCurrent,
   );
 
@@ -125,6 +127,7 @@ class ThemeSelectionOwner {
     required int revision,
     required ThemePreset before,
     required ThemePreset after,
+    required _ThemeModeSnapshots? mode,
     required bool Function() isCurrent,
   }) async {
     if (!identical(owner, _identity)) {
@@ -155,7 +158,7 @@ class ThemeSelectionOwner {
         return ThemeSelectionResult(_denialCode(revision));
       }
       final store = storage();
-      if (store == null) {
+      if (store == null || (mode != null && store is! ThemeModeStore)) {
         return const ThemeSelectionResult(
           ThemeSelectionCode.unsupportedStorage,
         );
@@ -179,7 +182,10 @@ class ThemeSelectionOwner {
       if (!_current(revision, isCurrent)) {
         return ThemeSelectionResult(_denialCode(revision));
       }
-      if (!_matches(stored, before, after) || active() != before) {
+      final matches = mode == null
+          ? _matches(stored, before, after)
+          : mode.matchesBefore(stored);
+      if (!matches || active() != before) {
         return const ThemeSelectionResult(ThemeSelectionCode.conflict);
       }
       if (before == after) {
@@ -197,6 +203,7 @@ class ThemeSelectionOwner {
         revision: effectRevision,
         before: before,
         after: after,
+        mode: mode,
         isCurrent: () => _current(effectRevision, isCurrent),
         publish: publish,
       );

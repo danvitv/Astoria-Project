@@ -37,7 +37,8 @@ enum ThemeSelectionSyntheticWrite {
 
 /// Independent backing list/selection and per-instance cache. No preferences,
 /// DB, widget bootstrap, native plugin, file or network path is evaluated.
-class ThemeSelectionTestStore implements ThemePresetStore, ThemeSelectionStore {
+class ThemeSelectionTestStore
+    implements ThemePresetStore, ThemeSelectionStore, ThemeModeStore {
   ThemeSelectionTestStore(this.backing)
     : cachedPresets = List.of(backing.presets),
       cachedActiveId = backing.activeId;
@@ -56,6 +57,10 @@ class ThemeSelectionTestStore implements ThemePresetStore, ThemeSelectionStore {
   int freshReads = 0;
   int failAtFreshRead = -1;
   void Function()? afterCheckedWrite;
+  final checkedModeWrites = <List<ThemePreset>>[];
+  final checkedModeOutcomes = <ThemeSelectionSyntheticWrite>[];
+  final modeWriteGates = <ThemeSelectionGate>[];
+  void Function()? afterCheckedModeWrite;
 
   @override
   Future<List<ThemePreset>> loadAll() async {
@@ -89,6 +94,36 @@ class ThemeSelectionTestStore implements ThemePresetStore, ThemeSelectionStore {
         ? ThemeSelectionSyntheticWrite.accepted
         : checkedModes.removeAt(0);
     return _write(id, mode: mode, checked: true);
+  }
+
+  @override
+  Future<bool> saveAllChecked(List<ThemePreset> presets) {
+    final snapshot = List<ThemePreset>.unmodifiable(presets);
+    checkedModeWrites.add(snapshot); // actual invocation, before any gate
+    final outcome = checkedModeOutcomes.isEmpty
+        ? ThemeSelectionSyntheticWrite.accepted
+        : checkedModeOutcomes.removeAt(0);
+    return _writeMode(snapshot, outcome);
+  }
+
+  Future<bool> _writeMode(
+    List<ThemePreset> snapshot,
+    ThemeSelectionSyntheticWrite outcome,
+  ) async {
+    cachedPresets = List.of(snapshot); // deliberately optimistic cache
+    if (modeWriteGates.isNotEmpty) await modeWriteGates.removeAt(0).pause();
+    if (outcome == ThemeSelectionSyntheticWrite.falseBeforeWrite) return false;
+    if (outcome == ThemeSelectionSyntheticWrite.throwBeforeWrite) {
+      throw StateError('SYNTHETIC_PRIVATE_EXCEPTION_CANARY');
+    }
+    if (outcome != ThemeSelectionSyntheticWrite.acceptedWithoutWrite) {
+      backing.presets = List.of(snapshot);
+    }
+    afterCheckedModeWrite?.call();
+    if (outcome == ThemeSelectionSyntheticWrite.writeThenThrow) {
+      throw StateError('SYNTHETIC_PRIVATE_EXCEPTION_CANARY');
+    }
+    return outcome != ThemeSelectionSyntheticWrite.falseAfterWrite;
   }
 
   Future<bool> _write(

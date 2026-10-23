@@ -21,7 +21,11 @@ abstract interface class ThemePresetStore {
 }
 
 class ThemePresetStorage
-    implements SyncThemePresetStore, ThemePresetStore, ThemeSelectionStore {
+    implements
+        SyncThemePresetStore,
+        ThemePresetStore,
+        ThemeSelectionStore,
+        ThemeModeStore {
   static const _presetsKey = 'theme_presets';
   static const _activeKey = 'theme_active_preset';
 
@@ -103,6 +107,12 @@ class ThemePresetStorage
 
   @override
   Future<bool> setActiveChecked(String id) => _prefs.setString(_activeKey, id);
+
+  @override
+  Future<bool> saveAllChecked(List<ThemePreset> presets) => _prefs.setString(
+    _presetsKey,
+    jsonEncode(presets.map((preset) => preset.toJson()).toList()),
+  );
 
   @override
   Future<void> saveAll(List<ThemePreset> presets) async {
