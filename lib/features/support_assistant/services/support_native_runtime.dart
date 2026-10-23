@@ -6,6 +6,8 @@ import '../models/support_permission_scope.dart';
 import 'support_authorization_service.dart';
 import 'support_permission_store.dart';
 
+part 'support_native_local_context.dart';
+
 /// Native custody and lease epoch. No Ref, persisted private results or executor.
 final class SupportNativeRuntime {
   SupportNativeRuntime({
@@ -49,6 +51,9 @@ final class SupportNativeRuntime {
   late bool _configurationWasStable;
   bool alive = true, recipientConfirmed = false;
   int settingsPending = 0;
+  int _localEpoch = 1, _localPending = 0;
+  Object _localOwner = Object();
+  bool _localExhausted = false;
   String? error;
   SupportPermissionSnapshot snapshot = const SupportPermissionSnapshot(
     SupportPermissionAvailability.unavailable,
@@ -180,6 +185,7 @@ final class SupportNativeRuntime {
 
   void selectSession(String id, {bool force = false}) {
     if (!force && id == sessionId) return;
+    _retireLocalOwner();
     invalidateBindings();
     lifetime++;
     sessionId = id;
@@ -222,6 +228,7 @@ final class SupportNativeRuntime {
       return false;
     }
     final a = snapshot.preferences, b = next.preferences;
+    _reconcileLocalSnapshot(next);
     if (a?.policyIdentity != b?.policyIdentity ||
         a?.revision != b?.revision ||
         snapshot.availability != next.availability) {
@@ -317,6 +324,7 @@ final class SupportNativeRuntime {
 
   void dispose() {
     if (!alive) return;
+    _retireLocalOwner();
     alive = false;
     lifetime++;
     writeOwner++;

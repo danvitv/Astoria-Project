@@ -8,39 +8,115 @@ final class _ModelConfiguration {
     this.key,
     this.policy,
     this.recipient,
+    this.nativeSource,
   );
   final SupportAssistantSettings settings;
   final ApiConfig api;
   final String key;
   final SupportPermissionPreferences policy;
   final SupportResolvedRecipient recipient;
+  final NativePreparedSavedConnection? nativeSource;
 
   static Future<_ModelConfiguration> read(
     _ModelReadOperation operation,
     String id, {
     bool prime = false,
     void Function()? checkpoint,
+    _ModelConfiguration? original,
   }) async {
     final s = operation.service;
+    // Capture BEFORE settings/API/prompt awaits. Admission retains the exact
+    // original prepared source; it never mints a replacement authorization.
+    final sources = s._nativeSources;
+    final retained = original?.nativeSource;
+    final stamp = sources != null && original == null
+        ? sources.captureOriginalStamp()
+        : null;
+    bool sourceCurrent() =>
+        operation.current() &&
+        (stamp == null ||
+            sources!.isOriginalCurrent(stamp, operation.current)) &&
+        (retained == null || retained.isCurrent);
+    if (!sourceCurrent()) _refuse(SupportModelRefusal.stale);
     final settings = await operation.settings(id, checkpoint);
     operation.check();
     if (!settings.hasConfiguredModel) _refuse(SupportModelRefusal.noModel);
-    final api = await operation.checked(
+    final row = await operation.checked(
       () => s._apiRepo.getById(settings.apiConfigId!),
       checkpoint,
     );
-    if (api == null) _refuse(SupportModelRefusal.unavailable);
+    if (row == null) _refuse(SupportModelRefusal.unavailable);
+    ApiConfig api = row;
+    if (!sourceCurrent()) _refuse(SupportModelRefusal.stale);
+    final metadata = s._nativeMetadata;
+    final facts = metadata == null
+        ? null
+        : await operation.checked(
+            () => metadata.readConfiguration(
+              connectionId: api.id,
+              isCurrent: sourceCurrent,
+            ),
+            checkpoint,
+          );
+    if (!sourceCurrent()) _refuse(SupportModelRefusal.stale);
+    NativePreparedSavedConnection? prepared;
+    if (facts != null && facts.nativeManaged) {
+      if (facts.metadata?.configured != true ||
+          sources == null ||
+          s._nativeDispatcher == null) {
+        _refuse(SupportModelRefusal.unavailable);
+      }
+      final NativePreparedSavedConnection savedSource;
+      if (original != null) {
+        if (retained == null || !retained.isNative || !retained.isCurrent) {
+          _refuse(SupportModelRefusal.stale);
+        }
+        // Latest durable row is compared below, but NEVER used to mint auth.
+        savedSource = retained;
+        api = sources.projectNativeConfiguration(api);
+      } else {
+        savedSource = await operation.checked(
+          () => sources.prepare(
+            originalStamp: stamp!,
+            configuration: api,
+            purpose: NativeProviderPurpose.astoria,
+            isCurrent: operation.current,
+          ),
+          checkpoint,
+        );
+        if (!sourceCurrent() ||
+            !savedSource.isNative ||
+            !savedSource.isCurrent) {
+          _refuse(SupportModelRefusal.stale);
+        }
+        api = savedSource.configuration;
+      }
+      prepared = savedSource;
+      savedSource.requireModel(settings.modelId!);
+      // Non-key request shape is checked before full-prompt approval. The
+      // unchanged private plan validates the actual key only inside dispatch.
+      if (!api.topP.isFinite ||
+          !api.frequencyPenalty.isFinite ||
+          !api.presencePenalty.isFinite ||
+          settings.modelId!.length > 256) {
+        _refuse(SupportModelRefusal.unsupported);
+      }
+    } else if (retained != null || (sources != null && metadata == null)) {
+      // Incomplete native injection or changed protected presence is not legacy.
+      _refuse(SupportModelRefusal.unavailable);
+    }
     if (!api.stream ||
         api.mode != 'chat' ||
         api.extraRequestParameters.any((parameter) => parameter.enabled)) {
       _refuse(SupportModelRefusal.unsupported);
     }
-    // Current durable API row is authoritative, exactly as for native routing.
-    // A same-ID vault slot is not evidence of this row's current credential.
+    // Only explicit ABSENT native metadata permits the unchanged row-key path.
+    // Native configurations remain keyless; no dummy preview/plan credential.
     final key = api.apiKey;
-    if (key.isEmpty ||
-        key.length > 8192 ||
-        RegExp(r'[\x00-\x20\x7f]').hasMatch(key)) {
+    if (prepared == null &&
+        (key.isEmpty ||
+            key.length > 8192 ||
+            RegExp(r'[\x00-\x20\x7f]').hasMatch(key))) {
       _refuse(SupportModelRefusal.unavailable);
     }
     if (prime) {
@@ -63,7 +139,10 @@ final class _ModelConfiguration {
       redactor: s._redaction.redactor,
     );
     if (recipient == null ||
-        Uri.parse(recipient.recipient.nativeRoute).scheme != 'https') {
+        Uri.parse(recipient.recipient.nativeRoute).scheme != 'https' ||
+        (prepared != null &&
+            prepared.savedConnectionAuth!.connection.endpoint !=
+                recipient.recipient.nativeRoute)) {
       _refuse(SupportModelRefusal.unsupported);
     }
     if (!runtime.recipientConfirmed ||
@@ -77,59 +156,67 @@ final class _ModelConfiguration {
       _refuse(SupportModelRefusal.recipientRequired);
     }
     operation.check();
+    if (!sourceCurrent()) _refuse(SupportModelRefusal.stale);
     checkpoint?.call();
-    return _ModelConfiguration(settings, api, key, policy, recipient);
+    return _ModelConfiguration(settings, api, key, policy, recipient, prepared);
   }
 
   bool sameAs(_ModelConfiguration other) =>
       api == other.api &&
       key == other.key &&
+      identical(nativeSource, other.nativeSource) &&
       _sameSettings(settings, other.settings) &&
       _samePolicy(policy, other.policy) &&
       recipient.recipient.sameAs(other.recipient.recipient) &&
       recipient.context.sameAs(other.recipient.context);
 
-  ChatTransportRequest request(List<SupportModelPreviewText> messages) =>
-      ChatTransportRequest(
-        endpoint: recipient.recipient.nativeRoute,
-        apiKey: key,
-        model: settings.modelId!,
-        messages: List.unmodifiable(
-          messages.map(
-            (m) => Map<String, dynamic>.unmodifiable({
-              'role': m.role,
-              'content': m.text,
-            }),
-          ),
-        ),
-        maxTokens: settings.maxTokens,
-        temperature: settings.temperature,
-        topP: api.topP,
-        topK: api.topK,
-        frequencyPenalty: api.frequencyPenalty,
-        presencePenalty: api.presencePenalty,
-        stream: true,
-        requestReasoning:
-            settings.reasoningEffort != SupportReasoningEffort.off,
-        reasoningEffort: settings.reasoningEffort == SupportReasoningEffort.off
-            ? null
-            : settings.reasoningEffort.name,
-        useResponsesApi: api.useResponsesApi,
-        omitTemperature: api.omitTemperature,
-        omitTopP: api.omitTopP,
-        omitTopK: api.omitTopK,
-        omitFrequencyPenalty: api.omitFrequencyPenalty,
-        omitPresencePenalty: api.omitPresencePenalty,
-        omitReasoning:
-            api.omitReasoning ||
-            settings.reasoningEffort == SupportReasoningEffort.off,
-        omitReasoningEffort: api.omitReasoningEffort,
-        showNativeReasoning: false,
-        sessionIdMode: 'off',
-        cacheControlTtl: 'off',
-        promptPostProcessing: 'none',
-        useSystemInstruction: api.useSystemInstruction,
-      );
+  ChatTransportRequest request(
+    List<SupportModelPreviewText> messages, {
+    required bool Function() isCurrent,
+  }) => ChatTransportRequest(
+    endpoint: recipient.recipient.nativeRoute,
+    apiKey: key,
+    savedConnectionAuth: nativeSource?.savedConnectionAuth,
+    savedConnectionId: nativeSource?.savedConnectionId,
+    nativeSourceIsCurrent: nativeSource?.bindNativeCurrent(
+      isCurrent: isCurrent,
+    ),
+    model: settings.modelId!,
+    messages: List.unmodifiable(
+      messages.map(
+        (m) => Map<String, dynamic>.unmodifiable({
+          'role': m.role,
+          'content': m.text,
+        }),
+      ),
+    ),
+    maxTokens: settings.maxTokens,
+    temperature: settings.temperature,
+    topP: api.topP,
+    topK: api.topK,
+    frequencyPenalty: api.frequencyPenalty,
+    presencePenalty: api.presencePenalty,
+    stream: true,
+    requestReasoning: settings.reasoningEffort != SupportReasoningEffort.off,
+    reasoningEffort: settings.reasoningEffort == SupportReasoningEffort.off
+        ? null
+        : settings.reasoningEffort.name,
+    useResponsesApi: api.useResponsesApi,
+    omitTemperature: api.omitTemperature,
+    omitTopP: api.omitTopP,
+    omitTopK: api.omitTopK,
+    omitFrequencyPenalty: api.omitFrequencyPenalty,
+    omitPresencePenalty: api.omitPresencePenalty,
+    omitReasoning:
+        api.omitReasoning ||
+        settings.reasoningEffort == SupportReasoningEffort.off,
+    omitReasoningEffort: api.omitReasoningEffort,
+    showNativeReasoning: false,
+    sessionIdMode: 'off',
+    cacheControlTtl: 'off',
+    promptPostProcessing: 'none',
+    useSystemInstruction: api.useSystemInstruction,
+  );
 }
 
 bool _sameSettings(SupportAssistantSettings a, SupportAssistantSettings b) =>
@@ -211,6 +298,7 @@ final class _ModelBinding {
             (r.recipient as SupportResolvedRecipient).recipient,
           ) &&
           _samePolicy(policy, r.snapshot.preferences) &&
+          (configuration.nativeSource?.isCurrent ?? true) &&
           identical(redactor, service._redaction.redactor);
     } catch (_) {
       return false;

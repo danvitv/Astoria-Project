@@ -8,6 +8,7 @@ import '../../../core/state/connection_revision_provider.dart';
 import '../../../core/state/credential_vault_provider.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../core/db/repositories/support_text_context_repo.dart';
+import '../../../core/llm/transport/native_provider_transport.dart';
 import '../services/support_model_service.dart';
 import 'support_model_dependencies.dart';
 import 'support_model_ui_bridge.dart';
@@ -27,6 +28,7 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
   final db = ref.watch(appDbProvider);
   final cipher = ref.watch(supportPayloadCipherProvider);
   final api = ref.watch(apiConfigRepoProvider);
+  final native = ref.watch(nativeProviderRuntimeProvider);
   final revisions = ref.watch(connectionRevisionRegistryProvider);
   final redaction = ref.watch(secretRedactionCoordinatorProvider);
   final snapshot = ref.watch(secretRedactorProvider);
@@ -38,7 +40,10 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
   final adapterFactory = ref.watch(supportModelPrivateAdapterFactoryProvider);
   var alive = true;
   bool current() =>
-      alive && custody.alive && identical(snapshot, redaction.redactor);
+      alive &&
+      custody.alive &&
+      (native?.isCurrent ?? true) &&
+      identical(snapshot, redaction.redactor);
   late final SupportModelUiBridge bridge;
   final service = SupportModelService(
     db: db,
@@ -50,6 +55,17 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
     adapterFactory: adapterFactory,
     isOwnerCurrent: current,
     writes: custody,
+    nativeSources: native?.sources,
+    nativeMetadata: native?.credentialReader,
+    nativeDispatcher: native == null
+        ? null
+        : (inner) => NativeProviderPrivateTextDispatcher(
+            credentials: native.credentials,
+            authIssuer: native.auth,
+            mutations: native.mutations,
+            routes: native.routes,
+            privateTextTransport: inner,
+          ),
     // AppDatabase's stock single background NativeDatabase, no pool/reconnect or
     // busy-handler setup. Emission/preparation initialize it before preview; the
     // FIFO callbacks await outside transactions. Unknown injected owners must

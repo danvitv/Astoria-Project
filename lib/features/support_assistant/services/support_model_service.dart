@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 
 import '../../../core/credentials/connection_revision_registry.dart';
+import '../../../core/credentials/native_provider_credentials.dart';
 import '../../../core/credentials/secret_redaction_coordinator.dart';
 import '../../../core/credentials/secret_redactor.dart';
 import '../../../core/db/app_db.dart';
@@ -14,6 +15,8 @@ import '../../../core/db/repositories/api_config_repo.dart';
 import '../../../core/db/repositories/support_repo.dart';
 import '../../../core/db/repositories/support_text_context_repo.dart';
 import '../../../core/llm/transport/chat_transport_request.dart';
+import '../../../core/llm/native_saved_connection_source.dart';
+import '../../../core/llm/transport/native_provider_transport.dart';
 import '../../../core/llm/transport/private_text_transport.dart';
 import '../../../core/models/api_config.dart';
 import '../../../core/models/support_models.dart';
@@ -75,6 +78,10 @@ final class SupportModelService {
     required HttpClientAdapter Function() adapterFactory,
     required bool Function() isOwnerCurrent,
     required SupportModelWriteScheduler writes,
+    NativeSavedConnectionSourceResolver? nativeSources,
+    NativeProviderCredentialMetadataReader? nativeMetadata,
+    NativeProviderPrivateTextDispatcher Function(PrivateTextTransport)?
+    nativeDispatcher,
     SupportTextAdmissionContract? admissionContract,
     String Function()? newId,
     int Function()? now,
@@ -92,6 +99,9 @@ final class SupportModelService {
        _adapterFactory = adapterFactory,
        _isOwnerCurrent = isOwnerCurrent,
        _writes = writes,
+       _nativeSources = nativeSources,
+       _nativeMetadata = nativeMetadata,
+       _nativeDispatcher = nativeDispatcher,
        _admissionContract = admissionContract,
        _newId = newId ?? generateId,
        _now = now ?? (() => DateTime.now().toUtc().millisecondsSinceEpoch),
@@ -120,6 +130,10 @@ final class SupportModelService {
   final HttpClientAdapter Function() _adapterFactory;
   final bool Function() _isOwnerCurrent;
   final SupportModelWriteScheduler _writes;
+  final NativeSavedConnectionSourceResolver? _nativeSources;
+  final NativeProviderCredentialMetadataReader? _nativeMetadata;
+  final NativeProviderPrivateTextDispatcher Function(PrivateTextTransport)?
+  _nativeDispatcher;
   final SupportTextAdmissionContract? _admissionContract;
   final String Function() _newId;
   final int Function() _now;

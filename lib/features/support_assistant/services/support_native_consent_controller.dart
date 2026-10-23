@@ -1,11 +1,13 @@
 import '../../../core/models/support_consent_selection.dart';
 import '../models/support_native_view.dart';
 import '../models/support_permission_preferences.dart';
+import '../models/support_permission_provenance.dart';
 import '../models/support_permission_scope.dart';
 import '../models/support_recipient_resolution.dart';
 import 'support_native_runtime.dart';
 
 part 'support_native_selection_intents.dart';
+part 'support_native_local_intent.dart';
 
 /// Private issuer-owned anchor, minted atomically with the emitted view. Grant
 /// revision/lease epoch are deliberately absent: same-binding edits can merge.
@@ -208,6 +210,21 @@ final class SupportNativeConsentController {
             !_implementedSelection(right, review._policy.scope))) {
       return false;
     }
+    if (right == SupportPermission.readSafeSettings ||
+        right == SupportPermission.confirmedSettingsChanges) {
+      return _withLocalPermissionChange(
+        () => _setValidatedGrant(review, right, enabled),
+      );
+    }
+    return _setValidatedGrant(review, right, enabled);
+  }
+
+  Future<bool> _setValidatedGrant(
+    SupportNativeReview review,
+    SupportPermission right,
+    bool enabled,
+  ) async {
+    if (!_current(review) || review._policy == null) return false;
     // Independent queued toggles fence data, NOT other admitted write owners.
     runtime.invalidateLease();
     if (enabled && _recipientDependent(right)) {
@@ -313,15 +330,18 @@ final class SupportNativeConsentController {
         review.view.availability != SupportPermissionAvailability.corrupt) {
       return Future.value(false);
     }
-    review = _admitBinding(review);
-    return _write(
-      review,
-      () => runtime.permissions.recoverToDenyFromNative(
-        review.view.sessionId,
-        confirmed: true,
-        isCurrent: () => _current(review),
-      ),
-    );
+    return _withLocalPermissionChange(() {
+      if (!_current(review)) return Future.value(false);
+      review = _admitBinding(review);
+      return _write(
+        review,
+        () => runtime.permissions.recoverToDenyFromNative(
+          review.view.sessionId,
+          confirmed: true,
+          isCurrent: () => _current(review),
+        ),
+      );
+    });
   }
 
   SupportNativeReview _admitBinding(SupportNativeReview review) {

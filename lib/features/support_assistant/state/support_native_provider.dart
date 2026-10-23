@@ -31,6 +31,7 @@ final supportNativeRuntimeProvider = Provider<SupportNativeRuntime>((ref) {
   final store = ref.watch(supportSessionStoreProvider);
   final permissions = ref.watch(supportPermissionStoreProvider);
   final api = ref.watch(apiConfigRepoProvider);
+  final native = ref.watch(nativeProviderRuntimeProvider);
   final revisions = ref.watch(connectionRevisionRegistryProvider);
   final sources = ref.watch(chatSourceMutationRegistryProvider);
   final writes = ref.watch(supportModelDurableWritesProvider);
@@ -46,6 +47,8 @@ final supportNativeRuntimeProvider = Provider<SupportNativeRuntime>((ref) {
   final metadata = SupportConnectionMetadataService(
     api,
     () => ref.read(secretRedactorProvider),
+    nativeMetadata: native?.credentialReader,
+    nativeMetadataIsCurrent: native == null ? null : () => native.isCurrent,
   );
   runtime = SupportNativeRuntime(
     permissions: permissions,

@@ -99,10 +99,11 @@ extension SupportModelNativeInput on SupportModelService {
           lifetime = r.lifetime,
           epoch = r.epoch,
           revision = _revisions.revision;
+      var preparingInput = true;
       bool current() =>
           _ownerCurrent &&
           isEmitterCurrent() &&
-          isDraftCurrent() &&
+          (!preparingInput || isDraftCurrent()) &&
           r.alive &&
           r.sessionId == id &&
           r.writeOwner == owner &&
@@ -122,6 +123,10 @@ extension SupportModelNativeInput on SupportModelService {
         prime: true,
       );
       operation.check();
+      // The saved source retains this original operation, including Stop and
+      // epoch/revision custody. Draft custody transfers to the intent binding;
+      // after durable append a new composer draft does not revoke this input.
+      preparingInput = false;
       final safe = _safeText(_redaction.redactor, text.trim(), 8192);
       if (safe.isEmpty) {
         _refuse(SupportModelRefusal.unsafe);

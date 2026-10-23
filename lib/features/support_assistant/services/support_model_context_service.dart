@@ -331,6 +331,7 @@ extension _ModelAdmission on _ModelRun {
             operation,
             sessionId,
             checkpoint: checkpoint,
+            original: configuration,
           );
           checkpoint();
           if (!configuration.sameAs(latest)) return false;

@@ -22,6 +22,17 @@ typedef SupportNativeMessageReader =
 
 /// Exact native metadata selection, separate from grant/recipient orchestration.
 extension SupportNativeSelectionIntents on SupportNativeConsentController {
+  Future<bool> _withLocalPermissionChange(
+    Future<bool> Function() operation,
+  ) async {
+    final finish = runtime.beginLocalPermissionChange();
+    try {
+      return await operation();
+    } finally {
+      finish();
+    }
+  }
+
   Future<bool> selectConnections(SupportNativeReview review, bool selected) =>
       _selectSafeCategory(review, SupportSafeCategory.connections, selected);
 
@@ -95,12 +106,20 @@ extension SupportNativeSelectionIntents on SupportNativeConsentController {
         chosen.any((row) => row.sessionId != page.sessionId)) {
       return false;
     }
-    review = _admitBinding(review);
-    final latest = await readMessages(
-      page.source,
-      page.sessionId!,
-      choice.offset,
+    return _withLocalPermissionChange(
+      () => _selectReviewedMessages(review, page, choice.offset, chosen),
     );
+  }
+
+  Future<bool> _selectReviewedMessages(
+    SupportNativeReview review,
+    SupportConsentMessagePage page,
+    int offset,
+    List<SupportConsentMessageOption> chosen,
+  ) async {
+    if (!_current(review)) return false;
+    review = _admitBinding(review);
+    final latest = await readMessages(page.source, page.sessionId!, offset);
     if (!_current(review) ||
         !_eligible(latest) ||
         latest.sessionId != page.sessionId ||
@@ -140,15 +159,18 @@ extension SupportNativeSelectionIntents on SupportNativeConsentController {
     SupportPermissionScope scope,
   ) {
     if (!_current(review)) return Future.value(false);
-    review = _admitBinding(review);
-    return _write(
-      review,
-      () => runtime.permissions.changeReviewedFromNative(
-        review._policy!,
-        change: (p) => p.withNativeScope(scope),
-        isCurrent: () => _current(review),
-      ),
-    );
+    return _withLocalPermissionChange(() {
+      if (!_current(review)) return Future.value(false);
+      review = _admitBinding(review);
+      return _write(
+        review,
+        () => runtime.permissions.changeReviewedFromNative(
+          review._policy!,
+          change: (p) => p.withNativeScope(scope),
+          isCurrent: () => _current(review),
+        ),
+      );
+    });
   }
 
   static bool _eligible(SupportConsentMessagePage p) =>

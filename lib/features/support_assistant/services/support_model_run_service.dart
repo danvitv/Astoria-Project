@@ -224,26 +224,53 @@ final class _ModelRun {
       operation.check();
       phase(SupportModelPhase.waiting);
       final configuration = binding.configuration;
-      outcome =
-          await PrivateTextTransport(
-            adapterFactory: service._adapterFactory,
-            currentRedactor: () => service._redaction.redactor,
-            authorize: (_) async => false,
-            admit: admit,
-            scheduleDeadline: service._scheduleTimer,
-          ).generate(
-            protocol: configuration.api.protocol,
-            request: configuration.request(preview!.messages),
-            approvedRecipient: Uri.parse(
-              configuration.recipient.recipient.nativeRoute,
-            ),
-            cancelToken: operation.token,
-            isCurrent: current,
-            deadline: service._deadline,
-            onActivity: () {
-              if (current()) phase(SupportModelPhase.activity);
-            },
-          );
+      // ONE original private admission owner. Native dispatch receives this
+      // very instance, not a permissive generic transport or substitute capsule.
+      final inner = PrivateTextTransport(
+        adapterFactory: service._adapterFactory,
+        currentRedactor: () => service._redaction.redactor,
+        authorize: (_) async => false,
+        admit: admit,
+        scheduleDeadline: service._scheduleTimer,
+      );
+      final request = configuration.request(
+        preview!.messages,
+        isCurrent: current,
+      );
+      final recipient = Uri.parse(
+        configuration.recipient.recipient.nativeRoute,
+      );
+      void activity() {
+        if (current()) phase(SupportModelPhase.activity);
+      }
+
+      final auth = configuration.nativeSource?.savedConnectionAuth;
+      if (auth != null) {
+        final factory = service._nativeDispatcher;
+        if (factory == null) _refuse(SupportModelRefusal.unavailable);
+        final dispatcher = factory(inner);
+        operation.check(); // Constructor callback cannot renew retired custody.
+        outcome = await dispatcher.generate(
+          savedConnectionAuth: auth,
+          protocol: configuration.api.protocol,
+          request: request,
+          approvedRecipient: recipient,
+          cancelToken: operation.token,
+          isCurrent: current,
+          deadline: service._deadline,
+          onActivity: activity,
+        );
+      } else {
+        outcome = await inner.generate(
+          protocol: configuration.api.protocol,
+          request: request,
+          approvedRecipient: recipient,
+          cancelToken: operation.token,
+          isCurrent: current,
+          deadline: service._deadline,
+          onActivity: activity,
+        );
+      }
     } on _ModelRefused catch (error) {
       reason = error.reason;
     } catch (_) {
