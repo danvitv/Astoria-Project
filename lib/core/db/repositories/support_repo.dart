@@ -37,6 +37,9 @@ class SupportRepo {
   late final _SupportContextStore _context;
   late final _SupportJournalStore _journal;
 
+  /// Identity check only; never opens/replaces a database or grants custody.
+  bool usesDatabase(AppDatabase db) => identical(_journal.db, db);
+
   Future<SupportSession> createSession(SupportSession session) =>
       _sessions.put(session, createOnly: true);
   Future<SupportSession> putSession(SupportSession session) =>

@@ -8,13 +8,44 @@ import '../../application/sync_repo_interfaces.dart';
 import '../../models/extra_request_parameter.dart';
 import '../../llm/history_trim.dart';
 import '../../llm/transport/endpoint_normalizer.dart';
+import '../../models/keyless_api_config.dart';
+import '../../models/support_models.dart';
+import 'support_repo.dart';
+
+part 'api_config_keyless_contract.dart';
+part 'api_config_keyless_store.dart';
+part 'api_config_keyless_operation.dart';
+part 'api_config_keyless_ordinary_guard.dart';
+part 'api_config_keyless_shape.dart';
+part 'api_config_keyless_evidence.dart';
+part 'support_provider_setup_repo.dart';
 
 class ApiConfigRepo implements SyncApiConfigStore {
   final AppDatabase _db;
   final void Function(ApiConfig)? onConfigObserved;
   // Feature-free fence: no settings, credentials or feature models cross it.
-  final void Function() Function()? onMutationStarted;
-  ApiConfigRepo(this._db, {this.onConfigObserved, this.onMutationStarted});
+  late final void Function() Function()? onMutationStarted;
+  final void Function() Function()? _mutationHook;
+  final KeylessNativeMutationPort? _keylessMutations;
+  final KeylessCreateUndoProofPort? _keylessCreateUndoProof;
+  final ApiConfigOrdinaryMutationGuard? _ordinaryMutations;
+  final _keyless = _KeylessRevisionState();
+  ApiConfigRepo(
+    this._db, {
+    this.onConfigObserved,
+    void Function() Function()? onMutationStarted,
+    this._keylessMutations,
+    this._keylessCreateUndoProof,
+    this._ordinaryMutations,
+  }) : _mutationHook = onMutationStarted {
+    this.onMutationStarted = () => _keyless.start(_mutationHook);
+  }
+
+  /// Commit notifications without rows or credentials. Drift defers updates
+  /// until the true outer commit, including native setup, Undo and imports.
+  Stream<void> watchChanges() => _db
+      .tableUpdates(TableUpdateQuery.onTable(_db.apiConfigs))
+      .map<void>((_) {});
 
   @override
   Future<List<ApiConfig>> getAll() async {
@@ -27,6 +58,24 @@ class ApiConfigRepo implements SyncApiConfigStore {
       }
     }
     return configs;
+  }
+
+  /// Bounded native metadata projection. Does not select/observe credential
+  /// columns or hydrate ApiConfig objects for a feature/tool list.
+  Future<List<String>> getConfigIds({int limit = 256}) async {
+    if (limit < 1 || limit > 256) throw const KeylessApiConfigException();
+    try {
+      final id = _db.apiConfigs.configId;
+      final rows =
+          await (_db.selectOnly(_db.apiConfigs)
+                ..addColumns([id])
+                ..orderBy([OrderingTerm.asc(id)])
+                ..limit(limit))
+              .get();
+      return List.unmodifiable(rows.map((row) => row.read(id)!));
+    } catch (_) {
+      throw const KeylessApiConfigException();
+    }
   }
 
   @override
@@ -42,6 +91,17 @@ class ApiConfigRepo implements SyncApiConfigStore {
 
   @override
   Future<void> put(ApiConfig config) async {
+    final guard = _ordinaryMutations;
+    if (guard != null) {
+      // Diagnostic protection is synchronous, even when admission is queued or
+      // denied. This only registers raw input; it does not migrate any key.
+      onConfigObserved?.call(config);
+      return _runOrdinaryGuard(
+        guard,
+        config.id,
+        () => _putGuarded(config, guard),
+      );
+    }
     final finish = onMutationStarted?.call();
     try {
       await _put(config);
@@ -72,6 +132,15 @@ class ApiConfigRepo implements SyncApiConfigStore {
 
   @override
   Future<void> delete(String id) async {
+    final guard = _ordinaryMutations;
+    if (guard != null) {
+      return _runOrdinaryGuard(guard, id, () async {
+        await guard.beforeDelete(id);
+        await (_db.delete(
+          _db.apiConfigs,
+        )..where((t) => t.configId.equals(id))).go();
+      });
+    }
     final finish = onMutationStarted?.call();
     try {
       await (_db.delete(
@@ -83,6 +152,22 @@ class ApiConfigRepo implements SyncApiConfigStore {
   }
 
   Future<void> putFromMap(Map<String, dynamic> m) async {
+    final guard = _ordinaryMutations;
+    if (guard != null) {
+      ApiConfig? observed;
+      try {
+        observed = ApiConfig.fromJson(m);
+      } catch (_) {
+        // Malformed decode still belongs to the original fenced operation below.
+      }
+      if (observed != null) onConfigObserved?.call(observed);
+      final label = m['id'];
+      return _runOrdinaryGuard(guard, label is String ? label : '', () async {
+        // The original observer begins INSIDE run, before even malformed decode.
+        final config = ApiConfig.fromJson(m);
+        await _putGuarded(config, guard);
+      });
+    }
     final finish = onMutationStarted?.call();
     try {
       final config = ApiConfig.fromJson(m);
