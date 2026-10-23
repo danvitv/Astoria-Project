@@ -137,9 +137,7 @@ void _confirmDelete(
         onTap: () async {
           Navigator.of(context, rootNavigator: true).pop();
           selection.clear();
-          for (final id in ids) {
-            await history.deleteSession(id);
-          }
+          await history.deleteSessions(ids);
         },
       ),
       BottomSheetItem(

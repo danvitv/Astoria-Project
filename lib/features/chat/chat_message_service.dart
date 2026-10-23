@@ -9,6 +9,7 @@ import '../../core/models/tracker.dart';
 import '../../core/models/tracker_snapshot.dart';
 import '../../core/utils/time_helpers.dart';
 import '../../core/state/db_provider.dart';
+import '../../core/state/chat_source_mutation_provider.dart';
 import '../../core/state/lorebook_embedding_provider.dart';
 import '../../core/db/repositories/lorebook_use_manifest_repo.dart';
 import '../extensions/providers/info_blocks_provider.dart';
@@ -18,6 +19,13 @@ class ChatMessageService {
   final Ref _ref;
 
   ChatMessageService(this._ref);
+
+  void Function() _beginMutation(
+    ChatSession session, {
+    Set<String>? messageIds,
+  }) => _ref
+      .read(chatSourceMutationRegistryProvider)
+      .beginMutation(sessionId: session.id, messageIds: messageIds);
 
   ChatSession editMessage(
     ChatSession session,
@@ -213,135 +221,149 @@ class ChatMessageService {
     ChatSession session,
     MessageDeletionPlan plan,
   ) async {
-    final snapshotRepo = _ref.read(trackerSnapshotRepoProvider);
-    final trackerRepo = _ref.read(trackerRepoProvider);
-    final memoryBookRepo = _ref.read(memoryBookRepoProvider);
-    final knowledgeRepo = _ref.read(characterKnowledgeFactRepoProvider);
-    final checkpointRepo = _ref.read(
-      ledgerReconciliationCheckpointRepoProvider,
-    );
-    final infoBlocksRepo = _ref.read(infoBlocksRepoProvider);
-    final chatRepo = _ref.read(chatRepoProvider);
-    final updated = plan.session;
-    final invalidatedMessageIds = plan.invalidatedMessageIds;
-    var wakeLoreEmbeddingWorker = false;
-
-    await chatRepo.transaction(() async {
-      // A reply can land between the optimistic plan and this transaction.
-      // Reject the stale plan before ANY derived state is rolled back; deleting
-      // its ids now would leave a hole ahead of the newly appended reply.
-      final current = await chatRepo.getById(session.id);
-      if (current == null ||
-          current.messages.length != session.messages.length ||
-          !Iterable<int>.generate(session.messages.length).every(
-            (i) =>
-                current.messages[i].id == session.messages[i].id &&
-                current.messages[i].swipeId == session.messages[i].swipeId &&
-                current.messages[i].agentSwipeId ==
-                    session.messages[i].agentSwipeId,
-          )) {
-        throw StateError('Chat changed while deleting its message suffix');
-      }
-      // Pick the rollback base in the same transaction as the row validation.
-      // A concurrent swipe changes the relevant snapshot without changing the
-      // message id; a pre-transaction lookup could restore the wrong ledger.
-      TrackerSnapshot? fallbackSnapshot;
-      for (final message
-          in current.messages
-              .take(plan.earliestDeletedIndex)
-              .toList()
-              .reversed) {
-        final candidate = await snapshotRepo.getByAnchor(
-          sessionId: session.id,
-          messageId: message.id,
-          swipeId: message.swipeId,
-          agentSwipeId: message.agentSwipeId,
-        );
-        if (candidate?.committed == true) {
-          fallbackSnapshot = candidate;
-          break;
-        }
-      }
-      await _ref
-          .read(cardEvolutionProposalRunRepoProvider)
-          .cancelPendingForMessageMutationInTransaction(
-            sessionId: session.id,
-            messageIds: invalidatedMessageIds,
-          );
-      await knowledgeRepo.rollbackReconciliationCleanupForMessages(
-        session.id,
-        invalidatedMessageIds,
-      );
-      await _ref
-          .read(ledgerReconciliationRunRepoProvider)
-          .invalidateForMessageMutation(
-            sessionId: session.id,
-            // Deleting an earlier message changes the causal transcript for
-            // every later reconciliation range, even when the deleted message
-            // itself was not one of that run's anchors. Conversely, deleting
-            // only a trailing trigger must leave an already-completed range
-            // intact.
-            messageIds: invalidatedMessageIds,
-            reason: 'message_deleted',
-            createdAt: currentTimestampSeconds(),
-          );
-      await knowledgeRepo.retractForMessages(session.id, invalidatedMessageIds);
-      await memoryBookRepo.deleteForMessages(session.id, invalidatedMessageIds);
-      await snapshotRepo.deleteForMessages(session.id, invalidatedMessageIds);
-      await infoBlocksRepo.deleteByMessageIds(
-        session.id,
-        invalidatedMessageIds,
-      );
-      await _deleteManifestProvenanceForMessages(
-        sessionId: session.id,
-        messageIds: invalidatedMessageIds,
-      );
-      await checkpointRepo.deleteForMessages(session.id, invalidatedMessageIds);
-      // Rolling back before the first committed snapshot restores the original
-      // clock seed. Legacy sessions without one retain a complete live clock as
-      // a best-effort baseline, but must not promote it to an initial seed.
-      var committedBase = fallbackSnapshot?.trackers ?? const <Tracker>[];
-      if (fallbackSnapshot == null) {
-        committedBase = await trackerRepo.getInitialGameTimeSeed(session.id);
-        if (committedBase.isEmpty) {
-          committedBase = await trackerRepo.getCompleteGameTime(session.id);
-        }
-      }
-      await trackerRepo.replaceLedgerState(session.id, committedBase);
-      final survivors = await _writeDeletion(session, plan);
-      final canonRollback = await _ref
-          .read(sessionCanonRollbackRepoProvider)
-          .reconcileInTransaction(
-            sessionId: session.id,
-            survivingMessages: survivors,
-          );
-      wakeLoreEmbeddingWorker = canonRollback.shouldWakeLoreEmbeddingWorker;
-    });
-
-    if (wakeLoreEmbeddingWorker) {
-      unawaited(_ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
-    }
-
-    // Current chunk indices no longer map to the same message ranges. Drop the
-    // session index now; post-generation indexing will rebuild current chunks.
+    final settle = _beginMutation(session, messageIds: plan.deletedMessageIds);
     try {
-      await _ref
-          .read(embeddingRepoProvider)
-          .deleteBySource('chat_message', session.id);
-    } catch (e) {
-      debugPrint('[ChatMessageService] failed to clear message index: $e');
-    }
+      final snapshotRepo = _ref.read(trackerSnapshotRepoProvider);
+      final trackerRepo = _ref.read(trackerRepoProvider);
+      final memoryBookRepo = _ref.read(memoryBookRepoProvider);
+      final knowledgeRepo = _ref.read(characterKnowledgeFactRepoProvider);
+      final checkpointRepo = _ref.read(
+        ledgerReconciliationCheckpointRepoProvider,
+      );
+      final infoBlocksRepo = _ref.read(infoBlocksRepoProvider);
+      final chatRepo = _ref.read(chatRepoProvider);
+      final updated = plan.session;
+      final invalidatedMessageIds = plan.invalidatedMessageIds;
+      var wakeLoreEmbeddingWorker = false;
 
-    // ExtBlock panels are keyed by message id. The transaction deleted the
-    // rows for every invalidated message; reload the provider so a deleted
-    // message's panel cannot be re-rendered from the in-memory cache.
-    if (invalidatedMessageIds.isNotEmpty) {
-      await _ref.read(infoBlocksProvider(session.id).notifier).refresh();
-    }
+      await chatRepo.transaction(() async {
+        // A reply can land between the optimistic plan and this transaction.
+        // Reject the stale plan before ANY derived state is rolled back; deleting
+        // its ids now would leave a hole ahead of the newly appended reply.
+        final current = await chatRepo.getById(session.id);
+        if (current == null ||
+            current.messages.length != session.messages.length ||
+            !Iterable<int>.generate(session.messages.length).every(
+              (i) =>
+                  current.messages[i].id == session.messages[i].id &&
+                  current.messages[i].swipeId == session.messages[i].swipeId &&
+                  current.messages[i].agentSwipeId ==
+                      session.messages[i].agentSwipeId,
+            )) {
+          throw StateError('Chat changed while deleting its message suffix');
+        }
+        // Pick the rollback base in the same transaction as the row validation.
+        // A concurrent swipe changes the relevant snapshot without changing the
+        // message id; a pre-transaction lookup could restore the wrong ledger.
+        TrackerSnapshot? fallbackSnapshot;
+        for (final message
+            in current.messages
+                .take(plan.earliestDeletedIndex)
+                .toList()
+                .reversed) {
+          final candidate = await snapshotRepo.getByAnchor(
+            sessionId: session.id,
+            messageId: message.id,
+            swipeId: message.swipeId,
+            agentSwipeId: message.agentSwipeId,
+          );
+          if (candidate?.committed == true) {
+            fallbackSnapshot = candidate;
+            break;
+          }
+        }
+        await _ref
+            .read(cardEvolutionProposalRunRepoProvider)
+            .cancelPendingForMessageMutationInTransaction(
+              sessionId: session.id,
+              messageIds: invalidatedMessageIds,
+            );
+        await knowledgeRepo.rollbackReconciliationCleanupForMessages(
+          session.id,
+          invalidatedMessageIds,
+        );
+        await _ref
+            .read(ledgerReconciliationRunRepoProvider)
+            .invalidateForMessageMutation(
+              sessionId: session.id,
+              // Deleting an earlier message changes the causal transcript for
+              // every later reconciliation range, even when the deleted message
+              // itself was not one of that run's anchors. Conversely, deleting
+              // only a trailing trigger must leave an already-completed range
+              // intact.
+              messageIds: invalidatedMessageIds,
+              reason: 'message_deleted',
+              createdAt: currentTimestampSeconds(),
+            );
+        await knowledgeRepo.retractForMessages(
+          session.id,
+          invalidatedMessageIds,
+        );
+        await memoryBookRepo.deleteForMessages(
+          session.id,
+          invalidatedMessageIds,
+        );
+        await snapshotRepo.deleteForMessages(session.id, invalidatedMessageIds);
+        await infoBlocksRepo.deleteByMessageIds(
+          session.id,
+          invalidatedMessageIds,
+        );
+        await _deleteManifestProvenanceForMessages(
+          sessionId: session.id,
+          messageIds: invalidatedMessageIds,
+        );
+        await checkpointRepo.deleteForMessages(
+          session.id,
+          invalidatedMessageIds,
+        );
+        // Rolling back before the first committed snapshot restores the original
+        // clock seed. Legacy sessions without one retain a complete live clock as
+        // a best-effort baseline, but must not promote it to an initial seed.
+        var committedBase = fallbackSnapshot?.trackers ?? const <Tracker>[];
+        if (fallbackSnapshot == null) {
+          committedBase = await trackerRepo.getInitialGameTimeSeed(session.id);
+          if (committedBase.isEmpty) {
+            committedBase = await trackerRepo.getCompleteGameTime(session.id);
+          }
+        }
+        await trackerRepo.replaceLedgerState(session.id, committedBase);
+        final survivors = await _writeDeletion(session, plan);
+        final canonRollback = await _ref
+            .read(sessionCanonRollbackRepoProvider)
+            .reconcileInTransaction(
+              sessionId: session.id,
+              survivingMessages: survivors,
+            );
+        wakeLoreEmbeddingWorker = canonRollback.shouldWakeLoreEmbeddingWorker;
+      });
 
-    final durable = await chatRepo.getById(session.id) ?? updated;
-    ChatSessionService.updateCache(durable);
-    return durable;
+      if (wakeLoreEmbeddingWorker) {
+        unawaited(_ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
+      }
+
+      // Current chunk indices no longer map to the same message ranges. Drop the
+      // session index now; post-generation indexing will rebuild current chunks.
+      try {
+        await _ref
+            .read(embeddingRepoProvider)
+            .deleteBySource('chat_message', session.id);
+      } catch (e) {
+        debugPrint('[ChatMessageService] failed to clear message index: $e');
+      }
+
+      // ExtBlock panels are keyed by message id. The transaction deleted the
+      // rows for every invalidated message; reload the provider so a deleted
+      // message's panel cannot be re-rendered from the in-memory cache.
+      if (invalidatedMessageIds.isNotEmpty) {
+        await _ref.read(infoBlocksProvider(session.id).notifier).refresh();
+      }
+
+      final durable = await chatRepo.getById(session.id) ?? updated;
+      ChatSessionService.updateCache(durable);
+      return durable;
+    } finally {
+      settle();
+    }
   }
 
   /// Applies [plan] to the durable row and returns the surviving messages.
@@ -667,168 +689,175 @@ class ChatMessageService {
     required String messageId,
     required bool removeAgentSwipe,
   }) async {
-    final chatRepo = _ref.read(chatRepoProvider);
-    final snapshots = _ref.read(trackerSnapshotRepoProvider);
-    final facts = _ref.read(characterKnowledgeFactRepoProvider);
-    final memory = _ref.read(memoryBookRepoProvider);
-    final blocks = _ref.read(infoBlocksRepoProvider);
-    final manifests = _ref.read(lorebookUseManifestRepoProvider);
-    late ChatSession updatedSession;
-    late ChatMessage updatedMessage;
-    var wakeLoreEmbeddingWorker = false;
+    final settle = _beginMutation(session, messageIds: {messageId});
+    try {
+      final chatRepo = _ref.read(chatRepoProvider);
+      final snapshots = _ref.read(trackerSnapshotRepoProvider);
+      final facts = _ref.read(characterKnowledgeFactRepoProvider);
+      final memory = _ref.read(memoryBookRepoProvider);
+      final blocks = _ref.read(infoBlocksRepoProvider);
+      final manifests = _ref.read(lorebookUseManifestRepoProvider);
+      late ChatSession updatedSession;
+      late ChatMessage updatedMessage;
+      var wakeLoreEmbeddingWorker = false;
 
-    await chatRepo.transaction(() async {
-      final latest = await chatRepo.getById(session.id);
-      if (latest == null) throw StateError('Chat session no longer exists.');
-      final messageIndex = latest.messages.indexWhere(
-        (message) => message.id == messageId,
-      );
-      if (messageIndex < 0) throw StateError('Chat message no longer exists.');
-      final original = latest.messages[messageIndex];
-      final removedSwipeId = original.swipeId;
-      final removedAgentSwipeId = removeAgentSwipe
-          ? original.agentSwipeId
-          : null;
-      final replacement = removeAgentSwipe
-          ? removeActiveAgentSwipe(original)
-          : removeActiveSwipe(original);
-      if (replacement == null) {
-        throw StateError('The last remaining swipe cannot be deleted.');
+      await chatRepo.transaction(() async {
+        final latest = await chatRepo.getById(session.id);
+        if (latest == null) throw StateError('Chat session no longer exists.');
+        final messageIndex = latest.messages.indexWhere(
+          (message) => message.id == messageId,
+        );
+        if (messageIndex < 0) {
+          throw StateError('Chat message no longer exists.');
+        }
+        final original = latest.messages[messageIndex];
+        final removedSwipeId = original.swipeId;
+        final removedAgentSwipeId = removeAgentSwipe
+            ? original.agentSwipeId
+            : null;
+        final replacement = removeAgentSwipe
+            ? removeActiveAgentSwipe(original)
+            : removeActiveSwipe(original);
+        if (replacement == null) {
+          throw StateError('The last remaining swipe cannot be deleted.');
+        }
+        updatedMessage = replacement;
+        updatedSession = latest.copyWith(
+          messages: List<ChatMessage>.from(latest.messages)
+            ..[messageIndex] = replacement,
+          updatedAt: currentTimestampSeconds(),
+        );
+        await _ref
+            .read(cardEvolutionProposalRunRepoProvider)
+            .cancelPendingForMessageMutationInTransaction(
+              sessionId: session.id,
+              messageIds: {messageId},
+            );
+        await _ref
+            .read(ledgerReconciliationRunRepoProvider)
+            .invalidateForMessageMutation(
+              sessionId: session.id,
+              messageIds: {messageId},
+              reason: 'variation_deleted',
+              createdAt: currentTimestampSeconds(),
+            );
+
+        if (!removeAgentSwipe) {
+          // Manifest anchors are immutable. Green-index compaction would make
+          // later anchors identify different variations, so fail closed.
+          await _deleteManifestVariations(
+            manifests,
+            sessionId: session.id,
+            message: original,
+          );
+          await snapshots.deleteSwipe(
+            sessionId: session.id,
+            messageId: messageId,
+            swipeId: removedSwipeId,
+          );
+          await snapshots.shiftSwipeIdsAfterRemoval(
+            sessionId: session.id,
+            messageId: messageId,
+            removedSwipeId: removedSwipeId,
+          );
+          await facts.deleteSwipeAndShift(
+            sessionId: session.id,
+            messageId: messageId,
+            removedSwipeId: removedSwipeId,
+          );
+          await memory.deleteSwipeAndShift(
+            sessionId: session.id,
+            messageId: messageId,
+            removedSwipeId: removedSwipeId,
+          );
+          await blocks.deleteSwipeAndShift(
+            sessionId: session.id,
+            messageId: messageId,
+            removedSwipeId: removedSwipeId,
+          );
+        } else {
+          // Blue-index compaction has the same identity problem, scoped to this
+          // green variation. Drop its immutable provenance before shifting.
+          await _deleteManifestVariations(
+            manifests,
+            sessionId: session.id,
+            message: original,
+            swipeIds: {removedSwipeId},
+          );
+          await snapshots.deleteAnchor(
+            sessionId: session.id,
+            messageId: messageId,
+            swipeId: removedSwipeId,
+            agentSwipeId: removedAgentSwipeId!,
+          );
+          await snapshots.shiftAgentSwipeIdsAfterRemoval(
+            sessionId: session.id,
+            messageId: messageId,
+            swipeId: removedSwipeId,
+            removedAgentSwipeId: removedAgentSwipeId,
+          );
+          await facts.deleteAgentSwipeAndShift(
+            sessionId: session.id,
+            messageId: messageId,
+            swipeId: removedSwipeId,
+            removedAgentSwipeId: removedAgentSwipeId,
+          );
+          await memory.deleteAgentSwipeAndShift(
+            sessionId: session.id,
+            messageId: messageId,
+            swipeId: removedSwipeId,
+            removedAgentSwipeId: removedAgentSwipeId,
+          );
+          await blocks.deleteAgentSwipeAndShift(
+            sessionId: session.id,
+            messageId: messageId,
+            swipeId: removedSwipeId,
+            removedAgentSwipeId: removedAgentSwipeId,
+          );
+        }
+        await _ref
+            .read(ledgerReconciliationCheckpointRepoProvider)
+            .deleteForMessages(session.id, {messageId});
+        await _ref
+            .read(embeddingRepoProvider)
+            .deleteBySource('chat_message', session.id);
+        await chatRepo.put(updatedSession);
+        final canonRollback = await _ref
+            .read(sessionCanonRollbackRepoProvider)
+            .reconcileInTransaction(
+              sessionId: updatedSession.id,
+              survivingMessages: updatedSession.messages,
+            );
+        wakeLoreEmbeddingWorker = canonRollback.shouldWakeLoreEmbeddingWorker;
+      });
+
+      if (wakeLoreEmbeddingWorker) {
+        unawaited(_ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
       }
-      updatedMessage = replacement;
-      updatedSession = latest.copyWith(
-        messages: List<ChatMessage>.from(latest.messages)
-          ..[messageIndex] = replacement,
-        updatedAt: currentTimestampSeconds(),
-      );
-      await _ref
-          .read(cardEvolutionProposalRunRepoProvider)
-          .cancelPendingForMessageMutationInTransaction(
-            sessionId: session.id,
-            messageIds: {messageId},
-          );
-      await _ref
-          .read(ledgerReconciliationRunRepoProvider)
-          .invalidateForMessageMutation(
-            sessionId: session.id,
-            messageIds: {messageId},
-            reason: 'variation_deleted',
-            createdAt: currentTimestampSeconds(),
-          );
 
-      if (!removeAgentSwipe) {
-        // Manifest anchors are immutable. Green-index compaction would make
-        // later anchors identify different variations, so fail closed.
-        await _deleteManifestVariations(
-          manifests,
-          sessionId: session.id,
-          message: original,
-        );
-        await snapshots.deleteSwipe(
-          sessionId: session.id,
-          messageId: messageId,
-          swipeId: removedSwipeId,
-        );
-        await snapshots.shiftSwipeIdsAfterRemoval(
-          sessionId: session.id,
-          messageId: messageId,
-          removedSwipeId: removedSwipeId,
-        );
-        await facts.deleteSwipeAndShift(
-          sessionId: session.id,
-          messageId: messageId,
-          removedSwipeId: removedSwipeId,
-        );
-        await memory.deleteSwipeAndShift(
-          sessionId: session.id,
-          messageId: messageId,
-          removedSwipeId: removedSwipeId,
-        );
-        await blocks.deleteSwipeAndShift(
-          sessionId: session.id,
-          messageId: messageId,
-          removedSwipeId: removedSwipeId,
-        );
+      final activeSnapshot = await snapshots.getByAnchor(
+        sessionId: session.id,
+        messageId: messageId,
+        swipeId: updatedMessage.swipeId,
+        agentSwipeId: updatedMessage.agentSwipeId,
+      );
+      final fallback =
+          activeSnapshot ?? await snapshots.getLatestCommitted(session.id);
+      if (fallback == null) {
+        await _ref.read(trackerRepoProvider).clearForSession(session.id);
       } else {
-        // Blue-index compaction has the same identity problem, scoped to this
-        // green variation. Drop its immutable provenance before shifting.
-        await _deleteManifestVariations(
-          manifests,
-          sessionId: session.id,
-          message: original,
-          swipeIds: {removedSwipeId},
-        );
-        await snapshots.deleteAnchor(
-          sessionId: session.id,
-          messageId: messageId,
-          swipeId: removedSwipeId,
-          agentSwipeId: removedAgentSwipeId!,
-        );
-        await snapshots.shiftAgentSwipeIdsAfterRemoval(
-          sessionId: session.id,
-          messageId: messageId,
-          swipeId: removedSwipeId,
-          removedAgentSwipeId: removedAgentSwipeId,
-        );
-        await facts.deleteAgentSwipeAndShift(
-          sessionId: session.id,
-          messageId: messageId,
-          swipeId: removedSwipeId,
-          removedAgentSwipeId: removedAgentSwipeId,
-        );
-        await memory.deleteAgentSwipeAndShift(
-          sessionId: session.id,
-          messageId: messageId,
-          swipeId: removedSwipeId,
-          removedAgentSwipeId: removedAgentSwipeId,
-        );
-        await blocks.deleteAgentSwipeAndShift(
-          sessionId: session.id,
-          messageId: messageId,
-          swipeId: removedSwipeId,
-          removedAgentSwipeId: removedAgentSwipeId,
-        );
+        await _ref
+            .read(trackerRepoProvider)
+            .replaceForSession(session.id, fallback.trackers);
       }
-      await _ref
-          .read(ledgerReconciliationCheckpointRepoProvider)
-          .deleteForMessages(session.id, {messageId});
-      await _ref
-          .read(embeddingRepoProvider)
-          .deleteBySource('chat_message', session.id);
-      await chatRepo.put(updatedSession);
-      final canonRollback = await _ref
-          .read(sessionCanonRollbackRepoProvider)
-          .reconcileInTransaction(
-            sessionId: updatedSession.id,
-            survivingMessages: updatedSession.messages,
-          );
-      wakeLoreEmbeddingWorker = canonRollback.shouldWakeLoreEmbeddingWorker;
-    });
 
-    if (wakeLoreEmbeddingWorker) {
-      unawaited(_ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
+      ChatSessionService.updateCache(updatedSession);
+      _ref.invalidate(memoryBookProvider(session.id));
+      await _ref.read(infoBlocksProvider(session.id).notifier).refresh();
+      return updatedSession;
+    } finally {
+      settle();
     }
-
-    final activeSnapshot = await snapshots.getByAnchor(
-      sessionId: session.id,
-      messageId: messageId,
-      swipeId: updatedMessage.swipeId,
-      agentSwipeId: updatedMessage.agentSwipeId,
-    );
-    final fallback =
-        activeSnapshot ?? await snapshots.getLatestCommitted(session.id);
-    if (fallback == null) {
-      await _ref.read(trackerRepoProvider).clearForSession(session.id);
-    } else {
-      await _ref
-          .read(trackerRepoProvider)
-          .replaceForSession(session.id, fallback.trackers);
-    }
-
-    ChatSessionService.updateCache(updatedSession);
-    _ref.invalidate(memoryBookProvider(session.id));
-    await _ref.read(infoBlocksProvider(session.id).notifier).refresh();
-    return updatedSession;
   }
 
   /// Removes every immutable manifest anchor represented by [message].
@@ -891,7 +920,7 @@ class ChatMessageService {
     }
   }
 
-  @visibleForTesting
+  /// Pure removal plan, also used for pre-queue action eligibility.
   static ChatMessage? removeActiveSwipe(ChatMessage message) {
     if (message.swipes.length <= 1 ||
         message.swipeId < 0 ||
@@ -962,7 +991,7 @@ class ChatMessageService {
     );
   }
 
-  @visibleForTesting
+  /// Pure removal plan, also used for pre-queue action eligibility.
   static ChatMessage? removeActiveAgentSwipe(ChatMessage message) {
     if (message.agentSwipes.length <= 1 ||
         message.agentSwipeId < 0 ||
@@ -1261,34 +1290,39 @@ class ChatMessageService {
       return snapshot;
     }
     final messageId = snapshot.messages[messageIndex].id;
-    final repo = _ref.read(chatRepoProvider);
-    var wakeLoreEmbeddingWorker = false;
-    final durable = await repo.mutateMessagesWithBeforeWrite(
-      sessionId: snapshot.id,
-      updatedAt: currentTimestampSeconds(),
-      mutate: (messages) {
-        final latestIndex = messages.indexWhere((m) => m.id == messageId);
-        if (latestIndex < 0) return messages;
-        final latest = snapshot.copyWith(messages: messages);
-        return mutate(latest, latestIndex).messages;
-      },
-      beforeWrite: (before, after) async {
-        await _invalidateChangedReconciliationAnchors(before, after);
-        final canonRollback = await _ref
-            .read(sessionCanonRollbackRepoProvider)
-            .reconcileInTransaction(
-              sessionId: after.id,
-              survivingMessages: after.messages,
-            );
-        wakeLoreEmbeddingWorker = canonRollback.shouldWakeLoreEmbeddingWorker;
-      },
-    );
-    if (durable == null) return snapshot;
-    if (wakeLoreEmbeddingWorker) {
-      unawaited(_ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
+    final settle = _beginMutation(snapshot, messageIds: {messageId});
+    try {
+      final repo = _ref.read(chatRepoProvider);
+      var wakeLoreEmbeddingWorker = false;
+      final durable = await repo.mutateMessagesWithBeforeWrite(
+        sessionId: snapshot.id,
+        updatedAt: currentTimestampSeconds(),
+        mutate: (messages) {
+          final latestIndex = messages.indexWhere((m) => m.id == messageId);
+          if (latestIndex < 0) return messages;
+          final latest = snapshot.copyWith(messages: messages);
+          return mutate(latest, latestIndex).messages;
+        },
+        beforeWrite: (before, after) async {
+          await _invalidateChangedReconciliationAnchors(before, after);
+          final canonRollback = await _ref
+              .read(sessionCanonRollbackRepoProvider)
+              .reconcileInTransaction(
+                sessionId: after.id,
+                survivingMessages: after.messages,
+              );
+          wakeLoreEmbeddingWorker = canonRollback.shouldWakeLoreEmbeddingWorker;
+        },
+      );
+      if (durable == null) return snapshot;
+      if (wakeLoreEmbeddingWorker) {
+        unawaited(_ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
+      }
+      ChatSessionService.updateCache(durable);
+      return durable;
+    } finally {
+      settle();
     }
-    ChatSessionService.updateCache(durable);
-    return durable;
   }
 
   /// Applies a session-wide message transformation to the latest durable row.
@@ -1296,17 +1330,22 @@ class ChatMessageService {
     ChatSession snapshot,
     ChatSession Function(ChatSession latest) mutate,
   ) async {
-    final repo = _ref.read(chatRepoProvider);
-    final durable = await repo.mutateMessagesWithBeforeWrite(
-      sessionId: snapshot.id,
-      updatedAt: currentTimestampSeconds(),
-      mutate: (messages) =>
-          mutate(snapshot.copyWith(messages: messages)).messages,
-      beforeWrite: _invalidateChangedReconciliationAnchors,
-    );
-    if (durable == null) return snapshot;
-    ChatSessionService.updateCache(durable);
-    return durable;
+    final settle = _beginMutation(snapshot);
+    try {
+      final repo = _ref.read(chatRepoProvider);
+      final durable = await repo.mutateMessagesWithBeforeWrite(
+        sessionId: snapshot.id,
+        updatedAt: currentTimestampSeconds(),
+        mutate: (messages) =>
+            mutate(snapshot.copyWith(messages: messages)).messages,
+        beforeWrite: _invalidateChangedReconciliationAnchors,
+      );
+      if (durable == null) return snapshot;
+      ChatSessionService.updateCache(durable);
+      return durable;
+    } finally {
+      settle();
+    }
   }
 
   Future<void> _invalidateChangedReconciliationAnchors(

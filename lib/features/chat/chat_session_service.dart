@@ -13,6 +13,7 @@ import '../../core/state/shared_prefs_provider.dart';
 import '../../core/utils/time_helpers.dart';
 import '../../core/utils/sync_deletion_tracker.dart';
 import '../../core/state/db_provider.dart';
+import '../../core/state/chat_source_mutation_provider.dart';
 import 'initial_message_builder.dart';
 
 class ChatSessionService {
@@ -477,37 +478,44 @@ class ChatSessionService {
   }
 
   Future<ChatSession> clearChat(String charId, ChatSession session) async {
-    final charRepo = _ref.read(characterRepoProvider);
-    final personaRepo = _ref.read(personaRepoProvider);
-    final activePersonaId = _ref.read(activePersonaIdProvider);
-    final connections = _ref.read(personaConnectionsProvider);
-    final character = await charRepo.getById(charId);
-    final personas = await personaRepo.getAll();
-    final persona = getEffectivePersona(
-      personas,
-      charId,
-      null,
-      activePersonaId,
-      connections,
-    );
-    final initialMessages = InitialMessageBuilder.build(
-      character: character,
-      persona: persona,
-      sessionId: session.id,
-    );
-    final clearedSession = await _ref
-        .read(sessionDeletionRepoProvider)
-        .clearSession(
-          sessionId: session.id,
-          replacementMessages: initialMessages,
-          resetBranchStamp: true,
-          countDeletedMessages: true,
-        );
-    if (clearedSession == null) return session;
-    updateCache(clearedSession);
-    _ref.invalidate(memoryBookProvider(session.id));
-    await SyncDeletionTracker.recordSessionRuntimeClear(session.id);
-    return clearedSession;
+    final settle = _ref
+        .read(chatSourceMutationRegistryProvider)
+        .beginMutation(sessionId: session.id);
+    try {
+      final charRepo = _ref.read(characterRepoProvider);
+      final personaRepo = _ref.read(personaRepoProvider);
+      final activePersonaId = _ref.read(activePersonaIdProvider);
+      final connections = _ref.read(personaConnectionsProvider);
+      final character = await charRepo.getById(charId);
+      final personas = await personaRepo.getAll();
+      final persona = getEffectivePersona(
+        personas,
+        charId,
+        null,
+        activePersonaId,
+        connections,
+      );
+      final initialMessages = InitialMessageBuilder.build(
+        character: character,
+        persona: persona,
+        sessionId: session.id,
+      );
+      final clearedSession = await _ref
+          .read(sessionDeletionRepoProvider)
+          .clearSession(
+            sessionId: session.id,
+            replacementMessages: initialMessages,
+            resetBranchStamp: true,
+            countDeletedMessages: true,
+          );
+      if (clearedSession == null) return session;
+      updateCache(clearedSession);
+      _ref.invalidate(memoryBookProvider(session.id));
+      await SyncDeletionTracker.recordSessionRuntimeClear(session.id);
+      return clearedSession;
+    } finally {
+      settle();
+    }
   }
 
   Future<List<ChatSession>> getSessions(String charId) async {

@@ -7,6 +7,7 @@ import '../../core/models/chat_message.dart';
 import '../../core/state/character_provider.dart'
     show revealHiddenCharactersProvider;
 import '../../core/state/db_provider.dart';
+import '../../core/state/chat_source_mutation_provider.dart';
 import '../../core/utils/sync_deletion_tracker.dart';
 import '../../shared/utils/time_formatter.dart';
 import '../chat/chat_provider.dart';
@@ -261,26 +262,55 @@ class ChatHistoryNotifier extends AsyncNotifier<List<ChatSessionInfo>> {
   }
 
   Future<void> deleteSession(String sessionId) async {
-    final studioConfig = await ref
-        .read(studioConfigRepoProvider)
-        .getBySessionId(sessionId);
-    final charId = _characterIdOf(sessionId);
-    await ref.read(sessionDeletionRepoProvider).deleteSession(sessionId);
-    ChatSessionService.clearCache();
-    // The chat screen may still be bound to the row that just went away. Left
-    // alone it keeps serving the deleted session, and its next write recreates
-    // the row it was deleted from (`commitDeleteMessages` ends in a full
-    // `ChatRepo.put`). Rebuilding picks the next surviving session, or a fresh
-    // one when this was the last.
-    if (charId != null) ref.invalidate(chatProvider(charId));
-    await SyncDeletionTracker.record('chat', sessionId);
-    await SyncDeletionTracker.record('memory_book', sessionId);
-    await SyncDeletionTracker.record('tracker_value', sessionId);
-    await SyncDeletionTracker.record('tracker_snapshot', sessionId);
-    await SyncDeletionTracker.record('session_lorebook_overlays', sessionId);
-    await SyncDeletionTracker.record('reconciliation_state', sessionId);
-    if (studioConfig != null) {
-      await SyncDeletionTracker.record('studio_config', sessionId);
+    if (!ref.mounted || sessionId.isEmpty) return;
+    final settle = ref
+        .read(chatSourceMutationRegistryProvider)
+        .beginMutation(sessionId: sessionId);
+    try {
+      final studioConfig = await ref
+          .read(studioConfigRepoProvider)
+          .getBySessionId(sessionId);
+      final charId = _characterIdOf(sessionId);
+      await ref.read(sessionDeletionRepoProvider).deleteSession(sessionId);
+      ChatSessionService.clearCache();
+      // The chat screen may still be bound to the row that just went away. Left
+      // alone it keeps serving the deleted session, and its next write recreates
+      // the row it was deleted from (`commitDeleteMessages` ends in a full
+      // `ChatRepo.put`). Rebuilding picks the next surviving session, or a fresh
+      // one when this was the last.
+      if (charId != null) ref.invalidate(chatProvider(charId));
+      await SyncDeletionTracker.record('chat', sessionId);
+      await SyncDeletionTracker.record('memory_book', sessionId);
+      await SyncDeletionTracker.record('tracker_value', sessionId);
+      await SyncDeletionTracker.record('tracker_snapshot', sessionId);
+      await SyncDeletionTracker.record('session_lorebook_overlays', sessionId);
+      await SyncDeletionTracker.record('reconciliation_state', sessionId);
+      if (studioConfig != null) {
+        await SyncDeletionTracker.record('studio_config', sessionId);
+      }
+    } finally {
+      settle();
+    }
+  }
+
+  /// Confirmed bulk action: admit ALL captured IDs before the first deletion's
+  /// prerequisite await. Later IDs stay pending even while earlier ones settle.
+  Future<void> deleteSessions(Iterable<String> sessionIds) async {
+    if (!ref.mounted) return;
+    final ids = sessionIds.where((id) => id.isNotEmpty).toSet();
+    final mutations = ref.read(chatSourceMutationRegistryProvider);
+    final settlements = <void Function()>[];
+    try {
+      for (final id in ids) {
+        settlements.add(mutations.beginMutation(sessionId: id));
+      }
+      for (final id in ids) {
+        await deleteSession(id);
+      }
+    } finally {
+      for (final settle in settlements) {
+        settle();
+      }
     }
   }
 
@@ -299,14 +329,22 @@ class ChatHistoryNotifier extends AsyncNotifier<List<ChatSessionInfo>> {
   }
 
   Future<void> clearChat(String sessionId) async {
-    final clearedSession = await ref
-        .read(sessionDeletionRepoProvider)
-        .clearSession(sessionId: sessionId, replacementMessages: const []);
-    if (clearedSession == null) return;
-    ChatSessionService.updateCache(clearedSession);
-    ref.invalidate(memoryBookProvider(sessionId));
-    ref.read(messageVariablesProvider.notifier).clearSession(sessionId);
-    await SyncDeletionTracker.recordSessionRuntimeClear(sessionId);
+    if (!ref.mounted || sessionId.isEmpty) return;
+    final settle = ref
+        .read(chatSourceMutationRegistryProvider)
+        .beginMutation(sessionId: sessionId);
+    try {
+      final clearedSession = await ref
+          .read(sessionDeletionRepoProvider)
+          .clearSession(sessionId: sessionId, replacementMessages: const []);
+      if (clearedSession == null) return;
+      ChatSessionService.updateCache(clearedSession);
+      ref.invalidate(memoryBookProvider(sessionId));
+      ref.read(messageVariablesProvider.notifier).clearSession(sessionId);
+      await SyncDeletionTracker.recordSessionRuntimeClear(sessionId);
+    } finally {
+      settle();
+    }
   }
 
   Future<void> renameSession(String sessionId, String newName) async {

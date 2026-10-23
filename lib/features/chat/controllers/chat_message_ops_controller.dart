@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/models/chat_message.dart';
 import '../../../core/state/db_provider.dart';
+import '../../../core/state/chat_source_mutation_provider.dart';
 import '../../../core/utils/time_helpers.dart';
 import '../chat_message_service.dart';
 import '../chat_session_service.dart';
@@ -50,6 +51,13 @@ class ChatMessageOpsController {
 
   ChatMessageService get _messageSvc => ChatMessageService(_ref);
 
+  void Function() _beginMutation(
+    ChatSession session, {
+    Set<String>? messageIds,
+  }) => _ref
+      .read(chatSourceMutationRegistryProvider)
+      .beginMutation(sessionId: session.id, messageIds: messageIds);
+
   Future<void> editMessage(
     int index,
     String newContent, {
@@ -66,38 +74,46 @@ class ChatMessageOpsController {
       return;
     }
     if (index < 0 || index >= current.session!.messages.length) return;
-    final token = _writes.beginPublication();
-    var edited = _messageSvc.editMessage(
+    final settle = _beginMutation(
       current.session!,
-      index,
-      newContent,
-      tagStart: tagStart,
-      tagEnd: tagEnd,
+      messageIds: {current.session!.messages[index].id},
     );
-    edited = await _applyRunOnEditRegexes(edited, index);
-    final updated = await _writes.run(
-      () => _messageSvc.commitMessageMutation(current.session!, index, (
-        latest,
-        latestIndex,
-      ) {
-        var result = _messageSvc.editMessage(
+    try {
+      final token = _writes.beginPublication();
+      var edited = _messageSvc.editMessage(
+        current.session!,
+        index,
+        newContent,
+        tagStart: tagStart,
+        tagEnd: tagEnd,
+      );
+      edited = await _applyRunOnEditRegexes(edited, index);
+      final updated = await _writes.run(
+        () => _messageSvc.commitMessageMutation(current.session!, index, (
           latest,
           latestIndex,
-          newContent,
-          tagStart: tagStart,
-          tagEnd: tagEnd,
-        );
-        final regexContent = edited.messages[index].content;
-        if (result.messages[latestIndex].content != regexContent) {
-          result = _messageSvc.editMessage(result, latestIndex, regexContent);
-        }
-        return result;
-      }),
-    );
-    if (!_ref.mounted) return;
-    _ref.read(cachedTokenBreakdownProvider(_charId).notifier).state = null;
-    _ref.read(lastVectorLoreTokensProvider(_charId).notifier).state = 0;
-    _publish(updated, token: token);
+        ) {
+          var result = _messageSvc.editMessage(
+            latest,
+            latestIndex,
+            newContent,
+            tagStart: tagStart,
+            tagEnd: tagEnd,
+          );
+          final regexContent = edited.messages[index].content;
+          if (result.messages[latestIndex].content != regexContent) {
+            result = _messageSvc.editMessage(result, latestIndex, regexContent);
+          }
+          return result;
+        }),
+      );
+      if (!_ref.mounted) return;
+      _ref.read(cachedTokenBreakdownProvider(_charId).notifier).state = null;
+      _ref.read(lastVectorLoreTokensProvider(_charId).notifier).state = 0;
+      _publish(updated, token: token);
+    } finally {
+      settle();
+    }
   }
 
   Future<ChatSession> _applyRunOnEditRegexes(
@@ -150,16 +166,24 @@ class ChatMessageOpsController {
     if (current == null || current.session == null) return;
     if (fromIndex < 0 || fromIndex >= current.session!.messages.length) return;
     if (toIndex < 0 || toIndex >= current.session!.messages.length) return;
-    final token = _writes.beginPublication();
-    final updated = await _writes.run(
-      () => _messageSvc.commitMessagesMutation(current.session!, (latest) {
-        final movedId = current.session!.messages[fromIndex].id;
-        final currentIndex = latest.messages.indexWhere((m) => m.id == movedId);
-        if (currentIndex < 0) return latest;
-        return _messageSvc.moveMessage(latest, currentIndex, toIndex);
-      }),
-    );
-    _publish(updated, token: token);
+    if (fromIndex == toIndex) return;
+    final settle = _beginMutation(current.session!);
+    try {
+      final token = _writes.beginPublication();
+      final updated = await _writes.run(
+        () => _messageSvc.commitMessagesMutation(current.session!, (latest) {
+          final movedId = current.session!.messages[fromIndex].id;
+          final currentIndex = latest.messages.indexWhere(
+            (m) => m.id == movedId,
+          );
+          if (currentIndex < 0) return latest;
+          return _messageSvc.moveMessage(latest, currentIndex, toIndex);
+        }),
+      );
+      _publish(updated, token: token);
+    } finally {
+      settle();
+    }
   }
 
   Future<void> deleteMessage(int index) async {
@@ -176,73 +200,89 @@ class ChatMessageOpsController {
     final plan = svc.planDeleteMessages(original, indices);
     if (plan == null) return;
 
-    // Optimistic: drop the bubbles on the frame of the tap. The commit below
-    // runs a multi-table transaction (knowledge rollback, memory, snapshots,
-    // ledger, embedding index) plus a full session re-encode, which is long
-    // enough on a big chat to read as an unresponsive Delete button.
-    final token = _writes.beginPublication();
-    ChatSessionService.updateCache(plan.session);
-    _setState(AsyncData(current.copyWith(session: plan.session)));
-    _invalidateHistory();
-
+    final settle = _beginMutation(original, messageIds: plan.deletedMessageIds);
     try {
-      final durable = await _writes.run(
-        () => svc.commitDeleteMessages(original, plan),
-      );
-      if (!_ref.mounted || !_writes.isCurrentPublication(token)) return;
-      final after = _getState().value;
-      if (after != null && identical(after.session, plan.session)) {
-        ChatSessionService.updateCache(durable);
-        _setState(AsyncData(after.copyWith(session: durable)));
-      }
-    } catch (e) {
-      debugPrint('[ChatMessageOps] delete failed, restoring messages: $e');
-      if (!_ref.mounted) return;
-      final after = _getState().value;
-      // Only undo the optimistic write when nothing else has touched the
-      // session since — a newer edit/generation owns the state by then, and
-      // restoring the pre-delete session would resurrect more than the failure.
-      if (after != null && identical(after.session, plan.session)) {
-        // Another writer can have appended a reply while this optimistic
-        // suffix deletion was waiting to commit. Restore the durable row, not
-        // the pre-delete snapshot that would silently drop that new reply.
-        final durable = await _ref.read(chatRepoProvider).getById(original.id);
-        if (!_ref.mounted) return;
-        final latest = _getState().value;
-        if (durable != null &&
-            latest != null &&
-            identical(latest.session, plan.session)) {
+      // Optimistic: drop the bubbles on the frame of the tap. The commit below
+      // runs a multi-table transaction (knowledge rollback, memory, snapshots,
+      // ledger, embedding index) plus a full session re-encode, which is long
+      // enough on a big chat to read as an unresponsive Delete button.
+      final token = _writes.beginPublication();
+      ChatSessionService.updateCache(plan.session);
+      _setState(AsyncData(current.copyWith(session: plan.session)));
+      _invalidateHistory();
+
+      try {
+        final durable = await _writes.run(
+          () => svc.commitDeleteMessages(original, plan),
+        );
+        if (!_ref.mounted || !_writes.isCurrentPublication(token)) return;
+        final after = _getState().value;
+        if (after != null && identical(after.session, plan.session)) {
           ChatSessionService.updateCache(durable);
-          _setState(AsyncData(latest.copyWith(session: durable)));
-          _invalidateHistory();
+          _setState(AsyncData(after.copyWith(session: durable)));
         }
+      } catch (e) {
+        debugPrint('[ChatMessageOps] delete failed, restoring messages: $e');
+        if (!_ref.mounted) return;
+        final after = _getState().value;
+        // Only undo the optimistic write when nothing else has touched the
+        // session since — a newer edit/generation owns the state by then, and
+        // restoring the pre-delete session would resurrect more than the failure.
+        if (after != null && identical(after.session, plan.session)) {
+          // Another writer can have appended a reply while this optimistic
+          // suffix deletion was waiting to commit. Restore the durable row, not
+          // the pre-delete snapshot that would silently drop that new reply.
+          final durable = await _ref
+              .read(chatRepoProvider)
+              .getById(original.id);
+          if (!_ref.mounted) return;
+          final latest = _getState().value;
+          if (durable != null &&
+              latest != null &&
+              identical(latest.session, plan.session)) {
+            ChatSessionService.updateCache(durable);
+            _setState(AsyncData(latest.copyWith(session: durable)));
+            _invalidateHistory();
+          }
+        }
+        GlazeToast.showWithoutContext(
+          'error_delete_message_failed'.tr(namedArgs: {'error': '$e'}),
+          isError: true,
+          duration: 5000,
+        );
+        return;
       }
-      GlazeToast.showWithoutContext(
-        'error_delete_message_failed'.tr(namedArgs: {'error': '$e'}),
-        isError: true,
-        duration: 5000,
-      );
-      return;
+      if (!_ref.mounted) return;
+      _invalidateHistory();
+    } finally {
+      settle();
     }
-    if (!_ref.mounted) return;
-    _invalidateHistory();
   }
 
   Future<void> toggleMessageHidden(int index) async {
     if (!_ref.mounted) return;
     final current = _getState().value;
     if (current == null || current.session == null) return;
-    final token = _writes.beginPublication();
-    final updated = await _writes.run(
-      () => _messageSvc.commitMessageMutation(
-        current.session!,
-        index,
-        _messageSvc.toggleMessageHidden,
-      ),
+    if (index < 0 || index >= current.session!.messages.length) return;
+    final settle = _beginMutation(
+      current.session!,
+      messageIds: {current.session!.messages[index].id},
     );
-    if (!_ref.mounted) return;
-    _dropTokenBreakdown();
-    _publish(updated, token: token);
+    try {
+      final token = _writes.beginPublication();
+      final updated = await _writes.run(
+        () => _messageSvc.commitMessageMutation(
+          current.session!,
+          index,
+          _messageSvc.toggleMessageHidden,
+        ),
+      );
+      if (!_ref.mounted) return;
+      _dropTokenBreakdown();
+      _publish(updated, token: token);
+    } finally {
+      settle();
+    }
   }
 
   /// Eye button on an image attachment: flips whether the image is sent to
@@ -251,48 +291,73 @@ class ChatMessageOpsController {
     if (!_ref.mounted) return;
     final current = _getState().value;
     if (current == null || current.session == null) return;
-    final token = _writes.beginPublication();
-    final updated = await _writes.run(
-      () => _messageSvc.commitMessageMutation(
-        current.session!,
-        index,
-        _messageSvc.toggleImageHidden,
-      ),
+    if (index < 0 || index >= current.session!.messages.length) return;
+    if (!current.session!.messages[index].hasAttachments) return;
+    final settle = _beginMutation(
+      current.session!,
+      messageIds: {current.session!.messages[index].id},
     );
-    if (identical(updated, current.session)) return;
-    _publish(updated, token: token);
+    try {
+      final token = _writes.beginPublication();
+      final updated = await _writes.run(
+        () => _messageSvc.commitMessageMutation(
+          current.session!,
+          index,
+          _messageSvc.toggleImageHidden,
+        ),
+      );
+      if (identical(updated, current.session)) return;
+      _publish(updated, token: token);
+    } finally {
+      settle();
+    }
   }
 
   Future<void> unhideAllMessages() async {
     if (!_ref.mounted) return;
     final current = _getState().value;
     if (current == null || current.session == null) return;
-    final token = _writes.beginPublication();
-    final updated = await _writes.run(
-      () => _messageSvc.commitMessagesMutation(
-        current.session!,
-        _messageSvc.unhideAllMessages,
-      ),
-    );
-    if (!_ref.mounted) return;
-    _dropTokenBreakdown();
-    _publish(updated, token: token);
+    if (!current.session!.messages.any((message) => message.isHidden)) return;
+    final settle = _beginMutation(current.session!);
+    try {
+      final token = _writes.beginPublication();
+      final updated = await _writes.run(
+        () => _messageSvc.commitMessagesMutation(
+          current.session!,
+          _messageSvc.unhideAllMessages,
+        ),
+      );
+      if (!_ref.mounted) return;
+      _dropTokenBreakdown();
+      _publish(updated, token: token);
+    } finally {
+      settle();
+    }
   }
 
   Future<void> hideTopMessages(int count) async {
     if (!_ref.mounted) return;
     final current = _getState().value;
     if (current == null || current.session == null) return;
-    final token = _writes.beginPublication();
-    final updated = await _writes.run(
-      () => _messageSvc.commitMessagesMutation(
-        current.session!,
-        (latest) => _messageSvc.hideTopMessages(latest, count),
-      ),
-    );
-    if (!_ref.mounted) return;
-    _dropTokenBreakdown();
-    _publish(updated, token: token);
+    if (count <= 0 ||
+        !current.session!.messages.any((message) => !message.isHidden)) {
+      return;
+    }
+    final settle = _beginMutation(current.session!);
+    try {
+      final token = _writes.beginPublication();
+      final updated = await _writes.run(
+        () => _messageSvc.commitMessagesMutation(
+          current.session!,
+          (latest) => _messageSvc.hideTopMessages(latest, count),
+        ),
+      );
+      if (!_ref.mounted) return;
+      _dropTokenBreakdown();
+      _publish(updated, token: token);
+    } finally {
+      settle();
+    }
   }
 
   /// Hiding a message changes the prompt just like editing one. Drop the last
@@ -325,14 +390,19 @@ class ChatMessageOpsController {
     if (!_ref.mounted) return;
     final current = _getState().value;
     if (current == null || current.session == null) return;
-    final token = _writes.beginPublication();
-    final cleared = await _writes.run(
-      () => ChatSessionService(_ref).clearChat(_charId, current.session!),
-    );
-    if (!_ref.mounted) return;
-    if (!_writes.isCurrentPublication(token)) return;
-    _ref.read(messageVariablesProvider.notifier).clearSession(cleared.id);
-    _invalidateHistory();
-    _setState(AsyncData(ChatState(session: cleared)));
+    final settle = _beginMutation(current.session!);
+    try {
+      final token = _writes.beginPublication();
+      final cleared = await _writes.run(
+        () => ChatSessionService(_ref).clearChat(_charId, current.session!),
+      );
+      if (!_ref.mounted) return;
+      if (!_writes.isCurrentPublication(token)) return;
+      _ref.read(messageVariablesProvider.notifier).clearSession(cleared.id);
+      _invalidateHistory();
+      _setState(AsyncData(ChatState(session: cleared)));
+    } finally {
+      settle();
+    }
   }
 }
