@@ -1,5 +1,6 @@
 import '../../models/extra_request_parameter.dart';
 import '../../models/api_config.dart';
+import '../../credentials/native_provider_credentials.dart';
 import 'llm_capture_context.dart';
 
 /// Provider-neutral input for [ChatTransport.stream].
@@ -17,6 +18,18 @@ class ChatTransportRequest {
   final String endpoint;
   final String apiKey;
   final String model;
+
+  /// Original saved-row authority, captured before asynchronous preparation.
+  /// Native-only custody: never serialize into provider/prompt/persisted data.
+  final SavedConnectionAuth? savedConnectionAuth;
+
+  /// Denial-only provenance when a saved row has no mintable native authority.
+  /// Presence must be inspected before allowing that row onto a legacy path.
+  final String? savedConnectionId;
+
+  /// Denial-only custody of the ORIGINAL prepared native source/run/context.
+  /// Never serialized, refreshed at dispatch, or treated as credential authority.
+  final bool Function()? nativeSourceIsCurrent;
 
   /// OpenAI-shape messages — see class docstring.
   final List<Map<String, dynamic>> messages;
@@ -118,6 +131,9 @@ class ChatTransportRequest {
     required this.apiKey,
     required this.model,
     required this.messages,
+    this.savedConnectionAuth,
+    this.savedConnectionId,
+    this.nativeSourceIsCurrent,
     required this.maxTokens,
     required this.temperature,
     required this.topP,
@@ -168,8 +184,13 @@ class ChatTransportRequest {
     String? charName,
     String? userName,
     LlmCaptureContext? captureContext,
+    SavedConnectionAuth? savedConnectionAuth,
+    bool Function()? nativeSourceIsCurrent,
   }) => ChatTransportRequest(
     endpoint: apiConfig.endpoint,
+    savedConnectionId: apiConfig.id,
+    savedConnectionAuth: savedConnectionAuth,
+    nativeSourceIsCurrent: nativeSourceIsCurrent,
     apiKey: apiConfig.apiKey,
     model: model ?? apiConfig.model,
     messages: messages,
@@ -215,6 +236,9 @@ class ChatTransportRequest {
     List<Map<String, dynamic>>? previousMessages,
   }) => ChatTransportRequest(
     endpoint: endpoint,
+    savedConnectionId: savedConnectionId,
+    savedConnectionAuth: savedConnectionAuth,
+    nativeSourceIsCurrent: nativeSourceIsCurrent,
     apiKey: apiKey,
     model: model,
     messages: messages,

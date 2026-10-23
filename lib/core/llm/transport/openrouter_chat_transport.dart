@@ -79,6 +79,9 @@ class OpenRouterChatTransport implements ChatTransport {
     // endpoint field for OR, but this is defence-in-depth).
     return ChatTransportRequest(
       endpoint: baseUrl,
+      savedConnectionId: input.savedConnectionId,
+      savedConnectionAuth: input.savedConnectionAuth,
+      nativeSourceIsCurrent: input.nativeSourceIsCurrent,
       apiKey: input.apiKey,
       model: input.model,
       messages: messages,
