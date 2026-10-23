@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 
 import '../models/pipeline_settings.dart';
+import '../credentials/native_provider_credentials.dart';
+import 'native_saved_connection_source.dart';
 import '../models/extra_request_parameter.dart';
 import '../utils/id_generator.dart';
 import 'aux_retry_runner.dart';
@@ -25,6 +27,9 @@ typedef AuxRawResponseSink =
 
 /// Resolved auxiliary API configuration for a non-streaming LLM call.
 class AuxApiConfig {
+  final String? savedConnectionId;
+  final SavedConnectionAuth? savedConnectionAuth;
+  final NativePreparedSavedConnection? nativeSource;
   final String endpoint;
   final String apiKey;
   final String model;
@@ -42,6 +47,9 @@ class AuxApiConfig {
   final List<ExtraRequestParameter> extraRequestParameters;
 
   const AuxApiConfig({
+    this.savedConnectionId,
+    this.savedConnectionAuth,
+    this.nativeSource,
     required this.endpoint,
     required this.apiKey,
     required this.model,
@@ -82,10 +90,14 @@ class AuxApiConfig {
 class AuxLlmClient {
   final AuxTransportPicker transportPicker;
   final AuxRetryPolicy retryPolicy;
+  final NativeSavedConnectionSourceResolver? sources;
+  final NativeProviderPurpose? purpose;
 
   const AuxLlmClient({
     this.transportPicker = pickChatTransport,
     this.retryPolicy = const AuxRetryPolicy(),
+    this.sources,
+    this.purpose,
   });
 
   /// Resolves the post-cleaner timeout from settings.
@@ -183,11 +195,19 @@ class AuxLlmClient {
     FutureOr<void> Function(int attempt, int maxAttempts)? onAttemptStart,
   }) async {
     _requireConfigured(config);
+    await _requireLegacyScope(config, cancelToken);
     if (messages == null && prompt.isEmpty) {
       throw ArgumentError('Provide a prompt or messages');
     }
-    final runner = AuxRetryRunner(policy: retryPolicy);
-    final identifiedContext = _identifiedContext(captureContext);
+    _requireNativeScope(config);
+    final runner = AuxRetryRunner(
+      policy: config.savedConnectionAuth == null
+          ? retryPolicy
+          : const AuxRetryPolicy(maxAttempts: 1),
+    );
+    final identifiedContext = config.savedConnectionAuth == null
+        ? _identifiedContext(captureContext)
+        : null;
     return runner.run(
       cancelToken: cancelToken,
       captureContext: identifiedContext,
@@ -215,6 +235,9 @@ class AuxLlmClient {
         omitTopP: omitTopP,
         captureContext: identifiedContext?.withAttempt(i + 1),
         onRawResponse: onRawResponse,
+        isCurrent: config.nativeSource?.isNative == true
+            ? () => cancelToken?.isCancelled != true
+            : null,
       ),
     );
   }
@@ -247,8 +270,16 @@ class AuxLlmClient {
     LlmCaptureContext? captureContext,
   }) async {
     _requireConfigured(config);
-    final runner = AuxRetryRunner(policy: retryPolicy);
-    final identifiedContext = _identifiedContext(captureContext);
+    await _requireLegacyScope(config, cancelToken);
+    _requireNativeScope(config);
+    final runner = AuxRetryRunner(
+      policy: config.savedConnectionAuth == null
+          ? retryPolicy
+          : const AuxRetryPolicy(maxAttempts: 1),
+    );
+    final identifiedContext = config.savedConnectionAuth == null
+        ? _identifiedContext(captureContext)
+        : null;
     return runner.run(
       cancelToken: cancelToken,
       captureContext: identifiedContext,
@@ -273,6 +304,9 @@ class AuxLlmClient {
         omitReasoningEffort: omitReasoningEffort,
         requestReasoning: requestReasoning,
         captureContext: identifiedContext?.withAttempt(i + 1),
+        isCurrent: config.nativeSource?.isNative == true
+            ? () => cancelToken?.isCancelled != true
+            : null,
       ),
     );
   }
@@ -285,6 +319,42 @@ class AuxLlmClient {
     if ((endpointRequired && config.endpoint.isEmpty) || config.model.isEmpty) {
       throw Exception('Aux API not configured');
     }
+  }
+
+  void _requireNativeScope(AuxApiConfig config) {
+    final auth = config.savedConnectionAuth;
+    if (auth == null) return;
+    config.nativeSource?.requireCurrent();
+    if (sources == null ||
+        config.nativeSource == null ||
+        transportPicker == pickChatTransport ||
+        purpose != auth.purpose ||
+        config.apiKey.isNotEmpty ||
+        config.savedConnectionId != auth.connection.id ||
+        config.model != auth.connection.model ||
+        config.endpoint != auth.connection.endpoint ||
+        config.protocol != auth.connection.protocol ||
+        config.useResponsesApi != auth.connection.useResponsesApi ||
+        config.extraRequestParameters.isNotEmpty) {
+      throw const NativeProviderException(NativeProviderFailure.denied);
+    }
+  }
+
+  Future<void> _requireLegacyScope(
+    AuxApiConfig config,
+    CancelToken? token,
+  ) async {
+    if (sources == null ||
+        config.savedConnectionAuth != null ||
+        config.savedConnectionId == null) {
+      return;
+    }
+    final original = sources!.captureOriginalStamp();
+    await sources!.requireLegacyOnly(
+      originalStamp: original,
+      savedConnectionId: config.savedConnectionId!,
+      isCurrent: () => token?.isCancelled != true,
+    );
   }
 
   static LlmCaptureContext? _identifiedContext(LlmCaptureContext? context) {
@@ -339,8 +409,11 @@ class AuxLlmClient {
     bool omitTopP = true,
     LlmCaptureContext? captureContext,
     AuxRawResponseSink? onRawResponse,
+    bool Function()? isCurrent,
   }) async {
+    _requireNativeScope(config);
     final transport = transportPicker(config.protocol);
+    final nativeSource = config.nativeSource;
     String? result;
     Object? transportError;
     var callbackReceived = false;
@@ -368,6 +441,14 @@ class AuxLlmClient {
       // this attempt may return and the retry runner may start another one.
       await transport.stream(
         request: ChatTransportRequest(
+          savedConnectionAuth: config.savedConnectionAuth,
+          savedConnectionId: config.savedConnectionId,
+          nativeSourceIsCurrent: nativeSource?.bindNativeCurrent(
+            isCurrent: () =>
+                acceptingCallbacks &&
+                cancelToken?.isCancelled != true &&
+                isCurrent?.call() != false,
+          ),
           endpoint: config.endpoint,
           apiKey: config.apiKey,
           model: config.model,
@@ -398,14 +479,22 @@ class AuxLlmClient {
         ),
         cancelToken: cancelToken,
         onUpdate: (delta, reasoningDelta) {
-          if (!acceptingCallbacks || cancelToken?.isCancelled == true) return;
+          if (!acceptingCallbacks ||
+              cancelToken?.isCancelled == true ||
+              config.nativeSource?.isCurrent == false) {
+            return;
+          }
           if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
             guard?.cancel();
           }
         },
         onComplete: (text, reasoning, {rawResponseJson}) {
           guard?.dispose();
-          if (!acceptingCallbacks || cancelToken?.isCancelled == true) return;
+          if (!acceptingCallbacks ||
+              cancelToken?.isCancelled == true ||
+              config.nativeSource?.isCurrent == false) {
+            return;
+          }
           callbackReceived = true;
           result = text;
           // Handed to the caller even on a "successful" empty answer: a build
@@ -430,6 +519,10 @@ class AuxLlmClient {
       throw TimeoutException('Aux call timed out (idle) after ${timeoutMs}ms');
     }
     if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
+    if (isCurrent?.call() == false) {
+      throw const NativeProviderException(NativeProviderFailure.stale);
+    }
+    config.nativeSource?.requireCurrent();
     if (transportError != null) throw transportError!;
     if (!callbackReceived) {
       throw StateError('Aux transport ended without a result');
@@ -452,8 +545,11 @@ class AuxLlmClient {
     bool omitReasoningEffort = true,
     bool requestReasoning = false,
     LlmCaptureContext? captureContext,
+    bool Function()? isCurrent,
   }) async {
+    _requireNativeScope(config);
     final transport = transportPicker(config.protocol);
+    final nativeSource = config.nativeSource;
     final accumulated = StringBuffer();
     String? result;
     Object? transportError;
@@ -475,6 +571,14 @@ class AuxLlmClient {
     try {
       await transport.stream(
         request: ChatTransportRequest(
+          savedConnectionAuth: config.savedConnectionAuth,
+          savedConnectionId: config.savedConnectionId,
+          nativeSourceIsCurrent: nativeSource?.bindNativeCurrent(
+            isCurrent: () =>
+                acceptingCallbacks &&
+                cancelToken?.isCancelled != true &&
+                isCurrent?.call() != false,
+          ),
           endpoint: config.endpoint,
           apiKey: config.apiKey,
           model: config.model,
@@ -498,7 +602,11 @@ class AuxLlmClient {
         ),
         cancelToken: cancelToken,
         onUpdate: (delta, reasoningDelta) {
-          if (!acceptingCallbacks || cancelToken?.isCancelled == true) return;
+          if (!acceptingCallbacks ||
+              cancelToken?.isCancelled == true ||
+              config.nativeSource?.isCurrent == false) {
+            return;
+          }
           if (delta.isNotEmpty) {
             guard.cancel();
             accumulated.write(delta);
@@ -520,7 +628,9 @@ class AuxLlmClient {
           // like trimming or final newline normalization). Fall back to our
           // own accumulation if the transport returned empty.
           final finalText = text.isNotEmpty ? text : accumulated.toString();
-          if (acceptingCallbacks && cancelToken?.isCancelled != true) {
+          if (acceptingCallbacks &&
+              cancelToken?.isCancelled != true &&
+              config.nativeSource?.isCurrent != false) {
             if (onChunk != null && finalText != accumulated.toString()) {
               try {
                 onChunk(finalText);
@@ -563,6 +673,10 @@ class AuxLlmClient {
       );
     }
     if (cancelToken?.isCancelled == true) throw cancelToken!.cancelError!;
+    if (isCurrent?.call() == false) {
+      throw const NativeProviderException(NativeProviderFailure.stale);
+    }
+    config.nativeSource?.requireCurrent();
     if (transportError != null) throw transportError!;
     if (!callbackReceived) {
       throw StateError('Aux stream transport ended without a result');

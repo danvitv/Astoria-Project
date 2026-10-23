@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import '../models/api_config.dart';
 import '../models/extra_request_parameter.dart';
 import 'aux_llm_client.dart';
+import 'native_saved_connection_source.dart';
+import '../credentials/native_provider_credentials.dart';
 import 'transport/extra_request_parameters.dart';
 
 /// Resolves a Studio API-config slot to an [AuxApiConfig] for auxiliary LLM
@@ -40,15 +42,26 @@ class StudioSlotResolver {
     String modelOverride = '',
     List<ExtraRequestParameter> extraRequestParameterOverrides = const [],
     bool? useResponsesApi,
+    Map<String, NativePreparedSavedConnection> nativeSources = const {},
   }) {
     if (apiConfigId.isEmpty) {
       if (fallback != null) {
         final model = modelOverride.isNotEmpty ? modelOverride : fallback.model;
+        final source = nativeSources[fallback.id];
+        source?.requireModel(model);
+        _requireNativeOptions(
+          source,
+          extraRequestParameterOverrides,
+          useResponsesApi,
+        );
         debugPrint(
           '[StudioSlotResolver] $errorLabel: apiConfigId is empty — '
           'falling back to active chat API config (model=$model)',
         );
         return AuxApiConfig(
+          savedConnectionId: fallback.id,
+          savedConnectionAuth: source?.savedConnectionAuth,
+          nativeSource: source,
           endpoint: fallback.endpoint,
           apiKey: fallback.apiKey,
           model: model,
@@ -84,11 +97,21 @@ class StudioSlotResolver {
       );
     }
     final model = modelOverride.isNotEmpty ? modelOverride : selected.model;
+    final source = nativeSources[selected.id];
+    source?.requireModel(model);
+    _requireNativeOptions(
+      source,
+      extraRequestParameterOverrides,
+      useResponsesApi,
+    );
     debugPrint(
       '[StudioSlotResolver] resolved $errorLabel '
       'model=$model endpoint=${selected.endpoint}',
     );
     return AuxApiConfig(
+      savedConnectionId: selected.id,
+      savedConnectionAuth: source?.savedConnectionAuth,
+      nativeSource: source,
       endpoint: selected.endpoint,
       apiKey: selected.apiKey,
       model: model,
@@ -101,5 +124,18 @@ class StudioSlotResolver {
         extraRequestParameterOverrides,
       ),
     );
+  }
+
+  static void _requireNativeOptions(
+    NativePreparedSavedConnection? source,
+    List<ExtraRequestParameter> extras,
+    bool? responses,
+  ) {
+    if (source?.isNative == true &&
+        (extras.isNotEmpty ||
+            (responses != null &&
+                responses != source!.configuration.useResponsesApi))) {
+      throw const NativeProviderException(NativeProviderFailure.denied);
+    }
   }
 }

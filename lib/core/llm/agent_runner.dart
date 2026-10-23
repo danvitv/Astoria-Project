@@ -4,6 +4,8 @@ import 'package:dio/dio.dart';
 import 'package:easy_localization/easy_localization.dart';
 
 import '../models/api_config.dart';
+import '../credentials/native_provider_credentials.dart';
+import 'native_saved_connection_source.dart';
 import '../models/extra_request_parameter.dart';
 import '../models/pipeline_settings.dart';
 import '../models/studio_config.dart';
@@ -30,13 +32,15 @@ class AgentRunner {
   final AgentConfigResolver _configResolver;
   final PipelineSettings Function() _readPipelineSettings;
   late final AgentStreamRunner _streamRunner = AgentStreamRunner(
-    pickChatTransport,
+    _pickTransport,
   );
+  final AgentTransportPicker _pickTransport;
 
   AgentRunner({
     required this._configResolver,
     required this._readPipelineSettings,
-  });
+    AgentTransportPicker transportPicker = pickChatTransport,
+  }) : _pickTransport = transportPicker;
 
   /// Run a single agent against the LLM. Streaming is driven by
   /// [onFinalResponseUpdate] / [onIntermediateUpdate]; the returned
@@ -182,8 +186,13 @@ class AgentRunner {
       isFinalResponse,
       turnConfig,
     );
+    if (effectiveResolved.savedConnectionAuth != null &&
+        _pickTransport == pickChatTransport) {
+      throw const NativeProviderException(NativeProviderFailure.denied);
+    }
     await beforeSend?.call();
     if (cancelToken.isCancelled) throw cancelToken.cancelError!;
+    effectiveResolved.nativeSource?.requireCurrent();
     return _streamRunner.run(
       agent: agent,
       messages: messages,
@@ -460,6 +469,9 @@ class AgentRunFailedException implements Exception {
 /// orchestrator so `MemoryStudioService.executeTrackerBatch` can read the
 /// `maxTokens` cap and `stream` flag when computing a batch budget.
 class ResolvedAgentConfig {
+  final SavedConnectionAuth? savedConnectionAuth;
+  final String? savedConnectionId;
+  final NativePreparedSavedConnection? nativeSource;
   final String endpoint;
   final String apiKey;
   final String model;
@@ -490,6 +502,9 @@ class ResolvedAgentConfig {
   final String? reasoningTagEnd;
 
   const ResolvedAgentConfig({
+    this.savedConnectionAuth,
+    this.savedConnectionId,
+    this.nativeSource,
     required this.endpoint,
     required this.apiKey,
     required this.model,
@@ -523,8 +538,26 @@ class ResolvedAgentConfig {
   factory ResolvedAgentConfig.fromApiConfig(
     ApiConfig config, {
     String modelOverride = '',
+    NativePreparedSavedConnection? nativeSource,
   }) {
+    nativeSource?.requireModel(
+      modelOverride.isNotEmpty ? modelOverride : config.model,
+    );
+    if (nativeSource?.isNative == true &&
+        (config.apiKey.isNotEmpty ||
+            config.embeddingApiKey.isNotEmpty ||
+            config.id != nativeSource!.savedConnectionId ||
+            config.endpoint != nativeSource.configuration.endpoint ||
+            config.protocol != nativeSource.configuration.protocol ||
+            config.useResponsesApi !=
+                nativeSource.configuration.useResponsesApi ||
+            config.extraRequestParameters.isNotEmpty)) {
+      throw const NativeProviderException(NativeProviderFailure.denied);
+    }
     return ResolvedAgentConfig(
+      savedConnectionAuth: nativeSource?.savedConnectionAuth,
+      savedConnectionId: config.id,
+      nativeSource: nativeSource,
       endpoint: config.endpoint,
       apiKey: config.apiKey,
       model: modelOverride.isNotEmpty ? modelOverride : config.model,
@@ -567,6 +600,9 @@ class ResolvedAgentConfig {
     String? reasoningEffort,
   }) {
     return ResolvedAgentConfig(
+      savedConnectionAuth: savedConnectionAuth,
+      savedConnectionId: savedConnectionId,
+      nativeSource: nativeSource,
       endpoint: endpoint,
       apiKey: apiKey,
       model: model,
@@ -611,6 +647,9 @@ class ResolvedAgentConfig {
     List<ExtraRequestParameter>? extraRequestParameters,
   }) {
     return ResolvedAgentConfig(
+      savedConnectionAuth: savedConnectionAuth,
+      savedConnectionId: savedConnectionId,
+      nativeSource: nativeSource,
       endpoint: endpoint,
       apiKey: apiKey,
       model: model,
@@ -653,6 +692,9 @@ class ResolvedAgentConfig {
     String? reasoningTagEnd,
   }) {
     return ResolvedAgentConfig(
+      savedConnectionAuth: savedConnectionAuth,
+      savedConnectionId: savedConnectionId,
+      nativeSource: nativeSource,
       endpoint: endpoint,
       apiKey: apiKey,
       model: model,

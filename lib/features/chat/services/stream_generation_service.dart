@@ -8,6 +8,8 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/llm/game_time.dart';
+import '../../../core/credentials/native_provider_credentials.dart';
+import '../../../core/llm/native_saved_connection_source.dart';
 import '../../../core/llm/generation_phase.dart';
 import '../../../core/llm/history_assembler.dart';
 import '../../../core/llm/history_trim.dart';
@@ -29,6 +31,7 @@ import '../../../core/llm/beauty_state_parser.dart';
 import '../../../core/llm/idle_timeout_guard.dart';
 import '../../../core/llm/transport/call_attempt_outcome.dart';
 import '../../../core/llm/transport/chat_transport_request.dart';
+import '../../../core/llm/transport/chat_transport.dart';
 import '../../../core/llm/transport/llm_call_event.dart';
 import '../../../core/llm/transport/llm_capture_context.dart';
 import '../../../core/llm/transport/transport_factory.dart';
@@ -65,7 +68,13 @@ class StreamGenerationService {
   final Ref _ref;
   final String _charId;
   final int _genId;
-  final bool Function() _isAborted;
+  final bool Function() _ownerAborted;
+  NativePreparedSavedConnection? _nativeSource;
+  StudioTurnConfigSnapshot? _nativeTurn;
+  NativeSavedConnectionSourceResolver? _nativeSources;
+  NativeConnectionStamp? _nativeOriginal;
+  final NativeSavedConnectionSourceResolver? _injectedSources;
+  final ChatTransport Function(String)? _injectedTransportPicker;
   final SavedMessageWriter _writer = const SavedMessageWriter();
   late final MemoryAgentRecorder _recorder = MemoryAgentRecorder(_ref);
 
@@ -73,8 +82,29 @@ class StreamGenerationService {
     required this._ref,
     required this._charId,
     required this._genId,
-    required this._isAborted,
-  });
+    required bool Function() isAborted,
+    NativeSavedConnectionSourceResolver? sources,
+    ChatTransport Function(String)? transportPicker,
+  }) : _ownerAborted = isAborted,
+       _injectedSources = sources,
+       _injectedTransportPicker = transportPicker;
+
+  bool _isAborted() {
+    if (!_ref.mounted || _ownerAborted()) return true;
+    final stamp = _nativeOriginal;
+    if (stamp != null &&
+        !_nativeSources!.isOriginalCurrent(
+          stamp,
+          () => _ref.mounted && !_ownerAborted(),
+        )) {
+      return true;
+    }
+    if (_nativeSource?.isCurrent == false) return true;
+    return _nativeTurn?.nativeSources.values.any(
+          (source) => !source.isCurrent,
+        ) ??
+        false;
+  }
 
   /// Publishes the live generation phase for the typing bubble. Never let a
   /// UI-only signal disturb the run: a stale generation must not overwrite
@@ -117,11 +147,24 @@ class StreamGenerationService {
       );
     }
     try {
+      final runtime = _ref.read(nativeProviderRuntimeProvider);
+      _nativeSources = _injectedSources ?? runtime?.sources;
+      _nativeOriginal = _nativeSources?.captureOriginalStamp();
       final studioService = _ref.read(memoryStudioServiceProvider);
       final turnConfig =
           studioTurnConfig ??
           await _ref.read(studioTurnConfigResolverProvider).resolve(session.id);
       final studioConfig = turnConfig.config;
+      _nativeTurn = turnConfig;
+      final finalSlotId = turnConfig.preset?.expensiveApiConfigId ?? '';
+      _nativeSource =
+          turnConfig.nativeSourceFor(finalSlotId) ??
+          turnConfig.nativeSourceFor(turnConfig.activeApiConfig?.id ?? '');
+      if (_nativeSource?.isNative == true &&
+          runtime == null &&
+          _injectedTransportPicker == null) {
+        throw const NativeProviderException(NativeProviderFailure.denied);
+      }
       final studioPreset = turnConfig.preset;
       studioWasActive = studioConfig != null;
       if (_isAborted()) {
@@ -156,6 +199,24 @@ class StreamGenerationService {
         );
       }
       final apiConfig = inputs.apiConfig;
+      if (_nativeSources != null && _nativeSource == null) {
+        // A legacy externally supplied turn snapshot cannot authorize a native
+        // source. Still inspect before payload construction, under ORIGINAL run.
+        _nativeSource = await _nativeSources!.prepare(
+          originalStamp: _nativeOriginal!,
+          configuration: apiConfig,
+          purpose: studioConfig == null
+              ? NativeProviderPurpose.roleplay
+              : NativeProviderPurpose.studio,
+          isCurrent: () =>
+              _ref.mounted && !_ownerAborted() && !cancelToken.isCancelled,
+        );
+        if (_nativeSource!.isNative) {
+          // An unprepared external snapshot was already collected. Do not copy
+          // its unsanitized configuration into a prompt or renew it late.
+          throw const NativeProviderException(NativeProviderFailure.denied);
+        }
+      }
 
       final pipelineSettings = turnConfig.pipelineSettings;
       final studioFinalContextSize =
@@ -670,7 +731,10 @@ class StreamGenerationService {
       );
 
       final startGenTime = DateTime.now();
-      final transport = pickChatTransport(apiConfig.protocol);
+      final transport =
+          (_injectedTransportPicker ??
+          runtime?.transports.pick ??
+          pickChatTransport)(apiConfig.protocol);
       ChatState? finalState;
 
       bool frameScheduled = false;
@@ -770,220 +834,237 @@ class StreamGenerationService {
       }
 
       _phase(GenerationPhase.waiting);
-      await transport.stream(
-        request: ChatTransportRequest.fromApiConfig(
-          apiConfig,
-          messages: apiMessages,
-          sessionId: session.id,
-          previousMessages: previousApiMessages,
-          charName: inputs.character.name,
-          userName: inputs.persona?.name ?? 'User',
-          captureContext: captureContext,
-        ),
-        cancelToken: cancelToken,
-        onUpdate: (delta, reasoningDelta) {
-          if (_isAborted()) return;
-          if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
-            idleGuard.cancel();
-          }
-          accumulator.consumeDelta(delta, reasoningDelta: reasoningDelta);
-          // Reasoning-only output keeps the typing bubble on screen (the
-          // visible text is still empty), so name that phase for what it is.
-          reportStreamPhase();
-          if (!frameScheduled && !streamPublishClosed) {
-            frameScheduled = true;
-            SchedulerBinding.instance.scheduleFrameCallback((_) {
-              frameScheduled = false;
-              if (streamPublishClosed || _isAborted()) return;
-              publishStreamedText();
-            });
-          }
-        },
-        onComplete: (text, reasoning, {rawResponseJson}) {
-          if (_isAborted()) return;
-          closeStreamPublishing();
-          idleGuard.dispose();
-          // The raw body when the transport kept one: the Response tab
-          // pretty-prints it and reads the assistant text back out of it, so
-          // the payload is worth more there than the assembled text alone.
-          recordOutcome(responseText: rawResponseJson ?? text);
-          if (!apiConfig.stream &&
-              accumulator.text.isEmpty &&
-              accumulator.reasoning.isEmpty &&
-              (text.isNotEmpty ||
-                  (reasoning != null && reasoning.isNotEmpty))) {
-            accumulator.consumeDelta(text, reasoningDelta: reasoning);
-          }
-          var finalText = accumulator.text.trimLeft();
-          var finalReasoning = accumulator.reasoning.isNotEmpty
-              ? accumulator.reasoning
-              : reasoning;
-
-          finalText = _writer.sanitizeReasoningMarkers(
-            finalText,
-            reasoningTagStart,
-            reasoningTagEnd,
-          );
-          if (finalReasoning != null && finalReasoning.isNotEmpty) {
-            finalReasoning = _writer.sanitizeReasoningMarkers(
-              finalReasoning,
-              reasoningTagStart,
-              reasoningTagEnd,
-            );
-          }
-
-          final beautyApplied = applyBeautyState(finalText, pendingSessionVars);
-          finalText = wrapLumiaOocColors(beautyApplied.text);
-          pendingSessionVars = beautyApplied.vars;
-
-          final isAllReasoning =
-              finalText.isEmpty &&
-              finalReasoning != null &&
-              finalReasoning.isNotEmpty;
-          final elapsed = DateTime.now()
-              .difference(startGenTime)
-              .inMilliseconds;
-          final timeStr = '${(elapsed / 1000).toStringAsFixed(1)}s';
-          final tokenCount = estimateTokens(finalText);
-          finalState = _writer
-              .writeAssistant(
-                text: finalText,
-                reasoning: finalReasoning,
-                currentSession: saveSession ?? session,
-                isAborted: _isAborted,
-                pendingSessionVars: pendingSessionVars,
-                genTime: timeStr,
-                tokens: tokenCount,
-                rawResponse: rawResponseJson ?? text,
-                previousSwipes: previousSwipes,
-                previousSwipeId: previousSwipeId,
-                previousReasoning: previousReasoning,
-                previousGenTime: previousGenTime,
-                previousTokens: previousTokens,
-                previousSwipesMeta: previousSwipesMeta,
-                guidanceText: guidanceText,
-                guidanceType: guidanceType,
-                memoryCoverage: coverage,
-                isAllReasoning: isAllReasoning,
-                triggeredLorebooks: triggeredLorebooks,
-                triggeredMemories: triggeredMemories,
-                regenTargetId: regenTargetId,
-                visibleStartIndex: vsi,
-              )
-              .copyWith(
-                promptPayload: payload,
-                mainModelContextSnapshot: MainModelContextSnapshot(
-                  providerMessages: apiMessages,
-                  promptResult: promptResult,
-                  promptPayload: payload,
-                  isStudioFinalWriter: false,
-                ),
-              );
-          _recordModelUsage(apiConfig.model);
-          _bindTurnCaptures(
-            session.id,
-            finalState?.session == null
-                ? null
-                : _lastAssistantId(finalState!.session!, regenTargetId),
-            turnStartedAtMs,
-          );
-          if (memoryDiagnostics is Map<String, dynamic> &&
-              finalState?.session != null) {
-            final messageId = _lastAssistantId(
-              finalState!.session!,
-              regenTargetId,
-            );
-            _ref
-                .read(lastMemoryActivityProvider(_charId).notifier)
-                .state = MemoryActivityState(
-              sessionId: finalState!.session!.id,
-              messageId: messageId,
-              diagnostics: Map<String, dynamic>.from(memoryDiagnostics),
-              updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
-            );
-            _recorder.recordMemoryAgentOperation(
-              finalState!.session!.id,
-              messageId,
-              memoryDiagnostics,
-            );
-          } else {
-            _ref.read(lastMemoryActivityProvider(_charId).notifier).state =
-                null;
-          }
-          // Post-turn memory pipeline (Phase G4): fire-and-forget.
-          // Does NOT block generation or user interaction.
-          if (finalState?.session != null) {
-            unawaited(
-              _ref
-                  .read(memoryPostTurnServiceProvider)
-                  .runPostTurn(finalState!.session!.id),
-            );
-          }
-        },
-        onError: (error) {
-          closeStreamPublishing();
-          idleGuard.dispose();
-          if (idleTimedOut) {
-            final msg = 'error_first_chunk_timeout'.tr(
-              namedArgs: {'seconds': '${idleTimeoutMs ~/ 1000}'},
-            );
-            // A first-chunk timeout reaches here as the cancel it was
-            // implemented as. Record it as the timeout the reader saw, so the
-            // inspector does not file it under "you stopped it".
-            recordOutcome(
-              error: TimeoutException(
-                msg,
-                Duration(milliseconds: idleTimeoutMs),
+      final nativeSource = _nativeSource;
+      var nativeRequestOpen = true;
+      await transport
+          .stream(
+            request: ChatTransportRequest.fromApiConfig(
+              apiConfig,
+              savedConnectionAuth: nativeSource?.savedConnectionAuth,
+              nativeSourceIsCurrent: nativeSource?.bindNativeCurrent(
+                isCurrent: () =>
+                    nativeRequestOpen &&
+                    !_isAborted() &&
+                    !cancelToken.isCancelled,
               ),
-            );
-            if (continueTargetId != null) {
-              finalState = _continueFailure(msg, session, vsi);
-            } else if (regenTargetId != null && saveSession != null) {
-              finalState = _writer.writeRegenError(
-                errorText: msg,
-                saveSession: saveSession,
-                regenTargetId: regenTargetId,
-                visibleStartIndex: vsi,
+              messages: apiMessages,
+              sessionId: session.id,
+              previousMessages: previousApiMessages,
+              charName: inputs.character.name,
+              userName: inputs.persona?.name ?? 'User',
+              captureContext: captureContext,
+            ),
+            cancelToken: cancelToken,
+            onUpdate: (delta, reasoningDelta) {
+              if (_isAborted()) return;
+              if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
+                idleGuard.cancel();
+              }
+              accumulator.consumeDelta(delta, reasoningDelta: reasoningDelta);
+              // Reasoning-only output keeps the typing bubble on screen (the
+              // visible text is still empty), so name that phase for what it is.
+              reportStreamPhase();
+              if (!frameScheduled && !streamPublishClosed) {
+                frameScheduled = true;
+                SchedulerBinding.instance.scheduleFrameCallback((_) {
+                  frameScheduled = false;
+                  if (streamPublishClosed || _isAborted()) return;
+                  publishStreamedText();
+                });
+              }
+            },
+            onComplete: (text, reasoning, {rawResponseJson}) {
+              if (_isAborted()) return;
+              closeStreamPublishing();
+              idleGuard.dispose();
+              // The raw body when the transport kept one: the Response tab
+              // pretty-prints it and reads the assistant text back out of it, so
+              // the payload is worth more there than the assembled text alone.
+              recordOutcome(responseText: rawResponseJson ?? text);
+              if (!apiConfig.stream &&
+                  accumulator.text.isEmpty &&
+                  accumulator.reasoning.isEmpty &&
+                  (text.isNotEmpty ||
+                      (reasoning != null && reasoning.isNotEmpty))) {
+                accumulator.consumeDelta(text, reasoningDelta: reasoning);
+              }
+              var finalText = accumulator.text.trimLeft();
+              var finalReasoning = accumulator.reasoning.isNotEmpty
+                  ? accumulator.reasoning
+                  : reasoning;
+
+              finalText = _writer.sanitizeReasoningMarkers(
+                finalText,
+                reasoningTagStart,
+                reasoningTagEnd,
               );
-            } else {
-              finalState = _writer.writeError(
-                errorText: msg,
-                currentSession: session,
-                visibleStartIndex: vsi,
+              if (finalReasoning != null && finalReasoning.isNotEmpty) {
+                finalReasoning = _writer.sanitizeReasoningMarkers(
+                  finalReasoning,
+                  reasoningTagStart,
+                  reasoningTagEnd,
+                );
+              }
+
+              final beautyApplied = applyBeautyState(
+                finalText,
+                pendingSessionVars,
               );
-            }
-            return;
-          }
-          recordOutcome(error: error);
-          final isCancelled =
-              (error is DioException &&
-                  error.type == DioExceptionType.cancel) ||
-              cancelToken.isCancelled ||
-              _isAborted();
-          if (isCancelled) {
-            finalState = ChatState(
-              session: session,
-              isGenerating: false,
-              visibleStartIndex: vsi,
-            );
-          } else if (continueTargetId != null) {
-            finalState = _continueFailure(formatError(error), session, vsi);
-          } else if (regenTargetId != null && saveSession != null) {
-            finalState = _writer.writeRegenError(
-              errorText: formatError(error),
-              saveSession: saveSession,
-              regenTargetId: regenTargetId,
-              visibleStartIndex: vsi,
-            );
-          } else {
-            finalState = _writer.writeError(
-              errorText: formatError(error),
-              currentSession: session,
-              visibleStartIndex: vsi,
-            );
-          }
-        },
-      );
+              finalText = wrapLumiaOocColors(beautyApplied.text);
+              pendingSessionVars = beautyApplied.vars;
+
+              final isAllReasoning =
+                  finalText.isEmpty &&
+                  finalReasoning != null &&
+                  finalReasoning.isNotEmpty;
+              final elapsed = DateTime.now()
+                  .difference(startGenTime)
+                  .inMilliseconds;
+              final timeStr = '${(elapsed / 1000).toStringAsFixed(1)}s';
+              final tokenCount = estimateTokens(finalText);
+              finalState = _writer
+                  .writeAssistant(
+                    text: finalText,
+                    reasoning: finalReasoning,
+                    currentSession: saveSession ?? session,
+                    isAborted: _isAborted,
+                    pendingSessionVars: pendingSessionVars,
+                    genTime: timeStr,
+                    tokens: tokenCount,
+                    rawResponse: rawResponseJson ?? text,
+                    previousSwipes: previousSwipes,
+                    previousSwipeId: previousSwipeId,
+                    previousReasoning: previousReasoning,
+                    previousGenTime: previousGenTime,
+                    previousTokens: previousTokens,
+                    previousSwipesMeta: previousSwipesMeta,
+                    guidanceText: guidanceText,
+                    guidanceType: guidanceType,
+                    memoryCoverage: coverage,
+                    isAllReasoning: isAllReasoning,
+                    triggeredLorebooks: triggeredLorebooks,
+                    triggeredMemories: triggeredMemories,
+                    regenTargetId: regenTargetId,
+                    visibleStartIndex: vsi,
+                  )
+                  .copyWith(
+                    promptPayload: payload,
+                    mainModelContextSnapshot: MainModelContextSnapshot(
+                      providerMessages: apiMessages,
+                      promptResult: promptResult,
+                      promptPayload: payload,
+                      isStudioFinalWriter: false,
+                    ),
+                  );
+              _recordModelUsage(apiConfig.model);
+              _bindTurnCaptures(
+                session.id,
+                finalState?.session == null
+                    ? null
+                    : _lastAssistantId(finalState!.session!, regenTargetId),
+                turnStartedAtMs,
+              );
+              if (memoryDiagnostics is Map<String, dynamic> &&
+                  finalState?.session != null) {
+                final messageId = _lastAssistantId(
+                  finalState!.session!,
+                  regenTargetId,
+                );
+                _ref
+                    .read(lastMemoryActivityProvider(_charId).notifier)
+                    .state = MemoryActivityState(
+                  sessionId: finalState!.session!.id,
+                  messageId: messageId,
+                  diagnostics: Map<String, dynamic>.from(memoryDiagnostics),
+                  updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+                );
+                _recorder.recordMemoryAgentOperation(
+                  finalState!.session!.id,
+                  messageId,
+                  memoryDiagnostics,
+                );
+              } else {
+                _ref.read(lastMemoryActivityProvider(_charId).notifier).state =
+                    null;
+              }
+              // Post-turn memory pipeline (Phase G4): fire-and-forget.
+              // Does NOT block generation or user interaction.
+              if (finalState?.session != null) {
+                unawaited(
+                  _ref
+                      .read(memoryPostTurnServiceProvider)
+                      .runPostTurn(finalState!.session!.id),
+                );
+              }
+            },
+            onError: (error) {
+              closeStreamPublishing();
+              idleGuard.dispose();
+              if (_isAborted()) return;
+              if (idleTimedOut) {
+                final msg = 'error_first_chunk_timeout'.tr(
+                  namedArgs: {'seconds': '${idleTimeoutMs ~/ 1000}'},
+                );
+                // A first-chunk timeout reaches here as the cancel it was
+                // implemented as. Record it as the timeout the reader saw, so the
+                // inspector does not file it under "you stopped it".
+                recordOutcome(
+                  error: TimeoutException(
+                    msg,
+                    Duration(milliseconds: idleTimeoutMs),
+                  ),
+                );
+                if (continueTargetId != null) {
+                  finalState = _continueFailure(msg, session, vsi);
+                } else if (regenTargetId != null && saveSession != null) {
+                  finalState = _writer.writeRegenError(
+                    errorText: msg,
+                    saveSession: saveSession,
+                    regenTargetId: regenTargetId,
+                    visibleStartIndex: vsi,
+                  );
+                } else {
+                  finalState = _writer.writeError(
+                    errorText: msg,
+                    currentSession: session,
+                    visibleStartIndex: vsi,
+                  );
+                }
+                return;
+              }
+              recordOutcome(error: error);
+              final isCancelled =
+                  (error is DioException &&
+                      error.type == DioExceptionType.cancel) ||
+                  cancelToken.isCancelled ||
+                  _isAborted();
+              if (isCancelled) {
+                finalState = ChatState(
+                  session: session,
+                  isGenerating: false,
+                  visibleStartIndex: vsi,
+                );
+              } else if (continueTargetId != null) {
+                finalState = _continueFailure(formatError(error), session, vsi);
+              } else if (regenTargetId != null && saveSession != null) {
+                finalState = _writer.writeRegenError(
+                  errorText: formatError(error),
+                  saveSession: saveSession,
+                  regenTargetId: regenTargetId,
+                  visibleStartIndex: vsi,
+                );
+              } else {
+                finalState = _writer.writeError(
+                  errorText: formatError(error),
+                  currentSession: session,
+                  visibleStartIndex: vsi,
+                );
+              }
+            },
+          )
+          .whenComplete(() {
+            nativeRequestOpen = false;
+          });
       // Neither callback is guaranteed on every transport path; the window
       // must be shut before the pipeline clears the streaming state.
       closeStreamPublishing();

@@ -5,6 +5,9 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/llm/history_assembler.dart';
+import '../../../core/llm/native_saved_connection_source.dart';
+import '../../../core/credentials/native_provider_credentials.dart';
+import '../../settings/api_list_provider.dart';
 import '../../../core/llm/idle_timeout_guard.dart';
 import '../../../core/llm/macro_engine.dart';
 import '../../../core/llm/prompt_isolate.dart';
@@ -12,6 +15,7 @@ import '../providers/prompt_build_providers.dart';
 import '../../../core/llm/stream_accumulator.dart';
 import '../../../core/llm/tokenizer.dart';
 import '../../../core/llm/transport/chat_transport_request.dart';
+import '../../../core/llm/transport/chat_transport.dart';
 import '../../../core/llm/transport/transport_factory.dart';
 import '../../../core/models/chat_message.dart';
 import '../../../core/services/preset_defaults.dart';
@@ -35,13 +39,23 @@ enum ImpersonationOutcome { ok, notConfigured, aborted, failed }
 class ImpersonationService {
   final Ref _ref;
   final String _charId;
-  final bool Function() _isAborted;
+  final bool Function() _ownerAborted;
+  NativePreparedSavedConnection? _source;
+  final NativeSavedConnectionSourceResolver? _injectedSources;
+  final ChatTransport Function(String)? _injectedTransportPicker;
 
   ImpersonationService({
     required this._ref,
     required this._charId,
-    required this._isAborted,
-  });
+    required bool Function() isAborted,
+    NativeSavedConnectionSourceResolver? sources,
+    ChatTransport Function(String)? transportPicker,
+  }) : _ownerAborted = isAborted,
+       _injectedSources = sources,
+       _injectedTransportPicker = transportPicker;
+
+  bool _isAborted() =>
+      !_ref.mounted || _ownerAborted() || _source?.isCurrent == false;
 
   /// Resolves the effective impersonation prompt for [sessionId], or null when
   /// it is empty/unset (the caller should then prompt the user to configure it,
@@ -62,10 +76,33 @@ class ImpersonationService {
     required void Function(CancelToken) setCancelToken,
     required void Function(String text) onDelta,
   }) async {
+    final runtime = _ref.read(nativeProviderRuntimeProvider);
+    final sources = _injectedSources ?? runtime?.sources;
+    final original = sources?.captureOriginalStamp();
     final cancelToken = CancelToken();
     setCancelToken(cancelToken);
     if (_isAborted() || cancelToken.isCancelled) {
       return ImpersonationOutcome.aborted;
+    }
+    if (sources != null) {
+      await _ref.read(apiListProvider.future);
+      if (_isAborted() || cancelToken.isCancelled) {
+        return ImpersonationOutcome.aborted;
+      }
+      final selected = _ref.read(activeApiConfigProvider);
+      if (selected == null) return ImpersonationOutcome.notConfigured;
+      _source = await sources.prepare(
+        originalStamp: original!,
+        configuration: selected,
+        purpose: NativeProviderPurpose.roleplay,
+        isCurrent: () =>
+            _ref.mounted && !_ownerAborted() && !cancelToken.isCancelled,
+      );
+      if (_source!.isNative &&
+          runtime == null &&
+          _injectedTransportPicker == null) {
+        throw const NativeProviderException(NativeProviderFailure.denied);
+      }
     }
 
     final preset = _ref.read(
@@ -115,6 +152,7 @@ class ImpersonationService {
     final payload = await builder.buildFromSession(
       charId: _charId,
       session: promptSession,
+      apiConfigOverride: _source?.configuration,
       guidanceText: null,
       shouldAbort: _isAborted,
       cancelToken: cancelToken,
@@ -153,7 +191,10 @@ class ImpersonationService {
       headerInline: '',
     );
 
-    final transport = pickChatTransport(apiConfig.protocol);
+    final transport =
+        (_injectedTransportPicker ??
+        runtime?.transports.pick ??
+        pickChatTransport)(apiConfig.protocol);
     var frameScheduled = false;
     ImpersonationOutcome outcome = ImpersonationOutcome.ok;
 
@@ -166,53 +207,68 @@ class ImpersonationService {
       cancelToken.cancel('First-chunk timeout after ${idleTimeoutMs}ms');
     });
 
-    await transport.stream(
-      request: ChatTransportRequest.fromApiConfig(
-        apiConfig,
-        messages: apiMessages,
-        sessionId: session.id,
-        charName: character?.name ?? 'Character',
-        userName: persona?.name ?? 'User',
-      ),
-      cancelToken: cancelToken,
-      onUpdate: (delta, reasoningDelta) {
-        if (_isAborted()) return;
-        if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
-          idleGuard.cancel();
-        }
-        accumulator.consumeDelta(delta, reasoningDelta: reasoningDelta);
-        if (!frameScheduled) {
-          frameScheduled = true;
-          SchedulerBinding.instance.scheduleFrameCallback((_) {
-            frameScheduled = false;
+    final nativeSource = _source;
+    var nativeRequestOpen = true;
+    await transport
+        .stream(
+          request: ChatTransportRequest.fromApiConfig(
+            apiConfig,
+            savedConnectionAuth: nativeSource?.savedConnectionAuth,
+            nativeSourceIsCurrent: nativeSource?.bindNativeCurrent(
+              isCurrent: () =>
+                  nativeRequestOpen &&
+                  !_isAborted() &&
+                  !cancelToken.isCancelled,
+            ),
+            messages: apiMessages,
+            sessionId: session.id,
+            charName: character?.name ?? 'Character',
+            userName: persona?.name ?? 'User',
+          ),
+          cancelToken: cancelToken,
+          onUpdate: (delta, reasoningDelta) {
             if (_isAborted()) return;
-            onDelta(accumulator.text.trimLeft());
-          });
-        }
-      },
-      onComplete: (text, reasoning, {rawResponseJson}) {
-        if (_isAborted()) return;
-        idleGuard.dispose();
-        if (!apiConfig.stream &&
-            accumulator.text.isEmpty &&
-            (text.isNotEmpty || (reasoning != null && reasoning.isNotEmpty))) {
-          accumulator.consumeDelta(text, reasoningDelta: reasoning);
-        }
-        onDelta(accumulator.text.trim());
-      },
-      onError: (error) {
-        idleGuard.dispose();
-        final isCancelled =
-            (error is DioException && error.type == DioExceptionType.cancel) ||
-            cancelToken.isCancelled ||
-            _isAborted();
-        if (isCancelled && !idleTimedOut) {
-          outcome = ImpersonationOutcome.aborted;
-        } else {
-          outcome = ImpersonationOutcome.failed;
-        }
-      },
-    );
+            if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
+              idleGuard.cancel();
+            }
+            accumulator.consumeDelta(delta, reasoningDelta: reasoningDelta);
+            if (!frameScheduled) {
+              frameScheduled = true;
+              SchedulerBinding.instance.scheduleFrameCallback((_) {
+                frameScheduled = false;
+                if (_isAborted()) return;
+                onDelta(accumulator.text.trimLeft());
+              });
+            }
+          },
+          onComplete: (text, reasoning, {rawResponseJson}) {
+            if (_isAborted()) return;
+            idleGuard.dispose();
+            if (!apiConfig.stream &&
+                accumulator.text.isEmpty &&
+                (text.isNotEmpty ||
+                    (reasoning != null && reasoning.isNotEmpty))) {
+              accumulator.consumeDelta(text, reasoningDelta: reasoning);
+            }
+            onDelta(accumulator.text.trim());
+          },
+          onError: (error) {
+            idleGuard.dispose();
+            final isCancelled =
+                (error is DioException &&
+                    error.type == DioExceptionType.cancel) ||
+                cancelToken.isCancelled ||
+                _isAborted();
+            if (isCancelled && !idleTimedOut) {
+              outcome = ImpersonationOutcome.aborted;
+            } else {
+              outcome = ImpersonationOutcome.failed;
+            }
+          },
+        )
+        .whenComplete(() {
+          nativeRequestOpen = false;
+        });
 
     if (_isAborted()) return ImpersonationOutcome.aborted;
     return outcome;

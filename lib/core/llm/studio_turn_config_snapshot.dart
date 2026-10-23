@@ -6,6 +6,7 @@ import '../models/studio_config.dart';
 import '../models/studio_pipeline_overrides.dart';
 import 'aux_llm_client.dart';
 import 'studio_slot_resolver.dart';
+import 'native_saved_connection_source.dart';
 
 /// Immutable Studio configuration captured once for a chat generation turn.
 class StudioTurnConfigSnapshot {
@@ -15,6 +16,7 @@ class StudioTurnConfigSnapshot {
   final List<ApiConfig> apiConfigs;
   final ApiConfig? activeApiConfig;
   final LedgerPromptInjectionPolicy ledgerPromptInjectionPolicy;
+  final Map<String, NativePreparedSavedConnection> nativeSources;
 
   StudioTurnConfigSnapshot({
     required this.config,
@@ -22,8 +24,10 @@ class StudioTurnConfigSnapshot {
     required PipelineSettings pipelineSettings,
     required this.apiConfigs,
     required this.activeApiConfig,
+    Map<String, NativePreparedSavedConnection> nativeSources = const {},
     LedgerPromptInjectionPolicy? ledgerPromptInjectionPolicy,
-  }) : ledgerPromptInjectionPolicy =
+  }) : nativeSources = Map.unmodifiable(nativeSources),
+       ledgerPromptInjectionPolicy =
            ledgerPromptInjectionPolicy ??
            (preset == null
                ? const LedgerPromptInjectionPolicy(
@@ -60,6 +64,15 @@ class StudioTurnConfigSnapshot {
 
   bool get enabled => config != null && preset != null;
 
+  NativePreparedSavedConnection? nativeSourceFor(String id) =>
+      nativeSources[id];
+
+  void requireNativeSourcesCurrent() {
+    for (final source in nativeSources.values) {
+      source.requireCurrent();
+    }
+  }
+
   bool get ledgerEnabled => enabled && preset!.agentEnabled['ledger'] != false;
 
   AuxApiConfig resolveCleanerConfig({
@@ -67,6 +80,7 @@ class StudioTurnConfigSnapshot {
     bool? useResponsesApi,
   }) {
     return StudioSlotResolver.resolve(
+      nativeSources: nativeSources,
       apiConfigs: apiConfigs,
       apiConfigId: preset?.cleanerApiConfigId ?? '',
       fallback: activeApiConfig,
@@ -95,6 +109,7 @@ class StudioTurnConfigSnapshot {
       );
     }
     return StudioSlotResolver.resolve(
+      nativeSources: nativeSources,
       apiConfigs: apiConfigs,
       apiConfigId: slotId.isNotEmpty
           ? slotId

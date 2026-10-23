@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/studio_config.dart';
+import '../credentials/native_provider_credentials.dart';
 import '../utils/id_generator.dart';
 import 'agent_runner.dart' show AgentRunResult, ResolvedAgentConfig;
 import 'reasoning_stripper.dart';
@@ -13,6 +14,7 @@ import 'transport/call_attempt_outcome.dart';
 import 'transport/chat_transport.dart';
 import 'transport/chat_stream_exception.dart';
 import 'transport/chat_transport_request.dart';
+import 'transport/transport_factory.dart';
 import 'transport/llm_call_event.dart';
 import 'transport/llm_capture_context.dart';
 import 'transport/llm_request_capture.dart';
@@ -60,6 +62,12 @@ class AgentStreamRunner {
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
     void Function(String text)? onIntermediateUpdate,
   }) async {
+    resolved.nativeSource?.requireCurrent();
+    if (resolved.savedConnectionAuth != null &&
+        _pickTransport == pickChatTransport) {
+      throw const NativeProviderException(NativeProviderFailure.denied);
+    }
+    if (cancelToken.isCancelled) throw cancelToken.cancelError!;
     final completer = Completer<AgentRunResult>();
     final shouldStream = resolved.stream;
 
@@ -111,7 +119,8 @@ class AgentStreamRunner {
       isFinalResponse: isFinalResponse,
     );
     final captureActive =
-        LlmRequestCapture.sink != null || LlmCallEventCapture.sink != null;
+        resolved.savedConnectionAuth == null &&
+        (LlmRequestCapture.sink != null || LlmCallEventCapture.sink != null);
     final captureContext = captureActive
         ? baseCaptureContext
               .withCallIdentity(
@@ -122,6 +131,8 @@ class AgentStreamRunner {
               .withAttempt(1)
         : baseCaptureContext;
 
+    CancelToken? agentCancelToken;
+    var nativeRequestOpen = true;
     final request = buildRequest(
       agent: agent,
       messages: messages,
@@ -134,12 +145,15 @@ class AgentStreamRunner {
       userName: userName,
       responseJsonSchema: responseJsonSchema,
       captureContext: captureContext,
+      isCurrent: () =>
+          nativeRequestOpen &&
+          !cancelToken.isCancelled &&
+          agentCancelToken?.isCancelled != true,
     );
     final transport = _pickTransport(resolved.protocol);
     final startedAt = DateTime.now();
     final startedAtMs = startedAt.millisecondsSinceEpoch;
     Timer? idleTimer;
-    CancelToken? agentCancelToken;
     var streamStarted = false;
     var chunkCount = 0;
     int? firstChunkMs;
@@ -190,6 +204,13 @@ class AgentStreamRunner {
 
     void completeWithAccumulated(String reason) {
       if (completer.isCompleted) return;
+      if (resolved.nativeSource?.isCurrent == false ||
+          cancelToken.isCancelled) {
+        completer.completeError(
+          const NativeProviderException(NativeProviderFailure.stale),
+        );
+        return;
+      }
       final text = accumulator.text.trim();
       final reasoningText = isFinalResponse || isThinkController
           ? accumulator.reasoning
@@ -241,154 +262,204 @@ class AgentStreamRunner {
     resetAgentTimer();
 
     unawaited(
-      transport.stream(
-        request: request,
-        cancelToken: agentCancelToken,
-        onUpdate: (delta, reasoningDelta) {
-          if (completer.isCompleted) return;
-          if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
-            final nowMs = DateTime.now().millisecondsSinceEpoch;
-            chunkCount++;
-            firstChunkMs ??= nowMs - startedAtMs;
-            if (lastChunkAtMs != null) {
-              final gap = nowMs - lastChunkAtMs!;
-              if (gap > maxChunkGapMs) {
-                maxChunkGapMs = gap;
-                longestGap = {
-                  'gapMs': gap,
-                  'contentOffset': contentOffset,
-                  'reasoningOffset': reasoningOffset,
-                  'chunk': chunkCount,
-                };
+      transport
+          .stream(
+            request: request,
+            cancelToken: agentCancelToken,
+            onUpdate: (delta, reasoningDelta) {
+              if (completer.isCompleted ||
+                  cancelToken.isCancelled ||
+                  resolved.nativeSource?.isCurrent == false) {
+                return;
               }
-            }
-            if (captureActive && chunkTrace.length < 2048) {
-              chunkTrace.add({
-                'elapsedMs': nowMs - startedAtMs,
-                'contentOffset': contentOffset,
-                'contentLength': delta.length,
-                'reasoningOffset': reasoningOffset,
-                'reasoningLength': reasoningDelta?.length ?? 0,
-              });
-            }
-            contentOffset += delta.length;
-            reasoningOffset += reasoningDelta?.length ?? 0;
-            lastChunkAtMs = nowMs;
-          }
-          accumulator.consumeDelta(delta, reasoningDelta: reasoningDelta);
-          final effectiveText = accumulator.text.trimLeft();
-          if (isFinalResponse) {
-            onFinalResponseUpdate?.call(
-              effectiveText,
-              accumulator.reasoning.isNotEmpty ? accumulator.reasoning : null,
-            );
-          } else if (delta.isNotEmpty ||
-              (isThinkController && reasoningDelta?.isNotEmpty == true)) {
-            reportIntermediateUpdate();
-          }
-          if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
-            if (!streamStarted) {
-              streamStarted = true;
-              idleTimer?.cancel();
-            }
-          }
-        },
-        onComplete: (text, finalReasoning, {rawResponseJson}) {
-          if (completer.isCompleted) return;
-          if (rawResponseJson != null) {
-            try {
-              final raw = jsonDecode(rawResponseJson) as Map<String, dynamic>;
-              streamTermination = raw['astoria_stream_termination'] as String?;
-              final choices = raw['choices'] as List?;
-              if (choices != null && choices.isNotEmpty) {
-                providerFinishReason =
-                    choices.first['finish_reason'] as String?;
+              if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
+                final nowMs = DateTime.now().millisecondsSinceEpoch;
+                chunkCount++;
+                firstChunkMs ??= nowMs - startedAtMs;
+                if (lastChunkAtMs != null) {
+                  final gap = nowMs - lastChunkAtMs!;
+                  if (gap > maxChunkGapMs) {
+                    maxChunkGapMs = gap;
+                    longestGap = {
+                      'gapMs': gap,
+                      'contentOffset': contentOffset,
+                      'reasoningOffset': reasoningOffset,
+                      'chunk': chunkCount,
+                    };
+                  }
+                }
+                if (captureActive && chunkTrace.length < 2048) {
+                  chunkTrace.add({
+                    'elapsedMs': nowMs - startedAtMs,
+                    'contentOffset': contentOffset,
+                    'contentLength': delta.length,
+                    'reasoningOffset': reasoningOffset,
+                    'reasoningLength': reasoningDelta?.length ?? 0,
+                  });
+                }
+                contentOffset += delta.length;
+                reasoningOffset += reasoningDelta?.length ?? 0;
+                lastChunkAtMs = nowMs;
               }
-            } catch (_) {
-              // Other transports can return a different raw payload shape.
-            }
-          }
-          idleTimer?.cancel();
-          if (accumulator.text.isEmpty && text.isNotEmpty) {
-            accumulator.consumeDelta(text, reasoningDelta: finalReasoning);
-          }
-          final effectiveText = accumulator.text.trimLeft();
-          final effectiveReasoning = isFinalResponse || isThinkController
-              ? (accumulator.reasoning.isNotEmpty
-                    ? accumulator.reasoning
-                    : finalReasoning?.trim().isNotEmpty == true
-                    ? finalReasoning!.trim()
-                    : null)
-              : null;
-          if (isFinalResponse) {
-            if (effectiveText.isNotEmpty) {
-              onFinalResponseUpdate?.call(effectiveText, effectiveReasoning);
-            } else if (text.isNotEmpty) {
-              onFinalResponseUpdate?.call(text.trimLeft(), effectiveReasoning);
-            }
-          } else {
-            if (effectiveText.isNotEmpty ||
-                (isThinkController && effectiveReasoning?.isNotEmpty == true)) {
-              reportIntermediateUpdate();
-            } else if (text.isNotEmpty) {
-              onIntermediateUpdate?.call(text.trimLeft());
-            }
-          }
-          if (!completer.isCompleted) {
-            final accumulatedText = effectiveText.isEmpty && text.isNotEmpty
-                ? text.trim()
-                : effectiveText;
-            final finalText = accumulatedText.isNotEmpty
-                ? accumulatedText
-                : text.trim();
-            final reasoningText = isFinalResponse || isThinkController
-                ? (accumulator.reasoning.isNotEmpty
+              accumulator.consumeDelta(delta, reasoningDelta: reasoningDelta);
+              final effectiveText = accumulator.text.trimLeft();
+              if (isFinalResponse) {
+                onFinalResponseUpdate?.call(
+                  effectiveText,
+                  accumulator.reasoning.isNotEmpty
                       ? accumulator.reasoning
-                      : finalReasoning?.trim() ?? '')
-                : '';
-            recordOutcome(
-              responseText: rawResponseJson ?? finalText,
-              completionReason: 'complete',
-            );
-            completer.complete(
-              AgentRunResult(
-                text: finalText,
-                reasoning: reasoningText,
-                rawResponseJson: rawResponseJson,
-              ),
-            );
-          }
-        },
-        onError: (error) {
-          if (completer.isCompleted) return;
-          final elapsed = DateTime.now().difference(startedAt).inMilliseconds;
-          idleTimer?.cancel();
-          if (shouldStream &&
-              (agentCancelToken?.isCancelled ?? false) &&
-              accumulator.text.isNotEmpty) {
-            completeWithAccumulated('cancel_with_streamed_text');
-            return;
-          }
-          final partialText = error is ChatStreamException
-              ? error.partialText
-              : accumulator.text.trim();
-          recordOutcome(
-            responseText: partialText.isNotEmpty ? partialText : null,
-            error: error,
-            completionReason: error is ChatStreamException
-                ? error.reason
-                : 'error',
-          );
-          debugPrint(
-            '[AgentRunner] agent error session=$sessionId '
-            'name="${agent.name}" elapsedMs=$elapsed error=$error',
-          );
-          if (!completer.isCompleted) completer.completeError(error);
-        },
-      ),
+                      : null,
+                );
+              } else if (delta.isNotEmpty ||
+                  (isThinkController && reasoningDelta?.isNotEmpty == true)) {
+                reportIntermediateUpdate();
+              }
+              if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
+                if (!streamStarted) {
+                  streamStarted = true;
+                  idleTimer?.cancel();
+                }
+              }
+            },
+            onComplete: (text, finalReasoning, {rawResponseJson}) {
+              if (completer.isCompleted ||
+                  cancelToken.isCancelled ||
+                  resolved.nativeSource?.isCurrent == false) {
+                return;
+              }
+              if (rawResponseJson != null) {
+                try {
+                  final raw =
+                      jsonDecode(rawResponseJson) as Map<String, dynamic>;
+                  streamTermination =
+                      raw['astoria_stream_termination'] as String?;
+                  final choices = raw['choices'] as List?;
+                  if (choices != null && choices.isNotEmpty) {
+                    providerFinishReason =
+                        choices.first['finish_reason'] as String?;
+                  }
+                } catch (_) {
+                  // Other transports can return a different raw payload shape.
+                }
+              }
+              idleTimer?.cancel();
+              if (accumulator.text.isEmpty && text.isNotEmpty) {
+                accumulator.consumeDelta(text, reasoningDelta: finalReasoning);
+              }
+              final effectiveText = accumulator.text.trimLeft();
+              final effectiveReasoning = isFinalResponse || isThinkController
+                  ? (accumulator.reasoning.isNotEmpty
+                        ? accumulator.reasoning
+                        : finalReasoning?.trim().isNotEmpty == true
+                        ? finalReasoning!.trim()
+                        : null)
+                  : null;
+              if (isFinalResponse) {
+                if (effectiveText.isNotEmpty) {
+                  onFinalResponseUpdate?.call(
+                    effectiveText,
+                    effectiveReasoning,
+                  );
+                } else if (text.isNotEmpty) {
+                  onFinalResponseUpdate?.call(
+                    text.trimLeft(),
+                    effectiveReasoning,
+                  );
+                }
+              } else {
+                if (effectiveText.isNotEmpty ||
+                    (isThinkController &&
+                        effectiveReasoning?.isNotEmpty == true)) {
+                  reportIntermediateUpdate();
+                } else if (text.isNotEmpty) {
+                  onIntermediateUpdate?.call(text.trimLeft());
+                }
+              }
+              if (!completer.isCompleted) {
+                final accumulatedText = effectiveText.isEmpty && text.isNotEmpty
+                    ? text.trim()
+                    : effectiveText;
+                final finalText = accumulatedText.isNotEmpty
+                    ? accumulatedText
+                    : text.trim();
+                final reasoningText = isFinalResponse || isThinkController
+                    ? (accumulator.reasoning.isNotEmpty
+                          ? accumulator.reasoning
+                          : finalReasoning?.trim() ?? '')
+                    : '';
+                recordOutcome(
+                  responseText: rawResponseJson ?? finalText,
+                  completionReason: 'complete',
+                );
+                completer.complete(
+                  AgentRunResult(
+                    text: finalText,
+                    reasoning: reasoningText,
+                    rawResponseJson: rawResponseJson,
+                  ),
+                );
+              }
+            },
+            onError: (error) {
+              if (completer.isCompleted) return;
+              if (resolved.nativeSource?.isCurrent == false ||
+                  cancelToken.isCancelled) {
+                idleTimer?.cancel();
+                completer.completeError(
+                  const NativeProviderException(NativeProviderFailure.stale),
+                );
+                return;
+              }
+              final elapsed = DateTime.now()
+                  .difference(startedAt)
+                  .inMilliseconds;
+              idleTimer?.cancel();
+              if (shouldStream &&
+                  (agentCancelToken?.isCancelled ?? false) &&
+                  accumulator.text.isNotEmpty) {
+                completeWithAccumulated('cancel_with_streamed_text');
+                return;
+              }
+              final partialText = error is ChatStreamException
+                  ? error.partialText
+                  : accumulator.text.trim();
+              recordOutcome(
+                responseText: partialText.isNotEmpty ? partialText : null,
+                error: error,
+                completionReason: error is ChatStreamException
+                    ? error.reason
+                    : 'error',
+              );
+              if (resolved.savedConnectionAuth == null) {
+                debugPrint(
+                  '[AgentRunner] agent error session=$sessionId '
+                  'name="${agent.name}" elapsedMs=$elapsed error=$error',
+                );
+              }
+              if (!completer.isCompleted) completer.completeError(error);
+            },
+          )
+          .then<void>((_) {
+            // Native revocation can cancel its child token without publishing a
+            // callback. Drain that original job; never wait for a later timer to
+            // reclassify it or publish an old partial as a successful new result.
+            if (resolved.savedConnectionAuth != null &&
+                !completer.isCompleted) {
+              idleTimer?.cancel();
+              completer.completeError(
+                NativeProviderException(
+                  resolved.nativeSource?.isCurrent == false ||
+                          cancelToken.isCancelled
+                      ? NativeProviderFailure.stale
+                      : NativeProviderFailure.unavailable,
+                ),
+              );
+            }
+          }),
     );
 
     return completer.future.whenComplete(() {
+      nativeRequestOpen = false;
       idleTimer?.cancel();
     });
   }
@@ -421,6 +492,7 @@ class AgentStreamRunner {
     String? userName,
     Map<String, dynamic>? responseJsonSchema,
     LlmCaptureContext? captureContext,
+    bool Function()? isCurrent,
   }) {
     final hasInlineReasoningTags =
         resolved.reasoningTagStart?.isNotEmpty == true &&
@@ -433,6 +505,11 @@ class AgentStreamRunner {
         : messages;
     final spec = StudioControllerOntology.specForAgent(agent);
     return ChatTransportRequest(
+      savedConnectionAuth: resolved.savedConnectionAuth,
+      savedConnectionId: resolved.savedConnectionId,
+      nativeSourceIsCurrent: resolved.nativeSource?.bindNativeCurrent(
+        isCurrent: isCurrent,
+      ),
       endpoint: resolved.endpoint,
       apiKey: resolved.apiKey,
       model: resolved.model,

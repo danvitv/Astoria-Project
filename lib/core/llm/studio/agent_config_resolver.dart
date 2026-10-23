@@ -1,4 +1,6 @@
 import '../../models/api_config.dart';
+import '../../credentials/native_provider_credentials.dart';
+import '../native_saved_connection_source.dart';
 import '../../models/extra_request_parameter.dart';
 import '../../models/pipeline_settings.dart';
 import '../../models/studio_config.dart';
@@ -31,12 +33,18 @@ class AgentConfigResolver {
   final Future<List<ApiConfig>> Function() _loadApiConfigs;
   final ApiConfig? Function() _readActiveApiConfig;
   final PipelineSettings Function() _readPipelineSettings;
+  final NativeSavedConnectionSourceResolver? _sources;
+  final bool Function() _isCurrent;
 
   AgentConfigResolver({
     required this._loadApiConfigs,
     required this._readActiveApiConfig,
     required this._readPipelineSettings,
-  });
+    this._sources,
+    bool Function()? isCurrent,
+  }) : _isCurrent = isCurrent ?? _alwaysCurrent;
+
+  static bool _alwaysCurrent() => true;
 
   Future<ResolvedAgentConfig> resolveAgentConfig(
     StudioAgent agent,
@@ -46,6 +54,11 @@ class AgentConfigResolver {
     String? apiConfigId,
     StudioTurnConfigSnapshot? turnConfig,
   }) async {
+    // Capture before the saved-list await. A turn snapshot already owns its
+    // original source; it must never be rebound to a late issuer observation.
+    final original = turnConfig == null
+        ? _sources?.captureOriginalStamp()
+        : null;
     final apiConfigs = turnConfig?.apiConfigs ?? await _loadApiConfigs();
     final selectedApiConfigId = apiConfigId ?? '';
     final resolver = StudioApiConfigResolver(
@@ -75,9 +88,38 @@ class AgentConfigResolver {
     }
 
     final presetTags = turnConfig?.preset?.runtime;
-    final resolved = resolver
-        .resolveAgentConfig(current, selectedApiConfigId, modelOverride)
-        .copyWithSampling(
+    final selected = resolver.resolveRunConfig(selectedApiConfigId) ?? current;
+    final source = turnConfig != null
+        ? turnConfig.nativeSourceFor(selected.id)
+        : _sources == null
+        ? null
+        : await _sources.prepare(
+            originalStamp: original!,
+            configuration: selected,
+            purpose: NativeProviderPurpose.studio,
+            isCurrent: _isCurrent,
+          );
+    source?.requireModel(
+      modelOverride.isNotEmpty ? modelOverride : selected.model,
+    );
+    if (source?.isNative == true &&
+        sampling.extraRequestParameters.isNotEmpty) {
+      throw const NativeProviderException(NativeProviderFailure.denied);
+    }
+    if (source?.isNative == true && _sources != null) {
+      _sources.projectNativeConfiguration(
+        source!.configuration.copyWith(
+          reasoningTagStart: presetTags?.reasoningTagStart,
+          reasoningTagEnd: presetTags?.reasoningTagEnd,
+        ),
+      );
+    }
+    final resolved =
+        ResolvedAgentConfig.fromApiConfig(
+          source?.configuration ?? selected,
+          modelOverride: modelOverride,
+          nativeSource: source,
+        ).copyWithSampling(
           topP: sampling.topP,
           topK: sampling.topK,
           frequencyPenalty: sampling.frequencyPenalty,

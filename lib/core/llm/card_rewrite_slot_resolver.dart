@@ -80,6 +80,7 @@ class CardRewriteSlotResolver {
       'model=$model endpoint=${selected.endpoint}',
     );
     return AuxApiConfig(
+      savedConnectionId: selected.id,
       endpoint: selected.endpoint,
       apiKey: selected.apiKey,
       model: model,

@@ -83,7 +83,15 @@ class ApiListNotifier extends AsyncNotifier<List<ApiConfig>>
     implements ApiPresetWriter {
   @override
   Future<List<ApiConfig>> build() async {
-    final configs = await ref.watch(apiConfigRepoProvider).getAll();
+    final repo = ref.watch(apiConfigRepoProvider);
+    // Observe committed table changes, including native setup/Undo and imports
+    // that do not pass through this notifier's ordinary put/remove methods.
+    // Subscribe before the read so a concurrent commit cannot leave it stale.
+    final changes = repo.watchChanges().listen((_) {
+      if (ref.mounted) ref.invalidateSelf();
+    });
+    ref.onDispose(changes.cancel);
+    final configs = await repo.getAll();
     final chatConfigs = [
       for (final config in configs)
         if (config.mode != kEmbeddingPresetMode) config,

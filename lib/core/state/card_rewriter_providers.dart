@@ -40,6 +40,9 @@ final cardRewriterSettingsProvider = Provider<CardRewriterSettings>((ref) {
 /// configuration.
 final manualRewriteServiceProvider = Provider<ManualRewriteService>((ref) {
   final settings = ref.watch(cardRewriterSettingsProvider);
+  final llm = AuxLlmClient(
+    sources: ref.watch(nativeProviderRuntimeProvider)?.sources,
+  );
   final service = ManualRewriteService(
     db: ref.watch(appDbProvider),
     jobRepo: ref.watch(manualRewriteJobRepoProvider),
@@ -54,6 +57,24 @@ final manualRewriteServiceProvider = Provider<ManualRewriteService>((ref) {
         modelOverride: settings.modelOverride,
       );
     },
+    executor:
+        ({
+          required config,
+          required prompt,
+          required maxTokens,
+          required temperature,
+          required timeoutMs,
+          cancelToken,
+          captureContext,
+        }) => llm.callOnceWithLog(
+          config: config,
+          prompt: prompt,
+          maxTokens: maxTokens,
+          temperature: temperature,
+          timeoutMs: timeoutMs,
+          cancelToken: cancelToken,
+          captureContext: captureContext,
+        ),
   );
   ref.onDispose(service.dispose);
   return service;
@@ -62,6 +83,9 @@ final manualRewriteServiceProvider = Provider<ManualRewriteService>((ref) {
 final automatedCardEvolutionServiceProvider =
     Provider<AutomatedCardEvolutionService>((ref) {
       final settings = ref.watch(cardRewriterSettingsProvider);
+      final llm = AuxLlmClient(
+        sources: ref.watch(nativeProviderRuntimeProvider)?.sources,
+      );
       Future<AuxApiConfig> resolveModel() async {
         await ref.read(apiListProvider.future);
         final apiConfigs =
@@ -90,8 +114,9 @@ final automatedCardEvolutionServiceProvider =
         isLorebookEvolutionEnabled: () =>
             ref.read(cardRewriterSettingsProvider).lorebookEvolutionEnabled,
         timeoutMs: settings.timeoutMs,
-        observationPromotionThreshold: () =>
-            ref.read(cardRewriterSettingsProvider).observationPromotionThreshold,
+        observationPromotionThreshold: () => ref
+            .read(cardRewriterSettingsProvider)
+            .observationPromotionThreshold,
         observationMinConfidence: () =>
             ref.read(cardRewriterSettingsProvider).observationMinConfidence,
         observationExpiryRuns: () =>
@@ -105,7 +130,7 @@ final automatedCardEvolutionServiceProvider =
               required timeoutMs,
               cancelToken,
               captureContext,
-            }) => const AuxLlmClient().callOnceWithLog(
+            }) => llm.callOnceWithLog(
               config: config,
               prompt: prompt,
               maxTokens: maxTokens,

@@ -2,6 +2,7 @@ import '../models/api_config.dart';
 import '../models/studio_config.dart';
 import 'agent_runner.dart';
 import 'studio_turn_config_snapshot.dart';
+import 'native_saved_connection_source.dart';
 import 'concurrency_limiter.dart';
 import 'controller_batch_protocol.dart';
 import 'studio_controller_ontology.dart';
@@ -187,8 +188,8 @@ class ControllerBatcher {
       );
     }
     final runner = _runner;
-    final groups = <String, List<StudioAgent>>{};
-    final resolvedByKey = <String, ResolvedAgentConfig>{};
+    final groups = <_ControllerGroupingKey, List<StudioAgent>>{};
+    final resolvedByKey = <_ControllerGroupingKey, ResolvedAgentConfig>{};
     for (final agent in batchable) {
       final resolved = await runner.resolveAgentConfig(
         agent,
@@ -206,7 +207,14 @@ class ControllerBatcher {
       // them. All pre-gen agents share the `|pre_generation` suffix (uniform,
       // so they group exactly as before); all post-gen agents share
       // `|post_processing`. Port of Marinara `postProcessingDataKey`.
-      final key = '${resolved.protocol}|${resolved.model}|${agent.phase}';
+      // Native authorities cannot coalesce just because their wire shape/model
+      // match. Identity of the original opaque scope also separates ABA stamps.
+      final source = resolved.nativeSource;
+      source?.requireCurrent();
+      final key = _ControllerGroupingKey(
+        '${resolved.protocol}|${resolved.model}|${agent.phase}',
+        source?.isNative == true ? source : null,
+      );
       groups.putIfAbsent(key, () => []).add(agent);
       resolvedByKey[key] = resolved;
     }
@@ -217,7 +225,7 @@ class ControllerBatcher {
       final groupAgents = entry.value;
       batchGroups.add(
         ControllerBatchGroup(
-          key: entry.key,
+          key: entry.key.label,
           resolved: resolved,
           agents: groupAgents,
           batchMaxTokens: _capBatchMaxTokens(groupAgents, resolved),
@@ -244,7 +252,8 @@ class ControllerBatcher {
   ) {
     final sum = agents.fold<int>(
       0,
-      (acc, a) => acc + (StudioControllerOntology.specForAgent(a)?.maxTokens ?? 8000),
+      (acc, a) =>
+          acc + (StudioControllerOntology.specForAgent(a)?.maxTokens ?? 8000),
     );
     // Glaze has no separate `maxOutputTokens` field on the model;
     // `ApiConfig.maxTokens` is the single output cap. Use it as the ceiling.
@@ -255,8 +264,8 @@ class ControllerBatcher {
     // (the spec's maxTokens, but the resolved ApiConfig
     // value is the source of truth for the batch request).
     // Per-agent cap from the spec; the SUM is what we actually send.
-    final apiCap = StudioControllerOntology
-        .specForAgent(agents.first)?.maxTokens ?? 8000;
+    final apiCap =
+        StudioControllerOntology.specForAgent(agents.first)?.maxTokens ?? 8000;
     // Final ceiling: the smaller of (provider context cap / 2) and (sum).
     // Half the context window is a sane max for output — the rest is input.
     final outputCeiling = cap ~/ 2;
@@ -266,7 +275,9 @@ class ControllerBatcher {
   double _minTemperature(List<StudioAgent> agents) {
     if (agents.isEmpty) return 0.3;
     return agents
-        .map((a) => StudioControllerOntology.specForAgent(a)?.temperature ?? 0.3)
+        .map(
+          (a) => StudioControllerOntology.specForAgent(a)?.temperature ?? 0.3,
+        )
         .reduce((a, b) => a < b ? a : b);
   }
 
@@ -298,7 +309,9 @@ class ControllerBatcher {
   ///
   /// The caller (`MemoryStudioService`) handles the actual parallel dispatch
   /// — this method only computes the split. Returns one or more groups.
-  List<ControllerBatchGroup> splitGroupForParallelJobs(ControllerBatchGroup group) {
+  List<ControllerBatchGroup> splitGroupForParallelJobs(
+    ControllerBatchGroup group,
+  ) {
     final maxJobs = normalizeMaxParallelJobs(
       group.agents.first.maxParallelJobs,
     );
@@ -466,4 +479,22 @@ class _PhaseJob {
 
   const _PhaseJob({required this.isBatch, this.batch, this.agent})
     : assert(isBatch ? batch != null : agent != null);
+}
+
+/// Map equality uses exact opaque-scope identity, not a concatenated hash which
+/// could collide and accidentally share a credential/purpose/stamp batch.
+final class _ControllerGroupingKey {
+  const _ControllerGroupingKey(this.legacyKey, this.source);
+  final String legacyKey;
+  final NativePreparedSavedConnection? source;
+  String get label => source == null
+      ? legacyKey
+      : '$legacyKey|native:${source!.savedConnectionId}:${identityHashCode(source)}';
+  @override
+  bool operator ==(Object other) =>
+      other is _ControllerGroupingKey &&
+      legacyKey == other.legacyKey &&
+      identical(source, other.source);
+  @override
+  int get hashCode => Object.hash(legacyKey, identityHashCode(source));
 }

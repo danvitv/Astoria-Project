@@ -13,7 +13,10 @@ import 'db_provider.dart';
 import 'shared_prefs_provider.dart';
 
 final summaryServiceProvider = Provider<SummaryService>((ref) {
-  return SummaryService(ref.watch(summaryRepoProvider));
+  return SummaryService(
+    ref.watch(summaryRepoProvider),
+    sources: ref.watch(nativeProviderRuntimeProvider)?.sources,
+  );
 });
 
 /// How many new messages must accumulate before the summary is regenerated on

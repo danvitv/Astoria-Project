@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../../../core/llm/idle_timeout_guard.dart';
+import '../../../../core/llm/native_saved_connection_source.dart';
 import '../../../../core/llm/transport/call_attempt_outcome.dart';
 import '../../../../core/llm/transport/chat_transport.dart';
 import '../../../../core/llm/transport/chat_transport_request.dart';
@@ -31,9 +32,13 @@ typedef BlockTransportPicker = ChatTransport Function(String protocol);
 ///   configured, and a provider that accepted the request and then went silent
 ///   surfaced a raw receive timeout instead of the block's own error.
 class BlockLlmRunner {
-  const BlockLlmRunner({this.transportPicker = pickChatTransport});
+  const BlockLlmRunner({
+    this.transportPicker = pickChatTransport,
+    this.sources,
+  });
 
   final BlockTransportPicker transportPicker;
+  final NativeSavedConnectionSourceResolver? sources;
 
   /// Fallback deadline when the connection carries no `firstChunkTimeoutMs`.
   static const int fallbackTimeoutMs = 60000;
@@ -56,6 +61,16 @@ class BlockLlmRunner {
     void Function(String accumulated)? onStreamUpdate,
     LlmCaptureContext? captureContext,
   }) async {
+    if (sources != null) {
+      // A block can produce an interactive/image domain, not only ordinary
+      // roleplay text. No automatic Studio/Memory credential borrowing here.
+      final original = sources!.captureOriginalStamp();
+      await sources!.requireLegacyOnly(
+        originalStamp: original,
+        savedConnectionId: apiConfig.id,
+        isCurrent: () => cancelToken?.isCancelled != true,
+      );
+    }
     final idleTimeoutMs = apiConfig.firstChunkTimeoutMs > 0
         ? apiConfig.firstChunkTimeoutMs
         : fallbackTimeoutMs;

@@ -4,7 +4,9 @@ import '../../features/chat/chat_session_service.dart';
 import '../../features/chat_history/chat_history_provider.dart';
 import '../../features/settings/api_list_provider.dart';
 import '../llm/agent_runner.dart';
+import '../credentials/native_provider_credentials.dart';
 import '../llm/aux_llm_client.dart';
+import '../llm/transport/transport_factory.dart';
 import '../llm/memory_graph_builder.dart';
 import '../llm/memory_provenance.dart';
 import '../llm/memory_cadence_service.dart';
@@ -55,6 +57,7 @@ final memoryAgenticServiceProvider = Provider<MemoryAgenticService>((ref) {
 
 /// Studio Mode pipeline service. Tracker-around-generator model.
 final agentRunnerProvider = Provider<AgentRunner>((ref) {
+  final runtime = ref.watch(nativeProviderRuntimeProvider);
   return AgentRunner(
     configResolver: AgentConfigResolver(
       loadApiConfigs: () async {
@@ -63,8 +66,11 @@ final agentRunnerProvider = Provider<AgentRunner>((ref) {
       },
       readActiveApiConfig: () => ref.read(activeApiConfigProvider),
       readPipelineSettings: () => ref.read(pipelineSettingsProvider),
+      sources: runtime?.sources,
+      isCurrent: () => ref.mounted,
     ),
     readPipelineSettings: () => ref.read(pipelineSettingsProvider),
+    transportPicker: runtime?.transports.pick ?? pickChatTransport,
   );
 });
 
@@ -85,7 +91,7 @@ final memoryStudioServiceProvider = Provider<MemoryStudioService>((ref) {
 final postCleanerServiceProvider = Provider<PostCleanerService>((ref) {
   final studioRegexes = ref.watch(studioRegexProvider).value ?? const [];
   return PostCleanerService(
-    llm: const AuxLlmClient(),
+    llm: ref.watch(studioAuxLlmClientProvider),
     chatRepo: ref.read(chatRepoProvider),
     snapshotRepo: ref.read(trackerSnapshotRepoProvider),
     onSessionUpdated: ChatSessionService.updateCache,
@@ -105,7 +111,7 @@ final ledgerTrackerLoaderProvider = Provider<LedgerTrackerLoader>((ref) {
 final studioLedgerServiceProvider = Provider<StudioLedgerService>((ref) {
   final studioRegexes = ref.watch(studioRegexProvider).value ?? const [];
   return StudioLedgerService(
-    llm: const AuxLlmClient(),
+    llm: ref.watch(studioAuxLlmClientProvider),
     trackerRepo: ref.read(trackerRepoProvider),
     bookRepo: ref.read(memoryBookRepoProvider),
     snapshotRepo: ref.read(trackerSnapshotRepoProvider),
@@ -118,5 +124,14 @@ final studioLedgerServiceProvider = Provider<StudioLedgerService>((ref) {
     chatRepo: ref.read(chatRepoProvider),
     canonContextLoader: ref.read(effectiveCanonContextLoaderProvider),
     readStudioRegexes: () => studioRegexes,
+  );
+});
+
+final studioAuxLlmClientProvider = Provider<AuxLlmClient>((ref) {
+  final runtime = ref.watch(nativeProviderRuntimeProvider);
+  return AuxLlmClient(
+    sources: runtime?.sources,
+    purpose: NativeProviderPurpose.studio,
+    transportPicker: runtime?.transports.pick ?? pickChatTransport,
   );
 });

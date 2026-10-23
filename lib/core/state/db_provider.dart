@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/io.dart';
 
 import '../db/app_db.dart';
 import '../db/repositories/character_repo.dart';
@@ -65,6 +66,7 @@ import 'credential_vault_provider.dart';
 import 'connection_revision_provider.dart';
 import 'chat_source_mutation_provider.dart';
 import 'studio_feature_provider.dart';
+import 'native_provider_runtime.dart';
 
 // Re-export so existing call sites that `import db_provider.dart` can still
 // read pipelineSettingsProvider (previously defined here as a
@@ -74,8 +76,15 @@ export 'pipeline_settings_provider.dart' show pipelineSettingsProvider;
 // Re-export the global Studio master switch so the generation pipeline stages
 // (which already import db_provider) can gate Studio without extra imports.
 export 'studio_feature_provider.dart' show studioFeatureEnabledProvider;
+export 'native_provider_runtime.dart' show NativeProviderRuntime;
 
 final _captureRepos = Expando<LlmRequestCaptureRepo>();
+final _nativeProviderRuntimes = Expando<NativeProviderRuntime>();
+
+/// Constructed only on an explicitly dispatched native job; no shared client.
+/// Synthetic root fixtures MUST override this before constructing the graph.
+final nativeProviderAdapterFactoryProvider =
+    Provider<NativeProviderAdapterFactory>((ref) => IOHttpClientAdapter.new);
 
 final appDbProvider = Provider<AppDatabase>((ref) {
   final db = AppDatabase();
@@ -175,13 +184,37 @@ final presetsListProvider = FutureProvider<List<Preset>>((ref) {
 
 final apiConfigRepoProvider = Provider<ApiConfigRepo>((ref) {
   final adapter = ref.watch(apiConfigCredentialAdapterProvider);
-  return ApiConfigRepo(
+  late final ApiConfigRepo repository;
+  final runtime = NativeProviderRuntime(
+    vault: ref.watch(credentialVaultProvider),
+    redaction: ref.watch(secretRedactionCoordinatorProvider),
+    revisions: ref.watch(connectionRevisionRegistryProvider),
+    readSavedConnection: (id) => repository.getById(id),
+    adapterFactory: ref.watch(nativeProviderAdapterFactoryProvider),
+    isOriginalRoot: () => ref.mounted,
+  );
+  repository = ApiConfigRepo(
     ref.watch(appDbProvider),
     onConfigObserved: adapter.registerConfigSecrets,
-    onMutationStarted: ref
-        .watch(connectionRevisionRegistryProvider)
-        .beginMutation,
+    onMutationStarted: runtime.onApiMutationStarted,
+    keylessMutations: runtime.keylessMutations,
+    ordinaryMutations: runtime.ordinaryMutations,
   );
+  _nativeProviderRuntimes[repository] = runtime;
+  ref.onDispose(() {
+    runtime.dispose();
+    if (identical(_nativeProviderRuntimes[repository], runtime)) {
+      _nativeProviderRuntimes[repository] = null;
+    }
+  });
+  return repository;
+});
+
+/// An overridden legacy repository has NO native runtime. Do not instantiate a
+/// default AppDatabase or vault to manufacture one for dependency injection.
+final nativeProviderRuntimeProvider = Provider<NativeProviderRuntime?>((ref) {
+  final runtime = _nativeProviderRuntimes[ref.watch(apiConfigRepoProvider)];
+  return runtime != null && runtime.isCurrent ? runtime : null;
 });
 
 final supportPayloadCipherProvider = Provider<SupportPayloadCipher>((ref) {

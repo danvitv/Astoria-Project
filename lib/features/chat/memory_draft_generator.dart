@@ -5,14 +5,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 
 import '../../core/llm/aux_llm_client.dart';
+import '../../core/llm/native_saved_connection_source.dart';
+import '../../core/credentials/native_provider_credentials.dart';
+import '../../core/llm/transport/transport_factory.dart';
 import '../../core/llm/transport/llm_capture_context.dart';
 import '../../core/llm/macro_engine.dart';
 import '../../core/llm/memory_book_api_config_resolver.dart';
+import '../../core/llm/memory_draft_api_source.dart';
 import '../../core/llm/memory_draft_response_parser.dart';
 import '../../core/llm/memory_draft_transcript_builder.dart';
 import '../../core/llm/regex_service.dart';
-import '../../core/llm/transport/llm_protocol.dart';
-import '../../core/models/api_config.dart';
 import '../../core/models/memory_book.dart';
 import '../../core/models/memory_source_manifest.dart';
 import '../../core/models/chat_message.dart';
@@ -28,14 +30,46 @@ import '../settings/api_list_provider.dart';
 class MemoryDraftGenerator {
   final T Function<T>(ProviderListenable<T> provider) _read;
   final AuxLlmClient _llm;
+  final NativeSavedConnectionSourceResolver? _sources;
+  final bool Function() _isCurrent;
 
   MemoryDraftGenerator(Ref ref, {AuxLlmClient? llm})
     : _read = ref.read,
-      _llm = llm ?? const AuxLlmClient();
+      _sources = ref.read(nativeProviderRuntimeProvider)?.sources,
+      _isCurrent = (() => ref.mounted),
+      _llm =
+          llm ??
+          AuxLlmClient(
+            sources: ref.read(nativeProviderRuntimeProvider)?.sources,
+            purpose: NativeProviderPurpose.memoryBooks,
+            transportPicker:
+                ref.read(nativeProviderRuntimeProvider)?.transports.pick ??
+                pickChatTransport,
+          );
 
   MemoryDraftGenerator.widget(WidgetRef ref, {AuxLlmClient? llm})
     : _read = ref.read,
-      _llm = llm ?? const AuxLlmClient();
+      _sources = ref.read(nativeProviderRuntimeProvider)?.sources,
+      _isCurrent = (() => ref.context.mounted),
+      _llm =
+          llm ??
+          AuxLlmClient(
+            sources: ref.read(nativeProviderRuntimeProvider)?.sources,
+            purpose: NativeProviderPurpose.memoryBooks,
+            transportPicker:
+                ref.read(nativeProviderRuntimeProvider)?.transports.pick ??
+                pickChatTransport,
+          );
+
+  /// Explicit dependency seam for non-widget settings/jobs and synthetic tests.
+  MemoryDraftGenerator.settings({
+    required this._read,
+    this._llm = const AuxLlmClient(),
+    this._sources,
+    bool Function()? isCurrent,
+  }) : _isCurrent = isCurrent ?? _alwaysCurrent;
+
+  static bool _alwaysCurrent() => true;
 
   Future<MemoryDraft> generate({
     required MemoryDraft draft,
@@ -47,14 +81,50 @@ class MemoryDraftGenerator {
     required Map<String, String> sessionVars,
     CancelToken? cancelToken,
   }) async {
+    final original = _sources?.captureOriginalStamp();
+    NativePreparedSavedConnection? source;
+    void requireCurrent() {
+      if (!_isCurrent() ||
+          cancelToken?.isCancelled == true ||
+          (original != null &&
+              !_sources!.isOriginalCurrent(original, _isCurrent))) {
+        throw const NativeProviderException(NativeProviderFailure.stale);
+      }
+      source?.requireCurrent();
+    }
+
+    requireCurrent();
+    final apiResolver = MemoryDraftApiSourceResolver(
+      sources: _sources,
+      loadApiConfigs: () async {
+        await _read(apiListProvider.future);
+        return _read(apiListProvider).value ?? const [];
+      },
+      readActiveApiConfig: () => _read(activeApiConfigProvider),
+    );
+    late ResolvedMemoryDraftApiSource resolvedApi;
+    Future<void> resolveConfiguration() async {
+      resolvedApi = await apiResolver.resolve(
+        settings: pipeline.memoryBookApi,
+        originalStamp: original,
+        isCurrent: () => _isCurrent() && cancelToken?.isCancelled != true,
+      );
+      source = resolvedApi.source;
+      requireCurrent();
+    }
+
+    if (_sources != null) await resolveConfiguration();
+    requireCurrent();
     final manifest = MemorySourceManifest.capture(
       sessionId,
       messages,
       draft.messageIds,
     );
     final character = await _read(characterRepoProvider).getById(charId);
+    requireCurrent();
     if (character == null) throw StateError('Character not found: $charId');
     final presets = await _read(presetRepoProvider).getAll();
+    requireCurrent();
     final preset = getEffectivePreset(
       presets,
       charId,
@@ -63,6 +133,7 @@ class MemoryDraftGenerator {
       _read(presetConnectionsProvider),
     );
     final personas = await _read(personaRepoProvider).getAll();
+    requireCurrent();
     final persona = getEffectivePersona(
       personas,
       charId,
@@ -71,7 +142,9 @@ class MemoryDraftGenerator {
       _read(personaConnectionsProvider),
     );
     final globalRegexes = await _read(globalRegexProvider.future);
+    requireCurrent();
     final studioRegexes = await _read(studioRegexProvider.future);
+    requireCurrent();
     final globalVars = _read(globalVarsProvider);
     final ledgerRange = MemoryDraftTranscriptBuilder.ledgerRange(messages);
     final historyText = MemoryDraftTranscriptBuilder.build(
@@ -115,47 +188,10 @@ class MemoryDraftGenerator {
       prompt = '$prompt\n\n$historyText';
     }
 
-    final isCustom = pipeline.memoryBookApi.generationSource == 'custom';
-    String endpoint;
-    String apiKey;
-    String model;
-    String protocol;
-    var useResponsesApi = false;
-    int? receiveTimeoutMs;
-    // The connection the slot resolved to, or null on the custom-endpoint
-    // branch, which has no saved connection to inherit limits from.
-    ApiConfig? slotConfig;
-
-    if (isCustom) {
-      endpoint = pipeline.memoryBookApi.generationEndpoint;
-      apiKey = pipeline.memoryBookApi.generationApiKey;
-      model = pipeline.memoryBookApi.generationModel;
-      protocol = LlmProtocol.customChatCompletion;
-    } else {
-      await _read(apiListProvider.future);
-      final apiResolver = MemoryBookApiConfigResolver(
-        apiConfigs: _read(apiListProvider).value ?? const [],
-        activeConfig: _read(activeApiConfigProvider),
-      );
-      final chatConfig = apiResolver.resolve(pipeline.memoryBookApi);
-      if (chatConfig == null) {
-        throw Exception('No chat API config available');
-      }
-      slotConfig = chatConfig;
-      endpoint = chatConfig.endpoint;
-      apiKey = chatConfig.apiKey;
-      model = pipeline.memoryBookApi.generationModel.isNotEmpty
-          ? pipeline.memoryBookApi.generationModel
-          : chatConfig.model;
-      protocol = chatConfig.protocol;
-      useResponsesApi = chatConfig.useResponsesApi;
-      receiveTimeoutMs = apiResolver.resolveTimeoutMs(pipeline.memoryBookApi);
-    }
-
-    final endpointRequired = protocol != LlmProtocol.openrouter;
-    if ((endpointRequired && endpoint.isEmpty) || model.isEmpty) {
-      throw Exception('API not configured for memory generation');
-    }
+    // Legacy-only DI preserves the original prompt-then-config ordering. Native
+    // composition resolves its keyless saved source before prompt collection.
+    if (_sources == null) await resolveConfiguration();
+    requireCurrent();
 
     // Left on "auto", the output cap is the one configured on the connection
     // this draft runs through — not a fixed number written in here. The old
@@ -163,7 +199,7 @@ class MemoryDraftGenerator {
     // reasoning tokens, and no field in the app could bring it back down.
     final maxTokens = MemoryBookApiConfigResolver.maxTokensFor(
       pipeline.memoryBookApi,
-      slotConfig,
+      resolvedApi.configuration,
     );
     final temperature = MemoryBookApiConfigResolver.temperatureFor(
       pipeline.memoryBookApi,
@@ -177,24 +213,13 @@ class MemoryDraftGenerator {
     // button again by hand, while the identical hiccup in the cleaner or the
     // summary was retried and never seen.
     final result = await _llm.callOnce(
-      config: AuxApiConfig(
-        endpoint: endpoint,
-        apiKey: apiKey,
-        model: model,
-        protocol: protocol,
-        useResponsesApi: useResponsesApi,
-        // The connection's own "no temperature" flag travels with it: drafting
-        // pins its own temperature, but a provider that rejects the parameter
-        // rejects it here too.
-        omitTemperature: slotConfig?.omitTemperature ?? false,
-        extraRequestParameters: slotConfig?.extraRequestParameters ?? const [],
-      ),
+      config: resolvedApi.config,
       prompt: prompt,
       maxTokens: maxTokens,
       temperature: temperature,
       // 0 keeps the old behaviour for a connection that names no timeout: the
       // request is not cut off on a deadline of ours.
-      timeoutMs: receiveTimeoutMs ?? 0,
+      timeoutMs: resolvedApi.receiveTimeoutMs ?? 0,
       cancelToken: cancelToken,
       // Memory-book drafting goes through a chat transport, so it was always
       // captured — but with no identity, which parked it in the session-less
@@ -204,6 +229,7 @@ class MemoryDraftGenerator {
         sessionId: sessionId,
       ),
     );
+    requireCurrent();
     return MemoryDraftResponseParser.parse(
       draft.copyWith(sourceManifest: manifest),
       result,

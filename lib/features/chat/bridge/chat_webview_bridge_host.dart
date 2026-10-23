@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/llm/transport/chat_transport_request.dart';
+import '../../../core/credentials/native_provider_credentials.dart';
 import '../../../core/llm/transport/llm_protocol.dart';
 import '../../../core/llm/transport/transport_factory.dart';
 import '../../../core/state/db_provider.dart';
@@ -133,6 +134,22 @@ class ChatWebViewBridgeHost {
     Map<String, dynamic> bridgeContext,
   ) async {
     _ensureActive();
+    final runtime = ref.read(nativeProviderRuntimeProvider);
+    final original = runtime?.sources.captureOriginalStamp();
+    final sessionId = currentSessionId();
+    final characterId = currentCharacterId();
+    final originalPresetId = ref
+        .read(extensionsSettingsProvider)
+        .activePresetId;
+    final cancelToken = CancelToken();
+    bool current() =>
+        active &&
+        !cancelToken.isCancelled &&
+        currentSessionId() == sessionId &&
+        currentCharacterId() == characterId &&
+        ref.read(extensionsSettingsProvider).activePresetId ==
+            originalPresetId &&
+        _bridgePermissionCheck('generate_text');
     await ref.read(apiListProvider.future);
     _ensureActive();
     final configs = ref.read(apiListProvider).value ?? const [];
@@ -146,7 +163,7 @@ class ChatWebViewBridgeHost {
               .read(extensionPresetsProvider)
               .where((p) => p.id == activePresetId)
               .firstOrNull;
-    final apiConfig = _profileResolver.resolve(
+    var apiConfig = _profileResolver.resolve(
       preset,
       profile,
       activeApiConfig,
@@ -155,33 +172,71 @@ class ChatWebViewBridgeHost {
     if (apiConfig == null) {
       throw StateError('No active API config available');
     }
+    final source = runtime == null
+        ? null
+        : await runtime.sources.prepare(
+            originalStamp: original!,
+            configuration: apiConfig,
+            purpose: NativeProviderPurpose.roleplay,
+            isCurrent: current,
+          );
+    if (source?.isNative == true &&
+        (apiConfig.id != activeApiConfig?.id ||
+            options.keys.any((key) => key != 'preset'))) {
+      throw const NativeProviderException(NativeProviderFailure.denied);
+    }
+    apiConfig = source?.configuration ?? apiConfig;
+    if (!current()) {
+      throw const NativeProviderException(NativeProviderFailure.stale);
+    }
     final endpointRequired = apiConfig.protocol != LlmProtocol.openrouter;
     if ((endpointRequired && apiConfig.endpoint.isEmpty) ||
         apiConfig.model.isEmpty) {
       throw StateError('Active API config is incomplete');
     }
 
-    final cancelToken = CancelToken();
     final completer = Completer<String>();
-    final transport = pickChatTransport(apiConfig.protocol);
+    var nativeRequestOpen = true;
+    final transport = (runtime?.transports.pick ?? pickChatTransport)(
+      apiConfig.protocol,
+    );
     unawaited(
-      transport.stream(
-        request: ChatTransportRequest.fromApiConfig(
-          apiConfig,
-          messages: [
-            {'role': 'user', 'content': prompt},
-          ],
-          stream: false,
-          sessionId: _activeSessionId(),
-        ),
-        cancelToken: cancelToken,
-        onComplete: (text, _, {rawResponseJson}) {
-          if (!completer.isCompleted) completer.complete(text);
-        },
-        onError: (error) {
-          if (!completer.isCompleted) completer.completeError(error);
-        },
-      ),
+      transport
+          .stream(
+            request: ChatTransportRequest.fromApiConfig(
+              apiConfig,
+              savedConnectionAuth: source?.savedConnectionAuth,
+              nativeSourceIsCurrent: source?.bindNativeCurrent(
+                isCurrent: () => nativeRequestOpen && current(),
+              ),
+              messages: [
+                {'role': 'user', 'content': prompt},
+              ],
+              stream: false,
+              sessionId: sessionId,
+            ),
+            cancelToken: cancelToken,
+            onComplete: (text, _, {rawResponseJson}) {
+              if (!current() || source?.isCurrent == false) return;
+              if (!completer.isCompleted) completer.complete(text);
+            },
+            onError: (error) {
+              if (!current() || source?.isCurrent == false) return;
+              if (!completer.isCompleted) completer.completeError(error);
+            },
+          )
+          .whenComplete(() {
+            nativeRequestOpen = false;
+          })
+          .then<void>((_) {
+            if (!completer.isCompleted &&
+                (!current() || source?.isCurrent == false)) {
+              cancelToken.cancel();
+              completer.completeError(
+                const NativeProviderException(NativeProviderFailure.stale),
+              );
+            }
+          }),
     );
     return completer.future.timeout(
       const Duration(seconds: 55),

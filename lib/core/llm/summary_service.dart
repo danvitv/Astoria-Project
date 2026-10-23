@@ -5,6 +5,7 @@ import '../models/api_config.dart';
 import '../models/chat_message.dart';
 import 'auxiliary_timed_history.dart';
 import 'aux_llm_client.dart';
+import 'native_saved_connection_source.dart';
 import 'macro_engine.dart';
 import 'transport/llm_protocol.dart';
 import 'transport/llm_capture_context.dart';
@@ -45,8 +46,9 @@ const kSummaryDefaultTemperature = 0.3;
 class SummaryService {
   final SummaryRepo _repo;
   final AuxLlmClient _llm;
+  final NativeSavedConnectionSourceResolver? _sources;
 
-  SummaryService(this._repo, {AuxLlmClient? llm})
+  SummaryService(this._repo, {AuxLlmClient? llm, this._sources})
     : _llm = llm ?? const AuxLlmClient();
 
   Future<String?> getSummary(String sessionId) async {
@@ -143,6 +145,14 @@ class SummaryService {
     /// [kSummaryDefaultTemperature].
     double? temperature,
   }) async {
+    final original = _sources?.captureOriginalStamp();
+    if (original != null) {
+      await _sources!.requireLegacyOnly(
+        originalStamp: original,
+        savedConnectionId: apiConfig.id,
+        isCurrent: () => cancelToken?.isCancelled != true,
+      );
+    }
     // OpenRouter's transport hardcodes its base URL and ignores the config's
     // endpoint, so an empty endpoint is legitimate there.
     final endpointRequired = apiConfig.protocol != LlmProtocol.openrouter;
@@ -169,6 +179,7 @@ class SummaryService {
 
     final content = await _llm.callOnce(
       config: AuxApiConfig(
+        savedConnectionId: apiConfig.id,
         endpoint: apiConfig.endpoint,
         apiKey: apiConfig.apiKey,
         model: apiConfig.model,
