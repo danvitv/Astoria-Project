@@ -12,6 +12,7 @@ import 'package:glaze_flutter/features/support_assistant/widgets/support_card_vi
 import 'package:glaze_flutter/features/support_assistant/widgets/support_composer_bar.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_sessions_panel.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_settings_panel.dart';
+import 'package:glaze_flutter/features/support_assistant/widgets/support_provider_sheet.dart';
 import 'package:glaze_flutter/shared/shell/desktop/desktop_left_sidebar.dart';
 import 'package:glaze_flutter/shared/shell/desktop/desktop_right_sidebar.dart';
 import 'package:glaze_flutter/shared/shell/desktop/desktop_shell.dart';
@@ -51,6 +52,9 @@ class _Workspace extends SupportWorkspaceNotifier {
     sends++;
     return sendResult == null ? false : sendResult!.future;
   }
+
+  @override
+  Future<bool> sendLocalHelp(String text) => sendUserMessage(text);
 }
 
 Widget _scope(Widget child, _Workspace workspace) => NativeWidgetIsolation(
@@ -91,37 +95,42 @@ void main() {
   setUpAll(initializeNativeWidgetLocalization);
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  testWidgets('rejected send retains draft and concurrent send is blocked', (
-    tester,
-  ) async {
-    final pending = Completer<bool>();
-    final workspace = _Workspace(sendResult: pending);
-    final router = _router();
-    addTearDown(router.dispose);
-    await tester.pumpWidget(
-      _scope(MaterialApp.router(routerConfig: router), workspace),
-    );
-    await tester.pumpAndSettle();
-    final input = find.descendant(
-      of: find.byKey(const ValueKey('support_composer_input')),
-      matching: find.byType(TextField),
-    );
-    await tester.enterText(input, 'Сохрани мой черновик');
-    await tester.tap(find.byKey(const ValueKey('support_composer_send_btn')));
-    await tester.pump();
-    final button = tester.widget<IconButton>(
-      find.byKey(const ValueKey('support_composer_send_btn')),
-    );
-    expect(button.onPressed, isNull);
-    expect(workspace.sends, 1);
-    pending.complete(false);
-    await tester.pumpAndSettle();
-    expect(
-      tester.widget<TextField>(input).controller!.text,
-      'Сохрани мой черновик',
-    );
-    expect(find.textContaining('Сообщение не сохранено'), findsOneWidget);
-  });
+  testWidgets(
+    'rejected local send retains draft and concurrent send is blocked',
+    (tester) async {
+      final pending = Completer<bool>();
+      final workspace = _Workspace(sendResult: pending);
+      final router = _router();
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        _scope(MaterialApp.router(routerConfig: router), workspace),
+      );
+      await tester.pumpAndSettle();
+      final input = find.descendant(
+        of: find.byKey(const ValueKey('support_composer_input')),
+        matching: find.byType(TextField),
+      );
+      await tester.enterText(input, 'Сохрани мой черновик');
+      // The real screen's main send now requires original native model custody;
+      // this visual-only fake exercises the explicit offline composer action.
+      await tester.tap(
+        find.byKey(const ValueKey('support_composer_local_help_btn')),
+      );
+      await tester.pump();
+      final button = tester.widget<IconButton>(
+        find.byKey(const ValueKey('support_composer_send_btn')),
+      );
+      expect(button.onPressed, isNull);
+      expect(workspace.sends, 1);
+      pending.complete(false);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(input).controller!.text,
+        'Сохрани мой черновик',
+      );
+      expect(find.textContaining('Сообщение не сохранено'), findsOneWidget);
+    },
+  );
 
   testWidgets('accepted send never clears a newer draft', (tester) async {
     final controller = TextEditingController(text: 'Первый');
@@ -226,7 +235,9 @@ void main() {
     },
   );
 
-  testWidgets('provider welcome action opens actual API route', (tester) async {
+  testWidgets('provider welcome action opens the native provider sheet', (
+    tester,
+  ) async {
     final router = _router();
     addTearDown(router.dispose);
     await tester.pumpWidget(
@@ -235,9 +246,11 @@ void main() {
     await tester.pumpAndSettle();
     final action = find.byKey(const ValueKey('quick_action_provider_setup'));
     await tester.ensureVisible(action);
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(action);
     await tester.pumpAndSettle();
-    expect(find.text('/tools/api'), findsOneWidget);
+    expect(find.byType(SupportProviderSheet), findsOneWidget);
+    expect(find.text('/tools/api'), findsNothing);
   });
 
   testWidgets('mutation and export cards cannot claim or execute success', (

@@ -10,6 +10,7 @@ import '../../../shared/widgets/sheet_view.dart';
 import '../state/support_workspace_provider.dart';
 import 'support_settings_pickers.dart';
 import 'support_settings_unavailable.dart';
+import 'support_settings_start_session.dart';
 import 'support_privacy_group.dart';
 
 /// Right panel for Astoria Assistant: mode selector (`Onboarding / Diagnostics / Hybrid`),
@@ -73,6 +74,11 @@ class SupportSettingsPanel extends ConsumerWidget {
     if (!workspace.settingsAvailable) {
       return const SupportSettingsUnavailableView();
     }
+    if (workspace.activeSessionId.isEmpty) {
+      return SupportSettingsStartSession(
+        enabled: !workspace.isLoading && !workspace.isBusy,
+      );
+    }
 
     final activeConnection = connections
         .where((c) => c.connectionId == settings.apiConfigId)
@@ -98,6 +104,8 @@ class SupportSettingsPanel extends ConsumerWidget {
                 ),
                 const SizedBox(height: 8),
                 GlazeTabBar(
+                  key: const ValueKey('support_settings_mode'),
+                  style: GlazeTabBarStyle.underline,
                   tabs: [
                     for (final mode in SupportAssistantMode.values)
                       GlazeTabItem(

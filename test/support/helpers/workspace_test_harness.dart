@@ -130,6 +130,22 @@ class ControlledWorkspaceStore extends SupportWorkspaceStore {
   }
 
   @override
+  Future<bool> deleteSessionIfMutationsSettled(
+    String id, {
+    bool Function()? isCurrent,
+  }) async {
+    // This notifier fixture owns synthetic in-memory parents, not repository
+    // parents. Keep the new store admission API on the SAME declared backend;
+    // actual SQLite mutation/deletion guards have their own repository suites.
+    await stage('delete');
+    if (isCurrent?.call() == false || !sessions.containsKey(id)) return false;
+    sessions.remove(id);
+    messages.remove(id);
+    availability.remove(id);
+    return true;
+  }
+
+  @override
   Future<void> rename(String id, String title) async {
     await stage('rename');
   }

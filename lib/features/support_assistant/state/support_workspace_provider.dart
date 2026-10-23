@@ -90,7 +90,9 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     });
     unawaited(
       Future<void>.microtask(() async {
-        if (_current(owner)) await _enqueue(owner, () => _reload(owner));
+        if (_current(owner)) {
+          await _enqueue(owner, () => _reload(owner, readPolicy: true));
+        }
       }),
     );
     return SupportWorkspaceState(lastHandledTopic: _topics.handledTopic);
@@ -137,7 +139,11 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     return result.future;
   }
 
-  Future<void> _reload(SupportWorkspaceLifecycle owner) async {
+  Future<void> _reload(
+    SupportWorkspaceLifecycle owner, {
+    bool readPolicy = false,
+  }) async {
+    final native = _native!;
     final publicationStamp = _writes.publicationStamp;
     final SupportWorkspaceSnapshot snapshot;
     try {
@@ -161,7 +167,18 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     final active = snapshot.sessions.any((s) => s.id == state.activeSessionId)
         ? state.activeSessionId
         : snapshot.sessions.firstOrNull?.id ?? '';
-    _native!.selectSession(active);
+    final changedSession = native.sessionId != active;
+    native.selectSession(active);
+    // Hydrate a newly bound session, not every message/settings repaint. A
+    // redundant refresh would retire another already-admitted local operation.
+    if (active.isNotEmpty && (readPolicy || changedSession)) {
+      await native.refresh(resolve: false);
+      if (!_current(owner)) return;
+      if (!identical(publicationStamp, _writes.publicationStamp)) {
+        unawaited(refresh());
+        return;
+      }
+    }
     state = state.copyWith(
       sessions: snapshot.sessions,
       messagesBySession: snapshot.messages,
@@ -180,7 +197,7 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
 
   Future<bool> refresh() {
     final owner = _owner;
-    return _enqueue(owner, () => _reload(owner));
+    return _enqueue(owner, () => _reload(owner, readPolicy: true));
   }
 
   void setSessionSearchQuery(String query) {
@@ -199,7 +216,7 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
         _native!.selectSession(created);
         state = state.copyWith(activeSessionId: id);
       }
-      await _reload(owner);
+      await _reload(owner, readPolicy: true);
     });
     return _current(owner) ? id : null;
   }
@@ -313,7 +330,7 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
           }
         }
         if (!_current(owner)) return;
-        await _reload(owner);
+        await _reload(owner, readPolicy: true);
       },
       ownsError: current,
     ).then((success) => success && current()).whenComplete(settleNative);
