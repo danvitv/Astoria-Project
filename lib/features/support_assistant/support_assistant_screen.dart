@@ -16,6 +16,7 @@ import 'widgets/support_sessions_panel.dart';
 import 'widgets/support_settings_panel.dart';
 import 'widgets/support_model_screen_controller.dart';
 import 'widgets/support_theme_entry.dart';
+import 'widgets/support_provider_entry.dart';
 
 /// Center workspace screen for Astoria Assistant (`/support`).
 ///
@@ -48,6 +49,7 @@ class _SupportAssistantScreenState
     extends ConsumerState<SupportAssistantScreen> {
   final TextEditingController _composerCtrl = TextEditingController();
   final SupportModelScreenController _modelUi = SupportModelScreenController();
+  final _providerEntry = GlobalKey<SupportProviderEntryState>();
   bool _sheetOpen = false;
 
   @override
@@ -171,7 +173,7 @@ class _SupportAssistantScreenState
   void _handleSetupCardAction(String topicId) {
     switch (topicId) {
       case 'provider_setup':
-        context.push('/tools/api');
+        _providerEntry.currentState?.open();
       case 'theme_setup':
         context.push('/menu/themes');
       case 'memory_books_setup':
@@ -212,6 +214,10 @@ class _SupportAssistantScreenState
       flushHeader: isDesktop,
       actions: [
         const SupportThemeEntry(),
+        SupportProviderEntry(
+          key: _providerEntry,
+          onOpenPermissions: _openSettingsSheet,
+        ),
         if (!isDesktop) ...[
           IconButton(
             key: const ValueKey('mobile_open_sessions_btn'),
@@ -287,9 +293,13 @@ class _SupportAssistantScreenState
                 padding: EdgeInsets.symmetric(vertical: 8),
                 child: Text(
                   'Модель отвечает только текстом после отдельного подтверждения '
-                  'точного prompt. Выбор установленной темы и условный Undo доступны '
-                  'только через отдельное нативное подтверждение. Изменение режима, '
-                  'провайдера, Memory, инструменты, DCP, диагностика и экспорт отчётов '
+                  'точного prompt. Выбор установленной темы, режим dark/light/system '
+                  'и условный Undo доступны только через отдельное нативное '
+                  'подтверждение. Подготовка профиля провайдера и отдельный '
+                  'защищённый ввод ключа доступны в нативном окне провайдера; '
+                  'они не выбирают активное подключение и не проверяют провайдера. '
+                  'Memory, инструменты, DCP, '
+                  'диагностика и экспорт отчётов '
                   'пока недоступны. Локальная помощь — отдельно, без сети.',
                   style: TextStyle(fontSize: 12),
                 ),
