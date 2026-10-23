@@ -5,6 +5,19 @@ import 'package:flutter_riverpod/legacy.dart';
 
 import 'theme_preset.dart';
 import 'theme_preset_storage.dart';
+import 'theme_selection.dart';
+
+export 'theme_selection.dart'
+    show
+        ThemeSelectionCode,
+        ThemeSelectionDisplay,
+        ThemeSelectionFreshObservation,
+        ThemeSelectionObservation,
+        ThemeSelectionPlan,
+        ThemeSelectionReadResult,
+        ThemeSelectionReceipt,
+        ThemeSelectionResult,
+        ThemeSelectionWriteAcceptance;
 
 class ThemeSettings {
   final ThemeMode mode;
@@ -56,6 +69,32 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
   StackTrace? _initializationErrorStack;
   int _debounceEpoch = 0;
   bool _disposed = false;
+  late final ThemeSelectionOwner _selection = ThemeSelectionOwner(
+    prepare: flushPersistence,
+    sequence: _sequenceWrite,
+    storage: () => _storage is ThemeSelectionStore
+        ? _storage as ThemeSelectionStore
+        : null,
+    active: () => state.activePreset,
+    publish: (preset) => state = state.copyWith(
+      activePreset: preset,
+      accentColor: preset.accent,
+    ),
+  );
+
+  Future<ThemeSelectionReadResult> observeInstalledThemes({
+    required bool Function() isCurrent,
+  }) => _selection.observe(isCurrent: isCurrent);
+
+  Future<ThemeSelectionResult> applyInstalledSelection(
+    ThemeSelectionPlan plan, {
+    required bool Function() isCurrent,
+  }) => _selection.apply(plan, isCurrent: isCurrent);
+
+  Future<ThemeSelectionResult> undoInstalledSelection(
+    ThemeSelectionReceipt receipt, {
+    required bool Function() isCurrent,
+  }) => _selection.undo(receipt, isCurrent: isCurrent);
 
   ThemeNotifier({
     ThemePresetStore? storage,
@@ -94,11 +133,15 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
     }
   }
 
-  Future<void> _load() async {
-    if (_storage == null) return;
+  Future<void> _load({int? expectedRevision}) async {
+    bool ownsPublication() =>
+        !_disposed &&
+        (expectedRevision == null || expectedRevision == _selection.revision);
+    if (_storage == null || !ownsPublication()) return;
     final presets = await _storage!.loadAll();
+    if (!ownsPublication()) return;
     final activeId = await _storage!.loadActiveId();
-    if (_disposed) return;
+    if (!ownsPublication()) return;
     final active = presets.firstWhere(
       (p) => p.id == activeId,
       orElse: () => presets.first,
@@ -112,26 +155,41 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
   }
 
   Future<void> setMode(ThemeMode mode) async {
+    if (_disposed) return;
+    _selection.admitOrdinaryMutation();
     state = state.copyWith(mode: mode);
   }
 
   Future<void> setAccentColor(Color color) async {
+    if (_disposed) return;
+    _selection.admitOrdinaryMutation();
     state = state.copyWith(accentColor: color);
   }
 
   Future<void> applyPreset(ThemePreset preset) async {
+    _selection.admitOrdinaryMutation();
     await _awaitReady();
     if (_disposed) return;
     state = state.copyWith(accentColor: preset.accent, activePreset: preset);
-    await _sequenceWrite(() => _storage!.setActive(preset.id));
+    await _sequenceWrite(() async {
+      if (_disposed) return;
+      await _storage!.setActive(preset.id);
+    });
   }
 
   Future<void> importPreset(ThemePreset preset) async {
+    final revision = _selection.admitOrdinaryMutation();
     await _awaitReady();
-    await flushPersistence();
-    await _sequenceWrite(() => _storage!.addPreset(preset));
-    final presets = await _storage!.loadAll();
     if (_disposed) return;
+    await flushPersistence();
+    if (_disposed) return;
+    await _sequenceWrite(() async {
+      if (_disposed) return;
+      await _storage!.addPreset(preset);
+    });
+    if (_disposed) return;
+    final presets = await _storage!.loadAll();
+    if (_disposed || revision != _selection.revision) return;
     state = state.copyWith(presets: presets);
   }
 
@@ -139,9 +197,13 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
     String path, {
     bool apply = true,
   }) async {
+    _selection.admitOrdinaryMutation();
     await _awaitReady();
+    if (_disposed) return null;
     final preset = await _storage!.importFromFile(path);
+    if (_disposed) return null;
     await importPreset(preset);
+    if (_disposed) return null;
     if (apply) {
       await applyPreset(preset);
     }
@@ -149,11 +211,18 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
   }
 
   Future<void> deletePreset(String id) async {
+    final revision = _selection.admitOrdinaryMutation();
     await _awaitReady();
-    await flushPersistence();
-    await _sequenceWrite(() => _storage!.removePreset(id));
-    final presets = await _storage!.loadAll();
     if (_disposed) return;
+    await flushPersistence();
+    if (_disposed) return;
+    await _sequenceWrite(() async {
+      if (_disposed) return;
+      await _storage!.removePreset(id);
+    });
+    if (_disposed) return;
+    final presets = await _storage!.loadAll();
+    if (_disposed || revision != _selection.revision) return;
     var active = state.activePreset;
     if (active.id == id) {
       active = presets.first;
@@ -167,6 +236,7 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
 
   /// Live-update the active preset and persist it (mirrors JS auto-save on change).
   Future<void> updatePreset(ThemePreset preset) {
+    _selection.admitOrdinaryMutation();
     if (!_ready.isCompleted) return _updatePresetWhenReady(preset);
     final error = _initializationError;
     if (error != null) {
@@ -213,10 +283,10 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
     if (presets == null) return;
     _pendingPresets = null;
     unawaited(
-      _sequenceWrite(() => _storage!.saveAll(presets)).catchError((
-        Object error,
-        StackTrace stackTrace,
-      ) {
+      _sequenceWrite(() async {
+        if (_disposed) return;
+        await _storage!.saveAll(presets);
+      }).catchError((Object error, StackTrace stackTrace) {
         _recordPersistenceError(error, stackTrace);
       }),
     );
@@ -236,6 +306,7 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
   /// Persists the latest preview immediately and waits for all prior writes.
   Future<void> flushPersistence() async {
     await _awaitReady();
+    if (_disposed) return;
     ++_debounceEpoch;
     _enqueuePendingPresets();
     await _writeTail;
@@ -249,17 +320,22 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
   }
 
   Future<void> reload() async {
+    final revision = _selection.admitOrdinaryMutation();
     await flushPersistence();
-    await _load();
+    if (_disposed || revision != _selection.revision) return;
+    await _sequenceWrite(() => _load(expectedRevision: revision));
   }
 
   void setIgnoreCustomFont(bool value) {
+    if (_disposed) return;
+    _selection.admitOrdinaryMutation();
     state = state.copyWith(ignoreCustomFont: value);
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _selection.retire();
     ++_debounceEpoch;
     _pendingPresets = null;
     super.dispose();

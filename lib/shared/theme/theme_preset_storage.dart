@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../application/sync_theme_store.dart';
 import 'theme_preset.dart';
+import 'theme_selection.dart';
+import 'theme_selection_storage_codec.dart';
 
 abstract interface class ThemePresetStore {
   Future<List<ThemePreset>> loadAll();
@@ -18,7 +20,8 @@ abstract interface class ThemePresetStore {
   Future<void> setActive(String id);
 }
 
-class ThemePresetStorage implements SyncThemePresetStore, ThemePresetStore {
+class ThemePresetStorage
+    implements SyncThemePresetStore, ThemePresetStore, ThemeSelectionStore {
   static const _presetsKey = 'theme_presets';
   static const _activeKey = 'theme_active_preset';
 
@@ -73,6 +76,33 @@ class ThemePresetStorage implements SyncThemePresetStore, ThemePresetStore {
   Future<String> loadActiveId() async {
     return _prefs.getString(_activeKey) ?? 'default';
   }
+
+  /// Fresh cache observation + API acceptance, not disk/CAS/power-loss proof.
+  /// Malformed existing keys never become an apparently known built-in default.
+  @override
+  Future<ThemeSelectionStoredState> readSelectionFresh() async {
+    await _prefs.reload();
+    try {
+      final raw = _prefs.get(_presetsKey);
+      final active = _prefs.get(_activeKey);
+      if ((raw != null && raw is! String) ||
+          (active != null && active is! String)) {
+        throw const ThemeSelectionInvalidStorage();
+      }
+      final presets = raw == null
+          ? <ThemePreset>[]
+          : decodeThemeSelectionPresets(jsonDecode(raw as String));
+      return ThemeSelectionStoredState(
+        presets: _withBuiltins(presets),
+        activeId: active as String? ?? 'default',
+      );
+    } catch (_) {
+      throw const ThemeSelectionInvalidStorage();
+    }
+  }
+
+  @override
+  Future<bool> setActiveChecked(String id) => _prefs.setString(_activeKey, id);
 
   @override
   Future<void> saveAll(List<ThemePreset> presets) async {
