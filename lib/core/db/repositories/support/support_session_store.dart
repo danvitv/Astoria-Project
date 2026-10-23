@@ -130,21 +130,30 @@ final class _SupportSessionStore {
     );
     return mapper.session((await row(sessionId))!);
   });
-  Future<void> delete(String id) => db.transaction(() async {
+  Future<void> delete(String id) => db.transaction(() => deleteRows(id));
+
+  /// DB-only existing cascade; guarded deletion calls this in its OWN transaction.
+  Future<void> deleteRows(String id, {void Function()? checkpoint}) async {
+    checkpoint?.call();
     await (db.delete(
       db.supportMessages,
     )..where((t) => t.sessionId.equals(id))).go();
+    checkpoint?.call();
     await (db.delete(
       db.supportContextBlocks,
     )..where((t) => t.sessionId.equals(id))).go();
+    checkpoint?.call();
     await (db.delete(
       db.supportMutationJournal,
     )..where((t) => t.sessionId.equals(id))).go();
+    checkpoint?.call();
     await (db.delete(
       db.supportReports,
     )..where((t) => t.sessionId.equals(id))).go();
+    checkpoint?.call();
     await (db.delete(db.supportSessions)..where((t) => t.id.equals(id))).go();
-  });
+    checkpoint?.call();
+  }
 }
 
 void _requireUnlocked(bool locked) {

@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:convert';
 import 'package:drift/drift.dart';
 import '../../models/support_models.dart';
 import '../../support/support_payload_cipher.dart';
@@ -11,6 +12,10 @@ part 'support/support_native_input_store.dart';
 part 'support/support_guarded_reply_store.dart';
 part 'support/support_context_store.dart';
 part 'support/support_journal_store.dart';
+part 'support/support_mutation_journal_contract.dart';
+part 'support/support_guarded_mutation_store.dart';
+part 'support/support_mutation_history_reader.dart';
+part 'support/support_mutation_history_types.dart';
 
 /// Exact committed snapshots, retained only by the native run owner.
 typedef SupportReplyReservation = ({
@@ -64,6 +69,13 @@ class SupportRepo {
     updatedAt: updatedAt,
   );
   Future<void> deleteSession(String sessionId) => _sessions.delete(sessionId);
+
+  /// Action-enabled deletion: one transaction excludes unresolved, unknown,
+  /// malformed or unreadable journal evidence. Legacy deleteSession is unchanged.
+  Future<bool> deleteSessionIfMutationsSettled({
+    required String sessionId,
+    required bool Function() isCurrent,
+  }) => _journal.guarded.deleteSession(sessionId, isCurrent);
   Future<SupportMessage> appendMessage(
     SupportMessage message, {
     int? sessionUpdatedAt,
@@ -151,6 +163,65 @@ class SupportRepo {
       _journal.putMutation(record);
   Future<SupportMutationRecord> putMutation(SupportMutationRecord record) =>
       _journal.putMutation(record);
+
+  /// Create ONLY a pending record with SupportMutationEvidence-encoded, already
+  /// sanitized native strings. The live admission guard must be synchronous.
+  /// Null is refusal; cipher/storage failures throw and roll back. A committed
+  /// return is DB custody, never native approval or permission for an effect.
+  Future<SupportMutationReservation?> reserveMutation({
+    required SupportMutationRecord record,
+    required bool Function() isCurrent,
+  }) => _journal.guarded.reserve(record, isCurrent);
+
+  /// Validated exact encrypted expectation for observation/recovery. Reading a
+  /// restored record cannot restore native approval or authorize any replay.
+  Future<SupportMutationReservation?> readCurrentMutation({
+    required String id,
+    required String sessionId,
+    required String domain,
+    required String targetId,
+    required bool Function() isCurrent,
+  }) => _journal.guarded.read(id, sessionId, domain, targetId, isCurrent);
+
+  /// Bounded primitive discovery, never decrypted evidence or effect custody.
+  /// Null explicitly means unavailable, not an empty history.
+  Future<SupportMutationHistoryPage?> discoverMutationHistory({
+    required String sessionId,
+    required String domain,
+    required String targetId,
+    required bool Function() isCurrent,
+    SupportMutationHistoryCursor? cursor,
+  }) =>
+      _journal.history.discover(sessionId, domain, targetId, isCurrent, cursor);
+
+  /// Revalidate the same bounded observation after a caller's awaited reads.
+  Future<bool> validateMutationHistory({
+    required SupportMutationHistoryPage page,
+    required bool Function() isCurrent,
+  }) => _journal.history.validate(page, isCurrent);
+
+  /// Equality of two actual guarded observations on this original DB only.
+  /// No DTO can manufacture either encrypted expectation; no effect is granted.
+  bool sameMutationHistoryObservation(
+    SupportMutationReservation expected,
+    SupportMutationReservation observed,
+  ) => _journal.history.sameObservation(expected, observed);
+
+  /// New Undo admission only: applied -> undo_pending. Requires a fresh native
+  /// approval and live admission guard in the caller; this API grants neither.
+  Future<SupportMutationReservation?> reserveMutationUndo({
+    required SupportMutationReservation expected,
+    required bool Function() isCurrent,
+  }) => _journal.guarded.beginUndo(expected, isCurrent);
+
+  /// Record only an observed fact for ALREADY STARTED work. Custody is the
+  /// original DB/session owner, independent of retired UI/permission ownership.
+  /// No external effect is started here, and SQLite/another store are not atomic.
+  Future<SupportMutationReservation?> settleMutation({
+    required SupportMutationReservation expected,
+    required SupportMutationFact fact,
+    required bool Function() hasOriginalDbCustody,
+  }) => _journal.guarded.settle(expected, fact, hasOriginalDbCustody);
   Future<SupportMutationRecord?> getMutationById(String id) =>
       _journal.getMutation(id);
   Future<List<SupportMutationRecord>> getMutationsForSession(

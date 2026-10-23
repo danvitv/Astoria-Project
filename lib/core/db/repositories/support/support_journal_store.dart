@@ -2,11 +2,16 @@ part of '../support_repo.dart';
 
 /// Local mutation audit and report receipts, independent of feature state.
 final class _SupportJournalStore {
-  _SupportJournalStore(this.db, this.cipher, this.mapper, this.sessions);
+  _SupportJournalStore(this.db, this.cipher, this.mapper, this.sessions) {
+    guarded = _SupportGuardedMutationStore(db, cipher, sessions);
+    history = _SupportMutationHistoryReader(db, guarded.checks);
+  }
   final AppDatabase db;
   final SupportPayloadCipher cipher;
   final _SupportRowMapper mapper;
   final _SupportSessionStore sessions;
+  late final _SupportGuardedMutationStore guarded;
+  late final _SupportMutationHistoryReader history;
   Future<SupportMutationJournalRow?> _mutationRow(String id) => (db.select(
     db.supportMutationJournal,
   )..where((t) => t.id.equals(id))).getSingleOrNull();
@@ -88,9 +93,9 @@ final class _SupportJournalStore {
       db.transaction(() async {
         await sessions.requireParent(report.sessionId, unlocked: false);
         final existing = await _reportRow(report.id);
-    if (existing != null) {
-      _requireSameSession(existing.sessionId, report.sessionId);
-    }
+        if (existing != null) {
+          _requireSameSession(existing.sessionId, report.sessionId);
+        }
         await db
             .into(db.supportReports)
             .insertOnConflictUpdate(
