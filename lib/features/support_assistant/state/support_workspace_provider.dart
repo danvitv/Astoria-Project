@@ -230,12 +230,35 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
       _editSession((store, current) => store.togglePin(id, isCurrent: current));
 
   Future<bool> deleteSession(String id) {
-    _writes.invalidateSession(id);
-    if (id == state.activeSessionId) {
-      _native!.invalidateBindings();
-      _selection++;
+    final owner = _owner;
+    final native = _native!, writes = _writes;
+    final activeTarget = id == state.activeSessionId;
+    writes.invalidateSession(id);
+    if (activeTarget) {
+      native.invalidateBindings();
+      if (_current(owner)) _selection++;
     }
-    return _editSession((store, _) => store.deleteSession(id));
+    var deleted = false, unavailable = false;
+    return _enqueue(owner, () async {
+      try {
+        deleted = await owner.store.deleteSessionIfMutationsSettled(
+          id,
+          isCurrent: () => _current(owner),
+        );
+      } catch (_) {
+        unavailable = true;
+        rethrow;
+      }
+      if (!deleted || !_current(owner)) return;
+      await _reload(owner);
+    }).then((_) {
+      if (unavailable) {
+        throw StateError('Support session deletion outcome unavailable.');
+      }
+      // Display reload/ownership may fail after the protected transaction has
+      // returned true. Neither failure changes the original committed fact.
+      return deleted;
+    });
   }
 
   Future<bool> _editSession(

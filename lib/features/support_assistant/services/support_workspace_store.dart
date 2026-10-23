@@ -191,6 +191,14 @@ class SupportWorkspaceStore {
 
   Future<void> deleteSession(String id) => repo.deleteSession(id);
 
+  /// Native action-enabled deletion consumes J's atomic durable boolean. Never
+  /// fall back to legacy deletion when evidence is unavailable or unresolved.
+  Future<bool> deleteSessionIfMutationsSettled(
+    String id, {
+    required bool Function() isCurrent,
+  }) =>
+      repo.deleteSessionIfMutationsSettled(sessionId: id, isCurrent: isCurrent);
+
   Future<SupportMessageItem> appendUser(String id, String text) => append(
     SupportMessageItem(
       id: generateId(),
