@@ -15,6 +15,8 @@ final class SupportThemeChoice {
   SupportThemeChoice._(this._binding, this._plan);
   final _ThemeBinding _binding;
   final ThemeSelectionPlan _plan;
+  SupportThemeOperation get operation =>
+      SupportThemeActionService._operation(_plan.operation);
 
   /// No stale label fallback after a known-value registration or owner loss.
   SupportThemeValue? get value {
@@ -46,6 +48,9 @@ final class SupportThemeReview {
   SupportThemeActionKind get kind => _applied == null
       ? SupportThemeActionKind.apply
       : SupportThemeActionKind.undo;
+  SupportThemeOperation get operation => SupportThemeActionService._operation(
+    _applied?._receipt.operation ?? _plan!.operation,
+  );
 }
 
 final class SupportThemeApproval {

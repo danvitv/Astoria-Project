@@ -7,6 +7,7 @@ extension _ThemeHistoryBoundary on SupportThemeActionService {
   Future<SupportMutationReservation?> _historyBoundaryRead(
     _ThemeBinding b,
     String id,
+    SupportThemeOperation operation,
   ) async {
     if (!_current(b) ||
         !SupportThemeActionService._codec.identifier(id, b.redactor) ||
@@ -14,11 +15,12 @@ extension _ThemeHistoryBoundary on SupportThemeActionService {
       return null;
     }
     try {
+      final codec = SupportThemeActionService._codecFor(operation);
       final row = await custody.repo.readCurrentMutation(
         id: id,
         sessionId: b.sessionId,
-        domain: SupportThemeEvidenceCodec.domain,
-        targetId: SupportThemeEvidenceCodec.target,
+        domain: codec.domainValue,
+        targetId: codec.targetValue,
         isCurrent: () => _current(b) && !custody._jobs.containsKey(id),
       );
       return _current(b) && !custody._jobs.containsKey(id) ? row : null;
@@ -33,13 +35,21 @@ extension _ThemeHistoryBoundary on SupportThemeActionService {
   ) async {
     final newest = cursor._newest, boundary = cursor._boundary;
     if (!_current(b) || newest == null || boundary == null) return false;
-    final latest = await _historyBoundaryRead(b, newest.record.id);
+    final latest = await _historyBoundaryRead(
+      b,
+      newest.record.id,
+      cursor.operation,
+    );
     if (!_current(b) ||
         latest == null ||
         !custody.repo.sameMutationHistoryObservation(newest, latest)) {
       return false;
     }
-    final edge = await _historyBoundaryRead(b, boundary.record.id);
+    final edge = await _historyBoundaryRead(
+      b,
+      boundary.record.id,
+      cursor.operation,
+    );
     return _current(b) &&
         edge != null &&
         custody.repo.sameMutationHistoryObservation(boundary, edge);
@@ -49,17 +59,26 @@ extension _ThemeHistoryBoundary on SupportThemeActionService {
     _ThemeBinding b,
     SupportMutationHistoryPage native,
     SupportThemeHistoryCursor? previous,
+    SupportThemeOperation operation,
   ) async {
     final next = native.nextCursor;
-    if (!_current(b) || next == null) return null;
+    if (!_current(b) ||
+        next == null ||
+        (previous != null && previous.operation != operation)) {
+      return null;
+    }
     final newest =
         previous?._newest ??
-        await _historyBoundaryRead(b, native.entries.first.id);
+        await _historyBoundaryRead(b, native.entries.first.id, operation);
     if (!_current(b)) return null;
-    final boundary = await _historyBoundaryRead(b, native.entries.last.id);
+    final boundary = await _historyBoundaryRead(
+      b,
+      native.entries.last.id,
+      operation,
+    );
     if (!_current(b)) return null;
     // A malformed/locked boundary remains explicit: a continuation is offered
     // but its next read will be unavailable, never falsely mark history exhausted.
-    return SupportThemeHistoryCursor._(b, next, newest, boundary);
+    return SupportThemeHistoryCursor._(b, next, newest, boundary, operation);
   }
 }

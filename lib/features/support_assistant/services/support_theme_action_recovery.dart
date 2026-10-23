@@ -9,8 +9,10 @@ final class SupportThemeRecovery {
     this._before,
     this._after, {
     this.status,
+    this.operation = SupportThemeOperation.selection,
   });
   final SupportThemeRecoveryState state;
+  final SupportThemeOperation operation;
   final SupportMutationStatus? status;
   final _ThemeBinding? _binding;
   final SupportThemeValue? _before, _after;
@@ -26,7 +28,7 @@ final class SupportThemeRecovery {
       name: value.name,
       mode: value.mode,
       accent: value.accent,
-      active: value.active,
+      active: operation == SupportThemeOperation.mode ? false : value.active,
       policy: b.service.redaction.redactor,
     );
   }
@@ -35,14 +37,17 @@ final class SupportThemeRecovery {
 extension SupportThemeRecoveryRead on SupportThemeActionService {
   Future<SupportThemeRecovery> recover(
     SupportThemeIntent intent,
-    String operationId,
-  ) async {
+    String operationId, {
+    SupportThemeOperation operation = SupportThemeOperation.selection,
+  }) async {
     final b = intent._binding;
-    const unavailable = SupportThemeRecovery._(
+    final codec = SupportThemeActionService._codecFor(operation);
+    final unavailable = SupportThemeRecovery._(
       SupportThemeRecoveryState.unavailable,
       null,
       null,
       null,
+      operation: operation,
     );
     if (!_current(b) ||
         !SupportThemeActionService._codec.identifier(operationId, b.redactor)) {
@@ -50,13 +55,15 @@ extension SupportThemeRecoveryRead on SupportThemeActionService {
     }
     final originalJob = custody._jobs[operationId];
     if (originalJob != null) {
-      return originalJob.sessionId != b.sessionId
+      return originalJob.sessionId != b.sessionId ||
+              originalJob.operation != operation
           ? unavailable
-          : const SupportThemeRecovery._(
+          : SupportThemeRecovery._(
               SupportThemeRecoveryState.liveJob,
               null,
               null,
               null,
+              operation: operation,
             );
     }
     try {
@@ -64,34 +71,44 @@ extension SupportThemeRecoveryRead on SupportThemeActionService {
       final row = await custody.repo.readCurrentMutation(
         id: operationId,
         sessionId: b.sessionId,
-        domain: SupportThemeEvidenceCodec.domain,
-        targetId: SupportThemeEvidenceCodec.target,
+        domain: codec.domainValue,
+        targetId: codec.targetValue,
         isCurrent: () => _current(b),
       );
       if (!_current(b)) return unavailable;
       final retainedJob = custody._jobs[operationId];
       if (retainedJob != null) {
-        return retainedJob.sessionId != b.sessionId
+        return retainedJob.sessionId != b.sessionId ||
+                retainedJob.operation != operation
             ? unavailable
-            : const SupportThemeRecovery._(
+            : SupportThemeRecovery._(
                 SupportThemeRecoveryState.liveJob,
                 null,
                 null,
                 null,
+                operation: operation,
               );
       }
       if (row == null) return unavailable;
-      final before = SupportThemeActionService._codec.decode(
+      final before = codec.decode(
         encoded: row.record.beforeJson,
         sessionId: b.sessionId,
         policy: redaction.redactor,
       );
-      final after = SupportThemeActionService._codec.decode(
+      final after = codec.decode(
         encoded: row.record.afterJson,
         sessionId: b.sessionId,
         policy: redaction.redactor,
       );
       if (before == null || after == null || !_current(b)) return unavailable;
+      // Mode evidence describes ONE preset with only its bounded mode changed.
+      // It still cannot restore the native full-content/revision precondition.
+      if (operation == SupportThemeOperation.mode &&
+          (before.id != after.id ||
+              before.name != after.name ||
+              before.accent != after.accent)) {
+        return unavailable;
+      }
       return SupportThemeRecovery._(
         row.status.unresolved
             ? SupportThemeRecoveryState.uncertain
@@ -100,6 +117,7 @@ extension SupportThemeRecoveryRead on SupportThemeActionService {
         before,
         after,
         status: row.status,
+        operation: operation,
       );
     } catch (_) {
       return unavailable;

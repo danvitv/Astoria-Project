@@ -4,19 +4,24 @@ extension SupportThemeHistoryRead on SupportThemeActionService {
   Future<SupportThemeHistoryPage> discoverHistory(
     SupportThemeIntent intent, {
     SupportThemeHistoryCursor? cursor,
+    SupportThemeOperation operation = SupportThemeOperation.selection,
   }) async {
     final b = intent._binding;
     SupportThemeHistoryPage unavailable() =>
-        SupportThemeHistoryPage._(b, null, const []);
-    if (!_current(b) || (cursor != null && !identical(cursor._binding, b))) {
+        SupportThemeHistoryPage._(b, operation, null, const []);
+    if (!_current(b) ||
+        (cursor != null &&
+            (!identical(cursor._binding, b) ||
+                cursor.operation != operation))) {
       return unavailable();
     }
     try {
+      final codec = SupportThemeActionService._codecFor(operation);
       if (!await _fresh(b) || !_current(b)) return unavailable();
       final native = await custody.repo.discoverMutationHistory(
         sessionId: b.sessionId,
-        domain: SupportThemeEvidenceCodec.domain,
-        targetId: SupportThemeEvidenceCodec.target,
+        domain: codec.domainValue,
+        targetId: codec.targetValue,
         isCurrent: () => _current(b),
         cursor: cursor?._native,
       );
@@ -31,12 +36,17 @@ extension SupportThemeHistoryRead on SupportThemeActionService {
         if (!_current(b)) return unavailable();
         // Existing exact guarded recovery retains shared live-job exclusion and
         // strict versioned evidence validation. No generic decrypted loader.
-        final recovery = await recover(intent, row.id);
+        final recovery = await recover(intent, row.id, operation: operation);
         if (!_current(b)) return unavailable();
         entries.add((id: row.id, recovery: recovery));
       }
       if (!_current(b)) return unavailable();
-      final continuation = await _historyContinuation(b, native, cursor);
+      final continuation = await _historyContinuation(
+        b,
+        native,
+        cursor,
+        operation,
+      );
       if (!_current(b)) return unavailable();
       if (continuation != null &&
           continuation._newest != null &&
@@ -53,7 +63,13 @@ extension SupportThemeHistoryRead on SupportThemeActionService {
         isCurrent: () => _current(b),
       );
       if (!_current(b) || !valid) return unavailable();
-      return SupportThemeHistoryPage._(b, native, entries, continuation);
+      return SupportThemeHistoryPage._(
+        b,
+        operation,
+        native,
+        entries,
+        continuation,
+      );
     } catch (_) {
       return unavailable();
     }
@@ -67,6 +83,7 @@ extension SupportThemeHistoryRead on SupportThemeActionService {
       SupportThemeHistoryAvailability.unavailable,
       const [],
       null,
+      operation: page.operation,
     );
     final b = intent._binding;
     if (!identical(page._binding, b) ||
@@ -84,12 +101,13 @@ extension SupportThemeHistoryRead on SupportThemeActionService {
       );
       if (!safeId) {
         entries.add(
-          const SupportThemeHistoryEntryView._(
+          SupportThemeHistoryEntryView._(
             SupportThemeRecoveryState.unavailable,
             null,
             null,
             null,
             null,
+            operation: page.operation,
           ),
         );
         continue;
@@ -99,13 +117,16 @@ extension SupportThemeHistoryRead on SupportThemeActionService {
       if (job != null) {
         entries.add(
           SupportThemeHistoryEntryView._(
-            job.sessionId == b.sessionId
+            job.sessionId == b.sessionId && job.operation == page.operation
                 ? SupportThemeRecoveryState.liveJob
                 : SupportThemeRecoveryState.unavailable,
-            job.sessionId == b.sessionId ? entry.id : null,
+            job.sessionId == b.sessionId && job.operation == page.operation
+                ? entry.id
+                : null,
             null,
             null,
             null,
+            operation: page.operation,
           ),
         );
         continue;
@@ -135,6 +156,7 @@ extension SupportThemeHistoryRead on SupportThemeActionService {
           readable ? recovery.status : null,
           readable ? before : null,
           readable ? after : null,
+          operation: page.operation,
         ),
       );
     }
@@ -151,13 +173,16 @@ extension SupportThemeHistoryRead on SupportThemeActionService {
       final job = custody._jobs[page._entries[i].id];
       if (job != null && entries[i].operationId != null) {
         entries[i] = SupportThemeHistoryEntryView._(
-          job.sessionId == b.sessionId
+          job.sessionId == b.sessionId && job.operation == page.operation
               ? SupportThemeRecoveryState.liveJob
               : SupportThemeRecoveryState.unavailable,
-          job.sessionId == b.sessionId ? entries[i].operationId : null,
+          job.sessionId == b.sessionId && job.operation == page.operation
+              ? entries[i].operationId
+              : null,
           null,
           null,
           null,
+          operation: page.operation,
         );
       }
     }
@@ -165,6 +190,7 @@ extension SupportThemeHistoryRead on SupportThemeActionService {
       SupportThemeHistoryAvailability.available,
       entries,
       cursor,
+      operation: page.operation,
     );
   }
 

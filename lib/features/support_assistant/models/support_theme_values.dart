@@ -18,14 +18,18 @@ final class SupportThemeValue {
 
 enum SupportThemeActionKind { apply, undo }
 
+enum SupportThemeOperation { selection, mode }
+
 @immutable
 final class SupportThemePreview {
   const SupportThemePreview({
     required this.kind,
     required this.before,
     required this.after,
+    this.operation = SupportThemeOperation.selection,
   });
   final SupportThemeActionKind kind;
+  final SupportThemeOperation operation;
   final SupportThemeValue before, after;
 }
 

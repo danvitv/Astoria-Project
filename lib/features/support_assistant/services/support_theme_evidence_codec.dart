@@ -7,9 +7,20 @@ import '../models/support_theme_values.dart';
 /// Fixed allowlisted keys are schema, not diagnostic input. Only VARIABLE
 /// values are redacted. In particular, never redact a whole sessionId JSON key.
 final class SupportThemeEvidenceCodec {
-  const SupportThemeEvidenceCodec();
+  const SupportThemeEvidenceCodec({
+    this.operation = SupportThemeOperation.selection,
+  });
+  final SupportThemeOperation operation;
   static const domain = 'theme.selection';
   static const target = 'installed-active-selection';
+  String get domainValue => switch (operation) {
+    SupportThemeOperation.selection => domain,
+    SupportThemeOperation.mode => 'theme.mode',
+  };
+  String get targetValue => switch (operation) {
+    SupportThemeOperation.selection => target,
+    SupportThemeOperation.mode => 'active-preset-mode',
+  };
   static const maxInstalled = 128;
   static final _id = RegExp(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$');
   static final _accent = RegExp(r'^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$');
@@ -93,8 +104,8 @@ final class SupportThemeEvidenceCodec {
           m.length != 9 ||
           m['v'] is! int ||
           m['v'] != 1 ||
-          m['domain'] != domain ||
-          m['target'] != target ||
+          m['domain'] != domainValue ||
+          m['target'] != targetValue ||
           m['sessionId'] != sessionId ||
           m['id'] is! String ||
           m['name'] is! String ||
@@ -128,8 +139,8 @@ final class SupportThemeEvidenceCodec {
 
   String _native(String sessionId, SupportThemeValue value) => jsonEncode({
     'v': 1,
-    'domain': domain,
-    'target': target,
+    'domain': domainValue,
+    'target': targetValue,
     'sessionId': sessionId,
     'id': value.id,
     'name': value.name,

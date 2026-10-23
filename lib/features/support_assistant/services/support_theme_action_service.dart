@@ -43,6 +43,19 @@ final class SupportThemeActionService {
   final String Function() _newOperationId;
   final int Function() _now;
   static const _codec = SupportThemeEvidenceCodec();
+  static const _modeCodec = SupportThemeEvidenceCodec(
+    operation: SupportThemeOperation.mode,
+  );
+  static SupportThemeEvidenceCodec _codecFor(SupportThemeOperation operation) =>
+      switch (operation) {
+        SupportThemeOperation.selection => _codec,
+        SupportThemeOperation.mode => _modeCodec,
+      };
+  static SupportThemeOperation _operation(ThemeSelectionOperation operation) =>
+      switch (operation) {
+        ThemeSelectionOperation.selection => SupportThemeOperation.selection,
+        ThemeSelectionOperation.mode => SupportThemeOperation.mode,
+      };
   final _consumed = Expando<bool>();
   Object _issuer = Object();
   bool _alive = true;
@@ -140,6 +153,34 @@ final class SupportThemeActionService {
     return SupportThemeReview._(b, choice._plan, null);
   }
 
+  /// Only the active preset captured by this native observation can be edited.
+  /// Mode strings choose a finite plan, never a target ID or action dispatcher.
+  SupportThemeInstalledView? projectModeChoices(
+    SupportThemeObservation handle,
+  ) {
+    final b = handle._binding;
+    if (!_displayCurrent(b) ||
+        handle._native.installed.isEmpty ||
+        handle._native.installed.length >
+            SupportThemeEvidenceCodec.maxInstalled) {
+      return null;
+    }
+    final policy = redaction.redactor;
+    final choices = <SupportThemeChoice>[];
+    for (final mode in const ['dark', 'light', 'system']) {
+      final plan = handle._native.planForMode(mode);
+      if (plan == null ||
+          _project(plan.before, true, policy) == null ||
+          _project(plan.after, true, policy) == null) {
+        return null;
+      }
+      choices.add(SupportThemeChoice._(b, plan));
+    }
+    return _displayCurrent(b) && identical(policy, redaction.redactor)
+        ? SupportThemeInstalledView._(choices)
+        : null;
+  }
+
   Future<SupportThemeReview?> prepareUndo(
     SupportThemeIntent intent,
     SupportThemeApplied applied,
@@ -169,7 +210,12 @@ final class SupportThemeActionService {
         !identical(policy, redaction.redactor)) {
       return null;
     }
-    return SupportThemePreview(kind: review.kind, before: a, after: z);
+    return SupportThemePreview(
+      kind: review.kind,
+      operation: review.operation,
+      before: a,
+      after: z,
+    );
   }
 
   /// Call only from the exact native final Apply/Undo gesture. A review, DTO,

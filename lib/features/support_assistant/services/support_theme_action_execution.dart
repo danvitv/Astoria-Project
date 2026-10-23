@@ -31,6 +31,7 @@ final class SupportThemeActionCustody {
 
 typedef _ThemeLiveJob = ({
   String sessionId,
+  SupportThemeOperation operation,
   Future<SupportThemeActionResult> future,
 });
 
@@ -103,7 +104,11 @@ extension SupportThemeExecution on SupportThemeActionService {
     }
     // _run starts with an awaited policy read, so register before it resumes.
     final job = _run(id, review);
-    custody._jobs[id] = (sessionId: b.sessionId, future: job);
+    custody._jobs[id] = (
+      sessionId: b.sessionId,
+      operation: review.operation,
+      future: job,
+    );
     return job.whenComplete(() {
       custody._jobs.remove(id);
     });
@@ -138,14 +143,16 @@ extension SupportThemeExecution on SupportThemeActionService {
     }
     final preview = projectReview(review);
     if (preview == null) return _refused;
+    // Finite operation comes from the opaque original plan/receipt, not a DTO.
+    final codec = SupportThemeActionService._codecFor(review.operation);
     SupportMutationRecord record;
     try {
-      final before = SupportThemeActionService._codec.encode(
+      final before = codec.encode(
         sessionId: b.sessionId,
         value: preview.before,
         policy: b.redactor,
       );
-      final after = SupportThemeActionService._codec.encode(
+      final after = codec.encode(
         sessionId: b.sessionId,
         value: preview.after,
         policy: b.redactor,
@@ -164,8 +171,8 @@ extension SupportThemeExecution on SupportThemeActionService {
           SupportMutationRecord(
             id: id,
             sessionId: b.sessionId,
-            domain: SupportThemeEvidenceCodec.domain,
-            targetId: SupportThemeEvidenceCodec.target,
+            domain: codec.domainValue,
+            targetId: codec.targetValue,
             beforeJson: before,
             afterJson: after,
             status: 'pending',

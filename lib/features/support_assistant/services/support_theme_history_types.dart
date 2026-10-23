@@ -9,10 +9,12 @@ final class SupportThemeHistoryCursor {
     this._native,
     this._newest,
     this._boundary,
+    this.operation,
   );
   final _ThemeBinding _binding;
   final SupportMutationHistoryCursor _native;
   final SupportMutationReservation? _newest, _boundary;
+  final SupportThemeOperation operation;
 }
 
 /// IDs and evidence stay private until a current-policy projection is requested.
@@ -20,12 +22,14 @@ final class SupportThemeHistoryCursor {
 final class SupportThemeHistoryPage {
   SupportThemeHistoryPage._(
     this._binding,
+    this.operation,
     this._native,
     Iterable<_ThemeHistoryEntry> entries, [
     this._continuation,
   ]) : _entries = List.unmodifiable(entries);
   final _ThemeBinding _binding;
   final SupportMutationHistoryPage? _native;
+  final SupportThemeOperation operation;
   final List<_ThemeHistoryEntry> _entries;
   final SupportThemeHistoryCursor? _continuation;
 }
@@ -38,11 +42,13 @@ final class SupportThemeHistoryView {
   SupportThemeHistoryView._(
     this.availability,
     Iterable<SupportThemeHistoryEntryView> entries,
-    this.nextCursor,
-  ) : entries = List.unmodifiable(entries);
+    this.nextCursor, {
+    this.operation = SupportThemeOperation.selection,
+  }) : entries = List.unmodifiable(entries);
   final SupportThemeHistoryAvailability availability;
   final List<SupportThemeHistoryEntryView> entries;
   final SupportThemeHistoryCursor? nextCursor;
+  final SupportThemeOperation operation;
 }
 
 final class SupportThemeHistoryEntryView {
@@ -51,11 +57,13 @@ final class SupportThemeHistoryEntryView {
     this.operationId,
     this.status,
     this.before,
-    this.after,
-  );
+    this.after, {
+    this.operation = SupportThemeOperation.selection,
+  });
   final SupportThemeRecoveryState state;
   final String? operationId;
   final SupportMutationStatus? status;
+  final SupportThemeOperation operation;
 
   /// Historical labels deliberately have active=false: not current theme proof.
   final SupportThemeValue? before, after;
