@@ -132,8 +132,24 @@ void main() {
           m['support_privacy_section_changes_notice'],
           contains(
             russian
-                ? 'Исполнитель изменений и отмена (Undo) пока недоступны'
-                : 'The changes executor and Undo are unavailable',
+                ? 'Только выбор установленной темы поддерживает точное нативное применение и отдельно проверенный условный Undo'
+                : 'Installed-theme selection alone supports exact native Apply and separately reviewed conditional Undo',
+          ),
+        );
+        expect(
+          m['support_privacy_section_changes_notice'],
+          contains(
+            russian
+                ? 'Это предварительное право не подтверждает действие'
+                : 'This prerequisite is not action approval',
+          ),
+        );
+        expect(
+          m['support_privacy_section_changes_notice'],
+          contains(
+            russian
+                ? 'Режим темы, провайдер, Memory и все остальные изменения пока недоступны'
+                : 'Theme mode, provider, Memory and all other changes remain unavailable',
           ),
         );
         expect(

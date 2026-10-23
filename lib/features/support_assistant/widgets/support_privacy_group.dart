@@ -78,8 +78,9 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
     SupportNativeConsentController controller,
     SupportNativeDisplayedIntent? displayedIntent,
     Object panelToken,
-    _PrivacyAction action,
-  ) async {
+    _PrivacyAction action, {
+    bool local = false,
+  }) async {
     if (_busy || !mounted || !identical(panelToken, _panelToken)) return;
     // The controller AND opaque intent come from the emitted view. Reading the
     // provider here only rejects replacement; it must never rebind old values.
@@ -128,6 +129,7 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
     try {
       final review = await controller.prepareReview(
         displayedIntent: displayedIntent,
+        resolveRecipient: !local,
       );
       if (!ownsPanel() ||
           runtime.sessionId != session ||
@@ -251,6 +253,8 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
     final panelToken = _panelToken;
     void run(_PrivacyAction action) =>
         _run(controller, view.displayedIntent, panelToken, action);
+    void runLocal(_PrivacyAction action) =>
+        _run(controller, view.displayedIntent, panelToken, action, local: true);
     final available =
         view.availability == SupportPermissionAvailability.available &&
         view.sessionId.isNotEmpty;
@@ -301,6 +305,19 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
                     ),
             ),
             _Toggle(
+              key: const ValueKey('support_privacy_theme_scope'),
+              label: 'support_theme_scope'.tr(),
+              description: 'support_theme_scope_notice'.tr(),
+              value: view.themeSelected,
+              onChanged: busy || !available
+                  ? null
+                  : (selected) => runLocal(
+                      (c, r, current) => current()
+                          ? c.selectTheme(r, selected)
+                          : Future.value(false),
+                    ),
+            ),
+            _Toggle(
               key: const ValueKey('support_privacy_connections_scope'),
               label: 'support_privacy_connections_scope'.tr(),
               description: 'support_privacy_chooser_not_consent'.tr(),
@@ -346,7 +363,10 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
                 _right(
                   view.rights.firstWhere((v) => v.right == right),
                   busy,
-                  run,
+                  right == SupportPermission.readSafeSettings ||
+                          right == SupportPermission.confirmedSettingsChanges
+                      ? runLocal
+                      : run,
                 ),
             ],
           ),

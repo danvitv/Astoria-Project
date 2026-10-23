@@ -15,6 +15,7 @@ import 'widgets/support_message_list.dart';
 import 'widgets/support_sessions_panel.dart';
 import 'widgets/support_settings_panel.dart';
 import 'widgets/support_model_screen_controller.dart';
+import 'widgets/support_theme_entry.dart';
 
 /// Center workspace screen for Astoria Assistant (`/support`).
 ///
@@ -210,6 +211,7 @@ class _SupportAssistantScreenState
       showBackground: !isDesktop,
       flushHeader: isDesktop,
       actions: [
+        const SupportThemeEntry(),
         if (!isDesktop) ...[
           IconButton(
             key: const ValueKey('mobile_open_sessions_btn'),
@@ -261,16 +263,6 @@ class _SupportAssistantScreenState
                 'Настройки сессии недоступны. Отправка заблокирована; открой настройки Астории.',
               ),
             ),
-          const Padding(
-            key: ValueKey('support_text_only_notice'),
-            padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: Text(
-              'Модель отвечает только текстом после отдельного подтверждения '
-              'точного prompt. Действия, Undo, инструменты, DCP, диагностика и '
-              'экспорт отчётов пока недоступны. Локальная помощь — отдельно, без сети.',
-              style: TextStyle(fontSize: 12),
-            ),
-          ),
           if (run.label.isNotEmpty ||
               _modelUi.refusal != SupportModelRefusal.none)
             Padding(
@@ -288,6 +280,20 @@ class _SupportAssistantScreenState
               hasConfiguredModel: workspace.settings.hasConfiguredModel,
               run: run,
               welcomeAvatar: widget.welcomeAvatar,
+              // Full capability copy scrolls with the feed instead of crowding
+              // out the composer on narrow screens with large text.
+              notice: const Padding(
+                key: ValueKey('support_text_only_notice'),
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  'Модель отвечает только текстом после отдельного подтверждения '
+                  'точного prompt. Выбор установленной темы и условный Undo доступны '
+                  'только через отдельное нативное подтверждение. Изменение режима, '
+                  'провайдера, Memory, инструменты, DCP, диагностика и экспорт отчётов '
+                  'пока недоступны. Локальная помощь — отдельно, без сети.',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
               onQuickAction: _handleSetupCardAction,
               onApplyPlan: notifier.applyMutationPlan,
               onRollback: notifier.rollbackMutation,

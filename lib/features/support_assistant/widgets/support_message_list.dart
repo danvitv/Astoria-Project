@@ -24,6 +24,7 @@ class SupportMessageList extends ConsumerWidget {
   final double bottomPadding;
   final SupportModelRunView run;
   final Widget? welcomeAvatar;
+  final Widget? notice;
 
   const SupportMessageList({
     super.key,
@@ -37,6 +38,7 @@ class SupportMessageList extends ConsumerWidget {
     this.bottomPadding = 16,
     this.run = const SupportModelRunView(),
     this.welcomeAvatar,
+    this.notice,
   });
 
   @override
@@ -45,21 +47,28 @@ class SupportMessageList extends ConsumerWidget {
       redactor: ref.watch(secretRedactorProvider),
     );
     final showWelcome = messages.isEmpty || !hasConfiguredModel;
-    final headerCount = showWelcome ? 1 : 0;
+    final headerCount = showWelcome || notice != null ? 1 : 0;
     final totalCount = headerCount + messages.length;
 
     return ListView.builder(
       padding: EdgeInsets.fromLTRB(16, topPadding, 16, bottomPadding),
       itemCount: totalCount,
       itemBuilder: (context, index) {
-        if (showWelcome && index == 0) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: _AstoriaWelcomeBanner(
-              hasConfiguredModel: hasConfiguredModel,
-              onQuickAction: onQuickAction,
-              avatar: welcomeAvatar,
-            ),
+        if (headerCount == 1 && index == 0) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ?notice,
+              if (showWelcome)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: _AstoriaWelcomeBanner(
+                    hasConfiguredModel: hasConfiguredModel,
+                    onQuickAction: onQuickAction,
+                    avatar: welcomeAvatar,
+                  ),
+                ),
+            ],
           );
         }
         final message = messages[index - headerCount];
@@ -96,7 +105,7 @@ class _AstoriaWelcomeBanner extends StatelessWidget {
     final welcomeCard = QuickActionChipsCard(
       title: 'Астория Ассистент',
       subtitle:
-          'История сессий хранится зашифрованной. Модель отвечает только текстом после подтверждения получателя и точного prompt. Инструменты, исправления, Undo, DCP, диагностика и экспорт отчёта пока недоступны. Ролевые профили не меняются.',
+          'История сессий хранится зашифрованной. Модель отвечает только текстом после подтверждения получателя и точного prompt. Только выбор установленной темы и условный Undo доступны через отдельный нативный обзор. Изменение режима, провайдера, Memory, инструменты, DCP, диагностика и экспорт отчёта пока недоступны. Ролевые профили не меняются.',
       actions: const [
         QuickActionItem(
           id: 'theme_setup',

@@ -1,3 +1,4 @@
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +8,8 @@ import '../../../shared/widgets/glaze_action_button.dart';
 import '../../../shared/widgets/glaze_text_field.dart';
 import '../../../shared/widgets/sheet_view.dart';
 import '../state/support_workspace_provider.dart';
+import '../state/support_native_provider.dart';
+import 'support_theme_delete_sheet.dart';
 
 /// Left panel for Astoria Assistant: session list, search, `+ New Session`,
 /// pin/delete controls, and a back button to `/characters`.
@@ -29,6 +32,63 @@ class SupportSessionsPanel extends ConsumerStatefulWidget {
 
 class _SupportSessionsPanelState extends ConsumerState<SupportSessionsPanel> {
   final TextEditingController _searchCtrl = TextEditingController();
+  Object _panelLifetime = Object();
+  SupportWorkspaceNotifier? _displayedNotifier;
+  bool _deleting = false;
+  String? _deleteNotice;
+
+  @override
+  void deactivate() {
+    _panelLifetime = Object();
+    super.deactivate();
+  }
+
+  Future<void> _delete(SupportWorkspaceNotifier original, String target) async {
+    if (!mounted || _deleting || !identical(original, _displayedNotifier)) {
+      return;
+    }
+    final panel = _panelLifetime;
+    final runtime = ref.read(supportNativeRuntimeProvider);
+    final session = runtime.sessionId, lifetime = runtime.lifetime;
+    bool current() =>
+        mounted &&
+        identical(panel, _panelLifetime) &&
+        identical(original, _displayedNotifier) &&
+        runtime.alive &&
+        runtime.sessionId == session &&
+        runtime.lifetime == lifetime;
+    setState(() {
+      _deleting = true;
+      _deleteNotice = null;
+    });
+    try {
+      final confirmed = await showModalBottomSheet<bool>(
+        context: context,
+        useRootNavigator: true,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => SupportThemeDeleteSheet(isCurrent: current),
+      );
+      if (confirmed != true || !current()) return;
+      // The ACTUAL atomic whole-session journal guard decides. No legacy retry,
+      // optimistic cache removal or racy widget pending/Undo check.
+      final deleted = await original.deleteSession(target);
+      if (!current()) return;
+      setState(
+        () => _deleteNotice = deleted
+            ? 'support_theme_delete_done'
+            : 'support_theme_delete_blocked',
+      );
+    } catch (_) {
+      if (current()) {
+        setState(() => _deleteNotice = 'support_theme_delete_unavailable');
+      }
+    } finally {
+      if (mounted && identical(panel, _panelLifetime)) {
+        setState(() => _deleting = false);
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -48,6 +108,10 @@ class _SupportSessionsPanelState extends ConsumerState<SupportSessionsPanel> {
   Widget build(BuildContext context) {
     final workspace = ref.watch(supportWorkspaceProvider);
     final notifier = ref.read(supportWorkspaceProvider.notifier);
+    if (!identical(_displayedNotifier, notifier)) {
+      _panelLifetime = Object();
+      _displayedNotifier = notifier;
+    }
 
     if (widget.collapsed) {
       return _CollapsedSessionsStrip(
@@ -145,6 +209,11 @@ class _SupportSessionsPanelState extends ConsumerState<SupportSessionsPanel> {
             isDense: true,
           ),
           Divider(height: 1, color: context.cs.outlineVariant),
+          if (_deleteNotice != null)
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(_deleteNotice!.tr()),
+            ),
           Expanded(
             child: sessions.isEmpty
                 ? Center(
@@ -173,7 +242,7 @@ class _SupportSessionsPanelState extends ConsumerState<SupportSessionsPanel> {
                         },
                         onTogglePin: () =>
                             notifier.togglePinSession(session.id),
-                        onDelete: () => notifier.deleteSession(session.id),
+                        onDelete: () => _delete(notifier, session.id),
                       );
                     },
                   ),

@@ -62,7 +62,7 @@ class SupportCardView extends StatelessWidget {
         Text('Предложение — до: ${c.beforeSummary}'),
         Text('Предложение — после: ${c.afterSummary}'),
         const Text(
-          'Исполнитель изменений пока не реализован. Текущее состояние не проверено и не изменено.',
+          'Эта текстовая карточка не разрешает изменений. Текущее состояние не проверено и не изменено. Выбор установленной темы доступен только в отдельном нативном окне.',
         ),
         _CardAction(
           key: ValueKey('apply_plan_${c.planId}'),
@@ -72,7 +72,7 @@ class SupportCardView extends StatelessWidget {
       final MutationAppliedCard c => <Widget>[
         _title(context, 'Запись о предложении (${c.domain})'),
         const Text(
-          'Применение и откат пока не реализованы. Эта карточка не подтверждает изменение настроек.',
+          'Эта текстовая карточка не подтверждает изменение настроек и не содержит разрешения на Undo. Нативная история тем не восстанавливает право отката.',
         ),
         _CardAction(
           key: ValueKey('rollback_${c.journalId}'),
