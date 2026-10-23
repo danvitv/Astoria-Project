@@ -23,6 +23,8 @@ enum SupportReasoningEffort {
 
 enum SupportMessageRole { user, assistant, system }
 
+enum SupportMessageActivity { inactive, interrupted }
+
 enum SupportCheckStatus { ok, warning, error, missingEvidence }
 
 enum SupportSettingsAvailability { available, unavailable, locked, corrupt }
@@ -177,22 +179,62 @@ class SupportMessageItem {
     this.cards = const [],
     required this.createdAt,
     this.isLocked = false,
+    this.runId,
+    this.status = 'complete',
   });
   final String id, sessionId, body;
+
+  /// Durable native metadata ONLY, never encrypted provenance or tool authority.
+  final String? runId;
+  final String status;
   final SupportMessageRole role;
   final List<SupportCard> cards;
   final DateTime createdAt;
   final bool isLocked;
-  SupportMessageItem copyWith({List<SupportCard>? cards, String? body}) =>
-      SupportMessageItem(
-        id: id,
-        sessionId: sessionId,
-        role: role,
-        body: body ?? this.body,
-        cards: cards ?? this.cards,
-        createdAt: createdAt,
-        isLocked: isLocked,
-      );
+
+  /// No restored row is a live request. Activity belongs to the owning run view.
+  SupportMessageActivity get activity =>
+      const {
+        'preparing',
+        'pending',
+        'running',
+        'waiting',
+        'activity',
+        'settling',
+      }.contains(status)
+      ? SupportMessageActivity.interrupted
+      : SupportMessageActivity.inactive;
+  String get statusLabel => isLocked
+      ? 'Зашифрованное сообщение недоступно'
+      : switch (status) {
+          'preparing' ||
+          'pending' ||
+          'running' ||
+          'waiting' ||
+          'activity' ||
+          'settling' =>
+            'Ответ прерван; автоматическая повторная отправка отключена.',
+          'stopped' => 'Отправка остановлена.',
+          'error' => 'Не удалось получить полный ответ.',
+          'limited' => 'Ответ ограничен.',
+          'complete' => '',
+          _ => 'Состояние сохранённого ответа недоступно.',
+        };
+  SupportMessageItem copyWith({
+    List<SupportCard>? cards,
+    String? body,
+    String? status,
+  }) => SupportMessageItem(
+    id: id,
+    sessionId: sessionId,
+    role: role,
+    body: body ?? this.body,
+    cards: cards ?? this.cards,
+    createdAt: createdAt,
+    isLocked: isLocked,
+    runId: runId,
+    status: status ?? this.status,
+  );
 }
 
 @immutable

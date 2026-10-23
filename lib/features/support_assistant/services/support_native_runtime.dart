@@ -14,6 +14,8 @@ final class SupportNativeRuntime {
     required this.loadSelectedConnection,
     required this.configurationRevision,
     required this.configurationStable,
+    this.gameSourceCheckpoint,
+    this.gameSourceStable,
   }) {
     _configuration = configurationRevision();
     _configurationWasStable = configurationStable();
@@ -38,6 +40,8 @@ final class SupportNativeRuntime {
   loadSelectedConnection;
   final int Function() configurationRevision;
   final bool Function() configurationStable;
+  final void Function()? gameSourceCheckpoint;
+  final bool Function()? gameSourceStable;
   late final SupportAuthorizationService authorization;
   String sessionId = '';
   int epoch = 1, writeOwner = 1, lifetime = 1, pending = 0, _reload = 0;
@@ -54,6 +58,27 @@ final class SupportNativeRuntime {
   );
   SupportConnectionInspection? _inspection;
   final _listeners = <void Function()>{};
+  final _gameSourceIntents = <void Function()>{};
+
+  /// Source retirement invalidates UI issuers, not recipient/write ownership or
+  /// unrelated queued grant merges. Only the original native controller listens.
+  void Function() listenGameSourceRetirement(void Function() listener) {
+    if (!alive) return () {};
+    _gameSourceIntents.add(listener);
+    return () => _gameSourceIntents.remove(listener);
+  }
+
+  void retireGameSourceIntents() {
+    for (final listener in List.of(_gameSourceIntents)) {
+      if (!alive || !_gameSourceIntents.contains(listener)) continue;
+      try {
+        listener();
+      } catch (_) {
+        // A UI observer cannot prevent synchronous source-lease retirement.
+      }
+    }
+  }
+
   void Function() listen(void Function() listener) {
     if (!alive) return () {};
     _listeners.add(listener);
@@ -61,6 +86,7 @@ final class SupportNativeRuntime {
   }
 
   void notify() {
+    if (alive) gameSourceCheckpoint?.call();
     for (final listener in List.of(_listeners)) {
       if (!_listeners.contains(listener)) continue;
       try {
@@ -91,6 +117,8 @@ final class SupportNativeRuntime {
   }
 
   void checkConfiguration() {
+    if (!alive) return;
+    gameSourceCheckpoint?.call();
     if (!alive) return;
     if (_configuration != configurationRevision() ||
         _configurationWasStable != configurationStable()) {
@@ -170,8 +198,17 @@ final class SupportNativeRuntime {
       // grants fence prepared data without cancelling another native toggle.
       ? SupportRecipientContext(supportSessionId: sessionId, epoch: writeOwner)
       : null;
-  bool owns(String id, int owner) =>
+  bool _ownsBinding(String id, int owner) =>
       alive && sessionId == id && writeOwner == owner;
+
+  bool owns(String id, int owner) {
+    if (alive) gameSourceCheckpoint?.call();
+    return _ownsBinding(id, owner) &&
+        // Settings already fence all native consent admission. Their ORIGINAL
+        // queued finally still owns recipient clearing; source stability must
+        // not suppress that independent deny write or replace its custody.
+        (settingsPending > 0 || (gameSourceStable?.call() ?? true));
+  }
 
   Future<bool> refresh({bool resolve = false}) async {
     checkConfiguration();
@@ -179,7 +216,11 @@ final class SupportNativeRuntime {
     if (!alive || id.isEmpty) return false;
     final next = await permissions.readForNative(id);
     checkConfiguration();
-    if (!owns(id, owner) || serial != _reload) return false;
+    // Permission observation can remove/switch the selected game source while
+    // it is pending. It does not grant admission or renew any old data epoch.
+    if (!_ownsBinding(id, owner) || serial != _reload) {
+      return false;
+    }
     final a = snapshot.preferences, b = next.preferences;
     if (a?.policyIdentity != b?.policyIdentity ||
         a?.revision != b?.revision ||
@@ -289,5 +330,6 @@ final class SupportNativeRuntime {
     );
     notify();
     _listeners.clear();
+    _gameSourceIntents.clear();
   }
 }

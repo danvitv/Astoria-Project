@@ -2,15 +2,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/db/repositories/support_consent_selection_repo.dart';
 import '../../../core/models/support_consent_selection.dart';
 import '../../../core/state/connection_revision_provider.dart';
+import '../../../core/state/chat_source_mutation_provider.dart';
 import '../../../core/state/credential_vault_provider.dart';
 import '../../../core/state/db_provider.dart';
 import '../models/support_native_view.dart';
 import '../services/support_connection_metadata_service.dart';
 import '../services/support_native_consent_controller.dart';
 import '../services/support_native_runtime.dart';
+import '../services/support_game_source_observer.dart';
 import '../services/support_permission_store.dart';
 import '../services/support_recipient_resolver.dart';
 import 'support_workspace_dependencies.dart';
+import 'support_model_dependencies.dart';
 
 final supportPermissionStoreProvider = Provider(
   (ref) => SupportPermissionStore(ref.watch(supportRepoProvider)),
@@ -29,6 +32,9 @@ final supportNativeRuntimeProvider = Provider<SupportNativeRuntime>((ref) {
   final permissions = ref.watch(supportPermissionStoreProvider);
   final api = ref.watch(apiConfigRepoProvider);
   final revisions = ref.watch(connectionRevisionRegistryProvider);
+  final sources = ref.watch(chatSourceMutationRegistryProvider);
+  final writes = ref.watch(supportModelDurableWritesProvider);
+  SupportGameSourceObserver? sourceObserver;
   late final SupportNativeRuntime runtime;
   final resolver = SupportRecipientResolver(
     apiRepo: api,
@@ -52,11 +58,19 @@ final supportNativeRuntimeProvider = Provider<SupportNativeRuntime>((ref) {
     ),
     configurationRevision: () => revisions.revision,
     configurationStable: () => revisions.isStable,
+    gameSourceCheckpoint: () => sourceObserver?.reconcile(),
+    gameSourceStable: () => sourceObserver?.isStable ?? true,
+  );
+  sourceObserver = SupportGameSourceObserver(
+    registry: sources,
+    runtime: runtime,
+    invalidateGameSource: writes.invalidateGameSource,
   );
   final stop = revisions.subscribe(runtime.invalidateConfiguration);
   // subscribe has no initial event. Sample before exposing this native owner.
   runtime.checkConfiguration();
   ref.onDispose(() {
+    sourceObserver?.dispose();
     stop();
     runtime.dispose();
   });
@@ -64,13 +78,22 @@ final supportNativeRuntimeProvider = Provider<SupportNativeRuntime>((ref) {
 });
 final supportNativeConsentControllerProvider = Provider((ref) {
   final selectors = ref.watch(supportConsentSelectionRepoProvider);
-  return SupportNativeConsentController(
-    runtime: ref.watch(supportNativeRuntimeProvider),
+  final runtime = ref.watch(supportNativeRuntimeProvider);
+  final controller = SupportNativeConsentController(
+    runtime: runtime,
     readMessages: (source, id, offset) =>
         source == SupportConsentSelectionSource.roleplay
         ? selectors.listRoleplayMessages(sessionId: id, offset: offset)
         : selectors.listSupportMessages(sessionId: id, offset: offset),
   );
+  final stop = runtime.listenGameSourceRetirement(
+    controller.invalidateDisplayedIntents,
+  );
+  ref.onDispose(() {
+    stop();
+    controller.invalidateDisplayedIntents();
+  });
+  return controller;
 });
 
 class SupportNativeViewNotifier extends Notifier<SupportNativeView> {

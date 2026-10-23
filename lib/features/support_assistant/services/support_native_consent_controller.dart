@@ -98,7 +98,7 @@ final class SupportNativeConsentController {
             runtime.snapshot.isAvailable &&
             runtime.settingsPending == 0 &&
             p!.hasScopeFor(right) &&
-            _implementedSelection(right) &&
+            _implementedSelection(right, p.scope) &&
             ((right != SupportPermission.readSafeSettings &&
                     right != SupportPermission.modelSafeSettingsDiagnostics) ||
                 p.scope!.safeCategories.contains(
@@ -199,7 +199,7 @@ final class SupportNativeConsentController {
     if (!_current(review) || review._policy == null) return false;
     if (enabled &&
         (!review.view.rights.firstWhere((v) => v.right == right).available ||
-            !_implementedSelection(right))) {
+            !_implementedSelection(right, review._policy.scope))) {
       return false;
     }
     // Independent queued toggles fence data, NOT other admitted write owners.
@@ -354,14 +354,27 @@ final class SupportNativeConsentController {
     return success;
   }
 
-  static bool _implementedSelection(SupportPermission right) => !{
-    SupportPermission.readGameData,
-    SupportPermission.readDiagnostics,
-    SupportPermission.modelGameData,
-    SupportPermission.modelPromptProviderSnippets,
-    SupportPermission.modelAttachments,
-    SupportPermission.reportPersonalDataAttachments,
-  }.contains(right);
+  static bool _implementedSelection(
+    SupportPermission right,
+    SupportPermissionScope? scope,
+  ) {
+    // The local game reader implements exact history only, not the broader
+    // selected-data scope accepted by the generic permission policy.
+    if (right == SupportPermission.readGameData) {
+      return scope != null &&
+          scope.gameSessionId?.isNotEmpty == true &&
+          scope.gameHistory != null &&
+          scope.selectedData.isEmpty;
+    }
+    return !{
+      SupportPermission.readDiagnostics,
+      SupportPermission.modelGameData,
+      SupportPermission.modelPromptProviderSnippets,
+      SupportPermission.modelAttachments,
+      SupportPermission.reportPersonalDataAttachments,
+    }.contains(right);
+  }
+
   static bool _recipientDependent(SupportPermission right) => {
     SupportPermission.modelGameHistory,
     SupportPermission.modelSupportHistory,

@@ -208,6 +208,8 @@ class SupportWorkspaceStore {
         role: item.role.name,
         body: _redactor().redactText(item.body),
         cardsJson: _cards.encode(item.cards),
+        runId: item.runId,
+        status: item.status,
         createdAt: item.createdAt.millisecondsSinceEpoch,
       ),
     );
@@ -235,5 +237,7 @@ class SupportWorkspaceStore {
     cards: m.isLocked ? const [] : _cards.decode(m.cardsJson),
     createdAt: DateTime.fromMillisecondsSinceEpoch(m.createdAt, isUtc: true),
     isLocked: m.isLocked,
+    runId: m.runId,
+    status: m.status,
   );
 }

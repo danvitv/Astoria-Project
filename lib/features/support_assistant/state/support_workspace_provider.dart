@@ -9,6 +9,10 @@ import 'support_workspace_state.dart';
 import 'support_workspace_topic_coordinator.dart';
 import 'support_workspace_dependencies.dart';
 import 'support_native_provider.dart';
+import 'support_model_dependencies.dart';
+import 'support_model_workspace_binding.dart';
+import 'support_model_write_custody.dart';
+import 'support_model_workspace_attachment.dart';
 
 export '../models/support_workspace_models.dart';
 export 'support_workspace_state.dart';
@@ -19,6 +23,8 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
   int _epoch = 0, _selection = 0;
   late SupportWorkspaceLifecycle _owner;
   SupportNativeRuntime? _native;
+  late SupportModelWorkspaceBinding _modelWorkspace;
+  late SupportModelDurableWrites _writes;
   late final _topics = SupportWorkspaceTopicCoordinator(
     capture: () => SupportWorkspaceSendContext(
       _owner,
@@ -27,6 +33,7 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
       ready:
           !state.isLoading &&
           !state.isBusy &&
+          !_modelWorkspace.busy &&
           (state.activeSessionId.isEmpty ||
               (state.settingsAvailable &&
                   state.activeSession?.isLocked != true)),
@@ -53,14 +60,33 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     final native = ref.watch(supportNativeRuntimeProvider);
     _native = native;
     native.selectSession('', force: true);
+    _writes = ref.watch(supportModelDurableWritesProvider);
     final owner = _owner = SupportWorkspaceLifecycle(
       ++_epoch,
       ref.watch(supportSessionStoreProvider),
+    );
+    final modelWorkspace = _modelWorkspace = ref.watch(
+      supportModelWorkspaceBindingProvider,
+    );
+    final attachment = SupportModelWorkspaceAttachment(
+      native: native,
+      readState: () => state,
+      readSelection: () => _selection,
+      isOwnerCurrent: () => _current(owner),
+      isWritePending: () => owner.sending || owner.pending > 0,
+      publish: (message) => _publishDurable(owner, message),
+    );
+    final binding = modelWorkspace.attach(
+      capture: attachment.capture,
+      resumeLocal: () {
+        if (_current(owner)) _topics.resume();
+      },
     );
     _selection++;
     ref.onDispose(() {
       native.invalidateBindings();
       owner.alive = false;
+      modelWorkspace.detach(binding);
     });
     unawaited(
       Future<void>.microtask(() async {
@@ -71,7 +97,10 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
   }
 
   bool _current(SupportWorkspaceLifecycle owner) =>
-      owner.alive && owner.epoch == _epoch && identical(owner, _owner);
+      ref.mounted &&
+      owner.alive &&
+      owner.epoch == _epoch &&
+      identical(owner, _owner);
 
   Future<bool> _enqueue(
     SupportWorkspaceLifecycle owner,
@@ -109,6 +138,7 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
   }
 
   Future<void> _reload(SupportWorkspaceLifecycle owner) async {
+    final publicationStamp = _writes.publicationStamp;
     final SupportWorkspaceSnapshot snapshot;
     try {
       snapshot = await owner.store.load();
@@ -121,6 +151,13 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
       rethrow;
     }
     if (!_current(owner)) return;
+    if (!identical(publicationStamp, _writes.publicationStamp)) {
+      // A concurrent native durable transition outlived this display read. Never
+      // repaint its older snapshot over an accepted/terminal row. Local reload
+      // retries on its own tail, NOT the model's bounded durable-write FIFO.
+      unawaited(refresh());
+      return;
+    }
     final active = snapshot.sessions.any((s) => s.id == state.activeSessionId)
         ? state.activeSessionId
         : snapshot.sessions.firstOrNull?.id ?? '';
@@ -193,6 +230,7 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
       _editSession((store, current) => store.togglePin(id, isCurrent: current));
 
   Future<bool> deleteSession(String id) {
+    _writes.invalidateSession(id);
     if (id == state.activeSessionId) {
       _native!.invalidateBindings();
       _selection++;
@@ -301,6 +339,7 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
 
   Future<bool> deleteMessage(String messageId) {
     final id = state.activeSessionId;
+    _writes.invalidateMessage(id, messageId);
     return _editSession(
       (store, current) =>
           store.deleteMessage(id, messageId, isCurrent: current),
@@ -312,19 +351,18 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     SupportMessageItem message,
   ) {
     if (!_current(owner)) return;
-    final messages = state.messagesBySession[message.sessionId] ?? const [];
     state = state.copyWith(
-      messagesBySession: Map.unmodifiable({
-        ...state.messagesBySession,
-        message.sessionId: List<SupportMessageItem>.unmodifiable([
-          ...messages.where((m) => m.id != message.id),
-          message,
-        ]),
-      }),
+      messagesBySession: SupportModelWorkspaceAttachment.mergeDurable(
+        state.messagesBySession,
+        message,
+      ),
     );
   }
 
-  Future<bool> sendUserMessage(String text) => _topics.send(text: text);
+  /// Legacy string-only callback is LOCAL help only; it can NEVER authorize HTTP.
+  /// Actual model UI uses supportModelUiBridgeProvider's emitted owning handle.
+  Future<bool> sendUserMessage(String text) => sendLocalHelp(text);
+  Future<bool> sendLocalHelp(String text) => _topics.send(text: text);
   Future<bool> triggerQuickAction(String topic) => _topics.send(topic: topic);
   void applyInitialTopic(String? topic) => _topics.applyInitialTopic(topic);
   // No executor/exporter exists in this phase.
