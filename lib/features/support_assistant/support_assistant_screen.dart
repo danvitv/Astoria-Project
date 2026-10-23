@@ -9,10 +9,12 @@ import '../../shared/widgets/glaze_error_block.dart';
 import '../../shared/widgets/glaze_toast.dart';
 import '../../shared/widgets/sheet_view.dart';
 import 'state/support_workspace_provider.dart';
+import 'state/support_model_provider.dart';
 import 'widgets/support_composer_bar.dart';
 import 'widgets/support_message_list.dart';
 import 'widgets/support_sessions_panel.dart';
 import 'widgets/support_settings_panel.dart';
+import 'widgets/support_model_screen_controller.dart';
 
 /// Center workspace screen for Astoria Assistant (`/support`).
 ///
@@ -27,7 +29,14 @@ import 'widgets/support_settings_panel.dart';
 class SupportAssistantScreen extends ConsumerStatefulWidget {
   final String? initialTopic;
 
-  const SupportAssistantScreen({super.key, this.initialTopic});
+  /// Optional presentation-only avatar; no effect on native send authority.
+  final Widget? welcomeAvatar;
+
+  const SupportAssistantScreen({
+    super.key,
+    this.initialTopic,
+    this.welcomeAvatar,
+  });
 
   @override
   ConsumerState<SupportAssistantScreen> createState() =>
@@ -37,12 +46,18 @@ class SupportAssistantScreen extends ConsumerStatefulWidget {
 class _SupportAssistantScreenState
     extends ConsumerState<SupportAssistantScreen> {
   final TextEditingController _composerCtrl = TextEditingController();
+  final SupportModelScreenController _modelUi = SupportModelScreenController();
   bool _sheetOpen = false;
 
   @override
   void initState() {
     super.initState();
+    _modelUi.addListener(_modelUiChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _syncTopicFromRoute());
+  }
+
+  void _modelUiChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -72,6 +87,8 @@ class _SupportAssistantScreenState
 
   @override
   void dispose() {
+    _modelUi.removeListener(_modelUiChanged);
+    _modelUi.dispose();
     _composerCtrl.dispose();
     super.dispose();
   }
@@ -171,6 +188,19 @@ class _SupportAssistantScreenState
     final isDesktop = isDesktopLayout(context);
     final workspace = ref.watch(supportWorkspaceProvider);
     final notifier = ref.read(supportWorkspaceProvider.notifier);
+    final modelEnabled =
+        workspace.settingsAvailable && workspace.settings.hasConfiguredModel;
+    final bridge = modelEnabled
+        ? ref.watch(supportModelUiBridgeProvider)
+        : null;
+    final run = modelEnabled
+        ? ref.watch(supportModelRunViewProvider)
+        : const SupportModelRunView();
+    final emitter = bridge == null
+        ? null
+        : _modelUi.bindView(bridge, _composerCtrl, workspace.activeSessionId);
+    if (bridge == null) _modelUi.retireView();
+    final activeSend = _modelUi.active;
     final activeTitle = workspace.activeSession?.title ?? 'Астория Ассистент';
 
     return GlazeScaffold(
@@ -231,10 +261,33 @@ class _SupportAssistantScreenState
                 'Настройки сессии недоступны. Отправка заблокирована; открой настройки Астории.',
               ),
             ),
+          const Padding(
+            key: ValueKey('support_text_only_notice'),
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Text(
+              'Модель отвечает только текстом после отдельного подтверждения '
+              'точного prompt. Действия, Undo, инструменты, DCP, диагностика и '
+              'экспорт отчётов пока недоступны. Локальная помощь — отдельно, без сети.',
+              style: TextStyle(fontSize: 12),
+            ),
+          ),
+          if (run.label.isNotEmpty ||
+              _modelUi.refusal != SupportModelRefusal.none)
+            Padding(
+              key: const ValueKey('support_model_run_status'),
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                _modelUi.refusal != SupportModelRefusal.none
+                    ? _modelUi.refusal.label
+                    : run.label,
+              ),
+            ),
           Expanded(
             child: SupportMessageList(
               messages: workspace.activeMessages,
               hasConfiguredModel: workspace.settings.hasConfiguredModel,
+              run: run,
+              welcomeAvatar: widget.welcomeAvatar,
               onQuickAction: _handleSetupCardAction,
               onApplyPlan: notifier.applyMutationPlan,
               onRollback: notifier.rollbackMutation,
@@ -244,11 +297,21 @@ class _SupportAssistantScreenState
           SupportComposerBar(
             controller: _composerCtrl,
             sessionId: workspace.activeSessionId,
-            busy: workspace.isBusy || workspace.isLoading,
+            busy:
+                workspace.isBusy ||
+                workspace.isLoading ||
+                run.busy ||
+                activeSend != null,
             available:
                 workspace.settingsAvailable &&
                 workspace.activeSessionId.isNotEmpty,
             onSend: notifier.sendUserMessage,
+            nativeOwner: emitter,
+            onNativeSend: emitter == null
+                ? (_) => _modelUi.rejectNoModel()
+                : (draft) => _modelUi.send(emitter, draft, context),
+            onLocalHelp: notifier.sendLocalHelp,
+            onStop: activeSend?.stop,
             onRunQuickDiagnostics: () =>
                 _handleSetupCardAction('connection_diagnostics'),
           ),

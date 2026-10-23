@@ -110,8 +110,9 @@ class _ManualModelFormState extends State<_ManualModelForm> {
 
   @override
   Widget build(BuildContext context) => MenuGroup(
+    header: 'Выбор модели',
     description:
-        'Укажи идентификатор из настроек провайдера. Доступность модели здесь не проверяется; запуск LLM пока недоступен.',
+        'Укажи идентификатор из настроек провайдера. Список моделей и доступность здесь не запрашиваются. Выбор не разрешает отправку: получатель и каждый точный текстовый prompt подтверждаются отдельно.',
     items: [
       if (widget.connectionModel case final model? when model.isNotEmpty)
         MenuItem(

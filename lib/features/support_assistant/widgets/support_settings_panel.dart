@@ -122,7 +122,7 @@ class SupportSettingsPanel extends ConsumerWidget {
             ),
           ),
           MenuGroup(
-            header: 'Профиль Астории (запуск LLM пока недоступен)',
+            header: 'Профиль Астории (текст по явному подтверждению)',
             description: 'support_privacy_chooser_not_consent'.tr(),
             items: [
               MenuSelectorItem(
