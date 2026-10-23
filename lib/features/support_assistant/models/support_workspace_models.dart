@@ -1,5 +1,8 @@
 import 'package:flutter/foundation.dart';
 import '../../../core/credentials/credential_metadata.dart';
+import 'support_guidance_target.dart';
+
+export 'support_guidance_target.dart';
 
 enum SupportAssistantMode {
   onboarding('Onboarding', 'Объяснять и обучать'),
@@ -70,6 +73,12 @@ const kDefaultSupportQuickActions = [
 @immutable
 sealed class SupportCard {
   const SupportCard();
+}
+
+/// Display proposal only. It contains no consent, scope or executable action.
+final class SupportGuidanceCard extends SupportCard {
+  const SupportGuidanceCard({required this.target});
+  final SupportGuidanceTarget target;
 }
 
 final class QuickActionChipsCard extends SupportCard {

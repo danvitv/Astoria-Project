@@ -14,9 +14,32 @@ enum SupportSourceKind {
 enum SupportProvenanceWrapper { source, summary, toolResult, agentResult }
 
 /// Native source declarations, never parsed from arbitrary model/card text.
-/// Exact IDs remain attached when the content becomes a summary/tool/agent result.
+/// Exact IDs or the explicit finite session extent remain attached when content
+/// becomes a summary/tool/agent result. This never approves a model snapshot.
 @immutable
 final class SupportPermissionSource {
+  /// The exact game target; the authorization lease separately owns the current
+  /// support policy/session. This constructor carries no selected-message IDs.
+  SupportPermissionSource.gameSessionHistory(String id)
+    : this._(
+        null,
+        SupportSourceKind.gameHistory,
+        id,
+        const [],
+        null,
+        null,
+        historyExtent: SupportHistoryExtent.wholeSession,
+      );
+  SupportPermissionSource.supportSessionHistory(String id)
+    : this._(
+        id,
+        SupportSourceKind.supportHistory,
+        null,
+        const [],
+        null,
+        null,
+        historyExtent: SupportHistoryExtent.wholeSession,
+      );
   SupportPermissionSource.gameHistory(
     String supportId,
     String gameId,
@@ -70,43 +93,62 @@ final class SupportPermissionSource {
     this.gameSessionId,
     Iterable<String> ids,
     this.safeCategory,
-    this.dataCategory,
-  ) : selectedIds = List.unmodifiable(ids) {
-    requireSupportPermissionId(supportSessionId);
+    this.dataCategory, {
+    this.historyExtent = SupportHistoryExtent.selectedMessages,
+  }) : selectedIds = List.unmodifiable(ids) {
+    if (supportSessionId != null) {
+      requireSupportPermissionId(supportSessionId!);
+    }
     if (gameSessionId != null) requireSupportPermissionId(gameSessionId!);
     if (selectedIds.length > 512 ||
         selectedIds.toSet().length != selectedIds.length ||
-        (kind != SupportSourceKind.safeProjection && selectedIds.isEmpty)) {
+        (kind != SupportSourceKind.safeProjection &&
+            historyExtent != SupportHistoryExtent.wholeSession &&
+            selectedIds.isEmpty) ||
+        (historyExtent == SupportHistoryExtent.wholeSession &&
+            (selectedIds.isNotEmpty ||
+                (kind != SupportSourceKind.gameHistory &&
+                    kind != SupportSourceKind.supportHistory)))) {
       throw StateError('Invalid permission provenance.');
     }
     selectedIds.forEach(requireSupportPermissionId);
   }
-  final String supportSessionId;
+  final String? supportSessionId;
   final String? gameSessionId;
   final SupportSourceKind kind;
   final List<String> selectedIds;
   final SupportSafeCategory? safeCategory;
   final SupportDataCategory? dataCategory;
+  final SupportHistoryExtent historyExtent;
 
   bool sameAs(SupportPermissionSource other) =>
       supportSessionId == other.supportSessionId &&
       kind == other.kind &&
       gameSessionId == other.gameSessionId &&
+      historyExtent == other.historyExtent &&
       safeCategory == other.safeCategory &&
       dataCategory == other.dataCategory &&
       listEquals(selectedIds, other.selectedIds);
 
   bool isSelectedBy(SupportPermissionPreferences p) {
-    if (supportSessionId != p.supportSessionId || p.scope == null) return false;
+    if ((supportSessionId != null && supportSessionId != p.supportSessionId) ||
+        p.scope == null) {
+      return false;
+    }
     final s = p.scope!;
     return switch (kind) {
       SupportSourceKind.gameHistory =>
         gameSessionId == s.gameSessionId &&
-            s.gameHistory != null &&
-            listEquals(selectedIds, s.gameHistory!.messageIds),
+            historyExtent == s.gameHistoryExtent &&
+            (historyExtent == SupportHistoryExtent.wholeSession ||
+                (s.gameHistory != null &&
+                    listEquals(selectedIds, s.gameHistory!.messageIds))),
       SupportSourceKind.supportHistory =>
-        s.supportHistory != null &&
-            listEquals(selectedIds, s.supportHistory!.messageIds),
+        supportSessionId == p.supportSessionId &&
+            historyExtent == s.supportHistoryExtent &&
+            (historyExtent == SupportHistoryExtent.wholeSession ||
+                (s.supportHistory != null &&
+                    listEquals(selectedIds, s.supportHistory!.messageIds))),
       SupportSourceKind.safeProjection => s.safeCategories.contains(
         safeCategory,
       ),

@@ -1,4 +1,5 @@
 import '../../../core/models/support_consent_selection.dart';
+import '../../../core/application/chat_source_mutation_registry.dart';
 import '../models/support_native_view.dart';
 import '../models/support_permission_preferences.dart';
 import '../models/support_permission_provenance.dart';
@@ -7,6 +8,7 @@ import '../models/support_recipient_resolution.dart';
 import 'support_native_runtime.dart';
 
 part 'support_native_selection_intents.dart';
+part 'support_native_session_intents.dart';
 part 'support_native_local_intent.dart';
 
 /// Private issuer-owned anchor, minted atomically with the emitted view. Grant
@@ -52,9 +54,13 @@ final class SupportNativeConsentController {
   SupportNativeConsentController({
     required this.runtime,
     required this.readMessages,
+    this.readSession,
+    this.sessionSources,
   });
   final SupportNativeRuntime runtime;
   final SupportNativeMessageReader readMessages;
+  final SupportNativeSessionReader? readSession;
+  final ChatSourceMutationRegistry? sessionSources;
   int _issuerLifetime = 1;
 
   /// Retire emitted intents when this UI controller is replaced, including an
@@ -90,6 +96,10 @@ final class SupportNativeConsentController {
       gameSessionId: p?.scope?.gameSessionId,
       gameMessageCount: p?.scope?.gameHistory?.messageIds.length ?? 0,
       supportMessageCount: p?.scope?.supportHistory?.messageIds.length ?? 0,
+      gameSessionSelected:
+          p?.scope?.gameHistoryExtent == SupportHistoryExtent.wholeSession,
+      supportSessionSelected:
+          p?.scope?.supportHistoryExtent == SupportHistoryExtent.wholeSession,
       connectionsSelected:
           p?.scope?.safeCategories.contains(SupportSafeCategory.connections) ==
           true,
@@ -388,12 +398,12 @@ final class SupportNativeConsentController {
     SupportPermission right,
     SupportPermissionScope? scope,
   ) {
-    // The local game reader implements exact history only, not the broader
-    // selected-data scope accepted by the generic permission policy.
+    // History consent is distinct from the broader selected-data categories
+    // accepted by the generic permission policy; those loaders stay unavailable.
     if (right == SupportPermission.readGameData) {
       return scope != null &&
           scope.gameSessionId?.isNotEmpty == true &&
-          scope.gameHistory != null &&
+          scope.hasGameHistory &&
           scope.selectedData.isEmpty;
     }
     return !{

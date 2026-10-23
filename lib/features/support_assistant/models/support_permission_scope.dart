@@ -20,6 +20,10 @@ enum SupportDataCategory {
   attachment,
 }
 
+/// Whole-session consent is explicit. A missing selected-message list is never
+/// an invitation to expand a source, and neither extent includes hidden bodies.
+enum SupportHistoryExtent { selectedMessages, wholeSession }
+
 enum SupportRecipientProtocol {
   openai,
   openaiResponses,
@@ -127,6 +131,8 @@ final class SupportPermissionScope {
     this.gameSessionId,
     this.gameHistory,
     this.supportHistory,
+    this.gameHistoryExtent = SupportHistoryExtent.selectedMessages,
+    this.supportHistoryExtent = SupportHistoryExtent.selectedMessages,
     Iterable<SupportSafeCategory> safeCategories = const [],
     Map<SupportDataCategory, Iterable<String>> selectedData = const {},
   }) : safeCategories = Set.unmodifiable(safeCategories),
@@ -139,7 +145,14 @@ final class SupportPermissionScope {
         selectionRevision > maxSupportPermissionRevision ||
         (gameSessionId == null &&
             (gameHistory != null ||
+                gameHistoryExtent == SupportHistoryExtent.wholeSession ||
                 this.selectedData.keys.any(_gameCategories.contains)))) {
+      throw StateError('Invalid permission scope.');
+    }
+    if ((gameHistoryExtent == SupportHistoryExtent.wholeSession &&
+            gameHistory != null) ||
+        (supportHistoryExtent == SupportHistoryExtent.wholeSession &&
+            supportHistory != null)) {
       throw StateError('Invalid permission scope.');
     }
     if (gameSessionId != null) requireSupportPermissionId(gameSessionId!);
@@ -153,6 +166,13 @@ final class SupportPermissionScope {
   final int selectionRevision;
   final String? gameSessionId;
   final SupportMessageSelection? gameHistory, supportHistory;
+  final SupportHistoryExtent gameHistoryExtent, supportHistoryExtent;
+  bool get hasGameHistory =>
+      gameHistoryExtent == SupportHistoryExtent.wholeSession ||
+      gameHistory != null;
+  bool get hasSupportHistory =>
+      supportHistoryExtent == SupportHistoryExtent.wholeSession ||
+      supportHistory != null;
   final Set<SupportSafeCategory> safeCategories;
   final Map<SupportDataCategory, List<String>> selectedData;
   static const _gameCategories = {
@@ -166,6 +186,8 @@ final class SupportPermissionScope {
       other != null &&
       selectionRevision == other.selectionRevision &&
       gameSessionId == other.gameSessionId &&
+      gameHistoryExtent == other.gameHistoryExtent &&
+      supportHistoryExtent == other.supportHistoryExtent &&
       _sameMessages(gameHistory, other.gameHistory) &&
       _sameMessages(supportHistory, other.supportHistory) &&
       setEquals(safeCategories, other.safeCategories) &&

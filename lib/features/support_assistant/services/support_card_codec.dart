@@ -13,7 +13,7 @@ class SupportCardCodec {
       if (raw.length > 65536) return const [];
       final root = jsonDecode(raw) as Map<String, dynamic>;
       _keys(root, ['version', 'cards']);
-      if (root['version'] != 1) return const [];
+      if (root['version'] is! int || root['version'] != 1) return const [];
       final cards = root['cards'] as List;
       if (cards.length > 32) return const [];
       return List.unmodifiable(
@@ -25,6 +25,7 @@ class SupportCardCodec {
   }
 
   Map<String, Object?> _encode(SupportCard card) => switch (card) {
+    SupportGuidanceCard c => {'type': 'guidance', 'target': c.target.name},
     QuickActionChipsCard c => {
       'type': 'quick',
       'title': c.title,
@@ -81,6 +82,12 @@ class SupportCardCodec {
   };
   SupportCard _decode(Map<String, dynamic> m) {
     switch (m['type']) {
+      case 'guidance':
+        _keys(m, ['type', 'target']);
+        // Restored JSON is a finite display destination, never a native lease.
+        return SupportGuidanceCard(
+          target: SupportGuidanceTarget.values.byName(_s(m, 'target')),
+        );
       case 'quick':
         _keys(m, ['type', 'title', 'subtitle', 'actions']);
         final actions = m['actions'] as List;

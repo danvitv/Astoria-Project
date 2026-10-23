@@ -45,6 +45,8 @@ final class SupportNativeView {
     this.gameSessionId,
     this.gameMessageCount = 0,
     this.supportMessageCount = 0,
+    this.gameSessionSelected = false,
+    this.supportSessionSelected = false,
     this.connectionsSelected = false,
     this.themeSelected = false,
     this.error,
@@ -56,7 +58,9 @@ final class SupportNativeView {
   final bool busy,
       needsRecipientConfirmation,
       connectionsSelected,
-      themeSelected;
+      themeSelected,
+      gameSessionSelected,
+      supportSessionSelected;
   final SupportRecipientResolution recipient;
   final List<SupportNativeRightView> rights;
   final String? gameSessionId, error;

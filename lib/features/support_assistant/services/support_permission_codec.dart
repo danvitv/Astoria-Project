@@ -45,7 +45,7 @@ final class SupportPermissionCodec {
         'recipient',
       });
       if (m['version'] is! int ||
-          m['version'] != SupportPermissionPreferences.version ||
+          (m['version'] != 1 && m['version'] != 2) ||
           m['session'] != sessionId) {
         throw const FormatException();
       }
@@ -63,7 +63,7 @@ final class SupportPermissionCodec {
         policyIdentity: m['identity'] as String,
         revision: m['revision'] as int,
         grants: grants,
-        scope: _scope(m['scope']),
+        scope: _scope(m['scope'], m['version'] as int),
         recipient: _recipient(m['recipient']),
       );
     } catch (_) {
@@ -75,8 +75,13 @@ final class SupportPermissionCodec {
 
   SupportContextBlock encode(SupportPermissionPreferences p, int now) {
     final s = p.scope, r = p.recipient;
+    final version =
+        s?.gameHistoryExtent == SupportHistoryExtent.wholeSession ||
+            s?.supportHistoryExtent == SupportHistoryExtent.wholeSession
+        ? 2
+        : 1;
     final json = jsonEncode(<String, Object?>{
-      'version': SupportPermissionPreferences.version,
+      'version': version,
       'session': p.supportSessionId,
       'identity': p.policyIdentity,
       'revision': p.revision,
@@ -91,6 +96,9 @@ final class SupportPermissionCodec {
               'gameSession': s.gameSessionId,
               'gameHistory': s.gameHistory?.messageIds,
               'supportHistory': s.supportHistory?.messageIds,
+              if (version == 2) 'gameHistoryExtent': s.gameHistoryExtent.name,
+              if (version == 2)
+                'supportHistoryExtent': s.supportHistoryExtent.name,
               'safeCategories': s.safeCategories.map((c) => c.name).toList(),
               'data': {
                 for (final e in s.selectedData.entries) e.key.name: e.value,
@@ -118,8 +126,11 @@ final class SupportPermissionCodec {
     );
   }
 
-  SupportPermissionScope? _scope(Object? value) {
-    if (value == null) return null;
+  SupportPermissionScope? _scope(Object? value, int version) {
+    if (value == null) {
+      if (version == 2) throw const FormatException();
+      return null;
+    }
     final m = _map(value, {
       'revision',
       'gameSession',
@@ -127,6 +138,8 @@ final class SupportPermissionCodec {
       'supportHistory',
       'safeCategories',
       'data',
+      if (version == 2) 'gameHistoryExtent',
+      if (version == 2) 'supportHistoryExtent',
     });
     final data = m['data'];
     if (data is! Map<String, dynamic> ||
@@ -144,6 +157,16 @@ final class SupportPermissionCodec {
       gameSessionId: m['gameSession'] as String?,
       gameHistory: _messages(m['gameHistory']),
       supportHistory: _messages(m['supportHistory']),
+      gameHistoryExtent: version == 1
+          ? SupportHistoryExtent.selectedMessages
+          : SupportHistoryExtent.values.byName(
+              m['gameHistoryExtent'] as String,
+            ),
+      supportHistoryExtent: version == 1
+          ? SupportHistoryExtent.selectedMessages
+          : SupportHistoryExtent.values.byName(
+              m['supportHistoryExtent'] as String,
+            ),
       safeCategories: safe.map(
         (v) => SupportSafeCategory.values.byName(v as String),
       ),

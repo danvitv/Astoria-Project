@@ -84,6 +84,9 @@ final supportNativeConsentControllerProvider = Provider((ref) {
   final runtime = ref.watch(supportNativeRuntimeProvider);
   final controller = SupportNativeConsentController(
     runtime: runtime,
+    readSession: (source, id) =>
+        selectors.readSessionMetadata(source: source, sessionId: id),
+    sessionSources: ref.watch(chatSourceMutationRegistryProvider),
     readMessages: (source, id, offset) =>
         source == SupportConsentSelectionSource.roleplay
         ? selectors.listRoleplayMessages(sessionId: id, offset: offset)

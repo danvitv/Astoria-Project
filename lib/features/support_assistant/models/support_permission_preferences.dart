@@ -60,13 +60,13 @@ final class SupportPermissionPreferences {
       SupportPermission.readDiagnostics =>
         s?.safeCategories.contains(SupportSafeCategory.diagnostics) ?? false,
       SupportPermission.readGameData =>
-        s?.gameSessionId != null && (s!.gameHistory != null || gameData),
+        s?.gameSessionId != null && (s!.hasGameHistory || gameData),
       SupportPermission.modelGameHistory =>
-        recipient != null && s?.gameHistory != null,
-      SupportPermission.reportGameHistory => s?.gameHistory != null,
+        recipient != null && (s?.hasGameHistory ?? false),
+      SupportPermission.reportGameHistory => s?.hasGameHistory ?? false,
       SupportPermission.modelSupportHistory =>
-        recipient != null && s?.supportHistory != null,
-      SupportPermission.reportSupportHistory => s?.supportHistory != null,
+        recipient != null && (s?.hasSupportHistory ?? false),
+      SupportPermission.reportSupportHistory => s?.hasSupportHistory ?? false,
       SupportPermission.modelSafeSettingsDiagnostics =>
         recipient != null && s != null && s.safeCategories.isNotEmpty,
       SupportPermission.modelGameData =>

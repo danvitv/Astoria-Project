@@ -30,13 +30,27 @@ final class SupportGameSourceObserver {
 
   bool _affects(ChatSourceMutationChange change) {
     final scope = _scope;
-    return scope?.gameSessionId != null &&
-        scope?.gameHistory != null &&
-        change.affects(
-          sessionId: scope!.gameSessionId!,
-          messageIds: scope.gameHistory!.messageIds,
-        );
+    if (scope == null || scope.gameSessionId == null || !scope.hasGameHistory) {
+      return false;
+    }
+    return scope.gameHistoryExtent == SupportHistoryExtent.wholeSession
+        ? change.sessionId == scope.gameSessionId
+        : change.affects(
+            sessionId: scope.gameSessionId!,
+            messageIds: scope.gameHistory!.messageIds,
+          );
   }
+
+  bool _sourcePending(SupportPermissionScope? scope) =>
+      scope != null &&
+      scope.gameSessionId != null &&
+      scope.hasGameHistory &&
+      (scope.gameHistoryExtent == SupportHistoryExtent.wholeSession
+          ? registry.isSessionPending(scope.gameSessionId!)
+          : registry.isPending(
+              sessionId: scope.gameSessionId!,
+              messageIds: scope.gameHistory!.messageIds,
+            ));
 
   void _changed(ChatSourceMutationChange change) {
     if (!_active || !runtime.alive) return;
@@ -85,14 +99,7 @@ final class SupportGameSourceObserver {
         _again = false;
         final scope = _scope;
         final disposed = registry.isDisposed;
-        final pending =
-            disposed ||
-            (scope?.gameSessionId != null &&
-                scope?.gameHistory != null &&
-                registry.isPending(
-                  sessionId: scope!.gameSessionId!,
-                  messageIds: scope.gameHistory!.messageIds,
-                ));
+        final pending = disposed || _sourcePending(scope);
         final changed = pending != _blocked;
         final retire =
             (pending && !_blocked) || (disposed && !_registryRetired);

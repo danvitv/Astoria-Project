@@ -87,7 +87,8 @@ final class _ModelRun {
                     ? sessionId
                     : s.gameSessionId) ==
                 id &&
-            s.selectedIds.contains(message),
+            (s.historyExtent == SupportHistoryExtent.wholeSession ||
+                s.selectedIds.contains(message)),
       );
 
   void phase(SupportModelPhase phase) {

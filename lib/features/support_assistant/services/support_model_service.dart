@@ -201,9 +201,12 @@ final class SupportModelService {
   }) {
     final ids = messageIds == null ? null : Set<String>.of(messageIds);
     bool affects(SupportPermissionScope? scope) =>
-        scope?.gameSessionId == sessionId &&
-        scope?.gameHistory != null &&
-        (ids == null || scope!.gameHistory!.messageIds.any(ids.contains));
+        scope != null &&
+        scope.gameSessionId == sessionId &&
+        scope.hasGameHistory &&
+        (scope.gameHistoryExtent == SupportHistoryExtent.wholeSession ||
+            ids == null ||
+            scope.gameHistory!.messageIds.any(ids.contains));
     final run = _active;
     if (run != null && affects(run.binding.policy.scope)) {
       run.cancel(SupportModelRefusal.stale);

@@ -18,6 +18,8 @@ export '../models/support_workspace_models.dart';
 export 'support_workspace_state.dart';
 export 'support_workspace_dependencies.dart';
 
+part 'support_workspace_settings_intent.dart';
+
 /// Serial durable writes; each build and selection own their completions.
 class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
   int _epoch = 0, _selection = 0;
@@ -289,26 +291,69 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     });
   }
 
+  SupportWorkspaceSettingsIntent? captureSettingsIntent({
+    bool Function()? isOriginalUiCurrent,
+  }) {
+    final native = _native;
+    if (native == null ||
+        state.activeSessionId.isEmpty ||
+        state.isLoading ||
+        !state.settingsAvailable) {
+      return null;
+    }
+    final owner = _owner, selection = _selection;
+    final session = state.activeSessionId, lifetime = native.lifetime;
+    bool original() =>
+        _current(owner) &&
+        selection == _selection &&
+        identical(native, _native) &&
+        native.alive &&
+        native.lifetime == lifetime &&
+        native.sessionId == session &&
+        state.activeSessionId == session;
+    final intent = SupportWorkspaceSettingsIntent._(
+      this,
+      () => original() && (isOriginalUiCurrent?.call() ?? true) && original(),
+    );
+    return intent.isCurrent ? intent : null;
+  }
+
+  bool _ownsSettingsIntent(SupportWorkspaceSettingsIntent intent) =>
+      identical(intent._notifier, this) && intent.isCurrent;
+
   Future<bool> _settings(
-    SupportAssistantSettings Function(SupportAssistantSettings) change,
-  ) {
+    SupportAssistantSettings Function(SupportAssistantSettings) change, {
+    SupportWorkspaceSettingsIntent? intent,
+  }) {
     final id = state.activeSessionId;
-    if (id.isEmpty || state.isLoading || !state.settingsAvailable) {
+    if (id.isEmpty ||
+        state.isLoading ||
+        !state.settingsAvailable ||
+        (intent != null && !_ownsSettingsIntent(intent))) {
       return Future.value(false);
     }
     return _editPreferences(
       (store, current) => store.changeSettings(id, change, isCurrent: current),
+      isOriginalUiCurrent: intent == null
+          ? null
+          : () => _ownsSettingsIntent(intent),
     );
   }
 
   Future<bool> _editPreferences(
-    Future<void> Function(SupportWorkspaceStore, bool Function()) edit,
-  ) {
+    Future<void> Function(SupportWorkspaceStore, bool Function()) edit, {
+    bool Function()? isOriginalUiCurrent,
+  }) {
     final native = _native!;
     final settleNative = native.beginSettingsChange();
     final owner = _owner, selection = _selection;
     final nativeOwner = native.writeOwner, id = state.activeSessionId;
-    bool current() => _current(owner) && selection == _selection;
+    bool current() =>
+        _current(owner) &&
+        selection == _selection &&
+        (isOriginalUiCurrent?.call() ?? true) &&
+        _current(owner) &&
+        selection == _selection;
     return _enqueue(
       owner,
       () async {
@@ -353,29 +398,55 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     );
   }
 
-  Future<bool> setMode(SupportAssistantMode mode) =>
-      _settings((s) => s.copyWith(mode: mode));
-  Future<bool> selectConnection(String? id, {String? defaultModelId}) =>
-      _settings(
-        (s) => s.copyWith(
-          apiConfigId: id,
-          clearApiConfigId: id == null,
-          modelId: defaultModelId,
-          clearModelId: defaultModelId == null,
-        ),
-      );
-  Future<bool> selectModel(String? id) => _settings(
+  Future<bool> setMode(
+    SupportAssistantMode mode, {
+    SupportWorkspaceSettingsIntent? intent,
+  }) => _settings((s) => s.copyWith(mode: mode), intent: intent);
+  Future<bool> selectConnection(
+    String? id, {
+    String? defaultModelId,
+    SupportWorkspaceSettingsIntent? intent,
+  }) => _settings(
+    (s) => s.copyWith(
+      apiConfigId: id,
+      clearApiConfigId: id == null,
+      modelId: defaultModelId,
+      clearModelId: defaultModelId == null,
+    ),
+    intent: intent,
+  );
+  Future<bool> selectModel(
+    String? id, {
+    SupportWorkspaceSettingsIntent? intent,
+  }) => _settings(
     (s) => s.copyWith(modelId: id, clearModelId: id == null || id.isEmpty),
+    intent: intent,
   );
-  Future<bool> setTemperature(double value) => _settings(
+  Future<bool> setTemperature(
+    double value, {
+    SupportWorkspaceSettingsIntent? intent,
+  }) => _settings(
     (s) => s.copyWith(temperature: value.isFinite ? value.clamp(0, 2) : 0.35),
+    intent: intent,
   );
-  Future<bool> setMaxTokens(int value) =>
-      _settings((s) => s.copyWith(maxTokens: value.clamp(256, 16384)));
-  Future<bool> setReasoningEffort(SupportReasoningEffort effort) =>
-      _settings((s) => s.copyWith(reasoningEffort: effort));
-  Future<bool> setDcpCompression(bool enabled) =>
-      _settings((s) => s.copyWith(dcpCompressionEnabled: enabled));
+  Future<bool> setMaxTokens(
+    int value, {
+    SupportWorkspaceSettingsIntent? intent,
+  }) => _settings(
+    (s) => s.copyWith(maxTokens: value.clamp(256, 16384)),
+    intent: intent,
+  );
+  Future<bool> setReasoningEffort(
+    SupportReasoningEffort effort, {
+    SupportWorkspaceSettingsIntent? intent,
+  }) => _settings((s) => s.copyWith(reasoningEffort: effort), intent: intent);
+  Future<bool> setDcpCompression(
+    bool enabled, {
+    SupportWorkspaceSettingsIntent? intent,
+  }) => _settings(
+    (s) => s.copyWith(dcpCompressionEnabled: enabled),
+    intent: intent,
+  );
 
   Future<bool> deleteMessage(String messageId) {
     final id = state.activeSessionId;

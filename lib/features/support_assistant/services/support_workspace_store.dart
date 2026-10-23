@@ -4,7 +4,9 @@ import '../../../core/models/support_models.dart' as db;
 import '../../../core/support/support_payload_cipher.dart';
 import '../../../core/utils/id_generator.dart';
 import '../models/support_workspace_models.dart';
+import '../models/support_model_provenance.dart';
 import 'support_card_codec.dart';
+import 'support_model_provenance_codec.dart';
 import 'support_workspace_settings_codec.dart';
 
 class SupportWorkspaceSnapshot {
@@ -208,6 +210,92 @@ class SupportWorkspaceStore {
       createdAt: DateTime.now().toUtc(),
     ),
   );
+
+  /// Actual composer USER origin for a future fixed native local reply. Empty
+  /// cards and a native run are required by the existing exact-origin port.
+  Future<SupportMessageItem> appendNativeLocalUser(
+    String id,
+    String text, {
+    required String runId,
+    required bool Function() isCurrent,
+  }) async {
+    final redactor = _redactor();
+    final durable = await repo.appendCurrentUser(
+      message: db.SupportMessage(
+        id: generateId(),
+        sessionId: id,
+        role: 'user',
+        body: redactor.redactText(text.trim()),
+        runId: runId,
+        createdAt: _now,
+      ),
+      isCurrent: () => isCurrent() && identical(redactor, _redactor()),
+    );
+    if (durable == null) throw StateError('Local input unavailable');
+    return _message(
+      durable,
+    ); // Already committed, even if UI retired meanwhile.
+  }
+
+  /// Native fixed response; NEVER called for restored/model/provider prose.
+  /// Missing native USER custody is a refusal, not a legacy append fallback.
+  Future<SupportMessageItem> appendNativeLocalReply(
+    SupportMessageItem item, {
+    required SupportMessageItem originatingUser,
+    required bool Function() isCurrent,
+  }) async {
+    final runId = originatingUser.runId;
+    if (runId == null ||
+        originatingUser.role != SupportMessageRole.user ||
+        originatingUser.sessionId != item.sessionId ||
+        item.role != SupportMessageRole.assistant) {
+      throw StateError('Local origin unavailable');
+    }
+    final recipe = SupportModelProvenance(
+      supportSessionId: item.sessionId,
+      replyMessageId: item.id,
+      runId: runId,
+      currentUserMessageId: originatingUser.id,
+      originalRanges: const [],
+      directReplies: const [],
+    );
+    final redactor = _redactor();
+    for (final id in [item.sessionId, item.id, runId, originatingUser.id]) {
+      if (redactor.redactText(id) != id) {
+        throw StateError('Local origin unavailable');
+      }
+    }
+    final encoded = SupportModelProvenanceCodec.encodeForEncryptedStorage(
+      recipe,
+    );
+    final durable = await repo.appendNativeLocalReply(
+      message: db.SupportMessage(
+        id: item.id,
+        sessionId: item.sessionId,
+        role: 'assistant',
+        body: redactor.redactText(item.body),
+        cardsJson: item.cards.isEmpty ? '' : _cards.encode(item.cards),
+        runId: runId,
+        status: item.status,
+        createdAt: item.createdAt.millisecondsSinceEpoch,
+      ),
+      originatingUser: db.SupportMessage(
+        id: originatingUser.id,
+        sessionId: originatingUser.sessionId,
+        role: 'user',
+        body: originatingUser.body,
+        runId: runId,
+        status: originatingUser.status,
+        createdAt: originatingUser.createdAt.millisecondsSinceEpoch,
+        isLocked: originatingUser.isLocked,
+      ),
+      provenanceJson: encoded,
+      isCurrent: () => isCurrent() && identical(redactor, _redactor()),
+    );
+    if (durable == null) throw StateError('Local reply unavailable');
+    return _message(durable);
+  }
+
   Future<SupportMessageItem> append(SupportMessageItem item) async {
     final durable = await repo.appendMessage(
       db.SupportMessage(

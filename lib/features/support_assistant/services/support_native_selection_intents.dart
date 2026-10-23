@@ -55,6 +55,10 @@ extension SupportNativeSelectionIntents on SupportNativeConsentController {
         gameSessionId: s?.gameSessionId,
         gameHistory: s?.gameHistory,
         supportHistory: s?.supportHistory,
+        gameHistoryExtent:
+            s?.gameHistoryExtent ?? SupportHistoryExtent.selectedMessages,
+        supportHistoryExtent:
+            s?.supportHistoryExtent ?? SupportHistoryExtent.selectedMessages,
         // Preserve implemented categories independently; no private/file handles.
         safeCategories: {
           ...?s?.safeCategories.where(
@@ -145,6 +149,13 @@ extension SupportNativeSelectionIntents on SupportNativeConsentController {
         supportHistory: page.source == SupportConsentSelectionSource.support
             ? selection
             : s?.supportHistory,
+        gameHistoryExtent: page.source == SupportConsentSelectionSource.roleplay
+            ? SupportHistoryExtent.selectedMessages
+            : s?.gameHistoryExtent ?? SupportHistoryExtent.selectedMessages,
+        supportHistoryExtent:
+            page.source == SupportConsentSelectionSource.support
+            ? SupportHistoryExtent.selectedMessages
+            : s?.supportHistoryExtent ?? SupportHistoryExtent.selectedMessages,
         safeCategories:
             s?.safeCategories.where(
               SupportNativeConsentController._implementedSafeCategory,
@@ -156,18 +167,20 @@ extension SupportNativeSelectionIntents on SupportNativeConsentController {
 
   Future<bool> _selectScope(
     SupportNativeReview review,
-    SupportPermissionScope scope,
-  ) {
-    if (!_current(review)) return Future.value(false);
+    SupportPermissionScope scope, {
+    bool Function()? sourceIsCurrent,
+  }) {
+    bool current() => _current(review) && (sourceIsCurrent?.call() ?? true);
+    if (!current()) return Future.value(false);
     return _withLocalPermissionChange(() {
-      if (!_current(review)) return Future.value(false);
+      if (!current()) return Future.value(false);
       review = _admitBinding(review);
       return _write(
         review,
         () => runtime.permissions.changeReviewedFromNative(
           review._policy!,
           change: (p) => p.withNativeScope(scope),
-          isCurrent: () => _current(review),
+          isCurrent: current,
         ),
       );
     });
