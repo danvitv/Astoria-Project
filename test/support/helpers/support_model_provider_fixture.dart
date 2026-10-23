@@ -50,6 +50,7 @@ final class ModelProviderFixture {
     repo = SupportRepo(db, cipher);
     workspaceStore = SupportWorkspaceStore(repo, () => redaction.redactor);
     isolation.extraAllowed.add(_databaseChoice);
+    isolation.extraAllowed.add(nativeProviderAdapterFactoryProvider);
     container = ProviderContainer(
       observers: [isolation],
       overrides: [
@@ -70,6 +71,9 @@ final class ModelProviderFixture {
           ),
         ),
         supportModelPrivateAdapterFactoryProvider.overrideWithValue(newAdapter),
+        nativeProviderAdapterFactoryProvider.overrideWithValue(
+          () => isolation.block('undeclared native provider wire adapter'),
+        ),
         supportConnectionMetadataProvider.overrideWith(
           (_) => isolation.block('bulk metadata/model startup'),
         ),

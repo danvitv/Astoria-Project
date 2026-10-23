@@ -24,6 +24,15 @@ final class ModelProviderIsolation extends ProviderObserver {
 
   @override
   void didAddProvider(ProviderObserverContext context, Object? value) {
+    if (context.provider == nativeProviderRuntimeProvider) {
+      // The fixture keeps the ACTUAL API repo over its explicitly injected
+      // memory DB/vault. Its associated runtime is constructor-only; its native
+      // wire factory is separately overridden with a recording refusal.
+      if (value != null && value is! NativeProviderRuntime) {
+        block('invalid associated native provider runtime');
+      }
+      return;
+    }
     if (!{
       appDbProvider,
       credentialStorageProvider,
@@ -51,7 +60,7 @@ final class ModelProviderIsolation extends ProviderObserver {
       supportModelRunViewProvider,
       ...extraAllowed,
     }.contains(context.provider)) {
-      block('unexpected startup provider');
+      block('unexpected startup provider ${context.provider}');
     }
   }
 

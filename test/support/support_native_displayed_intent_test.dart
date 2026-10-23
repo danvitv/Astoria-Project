@@ -451,7 +451,14 @@ void main() {
         }
       };
       await tester.runAsync(() async {
-        _switch(tester, 'readSafeSettings').onChanged!(true);
+        // Local-read toggles deliberately do not resolve a model recipient.
+        // Exercise the actual recipient preparation whose late failure this
+        // case owns, rather than requiring an API read from a local grant.
+        tester
+            .widget<GlazeActionButton>(
+              find.byKey(const ValueKey('support_privacy_recipient')),
+            )
+            .onTap!();
         for (var i = 0; i < 100 && !entered.isCompleted; i++) {
           await Future<void>.delayed(Duration.zero);
         }

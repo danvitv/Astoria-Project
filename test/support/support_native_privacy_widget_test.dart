@@ -313,7 +313,7 @@ void main() {
       ]) {
         expect(_switch(tester, right).onChanged, isNull);
       }
-      expect(find.textContaining('Выбор тем, пресетов'), findsOneWidget);
+      expect(find.textContaining('Выбор установленной темы'), findsOneWidget);
       expect(f.selectedLoads, 0);
     },
   );

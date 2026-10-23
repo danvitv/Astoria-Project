@@ -210,6 +210,7 @@ final class ModelScreenFixture {
       navHeightProvider,
       shellHeaderProvider,
       supportConnectionsProvider,
+      nativeProviderAdapterFactoryProvider,
     });
     container = ProviderContainer(
       observers: [isolation],
@@ -223,6 +224,9 @@ final class ModelScreenFixture {
         secretRedactionCoordinatorProvider.overrideWithValue(redaction),
         supportSessionStoreProvider.overrideWithValue(store),
         supportModelPrivateAdapterFactoryProvider.overrideWithValue(newAdapter),
+        nativeProviderAdapterFactoryProvider.overrideWithValue(
+          () => isolation.block('undeclared native provider wire adapter'),
+        ),
         supportConnectionsProvider.overrideWithValue(const []),
         supportConnectionMetadataProvider.overrideWith(
           (_) => isolation.block('bulk model/metadata startup'),
