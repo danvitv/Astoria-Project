@@ -49,35 +49,57 @@ final class SupportAppActionField {
       maximum = null,
       maxLength = null,
       pattern = null,
-      choices = null;
+      choices = null,
+      isBodyText = false;
   const SupportAppActionField.integer(this.minimum, this.maximum)
     : type = 'integer',
       maxLength = null,
       pattern = null,
-      choices = null;
+      choices = null,
+      isBodyText = false;
   const SupportAppActionField.number(this.minimum, this.maximum)
     : type = 'number',
       maxLength = null,
       pattern = null,
-      choices = null;
+      choices = null,
+      isBodyText = false;
   const SupportAppActionField.text(this.maxLength, {this.pattern})
     : type = 'string',
       minimum = null,
       maximum = null,
-      choices = null;
+      choices = null,
+      isBodyText = false;
+
+  /// Supplied new content only; never authorizes reading or returning a body.
+  const SupportAppActionField.bodyText(int maxLength)
+    : assert(maxLength >= 1 && maxLength <= 32768),
+      type = 'string',
+      minimum = null,
+      maximum = null,
+      maxLength = maxLength,
+      pattern = null,
+      choices = null,
+      isBodyText = true;
   SupportAppActionField.choice(Iterable<String> values)
     : type = 'string',
       minimum = null,
       maximum = null,
       maxLength = null,
       pattern = null,
-      choices = List.unmodifiable(values);
+      choices = List.unmodifiable(values),
+      isBodyText = false;
 
   final String type;
   final num? minimum, maximum;
   final int? maxLength;
   final String? pattern;
   final List<String>? choices;
+  final bool isBodyText;
+
+  static final _bodyControls = RegExp(
+    r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\p{Cf}\p{Cs}\p{Default_Ignorable_Code_Point}]',
+    unicode: true,
+  );
 
   bool accepts(Object? value) => switch (type) {
     'boolean' => value is bool,
@@ -86,9 +108,16 @@ final class SupportAppActionField {
       value is num && value.isFinite && value >= minimum! && value <= maximum!,
     'string' =>
       value is String &&
-          value.isNotEmpty &&
-          value == value.trim() &&
-          !RegExp(r'[\x00-\x1f\x7f\u200b-\u200f\ufeff]').hasMatch(value) &&
+          (isBodyText
+              ? maxLength != null &&
+                    maxLength! >= 1 &&
+                    maxLength! <= 32768 &&
+                    !_bodyControls.hasMatch(value)
+              : value.isNotEmpty &&
+                    value == value.trim() &&
+                    !RegExp(
+                      r'[\x00-\x1f\x7f\u200b-\u200f\ufeff]',
+                    ).hasMatch(value)) &&
           (maxLength == null || value.length <= maxLength!) &&
           (pattern == null || RegExp(pattern!).hasMatch(value)) &&
           (choices == null || choices!.contains(value)),
@@ -99,7 +128,7 @@ final class SupportAppActionField {
     'type': type,
     if (minimum != null) 'minimum': minimum,
     if (maximum != null) 'maximum': maximum,
-    if (type == 'string') 'minLength': 1,
+    if (type == 'string') 'minLength': isBodyText ? 0 : 1,
     if (maxLength != null) 'maxLength': maxLength,
     if (pattern != null) 'pattern': pattern,
     if (choices != null) 'enum': choices,

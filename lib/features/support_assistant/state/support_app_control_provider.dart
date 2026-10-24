@@ -11,6 +11,8 @@ import '../services/app_control/support_app_navigation_adapter.dart';
 import '../services/app_control/support_app_preferences_adapter.dart';
 import '../services/app_control/support_app_theme_adapter.dart';
 import 'support_app_control_connections_provider.dart';
+import 'support_app_control_native_domain_provider.dart';
+import 'support_app_control_backup_provider.dart';
 
 export '../models/support_app_action.dart';
 export '../services/app_control/support_app_action_registry.dart';
@@ -49,6 +51,14 @@ final supportAppActionRegistryProvider = Provider<SupportAppActionRegistry>((
           ),
         ),
       SupportAppNavigationAdapter(),
+      ...ref.watch(supportAppNativeDomainAdaptersProvider),
+      // Default graph is finite but has no backup file/source authority. The
+      // original service binds ONLY this adapter through withNativeBackup.
+      SupportDatabaseBackupAdapter(
+        native: null,
+        originalSource: () => null,
+        isOriginalOwnerCurrent: current,
+      ),
     ],
   );
 });

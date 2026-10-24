@@ -54,6 +54,7 @@ final class _ModelRun {
   bool compactInstalled = false;
   PrivateTextOutcome? compactOutcome;
   SupportAppActionRegistry? originalActions;
+  SupportDatabaseBackupAdapter? originalBackup;
   bool toolsResolved = false;
   String get sessionId => binding.sessionId;
   late final _ModelReadOperation operation;
@@ -326,6 +327,8 @@ extension _ModelSettlement on _ModelRun {
       reason = operation.reason;
     }
     operation.close();
+    // generateTools has joined any admitted file effect before settlement.
+    originalBackup?.dispose();
     phase(SupportModelPhase.settling);
     SupportModelMessage? message;
     var saved = compactInstalled && isCompact;

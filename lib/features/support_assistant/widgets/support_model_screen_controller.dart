@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import '../models/support_model_tool_ui_ports.dart';
 import '../state/support_model_provider.dart';
 import 'support_composer_bar.dart';
+import 'support_model_tool_native_ui.dart';
+import '../services/app_control/backup/support_backup_native_ui.dart';
+import '../services/app_control/backup/support_backup_file_host.dart';
 
 /// Displayed composer lifetime only. The original Send authorizes its exact
 /// native request; admission, cancellation and settlement stay with its issuer.
@@ -19,6 +22,15 @@ final class SupportModelScreenController extends ChangeNotifier {
   String? _session;
   List<SupportModelConversationMessage> _conversation = const [];
   void Function()? _unlisten;
+  Object? _nativeBinding;
+  BuildContext? _nativeContext;
+  SupportModelUiBridge? _nativeBridge;
+  TextEditingController? _nativeController;
+  String? _nativeSession;
+  SupportModelToolNativeUi? _nativeUi;
+  SupportBackupNativeUi? _backupUi;
+  SupportBackupNativeFileHost? _backupHost;
+  SupportModelToolUiPorts? _nativePorts;
   SupportModelRefusal refusal = SupportModelRefusal.none;
 
   SupportModelUiSend? get active => _send;
@@ -30,7 +42,50 @@ final class SupportModelScreenController extends ChangeNotifier {
     List<SupportModelConversationMessage> visibleConversation = const [],
     SupportModelToolUiPorts? toolUi,
     bool Function()? isOriginalRouteCurrent,
+    BuildContext? nativeContext,
+    SupportBackupFileDialog backupFileDialog =
+        const SupportBackupPlatformFileDialog(),
   }) {
+    if (nativeContext != null) {
+      if (!identical(nativeContext, _nativeContext) ||
+          !identical(bridge, _nativeBridge) ||
+          !identical(controller, _nativeController) ||
+          session != _nativeSession) {
+        _disposeNativeUi();
+        final lifetime = _nativeBinding = Object();
+        _nativeContext = nativeContext;
+        _nativeBridge = bridge;
+        _nativeController = controller;
+        _nativeSession = session;
+        bool originalUi() =>
+            _alive &&
+            nativeContext.mounted &&
+            identical(_nativeBinding, lifetime);
+        final native = _nativeUi = SupportModelToolNativeUi(
+          context: nativeContext,
+          isOriginalUiCurrent: originalUi,
+        );
+        final backup = _backupUi = SupportBackupNativeUi(
+          context: nativeContext,
+          isOriginalUiCurrent: originalUi,
+          fileDialog: backupFileDialog,
+        );
+        final host = _backupHost = SupportBackupNativeFileHost(
+          ui: backup,
+          otherConfirmation: native,
+        );
+        _nativePorts = SupportModelToolUiPorts(
+          confirmation: host,
+          navigation: native,
+          backupFileHost: host,
+        );
+      }
+      toolUi = _nativePorts;
+      final originalNativeUi = _nativeUi!;
+      final callerRouteCurrent = isOriginalRouteCurrent;
+      isOriginalRouteCurrent = () =>
+          originalNativeUi.isCurrent && (callerRouteCurrent?.call() ?? true);
+    }
     if (!identical(bridge, _bridge) ||
         !identical(controller, _controller) ||
         session != _session ||
@@ -71,6 +126,22 @@ final class SupportModelScreenController extends ChangeNotifier {
     _bridge = null;
     _controller = null;
     _send = null;
+    _disposeNativeUi();
+  }
+
+  void _disposeNativeUi() {
+    _nativeBinding = null;
+    _backupHost?.dispose();
+    _backupUi?.dispose();
+    _nativeUi?.dispose();
+    _backupHost = null;
+    _backupUi = null;
+    _nativeUi = null;
+    _nativePorts = null;
+    _nativeContext = null;
+    _nativeBridge = null;
+    _nativeController = null;
+    _nativeSession = null;
   }
 
   Future<bool> rejectNoModel() {
@@ -143,6 +214,7 @@ final class SupportModelScreenController extends ChangeNotifier {
     _binding = null;
     _unlisten?.call();
     _emitter?.retire();
+    _disposeNativeUi();
     super.dispose();
   }
 }

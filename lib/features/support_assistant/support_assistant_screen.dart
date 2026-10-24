@@ -17,7 +17,7 @@ import 'widgets/support_message_list.dart';
 import 'widgets/support_sessions_panel.dart';
 import 'widgets/support_settings_panel.dart';
 import 'widgets/support_model_screen_controller.dart';
-import 'widgets/support_model_tool_native_ui.dart';
+import 'services/app_control/backup/support_backup_native_ui.dart';
 import 'widgets/support_theme_entry.dart';
 import 'widgets/support_provider_entry.dart';
 import 'widgets/support_guidance_sheet.dart';
@@ -46,10 +46,14 @@ class SupportAssistantScreen extends ConsumerStatefulWidget {
   /// Optional presentation-only avatar; no effect on native send authority.
   final Widget? welcomeAvatar;
 
+  /// Framework SaveFile seam only; never a snapshot/source or approval override.
+  final SupportBackupFileDialog backupFileDialog;
+
   const SupportAssistantScreen({
     super.key,
     this.initialTopic,
     this.welcomeAvatar,
+    this.backupFileDialog = const SupportBackupPlatformFileDialog(),
   });
 
   @override
@@ -71,7 +75,6 @@ class _SupportAssistantScreenState
   bool _guidancePersistent = false, _guidanceBlocking = true;
   bool _showSendSnapshot = false;
   bool _sheetOpen = false;
-  SupportModelToolNativeUi? _toolUi;
 
   @override
   void initState() {
@@ -141,7 +144,6 @@ class _SupportAssistantScreenState
 
   @override
   void dispose() {
-    _toolUi?.dispose();
     _modelUi.removeListener(_modelUiChanged);
     _modelUi.dispose();
     _composerCtrl.dispose();
@@ -288,11 +290,8 @@ class _SupportAssistantScreenState
             bridge,
             _composerCtrl,
             workspace.activeSessionId,
-            toolUi: (_toolUi ??= SupportModelToolNativeUi(
-              context: context,
-              isOriginalUiCurrent: () => mounted,
-            )).ports,
-            isOriginalRouteCurrent: () => _toolUi?.isCurrent == true,
+            nativeContext: context,
+            backupFileDialog: widget.backupFileDialog,
             visibleConversation: [
               for (final message in workspace.activeMessages)
                 if ((message.role == SupportMessageRole.user ||
@@ -410,10 +409,16 @@ class _SupportAssistantScreenState
                       'повторного подтверждения отправки. Метаданные подключений доступны '
                       'без ключей; создание и ограниченные изменения профиля требуют точного '
                       'нативного подтверждения. Переход по разделам не изменяет их данные. '
-                      'Защищённый ввод ключа и Undo остаются отдельными нативными действиями. '
+                      'Защищённый ввод ключа остаётся отдельным нативным действием. '
                       'Диагностику можно обсудить без выбора игровой сессии. '
-                      'Автоматический сбор диагностических данных, Memory, '
-                      'правка содержимого других разделов, ремонт БД и экспорт отчётов недоступны. '
+                      'Подключены конечные операции карточек, персон, лора, обычных и Studio-пресетов, '
+                      'настроек Memory и отключения блока расширения с точным подтверждением. '
+                      'Доступны метаданные сессий и диагностики, ограниченная проверка всех зарегистрированных '
+                      'таблиц БД, выбранные скалярные исправления и условный Undo по сохранённой квитанции. '
+                      'Collector/Ledger требуют существующего безопасного владельца сессии; спящие цели '
+                      'могут быть недоступны. Проверка записанных хешей внутренняя, не оценка правды текста. '
+                      'Чтение приватных тел, сборка каталога без отдельного разрешения, произвольное удаление, '
+                      'каноническая перепись истории, экспорт и универсальное восстановление БД не подключены. '
                       'Компакт сжимает старый контекст выбранной моделью, не удаляя историю. '
                       'DCP автоматически запускает компакт при давлении на контекст; '
                       'внутри одного запроса также убирает точные дубли метаданных инструментов. '

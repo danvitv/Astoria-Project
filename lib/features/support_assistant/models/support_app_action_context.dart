@@ -4,6 +4,8 @@ import '../../../core/db/repositories/api_config_repo.dart';
 
 import 'support_app_action_definition.dart';
 
+part 'support_app_domain_terminal.dart';
+
 /// Trusted original-run authority. None of these ports is a tool argument.
 final class SupportAppActionContext {
   SupportAppActionContext({
@@ -16,6 +18,7 @@ final class SupportAppActionContext {
     this.navigation,
     this.sourceAccess,
     this.terminalRoot,
+    this.domainRoot,
   });
 
   final String runId, sessionId;
@@ -26,8 +29,12 @@ final class SupportAppActionContext {
   final SupportAppNavigationPort? navigation;
   final SupportAppSourceAccessPort? sourceAccess;
   final SupportAppTerminalRootPort? terminalRoot;
+  final SupportAppDomainRootPort? domainRoot;
+  SupportAppDomainCustody? _domainCustody;
+  SupportAppDomainSourceLease? _domainSource;
   SupportAppConfirmationLease? _confirmation;
   bool _terminalRequested = false;
+  bool _domainRequested = false;
   bool _retired = false;
   bool _checking = false;
 

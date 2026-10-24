@@ -12,6 +12,17 @@ final class SupportModelToolPayloads {
     'astoria_themes_list',
     'astoria_connections_list',
     'astoria_connection_read',
+    'astoria_content_catalog',
+    'astoria_content_handles',
+    'astoria_roleplay_inspect',
+    'astoria_memory_inspect',
+    'astoria_canon_validate',
+    'astoria_session_diagnostics',
+    'astoria_extension_controls_read',
+    'astoria_diagnostics_read',
+    'astoria_secondary_profiles_read',
+    'astoria_database_health',
+    'astoria_session_integrity',
   };
 
   static bool isRead(String action) => _reads.contains(action);

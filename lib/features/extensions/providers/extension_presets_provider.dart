@@ -31,7 +31,10 @@ class ExtensionPresetsNotifier extends StateNotifier<List<ExtensionPreset>> {
       _ref.read(extensionPresetsRepoProvider);
 
   Future<void> _load() async {
-    state = await _repo.getAll();
+    final presets = await _repo.getAll();
+    // This original owner may be disposed while the native read completes.
+    if (!mounted || !_ref.mounted) return;
+    state = presets;
   }
 
   Future<void> add(ExtensionPreset preset) async {

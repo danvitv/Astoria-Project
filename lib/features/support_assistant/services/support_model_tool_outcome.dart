@@ -28,11 +28,11 @@ final class SupportModelToolOutcome {
       for (final fact in _facts)
         '${fact.name}: ${fact.content['code']}; '
             '${switch (fact.content['effect']) {
-              'persisted' => 'изменение сохранено',
+              'persisted' => fact.name == 'astoria_database_snapshot' ? 'локальный файл сохранён' : 'изменение сохранено',
               'navigation' => 'выполнен только переход, данные не изменены',
               'uncertain' => 'результат изменения не подтверждён; повтор не выполнялся',
               _ => fact.content['ok'] == true ? 'чтение завершено или изменений нет' : 'успех действия не подтверждён',
-            }}.',
+            }}${fact.name == 'astoria_database_snapshot' && fact.content['effect'] == 'persisted' && fact.content['data'] is Map && (fact.content['data'] as Map)['status'] != 'verified' ? '; проверка снимка не подтверждена; повтор не выполнялся' : ''}${fact.content['effect'] == 'persisted' && fact.content['data'] is Map && (fact.content['data'] as Map)['refreshPending'] == true ? '; обновление нативных представлений ожидается' : ''}.',
     ];
     return lines.join('\n');
   }

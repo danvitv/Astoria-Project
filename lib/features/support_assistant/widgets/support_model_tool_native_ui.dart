@@ -145,7 +145,9 @@ final class SupportModelToolNativeUi
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                         child: Text(
-                          'Изменение подключения',
+                          request.action.startsWith('astoria_connection_')
+                              ? 'Изменение подключения'
+                              : 'Изменение данных Astoria',
                           style: Theme.of(ctx).textTheme.titleMedium,
                         ),
                       ),
@@ -159,7 +161,7 @@ final class SupportModelToolNativeUi
                             'Действие: ${request.action}\nЦель: ${request.target}\n'
                             'Аргументы: ${jsonEncode(request.arguments)}\n'
                             'Последствия: ${jsonEncode(request.preview)}\n'
-                            'Ключ не вводится, активное подключение не выбирается, сеть не проверяется.',
+                            '${request.action.startsWith('astoria_connection_') ? 'Ключ не вводится, активное подключение не выбирается, сеть не проверяется.' : 'Применяется только показанная операция и её последствия. Доступ к существующему приватному содержимому не выдаётся.'}',
                           ),
                         ),
                       ),

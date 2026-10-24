@@ -42,6 +42,8 @@ import 'support_recipient_projection.dart';
 import 'support_workspace_settings_codec.dart';
 import 'support_context_policy.dart';
 import 'app_control/support_app_action_registry.dart';
+import 'app_control/backup/support_backup_file_host.dart';
+import 'app_control/backup/support_database_backup_adapter.dart';
 import 'support_model_tool_payloads.dart';
 import 'support_model_tool_outcome.dart';
 
@@ -98,6 +100,8 @@ final class SupportModelService {
     NativeToolTransport? toolTransport,
     SupportAppActionRegistry? appActions,
     SupportAppActionRegistry Function()? appActionsFactory,
+    SupportAppActionRegistry Function(SupportDatabaseBackupAdapter)?
+    appActionsWithBackupFactory,
     String Function()? newId,
     int Function()? now,
     Timer Function(Duration, void Function()) scheduleTimer = Timer.new,
@@ -121,6 +125,7 @@ final class SupportModelService {
        _toolTransport = toolTransport,
        _appActions = appActions,
        _appActionsFactory = appActionsFactory,
+       _appActionsWithBackupFactory = appActionsWithBackupFactory,
        _newId = newId ?? generateId,
        _now = now ?? (() => DateTime.now().toUtc().millisecondsSinceEpoch),
        _scheduleTimer = scheduleTimer,
@@ -156,6 +161,8 @@ final class SupportModelService {
   final NativeToolTransport? _toolTransport;
   final SupportAppActionRegistry? _appActions;
   final SupportAppActionRegistry Function()? _appActionsFactory;
+  final SupportAppActionRegistry Function(SupportDatabaseBackupAdapter)?
+  _appActionsWithBackupFactory;
   final String Function() _newId;
   final int Function() _now;
   final Timer Function(Duration, void Function()) _scheduleTimer;

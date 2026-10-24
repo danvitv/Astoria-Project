@@ -69,3 +69,9 @@ abstract interface class SupportAppActionAdapter {
 abstract interface class SupportAppMetadataPolicy {
   String? exactText(String value, {required int maxLength});
 }
+
+/// Optional exact projection only for explicitly declared supplied-new-content
+/// strings. Metadata-only implementations remain valid and fail closed for bodies.
+abstract interface class SupportAppBodyMetadataPolicy {
+  String? exactBodyText(String value, {required int maxLength});
+}

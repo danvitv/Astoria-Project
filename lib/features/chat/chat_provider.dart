@@ -33,6 +33,7 @@ import 'controllers/chat_draft_controller.dart';
 import 'services/generation_pipeline.dart';
 import 'services/impersonation_service.dart';
 import 'state/chat_session_write_queue.dart';
+import 'state/chat_native_owner_registry.dart';
 import 'state/generation_phase_provider.dart';
 import '../extensions/services/extension_post_gen_service.dart';
 
@@ -123,6 +124,26 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   @override
   Future<ChatState> build() async {
     ref.keepAlive();
+    final nativeOwner = ChatNativeOwner(
+      characterId: arg,
+      sessionId: () =>
+          ref.mounted && _buildComplete ? state.value?.session?.id : null,
+      isIdle: () =>
+          ref.mounted &&
+          _buildComplete &&
+          !_sendInFlight &&
+          _sessionChangesInFlight == 0 &&
+          state.value != null &&
+          !state.value!.isGenerating &&
+          !state.value!.isGeneratingImage &&
+          !state.value!.isPostGenRunning &&
+          !state.value!.isSendPending,
+      queue: _sessionWrites,
+      refresh: _refreshNativeLatest,
+    );
+    ref.onDispose(
+      ref.read(chatNativeOwnerRegistryProvider).register(nativeOwner),
+    );
     _sessionCtrl = _createSessionController(ref);
     // Mirror this character's generation state into the global registry so the
     // chat list can show a live "typing" indicator for the session without
@@ -132,6 +153,11 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       (_, AsyncValue<ChatState> next) => _syncGeneratingRegistry(next),
     );
     _buildComplete = false;
+    final maintenance = ref
+        .read(chatNativeOwnerRegistryProvider)
+        .awaitRegistration(nativeOwner);
+    if (maintenance != null) await maintenance;
+    if (!ref.mounted) return const ChatState();
     final existing = await _sessionSvc.findExistingSession(arg);
     if (!ref.mounted) return const ChatState();
     if (_buildComplete) {
@@ -263,6 +289,41 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   // how deleted messages reappeared on the next variation switch.
   final ChatSessionWriteQueue _sessionWrites = ChatSessionWriteQueue();
 
+  /// Native repair refreshes only this SAME idle owner and latest durable row.
+  /// It never writes a caller snapshot or creates/rebuilds a replacement chat.
+  Future<bool> _refreshNativeLatest(String sessionId, int publication) async {
+    bool current() =>
+        ref.mounted &&
+        _buildComplete &&
+        !_sendInFlight &&
+        _sessionChangesInFlight == 0 &&
+        state.value?.session?.id == sessionId &&
+        !state.value!.isGenerating &&
+        !state.value!.isPostGenRunning &&
+        !state.value!.isGeneratingImage &&
+        !state.value!.isSendPending &&
+        _sessionWrites.isCurrentPublication(publication);
+    if (!current()) return false;
+    final repo = ref.read(chatRepoProvider);
+    ChatSessionService.clearCache(charId: arg);
+    final latest = await repo.getById(sessionId);
+    if (!current() || latest == null) return false;
+    final previous = state.value!;
+    ChatSessionService.updateCache(latest);
+    state = AsyncData(
+      ChatState(
+        session: latest,
+        visibleStartIndex: previous.visibleStartIndex.clamp(
+          0,
+          latest.messages.length,
+        ),
+        // Prompt identities must be rebuilt from the durable repaired state.
+      ),
+    );
+    _invalidateHistory();
+    return true;
+  }
+
   late final _messageOpsCtrl = ChatMessageOpsController(
     ref: ref,
     charId: arg,
@@ -386,6 +447,11 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   Future<ChatSession?> branchSession(int index) async {
     _sessionChangesInFlight++;
     try {
+      final maintenance = ref
+          .read(chatNativeOwnerRegistryProvider)
+          .beforeSessionSelection();
+      if (maintenance != null) await maintenance;
+      if (!ref.mounted) return null;
       return await _sessionCtrl.branchSession(index);
     } finally {
       _sessionChangesInFlight--;
@@ -397,6 +463,11 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   Future<void> _runSessionChange(Future<void> Function() operation) async {
     _sessionChangesInFlight++;
     try {
+      final maintenance = ref
+          .read(chatNativeOwnerRegistryProvider)
+          .beforeSessionSelection();
+      if (maintenance != null) await maintenance;
+      if (!ref.mounted) return;
       await operation();
     } finally {
       _sessionChangesInFlight--;
@@ -460,6 +531,14 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     List<String> imageDataUrls = const [],
     Completer<bool>? durableAcceptance,
   }) async {
+    if (!ref.mounted) {
+      durableAcceptance?.complete(false);
+      return;
+    }
+    final maintenance = ref
+        .read(chatNativeOwnerRegistryProvider)
+        .beforeSessionSelection();
+    if (maintenance != null) await maintenance;
     if (!ref.mounted) {
       durableAcceptance?.complete(false);
       return;
@@ -850,6 +929,11 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
 
   Future<void> regenerateLastAssistant({String? guidanceText}) async {
     if (!ref.mounted) return;
+    final maintenance = ref
+        .read(chatNativeOwnerRegistryProvider)
+        .beforeSessionSelection();
+    if (maintenance != null) await maintenance;
+    if (!ref.mounted) return;
     if (ref.read(editingMessageIdProvider(arg)) != null) return;
     if (state.value?.isGenerating == true ||
         state.value?.isPostGenRunning == true) {
@@ -1004,6 +1088,11 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   /// wrapper. Mirrors hydall/Glaze `startImpersonation`.
   Future<void> impersonate({String? guidanceText}) async {
     if (!ref.mounted) return;
+    final maintenance = ref
+        .read(chatNativeOwnerRegistryProvider)
+        .beforeSessionSelection();
+    if (maintenance != null) await maintenance;
+    if (!ref.mounted) return;
     if (ref.read(editingMessageIdProvider(arg)) != null) return;
     await _sessionWrites.settle();
     if (!ref.mounted) return;
@@ -1122,6 +1211,11 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   /// with the continue instruction injected right after the reply being
   /// extended. See `docs/INVARIANTS.md` INV-CM1..INV-CM4.
   Future<void> continueMessage() async {
+    if (!ref.mounted) return;
+    final maintenance = ref
+        .read(chatNativeOwnerRegistryProvider)
+        .beforeSessionSelection();
+    if (maintenance != null) await maintenance;
     if (!ref.mounted) return;
     if (ref.read(editingMessageIdProvider(arg)) != null) return;
     await _sessionWrites.settle();

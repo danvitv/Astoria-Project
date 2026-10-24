@@ -61,13 +61,15 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
     writes: custody,
     // Resolve ONCE only after this original native saved source was prepared.
     // Legacy text-only fixtures never evaluate the application action graph.
-    appActionsFactory: native == null
+    appActionsWithBackupFactory: native == null
         ? null
-        : () {
+        : (backup) {
             if (!current() || !ref.mounted) {
               throw StateError('Original model owner retired.');
             }
-            return ref.read(supportAppActionRegistryProvider);
+            return ref
+                .read(supportAppActionRegistryProvider)
+                .withNativeBackup(backup);
           },
     toolTransport: native == null
         ? null

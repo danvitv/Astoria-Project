@@ -162,6 +162,17 @@ class InfoBlocksNotifier extends StateNotifier<List<InfoBlock>> {
     await _load();
   }
 
+  /// Read-only refresh of this original loaded view. No stale-running repair,
+  /// replacement notifier, or publication after native source/owner retirement.
+  Future<bool> refreshNativeLatest(bool Function() isCurrent) async {
+    if (!mounted || !_ref.mounted || !isCurrent()) return false;
+    final repo = _repo;
+    final blocks = await repo.getBySessionId(sessionId);
+    if (!mounted || !_ref.mounted || !isCurrent()) return false;
+    state = blocks;
+    return true;
+  }
+
   /// Returns all blocks for a specific message, sorted by order.
   /// When duplicates exist for the same preset block, keeps the newest row.
   ///

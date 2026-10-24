@@ -1,5 +1,7 @@
 import '../../../../core/llm/transport/native_tool_types.dart';
 import '../../models/support_app_action.dart';
+import 'backup/support_backup_file_host.dart';
+import 'backup/support_database_backup_adapter.dart';
 
 /// Strict typed gateway. No model-supplied routes, callbacks or general commands.
 final class SupportAppActionRegistry {
@@ -7,7 +9,7 @@ final class SupportAppActionRegistry {
     required Iterable<SupportAppActionAdapter> adapters,
     required this.metadata,
     required this.isOriginalOwnerCurrent,
-  }) {
+  }) : _gate = _SupportAppRegistryGate() {
     for (final adapter in adapters) {
       for (final definition in adapter.definitions) {
         if (_actions.containsKey(definition.name)) {
@@ -20,9 +22,36 @@ final class SupportAppActionRegistry {
 
   final SupportAppMetadataPolicy metadata;
   final bool Function() isOriginalOwnerCurrent;
+  SupportAppActionRegistry._bound(
+    this.metadata,
+    this.isOriginalOwnerCurrent,
+    this._gate,
+  );
+  final _SupportAppRegistryGate _gate;
   final _actions =
       <String, (SupportAppActionAdapter, SupportAppActionDefinition)>{};
-  bool _busy = false;
+  bool get _busy => _gate.busy;
+  set _busy(bool value) => _gate.busy = value;
+
+  /// Native composition only: retain the original finite graph and replace ONLY
+  /// its unavailable backup with the adapter issued by the actual model service.
+  /// No provider/database/source lookup and no new authority for the other tools.
+  SupportAppActionRegistry withNativeBackup(
+    SupportDatabaseBackupAdapter backup,
+  ) {
+    final bound = SupportAppActionRegistry._bound(
+      metadata,
+      isOriginalOwnerCurrent,
+      _gate,
+    );
+    bound._actions.addAll(_actions);
+    final definition = backup.definitions.single;
+    if (definition.name != SupportBackupNativeFileHost.action) {
+      throw StateError('Not the finite native backup definition.');
+    }
+    bound._actions[definition.name] = (backup, definition);
+    return bound;
+  }
 
   List<NativeToolDefinition> get definitions =>
       List.unmodifiable(_actions.values.map((a) => a.$2.native));
@@ -42,13 +71,16 @@ final class SupportAppActionRegistry {
       return !ownerRetired;
     }
 
-    SupportAppActionOutcome interrupted([SupportAppActionEffect? effect]) =>
-        SupportAppActionOutcome(
-          context.cancelToken.isCancelled
-              ? SupportAppActionCode.cancelled
-              : SupportAppActionCode.stale,
-          effect: effect ?? SupportAppActionEffect.none,
-        );
+    SupportAppActionOutcome interrupted([
+      SupportAppActionEffect? effect,
+      bool refreshPending = false,
+    ]) => SupportAppActionOutcome(
+      context.cancelToken.isCancelled
+          ? SupportAppActionCode.cancelled
+          : SupportAppActionCode.stale,
+      effect: effect ?? SupportAppActionEffect.none,
+      data: refreshPending ? const {'refreshPending': true} : const {},
+    );
     if (_busy) throw const NativeToolException(NativeToolReason.denied);
     _busy = true; // Before any injected/reentrant callback.
     var identitySafe = false;
@@ -78,7 +110,7 @@ final class SupportAppActionRegistry {
           SupportAppActionOutcome(SupportAppActionCode.invalidArguments),
         );
       }
-      if (!_safeJson(call.arguments) || !current()) {
+      if (!_safeArguments(call.arguments, definition) || !current()) {
         return _result(
           call,
           current()
@@ -158,12 +190,30 @@ final class SupportAppActionRegistry {
               : interrupted(),
         );
       }
+      // Prepare/native confirmation callbacks may register further secrets.
+      // Recheck executable arguments, never mask them or expand output access.
+      if (!_safeArguments(arguments, definition) || !admitted()) {
+        return _result(
+          call,
+          admitted()
+              ? SupportAppActionOutcome(SupportAppActionCode.unsafeMetadata)
+              : interrupted(),
+        );
+      }
       effectMayHaveStarted = true;
       final outcome = await prepared.execute(admitted);
       effect = outcome.effect;
       // A known durable effect is not erased by Stop; no data/continuation is
       // published to a replacement run. Unknown completion is never retried.
-      if (!current()) return _result(call, interrupted(effect));
+      if (!current())
+        return _result(
+          call,
+          interrupted(
+            effect,
+            effect == SupportAppActionEffect.persisted &&
+                outcome.data['refreshPending'] == true,
+          ),
+        );
       if (!_safeJson(outcome.data) || !current()) {
         return _result(
           call,
@@ -196,6 +246,32 @@ final class SupportAppActionRegistry {
     } finally {
       _busy = false;
     }
+  }
+
+  bool _safeArguments(
+    Map<String, Object?> arguments,
+    SupportAppActionDefinition definition,
+  ) {
+    for (final entry in arguments.entries) {
+      final field = definition.fields[entry.key];
+      if (field == null || !_safeJson(entry.key)) return false;
+      if (field.isBodyText) {
+        final policy = metadata;
+        final value = entry.value;
+        if (policy is! SupportAppBodyMetadataPolicy ||
+            value is! String ||
+            (policy as SupportAppBodyMetadataPolicy).exactBodyText(
+                  value,
+                  maxLength: field.maxLength!,
+                ) !=
+                value) {
+          return false;
+        }
+      } else if (!_safeJson(entry.value)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   bool _safeJson(Object? value, [int depth = 0]) {
@@ -241,6 +317,30 @@ final class SupportAppActionRegistry {
         effect: outcome.effect,
       );
     }
+    if (call.name == SupportBackupNativeFileHost.action) {
+      final status = outcome.data['status'];
+      final fixedStatus =
+          const {
+            'verified',
+            'unavailable',
+            'cancelled',
+            'uncertain',
+          }.contains(status)
+          ? status!
+          : outcome.effect == SupportAppActionEffect.persisted
+          ? 'uncertain'
+          : switch (outcome.code) {
+              SupportAppActionCode.cancelled ||
+              SupportAppActionCode.stale => 'cancelled',
+              SupportAppActionCode.storageUncertain => 'uncertain',
+              _ => 'unavailable',
+            };
+      outcome = SupportAppActionOutcome(
+        outcome.code,
+        effect: outcome.effect,
+        data: {'status': fixedStatus},
+      );
+    }
     return NativeToolResult(
       callId: call.id,
       name: call.name,
@@ -254,4 +354,9 @@ final class SupportAppActionRegistry {
       },
     );
   }
+}
+
+/// Original finite registry serialization survives per-screen backup binding.
+final class _SupportAppRegistryGate {
+  bool busy = false;
 }
