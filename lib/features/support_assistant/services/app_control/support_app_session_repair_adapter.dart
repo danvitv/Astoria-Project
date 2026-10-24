@@ -180,10 +180,6 @@ final class SupportAppSessionRepairAdapter implements SupportAppActionAdapter {
       final id = arguments['receipt']! as String;
       final saved = _receipts.readForUndo(id, context);
       if (saved == null) return null;
-      if (runtime.needsQueueOwnerPreparation(saved.session) &&
-          (!await runtime.prepareQueueOwner(saved.session, context) ||
-              !context.current))
-        return null;
       final checkpoint = runtime.checkpoint(saved.session);
       if (checkpoint == null) return null;
       final authority = SupportAppRepairAuthority(
@@ -192,19 +188,44 @@ final class SupportAppSessionRepairAdapter implements SupportAppActionAdapter {
         context,
         checkpoint,
       );
+      final scope = authority.begin();
+      if (scope == null) return null;
+      SessionRepairUndoObservation? observed;
+      try {
+        // The original scope validates loaded/dormant queue custody and captures
+        // the actual SAME parent before confirmation, not after the Apply tap.
+        observed = await scope.run(
+          () => repo.prepareUndo(
+            receipt: saved.receipt,
+            supportSessionId: context.sessionId,
+            isCurrent: () => authority.current,
+          ),
+        );
+        if (!scope.current) return null;
+      } finally {
+        scope.close();
+      }
+      if (observed == null) return null;
+      final parentObservation = observed;
+      final preparedCheckpoint = runtime.checkpoint(saved.session);
+      if (preparedCheckpoint == null) return null;
       return SupportAppPreparedAction(
         target: id,
-        observation: saved.receipt,
+        observation: parentObservation,
         observationIsCurrent: () =>
-            context.current &&
-            runtime.unchanged(saved.session, checkpoint) &&
+            authority.current &&
+            runtime.unchanged(saved.session, preparedCheckpoint) &&
             identical(_receipts.readForUndo(id, context), saved),
         preview: _preview(saved.kind, undo: true),
         execute: (admitted) => _effect(
           authority,
           context,
           admitted,
-          (current) => repo.undo(receipt: saved.receipt, isCurrent: current),
+          (current) => repo.undo(
+            receipt: saved.receipt,
+            isCurrent: current,
+            parentObservation: parentObservation,
+          ),
           saved.kind,
           consumedReceipt: id,
         ),

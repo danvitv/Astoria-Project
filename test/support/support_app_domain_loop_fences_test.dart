@@ -7,8 +7,9 @@ import 'package:glaze_flutter/core/state/db_provider.dart';
 import 'package:glaze_flutter/core/db/repositories/character_repo.dart';
 import 'package:glaze_flutter/core/state/global_regex_provider.dart';
 import 'package:glaze_flutter/core/models/preset.dart';
-import 'package:glaze_flutter/shared/widgets/glaze_action_button.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_app_control_provider.dart';
+import 'package:glaze_flutter/features/support_assistant/state/support_model_ui_bridge.dart';
+import 'package:glaze_flutter/features/support_assistant/widgets/support_composer_bar.dart';
 
 import 'support_app_domain_loop_fixture.dart';
 
@@ -254,16 +255,55 @@ void main() {
         }),
       );
       await f.start(tester);
-      final stop = tester
-          .widget<GlazeActionButton>(
-            find.byKey(const ValueKey('support_composer_stop_btn')),
-          )
-          .onTap!;
-      var stopped = false;
+      // The sheet covers the original composer, but its exact Stop stays bound.
+      // Query the mounted original IconButton; do not manufacture a gesture.
+      final originalComposer = find.byType(
+        SupportComposerBar,
+        skipOffstage: false,
+      );
+      expect(originalComposer, findsOneWidget);
+      final composer = tester.widget<SupportComposerBar>(originalComposer);
+      expect(composer.sessionId, core.native.session);
+      expect(composer.busy, true);
+      expect(composer.nativeOwner, isA<SupportModelUiEmitter>());
+      expect((composer.nativeOwner! as SupportModelUiEmitter).isCurrent, true);
+      final stopButton = find.descendant(
+        of: originalComposer,
+        matching: find.byKey(
+          const ValueKey('support_composer_stop_btn'),
+          skipOffstage: false,
+        ),
+        skipOffstage: false,
+      );
+      expect(stopButton, findsOneWidget);
+      expect(tester.element(stopButton).mounted, true);
+      final originalRoute = ModalRoute.of<void>(
+        tester.element(originalComposer),
+      )!;
+      expect(originalRoute.isActive, true);
+      expect(
+        originalRoute.navigator,
+        same(
+          ModalRoute.of<void>(
+            tester.element(
+              find.byKey(const ValueKey('support_tool_confirmation_accept')),
+            ),
+          )!.navigator,
+        ),
+      );
+      final stop = tester.widget<IconButton>(stopButton).onPressed;
+      expect(stop, isNotNull);
+      expect(identical(stop, composer.onStop), true);
+      var terminalRootEntered = false, stopped = false;
       core.native.sql.afterSelect = (statement, _) async {
-        if (!stopped && statement.contains('support_messages')) {
+        if (statement.trim() == 'PRAGMA busy_timeout') {
+          terminalRootEntered = true;
+        }
+        if (terminalRootEntered &&
+            !stopped &&
+            statement.contains('support_messages')) {
           stopped = true;
-          stop(); // The ACTUAL original native Stop, before capsule consumption.
+          stop!(); // The ACTUAL original native Stop, before capsule consumption.
         }
       };
       await f.apply(tester);
@@ -275,12 +315,188 @@ void main() {
             .read(studioPresetRepoProvider)
             .getById('domain-collision'),
       );
+      expect(terminalRootEntered, true);
       expect(stopped, true);
       expect(row!.name, DomainLoopFixture.private);
       expect(reply.status, 'stopped');
       expect(reply.body, isNot(contains('изменение сохранено')));
       expect(core.wire, hasLength(1));
+      expect(
+        await configurationAction(
+          tester,
+          () => core.native.db
+              .select(core.native.db.supportMutationJournal)
+              .get(),
+        ),
+        isEmpty,
+      );
       f.noEgress(reply.body);
+    },
+  );
+
+  domainLoopTest(
+    'pending original native sheet survives navigator disposal only as a stopped original reply with zero effects',
+    (tester, f) async {
+      final core = f.screen.core;
+      f.script(
+        core.call('astoria_studio_preset_manage', {
+          'operation': 'rename',
+          'id': 'domain-collision',
+          'name': 'Must not persist after disposal',
+        }),
+      );
+      await f.start(tester);
+      final sheet =
+          ModalRoute.of<void>(
+                tester.element(
+                  find.byKey(
+                    const ValueKey('support_tool_confirmation_accept'),
+                  ),
+                ),
+              )!
+              as ModalBottomSheetRoute<void>;
+      final originalNavigator = sheet.navigator!;
+      expect(sheet.isCurrent, true);
+      expect(originalNavigator.mounted, true);
+
+      // Dispose the ACTUAL screen and its original navigator while confirmation
+      // is unresolved. No replacement root/controller, gesture, or UI port.
+      await tester.pumpWidget(const SizedBox.shrink());
+      await f.screen.join(tester, sheet.completed);
+      final reply = await f.finish(tester);
+      final row = await configurationAction(
+        tester,
+        () => core.container
+            .read(studioPresetRepoProvider)
+            .getById('domain-collision'),
+      );
+      expect(originalNavigator.mounted, false);
+      expect(sheet.navigator, isNull);
+      expect(row!.name, DomainLoopFixture.private);
+      expect(reply.status, 'stopped');
+      expect(reply.body, isNot(contains('изменение сохранено')));
+      expect(core.wire, hasLength(1));
+      expect(
+        await configurationAction(
+          tester,
+          () => core.native.db
+              .select(core.native.db.supportMutationJournal)
+              .get(),
+        ),
+        isEmpty,
+      );
+      expect(
+        find.byKey(const ValueKey('support_tool_confirmation_accept')),
+        findsNothing,
+      );
+      f.noEgress(reply.body);
+    },
+  );
+
+  domainLoopTest(
+    'actual Stop removes only its original pending sheet beneath a later user route',
+    (tester, f) async {
+      final core = f.screen.core;
+      f.script(
+        core.call('astoria_studio_preset_manage', {
+          'operation': 'rename',
+          'id': 'domain-collision',
+          'name': 'Must not persist beneath user route',
+        }),
+      );
+      await f.start(tester);
+      // Capture the original mounted Stop before pushing the later user route.
+      final originalComposer = find.byType(
+        SupportComposerBar,
+        skipOffstage: false,
+      );
+      expect(originalComposer, findsOneWidget);
+      final composer = tester.widget<SupportComposerBar>(originalComposer);
+      expect(composer.sessionId, core.native.session);
+      expect(composer.busy, true);
+      expect(composer.nativeOwner, isA<SupportModelUiEmitter>());
+      expect((composer.nativeOwner! as SupportModelUiEmitter).isCurrent, true);
+      final stopButton = find.descendant(
+        of: originalComposer,
+        matching: find.byKey(
+          const ValueKey('support_composer_stop_btn'),
+          skipOffstage: false,
+        ),
+        skipOffstage: false,
+      );
+      expect(stopButton, findsOneWidget);
+      expect(tester.element(stopButton).mounted, true);
+      final stop = tester.widget<IconButton>(stopButton).onPressed;
+      expect(stop, isNotNull);
+      expect(identical(stop, composer.onStop), true);
+      final sheet =
+          ModalRoute.of<void>(
+                tester.element(
+                  find.byKey(
+                    const ValueKey('support_tool_confirmation_accept'),
+                  ),
+                ),
+              )!
+              as ModalBottomSheetRoute<void>;
+      final navigator = sheet.navigator!;
+      final originalRoute = ModalRoute.of<void>(
+        tester.element(originalComposer),
+      )!;
+      expect(originalRoute.isActive, true);
+      expect(originalRoute.navigator, same(navigator));
+      final userRoute = MaterialPageRoute<void>(
+        builder: (_) => const SizedBox.shrink(),
+      );
+      final navigation = await configurationAction(
+        tester,
+        () => (navigator.push<void>(userRoute),),
+      );
+      try {
+        await tester.pump();
+        // Flutter's interpolation completes only AFTER its duration, not at
+        // the exact endpoint. A still-pushing top route defers lower removal.
+        await tester.pump(
+          userRoute.transitionDuration + const Duration(microseconds: 1),
+        );
+        expect(userRoute.animation!.status, AnimationStatus.completed);
+        expect(userRoute.isCurrent, true);
+        expect(sheet.isCurrent, false);
+        await configurationAction(tester, stop!);
+        await f.screen.join(tester, sheet.completed);
+        final reply = await f.finish(tester);
+        final row = await configurationAction(
+          tester,
+          () => core.container
+              .read(studioPresetRepoProvider)
+              .getById('domain-collision'),
+        );
+        expect(userRoute.isCurrent, true);
+        expect(identical(userRoute.navigator, navigator), true);
+        expect(sheet.navigator, isNull);
+        expect(row!.name, DomainLoopFixture.private);
+        expect(reply.status, 'stopped');
+        expect(reply.body, isNot(contains('изменение сохранено')));
+        expect(core.wire, hasLength(1));
+        expect(
+          await configurationAction(
+            tester,
+            () => core.native.db
+                .select(core.native.db.supportMutationJournal)
+                .get(),
+          ),
+          isEmpty,
+        );
+        f.noEgress(reply.body);
+      } finally {
+        // Join the test-owned user route too; Stop must not have popped it.
+        await configurationAction(tester, () {
+          if (identical(userRoute.navigator, navigator) && userRoute.isActive) {
+            navigator.removeRoute(userRoute);
+          }
+        });
+        await f.screen.join(tester, userRoute.completed);
+        await f.screen.join(tester, navigation.$1);
+      }
     },
   );
 
@@ -308,13 +524,23 @@ void main() {
           final result = f.lastResult();
           expect(result['effect'], 'none');
           final data = result['data'] as Map;
-          expect(data['count'], 1);
+          expect(data['scriptCount'], 1);
           expect(data['enabledCount'], 1);
           return core.answer('Loaded regex metadata inspected.');
         },
       );
       await f.start(tester, confirmation: false);
       final reply = await f.finish(tester);
+      expect(core.wire, hasLength(2));
+      expect(f.results, hasLength(1));
+      final result = f.results.single;
+      expect(result['ok'], true);
+      expect(result['code'], 'completed');
+      expect(result['effect'], 'none');
+      final data = result['data'] as Map;
+      expect(data['scriptCount'], 1);
+      expect(data['enabledCount'], 1);
+      expect(data.containsKey('count'), false);
       expect(reply.status, 'complete');
       final actual = c.read(globalRegexProvider).value!.single;
       expect(actual.disabled, false);

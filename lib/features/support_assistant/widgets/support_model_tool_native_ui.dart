@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../shared/widgets/glaze_action_button.dart';
@@ -53,31 +54,54 @@ final class SupportModelToolNativeUi
     final revision = _revision, location = _location;
     bool original() =>
         _current && _revision == revision && _location == location;
-    var open = true, decided = false;
+    var open = true, decided = false, dismissed = false;
     SupportAppConfirmationLease? accepted;
-    BuildContext? sheetContext;
-    void close() {
-      if (!open) return;
-      open = false;
-      final ctx = sheetContext;
-      if (ctx == null || !ctx.mounted) return;
-      final route = ModalRoute.of(ctx);
-      final navigator = Navigator.of(ctx);
-      if (route?.isCurrent == true) {
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final localizations = MaterialLocalizations.of(context);
+    late final ModalBottomSheetRoute<void> route;
+    void dismiss() {
+      // Retain identities before push; mounted sheet elements may already be
+      // deactivated during owner disposal and cannot resolve ancestors safely.
+      if (dismissed ||
+          !navigator.mounted ||
+          !identical(route.navigator, navigator)) {
+        return;
+      }
+      if (WidgetsBinding.instance.schedulerPhase ==
+          SchedulerPhase.persistentCallbacks) {
+        // A navigator can also be mounted but deactivated in this frame. Let
+        // its teardown finish before attempting to mutate the retained route.
+        WidgetsBinding.instance.addPostFrameCallback((_) => dismiss());
+        return;
+      }
+      if (route.isCurrent) {
+        dismissed = true;
         navigator.pop();
-      } else if (route?.isActive == true) {
+      } else if (route.isActive) {
+        dismissed = true;
         navigator.removeRoute(
-          route!,
+          route,
         ); // Only this original sheet, never route B.
       }
     }
 
-    _pending.add(close);
-    unawaited(request.context.cancelToken.whenCancel.then((_) => close()));
+    void close() {
+      if (!open) return;
+      open = false;
+      dismiss();
+    }
+
     try {
-      await showModalBottomSheet<void>(
-        context: context,
-        useRootNavigator: true,
+      route = ModalBottomSheetRoute<void>(
+        capturedThemes: InheritedTheme.capture(
+          from: context,
+          to: navigator.context,
+        ),
+        barrierLabel: localizations.modalBarrierDismissLabel,
+        barrierOnTapHint: localizations.scrimOnTapHint(
+          localizations.bottomSheetLabel,
+        ),
+        modalBarrierColor: Theme.of(context).bottomSheetTheme.modalBarrierColor,
         useSafeArea: true,
         isScrollControlled: true,
         backgroundColor: Colors.transparent,
@@ -85,13 +109,8 @@ final class SupportModelToolNativeUi
           padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
           child: LayoutBuilder(
             builder: (ctx, constraints) {
-              sheetContext = ctx;
               if (!open) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!ctx.mounted) return;
-                  final route = ModalRoute.of(ctx);
-                  if (route?.isCurrent == true) Navigator.of(ctx).pop();
-                });
+                WidgetsBinding.instance.addPostFrameCallback((_) => dismiss());
               }
               final footer = Row(
                 children: [
@@ -180,12 +199,18 @@ final class SupportModelToolNativeUi
           ),
         ),
       );
+      _pending.add(close);
+      unawaited(request.context.cancelToken.whenCancel.then((_) => close()));
+      unawaited(navigator.push<void>(route));
+      // Join this exact route's disposal as well as its normal pop. Destroying
+      // the original navigator need not complete Route.popped, but does dispose
+      // its routes; it must not strand the native run awaiting confirmation.
+      await route.completed;
       return original() && request.current ? accepted : null;
     } finally {
       open = false;
       decided = true;
       _pending.remove(close);
-      sheetContext = null;
     }
   }
 

@@ -78,12 +78,26 @@ final class SessionRepairRepo {
     required bool Function() isCurrent,
   }) => _RepairMutationStore(this).apply(plan, isCurrent);
 
+  /// Observe the SAME original parent before a later run's native confirmation.
+  /// Its activity clock may have advanced; identity/settings may not. This proof
+  /// is neither approval nor a restoration target and has no import/JSON path.
+  Future<SessionRepairUndoObservation?> prepareUndo({
+    required SessionRepairReceipt receipt,
+    required String supportSessionId,
+    required bool Function() isCurrent,
+  }) => _RepairMutationStore(
+    this,
+  ).prepareUndo(receipt, supportSessionId, isCurrent);
+
   /// Fresh exact native approval is required; an old apply guard is deliberately
   /// not reused as Undo consent. Dependencies and exact after-image must match.
+  /// A prepared parent is rechecked in full after confirmation/decryption. If
+  /// omitted, the original full parent guard applies without any clock allowance.
   Future<SessionRepairReceipt?> undo({
     required SessionRepairReceipt receipt,
     required bool Function() isCurrent,
-  }) => _RepairMutationStore(this).undo(receipt, isCurrent);
+    SessionRepairUndoObservation? parentObservation,
+  }) => _RepairMutationStore(this).undo(receipt, isCurrent, parentObservation);
 
   /// Explicit native body-source lease only. The lease owner must bind this
   /// exact plan, target session/record/hash, fields and source checkpoint. Astoria

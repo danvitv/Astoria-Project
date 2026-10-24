@@ -240,9 +240,32 @@ final class _RepairMutationStore {
     }
   }
 
+  Future<SessionRepairUndoObservation?> prepareUndo(
+    SessionRepairReceipt receipt,
+    String parent,
+    bool Function() admission,
+  ) async {
+    final plan = receipt._plan;
+    try {
+      bool current() =>
+          identical(plan._owner, owner) &&
+          owner._support.usesDatabase(db) &&
+          receipt.outcome == SessionRepairOutcome.applied &&
+          parent == receipt._durable.supportSession &&
+          admission();
+      return await _repairTransaction(db, current, () async {
+        final observed = await raw.observeUndoParent(receipt._durable, current);
+        return SessionRepairUndoObservation._(receipt, observed, current);
+      });
+    } on _RepairRefused {
+      return null;
+    }
+  }
+
   Future<SessionRepairReceipt?> undo(
     SessionRepairReceipt receipt,
     bool Function() admission,
+    SessionRepairUndoObservation? observation,
   ) async {
     if (receipt.outcome != SessionRepairOutcome.applied) return null;
     final plan = receipt._plan;
@@ -250,8 +273,24 @@ final class _RepairMutationStore {
       bool current() =>
           identical(plan._owner, owner) &&
           owner._support.usesDatabase(db) &&
+          (observation == null ||
+              (identical(observation._receipt, receipt) &&
+                  observation._current())) &&
           admission();
       return await _repairTransaction(db, current, () async {
+        // Without an owner-prepared observation the original full guard remains
+        // unchanged. With one, substitute ONLY its exact parent guard, never any
+        // target/session/source/dependency after-image or encrypted evidence.
+        final durable = observation == null
+            ? receipt._durable
+            : receipt._durable.replacing(
+                db.supportSessions,
+                observation._parent.rows,
+              );
+        _repairRequire(
+          observation == null ||
+              await raw.matchesSlice(observation._parent, current),
+        );
         final pending = await owner._support.reserveMutationUndo(
           expected: receipt._journal,
           isCurrent: current,
@@ -264,26 +303,41 @@ final class _RepairMutationStore {
               pending.record.afterJson == evidence(plan, after: true),
           SessionRepairIssue.incompleteEvidence,
         );
-        if (!await raw.matches(receipt._durable, current)) {
+        final matches = await raw.matches(durable, current);
+        _repairRequire(
+          observation == null ||
+              await raw.matchesSlice(observation._parent, current),
+        );
+        if (!matches) {
           final conflict = await owner._support.settleMutation(
             expected: pending,
             fact: SupportMutationFact.undoConflict,
             hasOriginalDbCustody: current,
           );
           _repairRequire(conflict != null);
+          _repairRequire(
+            observation == null ||
+                await raw.matchesSlice(observation._parent, current),
+          );
           return SessionRepairReceipt._(
             plan,
             conflict!,
-            receipt._durable,
+            durable,
             SessionRepairOutcome.undoConflict,
           );
         }
-        var restored = plan._before;
+        // support_sessions is an admission GUARD, never a repair target. Keep
+        // the latest observed parent in both expected images; do not restore its
+        // old activity timestamp/settings or touch its messages during Undo.
+        var restored = plan._before.replacing(
+          db.supportSessions,
+          durable.rows(db.supportSessions),
+        );
         if (plan.kind == SessionRepairTargetKind.liveLedger) {
           // Restore the exact target original but NEVER roll back the durable
           // retirement fence: old in-flight Ledger bases must remain retired.
-          restored = receipt._durable.replacing(db.trackerRows, [
-            for (final r in receipt._durable.rows(db.trackerRows))
+          restored = durable.replacing(db.trackerRows, [
+            for (final r in durable.rows(db.trackerRows))
               if (r['name'] == plan._target._row['name'])
                 plan._target._row
               else
@@ -291,8 +345,12 @@ final class _RepairMutationStore {
           ]);
           restored = advanceFence(restored, plan._createdAt);
         }
-        await effect(plan, receipt._durable, restored, current, undo: true);
+        await effect(plan, durable, restored, current, undo: true);
         _repairRequire(await raw.matches(restored, current));
+        _repairRequire(
+          observation == null ||
+              await raw.matchesSlice(observation._parent, current),
+        );
         final settled = await owner._support.settleMutation(
           expected: pending,
           fact: SupportMutationFact.undone,
@@ -300,6 +358,10 @@ final class _RepairMutationStore {
         );
         _repairRequire(settled != null);
         _repairRequire(await raw.matches(restored, current));
+        _repairRequire(
+          observation == null ||
+              await raw.matchesSlice(observation._parent, current),
+        );
         return SessionRepairReceipt._(
           plan,
           settled!,

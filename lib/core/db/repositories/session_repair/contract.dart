@@ -102,6 +102,22 @@ final class SessionRepairReceipt {
   String toString() => 'SessionRepairReceipt(${outcome.name})';
 }
 
+/// Opaque pre-confirmation proof for a later SAME-parent Undo. It retains the
+/// exact raw observation and original receipt, never executable imported JSON,
+/// a replacement receipt, body disclosure or native approval.
+final class SessionRepairUndoObservation {
+  const SessionRepairUndoObservation._(
+    this._receipt,
+    this._parent,
+    this._current,
+  );
+  final SessionRepairReceipt _receipt;
+  final _RepairSlice _parent;
+  final bool Function() _current;
+  @override
+  String toString() => 'SessionRepairUndoObservation(protected)';
+}
+
 /// This is private-source native UI material, NOT safe model metadata. It can
 /// only be obtained under a separate exact body-source lease above.
 final class SessionRepairNativePreview {

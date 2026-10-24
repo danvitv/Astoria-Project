@@ -239,6 +239,53 @@ final class _RepairRawStore {
       )).stamp ==
       image.stamp;
 
+  Future<bool> matchesSlice(
+    _RepairSlice expected,
+    bool Function() current,
+  ) async =>
+      _repairHash(
+        (await slice(
+          expected.table,
+          expected.column,
+          expected.id,
+          current,
+        )).rows,
+      ) ==
+      _repairHash(expected.rows);
+
+  /// Undo-only observation, not a change to capture/stamp/Apply guards. The
+  /// SAME original parent may advance its activity clock between operations;
+  /// every other raw column (including encrypted title and settings) stays exact.
+  /// The observed FULL row must then stay exact across confirmation and AEAD.
+  Future<_RepairSlice> observeUndoParent(
+    _RepairImage original,
+    bool Function() current,
+  ) async {
+    final before = original.rows(db.supportSessions).single;
+    final fresh = await slice(
+      db.supportSessions,
+      'id',
+      original.supportSession,
+      current,
+    );
+    _repairRequire(fresh.rows.length == 1, SessionRepairIssue.authorityDenied);
+    final latest = fresh.rows.single;
+    final time = latest['updated_at'];
+    _repairRequire(
+      time is int &&
+          time >= 0 &&
+          time <= 9007199254740991 &&
+          time >= (before['updated_at'] as int) &&
+          _repairHash([
+                {...latest, 'updated_at': before['updated_at']},
+              ]) ==
+              _repairHash([before]),
+      SessionRepairIssue.authorityDenied,
+    );
+    _repairRequire(await matchesSlice(fresh, current));
+    return fresh;
+  }
+
   Future<void> narrowSchema(TableInfo table, bool Function() current) async {
     // Neither owned effect target has native triggers or SQL FK edges. Refuse
     // altered schema that could make a selected-row repair a hidden cascade.
