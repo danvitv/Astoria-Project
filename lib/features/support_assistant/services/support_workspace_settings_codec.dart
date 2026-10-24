@@ -17,26 +17,32 @@ class SupportWorkspaceSettingsCodec {
     SupportAssistantSettings s,
     int now,
     SecretRedactor redactor,
-  ) => SupportContextBlock(
-    id: idFor(id),
-    sessionId: id,
-    startMessageId: '',
-    endMessageId: '',
-    summary: 'workspace-settings-v1',
-    createdAt: now,
-    protectedFactsJson: jsonEncode({
-      'version': 1,
-      'mode': s.mode.name,
-      'apiConfigId': s.apiConfigId == null
-          ? null
-          : redactor.redactText(s.apiConfigId!),
-      'modelId': s.modelId == null ? null : redactor.redactText(s.modelId!),
-      'temperature': s.temperature,
-      'maxTokens': s.maxTokens,
-      'reasoningEffort': s.reasoningEffort.name,
-      'dcpCompressionEnabled': s.dcpCompressionEnabled,
-    }),
-  );
+  ) {
+    if (s.maxTokens != -1 && (s.maxTokens < 1 || s.maxTokens > 0x7fffffff)) {
+      throw ArgumentError('Invalid output token limit');
+    }
+    return SupportContextBlock(
+      id: idFor(id),
+      sessionId: id,
+      startMessageId: '',
+      endMessageId: '',
+      summary: 'workspace-settings-v1',
+      createdAt: now,
+      protectedFactsJson: jsonEncode({
+        'version': 1,
+        'mode': s.mode.name,
+        'apiConfigId': s.apiConfigId == null
+            ? null
+            : redactor.redactText(s.apiConfigId!),
+        'modelId': s.modelId == null ? null : redactor.redactText(s.modelId!),
+        'temperature': s.temperature,
+        'maxTokens': s.maxTokens,
+        'reasoningEffort': s.reasoningEffort.name,
+        'dcpCompressionEnabled': s.dcpCompressionEnabled,
+      }),
+    );
+  }
+
   SupportAssistantSettings decode(SupportContextBlock? block) {
     if (block == null) return const SupportAssistantSettings();
     if (block.isLocked) {
@@ -53,8 +59,7 @@ class SupportWorkspaceSettingsCodec {
       if (!temperature.isFinite ||
           temperature < 0 ||
           temperature > 2 ||
-          tokens < 256 ||
-          tokens > 16384) {
+          (tokens != -1 && (tokens < 1 || tokens > 0x7fffffff))) {
         throw const FormatException();
       }
       return SupportAssistantSettings(

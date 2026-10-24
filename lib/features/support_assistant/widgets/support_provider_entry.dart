@@ -28,8 +28,12 @@ class SupportProviderEntryState extends ConsumerState<SupportProviderEntry> {
   bool _open = false;
 
   /// Header and native provider_setup cards enter the same owned native flow.
-  Future<void> open() async {
-    if (!mounted || _open) return;
+  Future<void> open({
+    bool createForAstoria = false,
+    bool Function()? isOriginalUiCurrent,
+    bool Function(SupportProviderConnectionHandle)? onUseConnection,
+  }) async {
+    if (!mounted || _open || isOriginalUiCurrent?.call() == false) return;
     _open = true;
     final lifetime = _lifetime = Object();
     final controller = ref.read(supportNativeConsentControllerProvider);
@@ -52,6 +56,7 @@ class SupportProviderEntryState extends ConsumerState<SupportProviderEntry> {
         bool originalRoot() =>
             mounted &&
             identical(lifetime, _lifetime) &&
+            (isOriginalUiCurrent?.call() ?? true) &&
             (owner?.routeCurrent?.call() ?? true) &&
             identical(
               controller,
@@ -75,6 +80,9 @@ class SupportProviderEntryState extends ConsumerState<SupportProviderEntry> {
           );
           owner = SupportProviderScreenController(
             binding: binding,
+            purpose: createForAstoria
+                ? SupportProviderPurpose.astoria
+                : SupportProviderPurpose.roleplay,
             standardEndpointFor: (protocol, model) =>
                 native.routes.standardEndpointFor(protocol, model),
             canChange: () =>
@@ -100,6 +108,14 @@ class SupportProviderEntryState extends ConsumerState<SupportProviderEntry> {
       owner = null;
       _opened = null;
     }
+    if (!mounted ||
+        !identical(lifetime, _lifetime) ||
+        isOriginalUiCurrent?.call() == false) {
+      owner?.dispose();
+      if (identical(_opened, owner)) _opened = null;
+      _open = false;
+      return;
+    }
     var openPermissions = false;
     try {
       await showModalBottomSheet<void>(
@@ -109,6 +125,18 @@ class SupportProviderEntryState extends ConsumerState<SupportProviderEntry> {
         backgroundColor: Colors.transparent,
         builder: (_) => SupportProviderSheet(
           controller: owner,
+          createForAstoria: createForAstoria,
+          onUseConnection: onUseConnection == null
+              ? null
+              : (original) {
+                  if (owner?.current != true ||
+                      !identical(original, owner?.actualResult?.applied) ||
+                      original.value == null ||
+                      owner?.current != true) {
+                    return false;
+                  }
+                  return onUseConnection(original);
+                },
           nativeUnavailable: allowed && owner == null,
           onPermissions: widget.onOpenPermissions == null
               ? null
@@ -123,7 +151,12 @@ class SupportProviderEntryState extends ConsumerState<SupportProviderEntry> {
       _open = false;
     }
     // Never nest the permissions route over a still-current provider lifetime.
-    if (mounted && openPermissions) widget.onOpenPermissions?.call();
+    if (mounted &&
+        openPermissions &&
+        identical(lifetime, _lifetime) &&
+        isOriginalUiCurrent?.call() != false) {
+      widget.onOpenPermissions?.call();
+    }
   }
 
   @override

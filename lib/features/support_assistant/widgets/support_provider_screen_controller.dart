@@ -9,6 +9,7 @@ final class SupportProviderScreenController extends ChangeNotifier {
     required this.standardEndpointFor,
     required this.canChange,
     required void Function() Function(void Function()) listen,
+    this.purpose = SupportProviderPurpose.roleplay,
   }) {
     _stop = listen(_presentationChanged);
   }
@@ -20,7 +21,7 @@ final class SupportProviderScreenController extends ChangeNotifier {
   bool Function()? routeCurrent;
   bool _alive = true, busy = false, creating = false, customConfirmed = false;
   int _read = 0;
-  SupportProviderPurpose purpose = SupportProviderPurpose.roleplay;
+  SupportProviderPurpose purpose;
   SupportProviderConnections? connections;
   SupportProviderChoice? updating;
   Object formIdentity = Object();
@@ -217,6 +218,14 @@ final class SupportProviderScreenController extends ChangeNotifier {
     updating = null;
     _changed();
     observe();
+  }
+
+  /// Return from trusted key input to its original result without saved-list IO.
+  void showResult() {
+    if (!current || busy) return;
+    keyEntry?.dispose();
+    keyEntry = null;
+    _changed();
   }
 
   Future<void> openKey(SupportProviderConnectionHandle original) async {

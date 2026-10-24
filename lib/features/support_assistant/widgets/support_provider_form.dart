@@ -9,8 +9,15 @@ import 'support_provider_screen_controller.dart';
 
 /// Deterministic offline form. It creates only keyless setup input, never IDs.
 class SupportProviderForm extends StatefulWidget {
-  const SupportProviderForm({super.key, required this.controller});
+  const SupportProviderForm({
+    super.key,
+    required this.controller,
+    this.simple = false,
+    this.onCancel,
+  });
   final SupportProviderScreenController controller;
+  final bool simple;
+  final VoidCallback? onCancel;
 
   @override
   State<SupportProviderForm> createState() => _FormState();
@@ -138,15 +145,16 @@ class _FormState extends State<SupportProviderForm> {
             description: 'support_provider_purpose_notice'.tr(),
             items: [
               if (!_updating) ...[
-                SupportProviderSelector<SupportProviderPurpose>(
-                  id: 'purpose',
-                  label: 'support_provider_purpose'.tr(),
-                  value: _purpose,
-                  values: SupportProviderPurpose.values,
-                  labelFor: supportProviderPurposeLabel,
-                  idFor: (value) => value.name,
-                  onChanged: (value) => setState(() => _purpose = value),
-                ),
+                if (!widget.simple)
+                  SupportProviderSelector<SupportProviderPurpose>(
+                    id: 'purpose',
+                    label: 'support_provider_purpose'.tr(),
+                    value: _purpose,
+                    values: SupportProviderPurpose.values,
+                    labelFor: supportProviderPurposeLabel,
+                    idFor: (value) => value.name,
+                    onChanged: (value) => setState(() => _purpose = value),
+                  ),
                 SupportProviderSelector<String>(
                   id: 'protocol',
                   label: 'support_provider_protocol'.tr(),
@@ -196,15 +204,39 @@ class _FormState extends State<SupportProviderForm> {
             ],
           ),
         ),
-        SupportProviderFields(
-          name: _name,
-          model: _model,
-          maxTokens: _tokens,
-          contextSize: _context,
-          temperature: _temperature,
-          enabled: enabled,
-          onModelChanged: (_) => setState(_updateStandardEndpoint),
-        ),
+        if (widget.simple)
+          IgnorePointer(
+            ignoring: !enabled,
+            child: MenuGroup(
+              header: 'support_provider_profile'.tr(),
+              items: [
+                MenuFieldItem(
+                  key: const ValueKey('support_provider_name'),
+                  label: 'support_provider_name'.tr(),
+                  controller: _name,
+                  inputFormatters: [LengthLimitingTextInputFormatter(128)],
+                ),
+                MenuFieldItem(
+                  key: const ValueKey('support_provider_model'),
+                  label: 'support_provider_model'.tr(),
+                  description: 'support_provider_model_manual'.tr(),
+                  controller: _model,
+                  inputFormatters: [LengthLimitingTextInputFormatter(192)],
+                  onChanged: (_) => setState(_updateStandardEndpoint),
+                ),
+              ],
+            ),
+          )
+        else
+          SupportProviderFields(
+            name: _name,
+            model: _model,
+            maxTokens: _tokens,
+            contextSize: _context,
+            temperature: _temperature,
+            enabled: enabled,
+            onModelChanged: (_) => setState(_updateStandardEndpoint),
+          ),
         if (_error != null) SupportProviderNotice(_error!.tr()),
         SupportProviderButton(
           key: const ValueKey('support_provider_review'),
@@ -216,8 +248,12 @@ class _FormState extends State<SupportProviderForm> {
         ),
         SupportProviderButton(
           key: const ValueKey('support_provider_form_cancel'),
-          label: 'support_provider_back_list'.tr(),
-          onTap: !c.busy ? c.showList : null,
+          label:
+              (widget.simple
+                      ? 'support_provider_close'
+                      : 'support_provider_back_list')
+                  .tr(),
+          onTap: !c.busy ? widget.onCancel ?? c.showList : null,
         ),
       ],
     );

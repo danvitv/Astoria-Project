@@ -432,10 +432,13 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
   Future<bool> setMaxTokens(
     int value, {
     SupportWorkspaceSettingsIntent? intent,
-  }) => _settings(
-    (s) => s.copyWith(maxTokens: value.clamp(256, 16384)),
-    intent: intent,
-  );
+  }) {
+    if (value != -1 && (value < 1 || value > 0x7fffffff)) {
+      return Future.value(false);
+    }
+    return _settings((s) => s.copyWith(maxTokens: value), intent: intent);
+  }
+
   Future<bool> setReasoningEffort(
     SupportReasoningEffort effort, {
     SupportWorkspaceSettingsIntent? intent,

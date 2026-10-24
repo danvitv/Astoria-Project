@@ -7,6 +7,7 @@ import '../../../core/state/db_provider.dart';
 import '../../../shared/widgets/sheet_view.dart';
 import '../state/support_native_provider.dart';
 import '../state/support_provider_provider.dart';
+import '../state/support_provider_ui_binding.dart';
 import 'support_provider_connections.dart';
 import 'support_provider_fields.dart';
 import 'support_provider_form.dart';
@@ -21,10 +22,14 @@ class SupportProviderSheet extends ConsumerStatefulWidget {
     required this.controller,
     this.onPermissions,
     this.nativeUnavailable = false,
+    this.createForAstoria = false,
+    this.onUseConnection,
   });
   final SupportProviderScreenController? controller;
   final VoidCallback? onPermissions;
   final bool nativeUnavailable;
+  final bool createForAstoria;
+  final bool Function(SupportProviderConnectionHandle)? onUseConnection;
 
   @override
   ConsumerState<SupportProviderSheet> createState() => _SheetState();
@@ -33,6 +38,7 @@ class SupportProviderSheet extends ConsumerStatefulWidget {
 class _SheetState extends ConsumerState<SupportProviderSheet> {
   ModalRoute<void>? _route;
   NavigatorState? _navigator;
+  bool _usingConnection = false;
 
   @override
   void initState() {
@@ -40,7 +46,11 @@ class _SheetState extends ConsumerState<SupportProviderSheet> {
     widget.controller?.addListener(_changed);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && widget.controller?.current == true) {
-        widget.controller?.observe();
+        if (widget.createForAstoria) {
+          widget.controller?.newProfile();
+        } else {
+          widget.controller?.observe();
+        }
       }
     });
   }
@@ -66,6 +76,29 @@ class _SheetState extends ConsumerState<SupportProviderSheet> {
   void _close() {
     widget.controller?.retire();
     if (_route?.isCurrent == true) _navigator?.pop();
+  }
+
+  void _useConnection(SupportProviderApplied original) {
+    final c = widget.controller;
+    final use = widget.onUseConnection;
+    if (_usingConnection ||
+        !mounted ||
+        _route?.isCurrent != true ||
+        c == null ||
+        !c.current ||
+        c.busy ||
+        !identical(original, c.actualResult?.applied) ||
+        original.purpose != SupportProviderPurpose.astoria ||
+        original.value == null ||
+        use == null) {
+      return;
+    }
+    _usingConnection = true; // Latch before settings admission can reenter.
+    if (use(original)) {
+      _close();
+    } else {
+      _usingConnection = false;
+    }
   }
 
   @override
@@ -133,7 +166,7 @@ class _SheetState extends ConsumerState<SupportProviderSheet> {
               SupportProviderKeySheet(
                 key: ObjectKey(keyEntry),
                 target: keyEntry,
-                onBack: c!.showList,
+                onBack: widget.createForAstoria ? c!.showResult : c!.showList,
               )
             else if (c != null) ...[
               SupportProviderNotice('support_provider_scope_notice'.tr()),
@@ -141,7 +174,7 @@ class _SheetState extends ConsumerState<SupportProviderSheet> {
                 SupportProviderNotice('support_provider_read_only'.tr()),
               if (c.notice != null) SupportProviderNotice(c.notice!.tr()),
               if (c.busy) SupportProviderNotice('support_provider_busy'.tr()),
-              if (review == null && !c.hasForm) ...[
+              if (!widget.createForAstoria && review == null && !c.hasForm) ...[
                 SupportProviderButton(
                   key: const ValueKey('support_provider_mode_create'),
                   label: 'support_provider_new'.tr(),
@@ -164,6 +197,8 @@ class _SheetState extends ConsumerState<SupportProviderSheet> {
                   child: SupportProviderForm(
                     key: const ValueKey('support_provider_form'),
                     controller: c,
+                    simple: widget.createForAstoria,
+                    onCancel: widget.createForAstoria ? _close : null,
                   ),
                 ),
               if (c.hasForm && !editingCurrent)
@@ -183,6 +218,21 @@ class _SheetState extends ConsumerState<SupportProviderSheet> {
                 else
                   SupportProviderNotice('support_provider_unavailable'.tr()),
             ],
+            if (widget.createForAstoria &&
+                widget.onUseConnection != null &&
+                fact?.code == SupportProviderActionCode.applied &&
+                fact?.applied != null &&
+                fact!.applied!.value != null &&
+                review == null)
+              SupportProviderButton(
+                key: const ValueKey('support_provider_use_astoria'),
+                label: 'Использовать в Астории',
+                icon: Icons.check_rounded,
+                primary: true,
+                onTap: usable && !c!.busy && !_usingConnection
+                    ? () => _useConnection(fact.applied!)
+                    : null,
+              ),
             if (widget.onPermissions != null && (!usable || !c!.changesAllowed))
               SupportProviderButton(
                 key: const ValueKey('support_provider_permissions_open'),

@@ -2,6 +2,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/credentials/api_connection_metadata.dart';
+import '../state/support_model_catalog_provider.dart';
 
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/widgets/glaze_toast.dart';
@@ -15,6 +16,8 @@ import 'support_settings_pickers.dart';
 import 'support_settings_unavailable.dart';
 import 'support_settings_start_session.dart';
 import 'support_privacy_group.dart';
+import 'support_output_token_field.dart';
+import 'support_connection_selector.dart';
 
 /// Right panel for Astoria Assistant: mode selector (`Onboarding / Diagnostics / Hybrid`),
 /// independent API connection & model selector using safe `CredentialMetadata`
@@ -161,20 +164,13 @@ class SupportSettingsPanel extends ConsumerWidget {
               description: 'support_privacy_chooser_not_consent'.tr(),
               items: [
                 if (focus.includes(SupportSettingsFocus.connection))
-                  MenuSelectorItem(
-                    key: const ValueKey('support_connection_selector'),
-                    label: 'API',
+                  SupportConnectionSelector(
+                    notifier: notifier,
+                    connections: connections,
+                    isOriginalUiCurrent: isOriginalUiCurrent,
                     currentValue:
                         activeConnection?.displayName ??
                         'Не выбрано (Автономный режим)',
-                    onTap: () => intent == null
-                        ? null
-                        : SupportSettingsPickers.connection(
-                            context,
-                            notifier,
-                            connections,
-                            intent: intent,
-                          ),
                   ),
                 if (focus.includes(SupportSettingsFocus.connection) ||
                     focus.includes(SupportSettingsFocus.model))
@@ -186,16 +182,32 @@ class SupportSettingsPanel extends ConsumerWidget {
                             settings.modelId!.isNotEmpty)
                         ? settings.modelId!
                         : 'Не выбрана',
-                    onTap: () => intent == null
-                        ? null
-                        : SupportSettingsPickers.model(
-                            context,
-                            notifier,
-                            activeConnection,
-                            settings,
-                            intent: intent,
-                            connections: connections,
-                          ),
+                    onTap: () {
+                      if (intent == null || !intent.isCurrent) return;
+                      final original = ref.read(supportModelCatalogProvider);
+                      SupportSettingsPickers.model(
+                        context,
+                        notifier,
+                        activeConnection,
+                        settings,
+                        intent: intent,
+                        loadModels: original == null || activeConnection == null
+                            ? null
+                            : ({required isCurrent, required cancelToken}) =>
+                                  original.fetchModelIds(
+                                    connectionId: activeConnection.connectionId,
+                                    cancelToken: cancelToken,
+                                    isCurrent: () =>
+                                        intent.isCurrent &&
+                                        isCurrent() &&
+                                        context.mounted &&
+                                        identical(
+                                          original,
+                                          ref.read(supportModelCatalogProvider),
+                                        ),
+                                  ),
+                      );
+                    },
                   ),
                 if (focus.includes(SupportSettingsFocus.temperature))
                   MenuRangeItem(
@@ -211,17 +223,11 @@ class SupportSettingsPanel extends ConsumerWidget {
                         : notifier.setTemperature(value, intent: intent),
                   ),
                 if (focus.includes(SupportSettingsFocus.maxTokens))
-                  MenuRangeItem(
+                  SupportOutputTokenField(
                     key: const ValueKey('support_settings_max_tokens'),
-                    label: 'Лимит ответа, токены',
-                    value: settings.maxTokens.toDouble(),
-                    min: 256,
-                    max: 8192,
-                    divisions: 31,
-                    decimalPlaces: 0,
-                    onChanged: (v) => intent == null
-                        ? null
-                        : notifier.setMaxTokens(v.round(), intent: intent),
+                    value: settings.maxTokens,
+                    notifier: notifier,
+                    intent: intent,
                   ),
                 if (focus.includes(SupportSettingsFocus.reasoning))
                   MenuSelectorItem(

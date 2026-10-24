@@ -5,22 +5,30 @@ import '../../../shared/widgets/glaze_bottom_sheet.dart';
 import '../state/support_workspace_provider.dart';
 import 'support_model_selection_form.dart';
 
-/// Safe metadata-only pickers; no request or credential read is performed.
+/// Settings writes retain their original native display and final confirmation.
 class SupportSettingsPickers {
   static void connection(
     BuildContext context,
     SupportWorkspaceNotifier notifier,
     List<ApiConnectionMetadata> connections, {
     required SupportWorkspaceSettingsIntent intent,
+    VoidCallback? onAdd,
   }) {
     if (!intent.isCurrent) return;
     final confirmation = _SettingsPickerConfirmation(intent);
-    GlazeBottomSheet.show<void>(
+    GlazeBottomSheet.show<bool>(
       context,
       title: 'Подключение Астории',
-      itemCount: connections.length + 1,
+      itemCount: connections.length + 1 + (onAdd == null ? 0 : 1),
       itemBuilder: (pickerContext, index) {
-        final route = ModalRoute.of<void>(pickerContext);
+        final route = ModalRoute.of<bool>(pickerContext);
+        if (index == connections.length + 1) {
+          return BottomSheetItem(
+            label: 'Добавить провайдера',
+            icon: Icons.add_rounded,
+            onTap: () => confirmation.closeForNavigation(pickerContext, route),
+          );
+        }
         final connection = index == 0 ? null : connections[index - 1];
         return BottomSheetItem(
           label: connection?.displayName ?? 'Не выбрано',
@@ -40,7 +48,10 @@ class SupportSettingsPickers {
           ),
         );
       },
-    );
+    ).then((add) {
+      // The picker has popped. Never rediscover its route from a closed context.
+      if (add == true && intent.isCurrent) onAdd?.call();
+    });
   }
 
   static void model(
@@ -49,7 +60,7 @@ class SupportSettingsPickers {
     ApiConnectionMetadata? connection,
     SupportAssistantSettings settings, {
     required SupportWorkspaceSettingsIntent intent,
-    List<ApiConnectionMetadata> connections = const [],
+    SupportProviderModelLoader? loadModels,
   }) {
     if (!intent.isCurrent) return;
     final confirmation = _SettingsPickerConfirmation(intent);
@@ -61,7 +72,8 @@ class SupportSettingsPickers {
           final route = ModalRoute.of<void>(pickerContext);
           return SupportModelSelectionForm(
             initialModel: settings.modelId ?? '',
-            models: _knownModels(connection, connections, settings.modelId),
+            models: const [],
+            loadModels: loadModels,
             isCurrent: () => intent.isCurrent && route?.isCurrent == true,
             onSelect: (model) => confirmation.confirm(
               pickerContext,
@@ -72,37 +84,6 @@ class SupportSettingsPickers {
         },
       ),
     );
-  }
-
-  /// Only already projected, locally saved IDs; never a provider catalog probe.
-  static List<String> _knownModels(
-    ApiConnectionMetadata? connection,
-    List<ApiConnectionMetadata> connections,
-    String? current,
-  ) {
-    final models = <String>{};
-    void add(String? model) {
-      if (model != null &&
-          model.isNotEmpty &&
-          model.length <= 256 &&
-          RegExp(r'^[A-Za-z0-9_.:/-]+$').hasMatch(model)) {
-        models.add(model);
-      }
-    }
-
-    add(current);
-    add(connection?.model);
-    if (connection != null) {
-      for (final saved in connections.take(256)) {
-        if (saved.endpoint == connection.endpoint &&
-            saved.protocol == connection.protocol &&
-            saved.providerId == connection.providerId &&
-            saved.mode == connection.mode) {
-          add(saved.model);
-        }
-      }
-    }
-    return List.unmodifiable(models.toList()..sort());
   }
 
   static void reasoning(
@@ -139,9 +120,22 @@ final class _SettingsPickerConfirmation {
   final SupportWorkspaceSettingsIntent intent;
   bool _used = false;
 
+  void closeForNavigation(BuildContext context, ModalRoute<dynamic>? route) {
+    if (_used ||
+        !context.mounted ||
+        route?.isCurrent != true ||
+        !intent.isCurrent ||
+        !context.mounted ||
+        route?.isCurrent != true) {
+      return;
+    }
+    _used = true;
+    Navigator.of(context).pop(true);
+  }
+
   void confirm(
     BuildContext context,
-    ModalRoute<void>? route,
+    ModalRoute<dynamic>? route,
     Future<bool> Function() save,
   ) {
     if (_used ||
