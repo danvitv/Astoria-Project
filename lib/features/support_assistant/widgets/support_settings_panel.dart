@@ -194,6 +194,7 @@ class SupportSettingsPanel extends ConsumerWidget {
                             activeConnection,
                             settings,
                             intent: intent,
+                            connections: connections,
                           ),
                   ),
                 if (focus.includes(SupportSettingsFocus.temperature))

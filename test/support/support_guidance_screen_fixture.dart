@@ -55,11 +55,15 @@ export 'support_guidance_screen_turns.dart';
 /// Actual provider graph over ONE memory SQLite/FakeVault/real AEAD. All async
 /// resources are created in guarded tester.runAsync, never a fake-zone field.
 final class GuidanceScreenFixture {
-  GuidanceScreenFixture({this.screen = true});
+  GuidanceScreenFixture({
+    this.screen = true,
+    this.connections = const [guidanceProfile],
+  });
   static const session = 'guidance-own-current', other = 'guidance-own-other';
   static const newest = 'guidance-game-newest', older = 'guidance-game-older';
   static const bodyCanary = 'SYNTHETIC_UNREAD_HISTORY_8d21';
   final bool screen;
+  final List<ApiConnectionMetadata> connections;
   final isolation = GuidanceScreenIsolation();
   late final turns = GuidanceScreenTurns(isolation.guarded);
   late final GuidanceMemoryDatabase database;
@@ -148,7 +152,7 @@ final class GuidanceScreenFixture {
           (_) => isolation.block('selected/API metadata resolver'),
         ),
         // A declared synthetic chooser projection, NOT workspace/policy overrides.
-        supportConnectionsProvider.overrideWithValue(const [guidanceProfile]),
+        supportConnectionsProvider.overrideWithValue(connections),
         imageStorageProvider.overrideWith(
           (_) => isolation.block('image startup'),
         ),
@@ -667,13 +671,17 @@ void guidanceScreenTest(
   String name,
   Future<void> Function(WidgetTester tester, GuidanceScreenFixture f) body, {
   bool screen = true,
+  List<ApiConnectionMetadata> connections = const [guidanceProfile],
 }) {
   testWidgets(name, (tester) async {
     tester.view.physicalSize = const Size(550, 1100);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final fixture = GuidanceScreenFixture(screen: screen);
+    final fixture = GuidanceScreenFixture(
+      screen: screen,
+      connections: connections,
+    );
     await fixture.run(tester, () => body(tester, fixture));
   });
 }

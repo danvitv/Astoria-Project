@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../../core/credentials/api_connection_metadata.dart';
 import '../../../shared/widgets/glaze_bottom_sheet.dart';
-import '../../../shared/widgets/menu_group.dart';
 import '../state/support_workspace_provider.dart';
+import 'support_model_selection_form.dart';
 
 /// Safe metadata-only pickers; no request or credential read is performed.
 class SupportSettingsPickers {
@@ -49,6 +49,7 @@ class SupportSettingsPickers {
     ApiConnectionMetadata? connection,
     SupportAssistantSettings settings, {
     required SupportWorkspaceSettingsIntent intent,
+    List<ApiConnectionMetadata> connections = const [],
   }) {
     if (!intent.isCurrent) return;
     final confirmation = _SettingsPickerConfirmation(intent);
@@ -58,9 +59,10 @@ class SupportSettingsPickers {
       child: Builder(
         builder: (pickerContext) {
           final route = ModalRoute.of<void>(pickerContext);
-          return _ManualModelForm(
+          return SupportModelSelectionForm(
             initialModel: settings.modelId ?? '',
-            connectionModel: connection?.model,
+            models: _knownModels(connection, connections, settings.modelId),
+            isCurrent: () => intent.isCurrent && route?.isCurrent == true,
             onSelect: (model) => confirmation.confirm(
               pickerContext,
               route,
@@ -70,6 +72,37 @@ class SupportSettingsPickers {
         },
       ),
     );
+  }
+
+  /// Only already projected, locally saved IDs; never a provider catalog probe.
+  static List<String> _knownModels(
+    ApiConnectionMetadata? connection,
+    List<ApiConnectionMetadata> connections,
+    String? current,
+  ) {
+    final models = <String>{};
+    void add(String? model) {
+      if (model != null &&
+          model.isNotEmpty &&
+          model.length <= 256 &&
+          RegExp(r'^[A-Za-z0-9_.:/-]+$').hasMatch(model)) {
+        models.add(model);
+      }
+    }
+
+    add(current);
+    add(connection?.model);
+    if (connection != null) {
+      for (final saved in connections.take(256)) {
+        if (saved.endpoint == connection.endpoint &&
+            saved.protocol == connection.protocol &&
+            saved.providerId == connection.providerId &&
+            saved.mode == connection.mode) {
+          add(saved.model);
+        }
+      }
+    }
+    return List.unmodifiable(models.toList()..sort());
   }
 
   static void reasoning(
@@ -125,52 +158,4 @@ final class _SettingsPickerConfirmation {
       Navigator.of(context).pop();
     }
   }
-}
-
-class _ManualModelForm extends StatefulWidget {
-  final String initialModel;
-  final String? connectionModel;
-  final ValueChanged<String?> onSelect;
-
-  const _ManualModelForm({
-    required this.initialModel,
-    this.connectionModel,
-    required this.onSelect,
-  });
-
-  @override
-  State<_ManualModelForm> createState() => _ManualModelFormState();
-}
-
-class _ManualModelFormState extends State<_ManualModelForm> {
-  late final TextEditingController _controller = TextEditingController(
-    text: widget.initialModel,
-  );
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => MenuGroup(
-    header: 'Выбор модели',
-    description:
-        'Укажи идентификатор из настроек провайдера. Список моделей и доступность здесь не запрашиваются. Выбор не разрешает отправку: получатель и каждый точный текстовый prompt подтверждаются отдельно.',
-    items: [
-      if (widget.connectionModel case final model? when model.isNotEmpty)
-        MenuItem(
-          label: model,
-          subtitle: 'Модель выбранного подключения',
-          onTap: () => widget.onSelect(model),
-        ),
-      MenuFieldItem(label: 'Идентификатор модели', controller: _controller),
-      MenuItem(
-        label: 'Сохранить идентификатор',
-        onTap: () => widget.onSelect(_controller.text.trim()),
-      ),
-      MenuItem(label: 'Без модели', onTap: () => widget.onSelect(null)),
-    ],
-  );
 }
