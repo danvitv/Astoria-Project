@@ -65,9 +65,12 @@ final class BackupLoopNative {
   bool _closed = false;
 
   Future<void> initialize(BackupLoopIo io, {bool memory = false}) async {
-    directory = await Directory(approvedRoot).createTemp('model-backup-loop-');
-    created = true;
-    io.originalDirectory = directory.path;
+    directory = await io.createOwnedRoot((owned) {
+      // Capture at the SDK's returned Directory factory, before its await can
+      // fail. Cleanup owns exactly this creation, never older Temp children.
+      directory = owned;
+      created = true;
+    });
     sourcePath = p.join(directory.path, 'original.db');
     destinationPath = p.join(directory.path, 'local-backup.db');
     handle = memory
@@ -279,18 +282,69 @@ final class BackupLoopNative {
 /// File/socket tripwires precede source initialization. Only this unique subtree
 /// is admitted. Native SQLite/Windows FFI is not claimed to be a universal sandbox.
 final class BackupLoopIo extends IOOverrides {
-  String? originalDirectory;
+  static final _windows = p.Context(style: p.Style.windows);
+  static const _prefix = 'model-backup-loop-';
+  String? _originalDirectory;
+  Directory? _ownedDirectory;
+  void Function(Directory)? _capture;
+  bool _bootstrapArmed = false;
+  String? get originalDirectory => _originalDirectory;
   final attempts = <String>[];
   Never block(String boundary) {
     attempts.add(boundary);
     throw StateError('Outside synthetic backup loop boundary');
   }
 
-  bool _inside(String path) =>
-      originalDirectory != null &&
-      p.isAbsolute(path) &&
-      (p.equals(path, originalDirectory!) ||
-          p.isWithin(originalDirectory!, path));
+  // Lexical Windows canonicalization only; this does not resolve filesystem
+  // links. Reject traversal/namespace aliases before normalizing comparisons.
+  static String? canonicalPath(String path) {
+    if (!RegExp(r'^[a-zA-Z]:[\\/]').hasMatch(path) ||
+        !_windows.isAbsolute(path))
+      return null;
+    final parts = path.substring(3).split(RegExp(r'[\\/]'));
+    if (parts.any(
+      (part) =>
+          part == '.' ||
+          part == '..' ||
+          part.endsWith('.') ||
+          part.endsWith(' ') ||
+          part.contains(':') ||
+          part.contains('\u0000'),
+    ))
+      return null;
+    return _windows.normalize(path).replaceAll('/', r'\').toLowerCase();
+  }
+
+  Future<Directory> createOwnedRoot(void Function(Directory) capture) async {
+    if (_bootstrapArmed || _ownedDirectory != null) block('root bootstrap');
+    _capture = capture;
+    _bootstrapArmed = true;
+    try {
+      final returned = await Directory(
+        BackupLoopNative.approvedRoot,
+      ).createTemp(_prefix);
+      final owned = _ownedDirectory;
+      if (owned == null ||
+          !identical(returned, owned) ||
+          canonicalPath(returned.path) != _originalDirectory ||
+          canonicalPath(owned.path) != _originalDirectory) {
+        block('root bootstrap return');
+      }
+      return owned;
+    } finally {
+      _bootstrapArmed = false;
+      _capture = null;
+    }
+  }
+
+  bool _inside(String path) {
+    final canonical = canonicalPath(path);
+    final root = _originalDirectory;
+    return canonical != null &&
+        root != null &&
+        (canonical == root || _windows.isWithin(root, canonical));
+  }
+
   @override
   File createFile(String path) {
     if (!_inside(path)) block('file/default database');
@@ -299,8 +353,29 @@ final class BackupLoopIo extends IOOverrides {
 
   @override
   Directory createDirectory(String path) {
-    if (!_inside(path) && path != BackupLoopNative.approvedRoot)
+    final canonical = canonicalPath(path);
+    final approved = canonicalPath(BackupLoopNative.approvedRoot)!;
+    if (_bootstrapArmed &&
+        _ownedDirectory == null &&
+        canonical != null &&
+        _windows.dirname(canonical) == approved &&
+        _windows.basename(_windows.normalize(path)).startsWith(_prefix) &&
+        _windows.basename(canonical).length > _prefix.length) {
+      // Consume before constructing: a reentrant or second sibling factory
+      // cannot use the bootstrap exception. Files remain denied until capture.
+      _bootstrapArmed = false;
+      final owned = super.createDirectory(path);
+      _ownedDirectory = owned;
+      _originalDirectory = canonical;
+      _capture!(owned);
+      return owned;
+    }
+    if (!_inside(path) &&
+        !(_bootstrapArmed &&
+            _ownedDirectory == null &&
+            canonical == approved)) {
       block('directory');
+    }
     return super.createDirectory(path);
   }
 

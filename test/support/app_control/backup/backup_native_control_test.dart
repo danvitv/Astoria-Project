@@ -15,6 +15,7 @@ void backupWidgetTest(
   String name,
   Future<void> Function(WidgetTester, BackupNativeFixture) body, {
   bool noHost = false,
+  bool observePhases = false,
 }) {
   testWidgets(name, (tester) async {
     final messenger = tester.binding.defaultBinaryMessenger;
@@ -67,28 +68,61 @@ void backupWidgetTest(
       return block('unapproved framework channel');
     };
     final f = BackupNativeFixture();
+    final probe = observePhases ? BackupNativePhaseProbe(f) : null;
+    f.phaseProbe = probe;
+    f.dialog.phaseProbe = probe;
     final failure = BackupFixtureFailure();
     try {
       await failure.run(
         () => HttpOverrides.runZoned(() async {
           await failure.run(() async {
-            await backupReal(tester, f.initialize);
-            await tester.pumpWidget(f.widget());
-            await tester.pumpAndSettle();
+            if (probe == null) {
+              await backupReal(tester, f.initialize);
+              await tester.pumpWidget(f.widget());
+              await tester.pumpAndSettle();
+            } else {
+              await probe.real(
+                tester,
+                BackupNativePhase.initialize,
+                f.initialize,
+              );
+              await probe.frame(
+                tester,
+                BackupNativePhase.mount,
+                () => tester.pumpWidget(f.widget()),
+              );
+              await probe.wait(
+                tester,
+                BackupNativePhase.mount,
+                () => !tester.binding.hasScheduledFrame,
+              );
+            }
             f.attach(noHost: noHost);
             await body(tester, f);
           });
-          await failure.run(f.stopOriginalActions);
-          await failure.run(() => f.drainOriginalActions(tester));
-          await failure.run(() async {
-            await tester.pumpWidget(const SizedBox.shrink());
-            await tester.pump();
-          });
-          await failure.run(() => backupReal(tester, f.close));
+          if (probe != null) {
+            await probe.cleanup(tester, failure);
+          } else {
+            await failure.run(f.stopOriginalActions);
+            await failure.run(() => f.drainOriginalActions(tester));
+            await failure.run(() async {
+              await tester.pumpWidget(const SizedBox.shrink());
+              await tester.pump();
+            });
+            await failure.run(() => backupReal(tester, f.close));
+          }
         }, createHttpClient: (_) => block('HTTP/network')),
       );
       await failure.run(() async {
-        await messenger.platformMessagesFinished;
+        if (probe == null) {
+          await messenger.platformMessagesFinished;
+        } else {
+          await probe.real(
+            tester,
+            BackupNativePhase.cleanup,
+            () => messenger.platformMessagesFinished,
+          );
+        }
         expect(attempts, isEmpty);
         expect(tester.takeException(), isNull);
       });
@@ -105,9 +139,39 @@ Future<({Future<NativeToolResult> future})> beginSave(
 ) async {
   final pending = await backupReal(tester, () => (future: f.call()));
   final action = f.actionFor(pending.future);
-  await backupPumpUntil(tester, () => f.dialog.choices == 1, action: action);
+  final probe = f.phaseProbe;
+  if (probe == null) {
+    await backupPumpUntil(tester, () => f.dialog.choices == 1, action: action);
+  } else {
+    await probe.wait(
+      tester,
+      BackupNativePhase.picker,
+      () => f.dialog.choices == 1,
+      action: action,
+    );
+  }
   await backupReal(tester, () => f.dialog.choose(f.destinationPath));
-  await backupModal(tester, action: action);
+  if (probe == null) {
+    await backupModal(tester, action: action);
+  } else {
+    final button = find.byKey(
+      const ValueKey('support_backup_confirmation_accept'),
+    );
+    await probe.wait(
+      tester,
+      BackupNativePhase.modal,
+      () => button.evaluate().isNotEmpty,
+      action: action,
+    );
+    final route = ModalRoute.of(tester.element(button))!;
+    await probe.frame(tester, BackupNativePhase.modal, tester.pump);
+    await probe.frame(
+      tester,
+      BackupNativePhase.modal,
+      () => tester.pump(route.transitionDuration),
+    );
+    expect(button.hitTestable(), findsOneWidget);
+  }
   return pending;
 }
 
@@ -123,7 +187,11 @@ void main() {
       expect(definition.parameters['additionalProperties'], isFalse);
       final pending = await beginSave(tester, f);
       expect(
-        await backupReal(tester, () => File(f.destinationPath).exists()),
+        await f.real(
+          tester,
+          BackupNativePhase.modal,
+          () => File(f.destinationPath).exists(),
+        ),
         isFalse,
       );
       final preview = find.byKey(
@@ -138,8 +206,23 @@ void main() {
       expect(text, contains(SupportBackupNativeFileHost.disclosure));
       expect(text, contains(f.original.runId));
       expect(text, isNot(contains(BackupNativeFixture.private)));
-      await backupDecision(tester, 'accept');
-      final result = await backupJoin(tester, pending.future);
+      final probe = f.phaseProbe!;
+      final accept = find.byKey(
+        const ValueKey('support_backup_confirmation_accept'),
+      );
+      final route = ModalRoute.of(tester.element(accept))!;
+      await probe.real(
+        tester,
+        BackupNativePhase.modal,
+        () => tester.tap(accept),
+      );
+      await probe.frame(tester, BackupNativePhase.modal, tester.pump);
+      await probe.frame(
+        tester,
+        BackupNativePhase.modal,
+        () => tester.pump(route.reverseTransitionDuration),
+      );
+      final result = await probe.join(tester, pending.future);
       expect(result.content, {
         'ok': true,
         'code': 'completed',
@@ -159,7 +242,7 @@ void main() {
       ]) {
         expect(serialized, isNot(contains(forbidden)));
       }
-      await backupReal(tester, () async {
+      await f.real(tester, BackupNativePhase.join, () async {
         await f.expectSourceUnchanged();
         final copy = sqlite.sqlite3.open(
           f.destinationPath,
@@ -234,6 +317,7 @@ void main() {
         );
       });
     },
+    observePhases: true,
   );
 
   backupWidgetTest(

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show debugPrintSynchronously;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -69,6 +70,8 @@ final class BackupNativeFixture {
   Future<void>? _databaseClose;
   final _actions = <BackupOriginalAction>[];
   final _rootGates = <Completer<void>>[];
+  BackupNativePhaseProbe? phaseProbe;
+  bool get actionsSettled => _actions.every((action) => action.done);
   List<int> sourceBefore = [], walBefore = [];
 
   Future<void> initialize() async {
@@ -128,6 +131,7 @@ final class BackupNativeFixture {
         messageId: 'native-input',
       ),
     );
+    root.phaseProbe = phaseProbe;
     rootReady = true;
     writer.execute('PRAGMA wal_checkpoint(TRUNCATE)');
     writer.execute('BEGIN');
@@ -259,7 +263,10 @@ final class BackupNativeFixture {
       fileDialog: dialog,
     );
     mountedUi = true;
-    host = SupportBackupNativeFileHost(ui: ui);
+    final probe = phaseProbe;
+    host = SupportBackupNativeFileHost(
+      ui: probe == null ? ui : _BackupObservedNativeUi(ui, probe),
+    );
     hostAvailable = !noHost;
     providerDb = providerDatabase;
     rebuildRegistry();
@@ -303,6 +310,16 @@ final class BackupNativeFixture {
   BackupOriginalAction actionFor(Future<NativeToolResult> originalAction) =>
       _actions.firstWhere((action) => identical(action.future, originalAction));
 
+  Future<T> real<T>(
+    WidgetTester tester,
+    BackupNativePhase phase,
+    Future<T> Function() action,
+  ) => phaseProbe?.real(tester, phase, action) ?? backupReal(tester, action);
+
+  String get phaseCounters =>
+      'picker=${dialog.choices} admissions=${rootReady ? root.admissions : 0} '
+      'actions=${_actions.length} settled=${_actions.where((a) => a.done).length}';
+
   Completer<void> holdRootGate() {
     final gate = Completer<void>();
     _rootGates.add(gate);
@@ -344,15 +361,20 @@ final class BackupNativeFixture {
 
   Future<void> closeDatabase() => _databaseClose ??= db.close();
 
-  Future<void> close() async {
+  Future<void> close({bool doNotWaitForActions = false}) async {
     if (_closed) return;
+    if (doNotWaitForActions && !actionsSettled) {
+      throw TestFailure('Original backup cleanup has unsettled actions.');
+    }
     _closed = true;
     final failure = BackupFixtureFailure();
     await failure.run(stopOriginalActions);
     // Every held picker/ROOT gate was released before this actual join. The
     // test wrapper pumps native route dismissal before closing the database.
-    for (final action in _actions) {
-      await action.settled;
+    if (!doNotWaitForActions) {
+      for (final action in _actions) {
+        await action.settled;
+      }
     }
     for (final action in _actions) {
       await failure.run(action.throwIfFailed);
@@ -396,6 +418,7 @@ final class BackupOriginalReadRoot
   bool retired = false;
   int admissions = 0;
   Future<void> Function()? beforeAdmission;
+  BackupNativePhaseProbe? phaseProbe;
   @override
   bool retainsBackupSource(
     NativeDataSourceIdentity source,
@@ -412,6 +435,21 @@ final class BackupOriginalReadRoot
 
   @override
   Future<SupportBackupRootLease?> admitBackupFile(
+    SupportBackupFileSelection selection,
+    SupportAppActionContext context,
+  ) {
+    final probe = phaseProbe;
+    return probe == null
+        ? _admitBackupFile(selection, context)
+        : probe
+              ._start(
+                BackupNativePhase.rootEffect,
+                () => _admitBackupFile(selection, context),
+              )
+              .original;
+  }
+
+  Future<SupportBackupRootLease?> _admitBackupFile(
     SupportBackupFileSelection selection,
     SupportAppActionContext context,
   ) async {
@@ -450,8 +488,16 @@ final class BackupSyntheticFileDialog implements SupportBackupFileDialog {
   Completer<String?>? _pending;
   int choices = 0;
   Future<void> Function()? onChoose;
+  BackupNativePhaseProbe? phaseProbe;
   @override
-  Future<String?> saveLocalDatabase() async {
+  Future<String?> saveLocalDatabase() {
+    final probe = phaseProbe;
+    return probe == null
+        ? _saveLocalDatabase()
+        : probe._start(BackupNativePhase.picker, _saveLocalDatabase).original;
+  }
+
+  Future<String?> _saveLocalDatabase() async {
     choices++;
     _pending = Completer<String?>();
     await onChoose?.call();
@@ -599,5 +645,276 @@ final class BackupFixtureFailure {
 
   void throwIfAny() {
     if (_error != null) Error.throwWithStackTrace(_error!, _stack!);
+  }
+}
+
+enum BackupNativePhase {
+  initialize,
+  mount,
+  picker,
+  modal,
+  rootEffect,
+  join,
+  cleanup,
+}
+
+/// Observation-only forwarding: the ACTUAL native UI still creates the modal,
+/// checks currentness and returns its original lease/future without alteration.
+final class _BackupObservedNativeUi implements SupportBackupFileUi {
+  _BackupObservedNativeUi(this.original, this.probe);
+  final SupportBackupNativeUi original;
+  final BackupNativePhaseProbe probe;
+  @override
+  bool get isCurrent => original.isCurrent;
+  @override
+  Future<String?> chooseLocalFile(SupportAppActionContext context) =>
+      original.chooseLocalFile(context);
+  @override
+  Future<SupportAppConfirmationLease?> confirmLocalFile(
+    SupportAppConfirmationRequest request,
+    String destination,
+    String disclosure,
+  ) => probe
+      ._start(
+        BackupNativePhase.modal,
+        () => original.confirmLocalFile(request, destination, disclosure),
+      )
+      .original;
+}
+
+typedef _BackupPhaseObservation<T> = ({
+  Future<T> original,
+  bool Function() done,
+  T Function() value,
+  void Function() check,
+});
+
+/// First-case diagnostic only. Originals keep their identity and original error
+/// stacks; runAsync returns a record, never awaits work that needs widget frames.
+/// Fixed labels/counters are the only diagnostic output. ROOT-effect observes
+/// the exposed original admission, NOT an invented internal snapshot checkpoint.
+final class BackupNativePhaseProbe {
+  BackupNativePhaseProbe(this.fixture);
+  final BackupNativeFixture fixture;
+  final _signals =
+      <BackupNativePhase, ({bool Function() done, void Function() check})>{};
+
+  void _emit(BackupNativePhase phase, String state) {
+    final label = phase == BackupNativePhase.rootEffect
+        ? 'ROOT-effect'
+        : phase.name;
+    debugPrintSynchronously(
+      'backup-native phase=$label state=$state ${fixture.phaseCounters}',
+    );
+  }
+
+  _BackupPhaseObservation<T> _start<T>(
+    BackupNativePhase phase,
+    Future<T> Function() createOriginal, {
+    bool retain = true,
+  }) {
+    _emit(phase, 'entered');
+    final original = createOriginal();
+    var done = false;
+    T? value;
+    Object? error;
+    StackTrace? stack;
+    void check() {
+      if (error != null) Error.throwWithStackTrace(error!, stack!);
+    }
+
+    original.then<void>(
+      (result) {
+        value = result;
+        done = true;
+        _emit(phase, 'settled-value');
+      },
+      onError: (Object failure, StackTrace trace) {
+        error = failure;
+        stack = trace;
+        done = true;
+        _emit(phase, 'settled-error');
+      },
+    );
+    // Auxiliary frame/I/O observations must not overwrite the actual original
+    // native modal/picker/ROOT phase while it is pending (or hide its error).
+    if (retain)
+      _signals.putIfAbsent(phase, () => (done: () => done, check: check));
+    return (
+      original: original,
+      done: () => done,
+      value: () {
+        check();
+        if (!done) throw boundedFailure(phase);
+        return value as T;
+      },
+      check: check,
+    );
+  }
+
+  bool settled(BackupNativePhase phase) => _signals[phase]?.done() == true;
+
+  TestFailure boundedFailure(BackupNativePhase phase) {
+    _emit(phase, 'bounded-unsettled');
+    return TestFailure(
+      'Original backup phase=${phase.name} exceeded finite frame budget; '
+      '${fixture.phaseCounters}',
+    );
+  }
+
+  Future<T> real<T>(
+    WidgetTester tester,
+    BackupNativePhase phase,
+    Future<T> Function() createOriginal,
+  ) async {
+    Object? synchronousError;
+    StackTrace? synchronousStack;
+    final record = await tester.runAsync(() async {
+      _BackupPhaseObservation<T>? observation;
+      try {
+        observation = _start(phase, createOriginal);
+      } catch (error, stack) {
+        synchronousError = error;
+        synchronousStack = stack;
+        _emit(phase, 'settled-error');
+      }
+      return (observation: observation);
+    });
+    if (synchronousError != null) {
+      Error.throwWithStackTrace(synchronousError!, synchronousStack!);
+    }
+    final observation = record?.observation;
+    if (observation == null) throw boundedFailure(phase);
+    return _settle(tester, phase, observation);
+  }
+
+  // Framework futures start in the widget test's own fake-async zone. Capture
+  // them immediately, then hand the observer back through the same record path.
+  Future<T> frame<T>(
+    WidgetTester tester,
+    BackupNativePhase phase,
+    Future<T> Function() createOriginal,
+  ) async {
+    final observation = _start(phase, createOriginal, retain: false);
+    final record = await tester.runAsync(
+      () async => (observation: observation),
+    );
+    if (record == null) throw boundedFailure(phase);
+    return _settle(tester, phase, record.observation);
+  }
+
+  Future<T> _settle<T>(
+    WidgetTester tester,
+    BackupNativePhase phase,
+    _BackupPhaseObservation<T> observation,
+  ) async {
+    for (var frame = 0; frame < 512; frame++) {
+      observation.check();
+      if (observation.done()) return observation.value();
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      observation.check();
+      if (observation.done()) return observation.value();
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    observation.check();
+    if (observation.done()) return observation.value();
+    throw boundedFailure(phase);
+  }
+
+  Future<void> wait(
+    WidgetTester tester,
+    BackupNativePhase phase,
+    bool Function() ready, {
+    BackupOriginalAction? action,
+    bool checkSignals = true,
+  }) async {
+    _emit(phase, 'entered');
+    void check() {
+      if (!checkSignals) return;
+      action?.throwIfFailed();
+      for (final signal in _signals.values) {
+        signal.check();
+      }
+    }
+
+    for (var frame = 0; frame < 512; frame++) {
+      check();
+      if (ready()) {
+        _emit(phase, 'observed');
+        return;
+      }
+      if (action?.done == true) {
+        throw TestFailure(
+          'Original backup phase=${phase.name} missed its signal; ${fixture.phaseCounters}',
+        );
+      }
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    }
+    check();
+    if (ready()) {
+      _emit(phase, 'observed');
+      return;
+    }
+    throw boundedFailure(phase);
+  }
+
+  Future<NativeToolResult> join(
+    WidgetTester tester,
+    Future<NativeToolResult> original,
+  ) async {
+    // Reuse the immediate ORIGINAL registry observer rather than a new action
+    // or synthetic completion. ROOT admission and action settlement stay distinct.
+    final action = fixture.actionFor(original);
+    await wait(
+      tester,
+      BackupNativePhase.join,
+      () => action.done,
+      action: action,
+    );
+    return action.result;
+  }
+
+  Future<void> cleanup(
+    WidgetTester tester,
+    BackupFixtureFailure failure,
+  ) async {
+    await failure.run(fixture.stopOriginalActions);
+    await failure.run(
+      () => wait(
+        tester,
+        BackupNativePhase.cleanup,
+        () => fixture.actionsSettled,
+        checkSignals: false,
+      ),
+    );
+    if (fixture.actionsSettled) {
+      for (final action in fixture._actions) {
+        await failure.run(action.throwIfFailed);
+      }
+    }
+    await failure.run(
+      () => frame(
+        tester,
+        BackupNativePhase.cleanup,
+        () => tester.pumpWidget(const SizedBox.shrink()),
+      ),
+    );
+    await failure.run(
+      () => frame(tester, BackupNativePhase.cleanup, tester.pump),
+    );
+    await failure.run(() async {
+      // Do not close/delete beneath a still-running initializer or action, and
+      // never join that broken work unboundedly inside runAsync. Retention here
+      // is an honest bounded failure, not proof of ROOT deadlock or safe cleanup.
+      if (!settled(BackupNativePhase.initialize) || !fixture.actionsSettled) {
+        throw boundedFailure(BackupNativePhase.cleanup);
+      }
+      await real(
+        tester,
+        BackupNativePhase.cleanup,
+        () => fixture.close(doNotWaitForActions: true),
+      );
+    });
   }
 }

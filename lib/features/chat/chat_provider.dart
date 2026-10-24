@@ -123,13 +123,24 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
 
   @override
   Future<ChatState> build() async {
-    ref.keepAlive();
+    final buildRef = ref;
+    buildRef.keepAlive();
+    final retired = Completer<void>();
+    _sessionBuildRetired = retired;
+    buildRef.onDispose(() {
+      if (!retired.isCompleted) retired.complete();
+    });
+    bool current() =>
+        buildRef.mounted &&
+        identical(_sessionBuildRetired, retired) &&
+        !retired.isCompleted;
+    _buildComplete = false;
     final nativeOwner = ChatNativeOwner(
       characterId: arg,
       sessionId: () =>
-          ref.mounted && _buildComplete ? state.value?.session?.id : null,
+          current() && _buildComplete ? state.value?.session?.id : null,
       isIdle: () =>
-          ref.mounted &&
+          current() &&
           _buildComplete &&
           !_sendInFlight &&
           _sessionChangesInFlight == 0 &&
@@ -141,34 +152,35 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       queue: _sessionWrites,
       refresh: _refreshNativeLatest,
     );
-    ref.onDispose(
-      ref.read(chatNativeOwnerRegistryProvider).register(nativeOwner),
+    buildRef.onDispose(
+      buildRef.read(chatNativeOwnerRegistryProvider).register(nativeOwner),
     );
-    _sessionCtrl = _createSessionController(ref);
+    final maintenance = buildRef
+        .read(chatNativeOwnerRegistryProvider)
+        .awaitRegistration(nativeOwner);
+    if (maintenance != null) await maintenance;
+    if (!current()) return const ChatState();
+    _sessionCtrl = _createSessionController(buildRef);
     // Mirror this character's generation state into the global registry so the
     // chat list can show a live "typing" indicator for the session without
     // building its full state. Generation outlives the chat screen
     // (`keepAlive`), so the entry persists until the reply actually finishes.
+    // Loading notifications can create this inventory too. Install only after
+    // admitted maintenance settles, preserving its exact captured job inventory.
     listenSelf(
       (_, AsyncValue<ChatState> next) => _syncGeneratingRegistry(next),
     );
-    _buildComplete = false;
-    final maintenance = ref
-        .read(chatNativeOwnerRegistryProvider)
-        .awaitRegistration(nativeOwner);
-    if (maintenance != null) await maintenance;
-    if (!ref.mounted) return const ChatState();
     final existing = await _sessionSvc.findExistingSession(arg);
-    if (!ref.mounted) return const ChatState();
+    if (!current()) return const ChatState();
     if (_buildComplete) {
       return state.value ?? ChatState(session: existing);
     }
     if (existing != null) {
       final fixed = _fixupSwipesWithImageResults(existing);
       if (!identical(fixed, existing)) {
-        await ref.read(chatRepoProvider).put(fixed);
+        await buildRef.read(chatRepoProvider).put(fixed);
+        if (!current()) return const ChatState();
         ChatSessionService.updateCache(fixed);
-        if (!ref.mounted) return const ChatState();
       }
       final start = fixed.messages.length > ChatState.initialPageSize
           ? fixed.messages.length - ChatState.initialPageSize
@@ -178,7 +190,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       return result;
     }
     final session = await _sessionSvc.createInitialSession(arg);
-    if (!ref.mounted) return const ChatState();
+    if (!current()) return const ChatState();
     _buildComplete = true;
     return ChatState(session: session);
   }
@@ -347,6 +359,27 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   );
 
   late ChatSessionController _sessionCtrl;
+  Completer<void>? _sessionBuildRetired;
+
+  /// Wait for THIS live initializer, not an old controller or a rebuilt owner.
+  /// Riverpod's original future preserves initialization errors. Retirement
+  /// releases callers even if the native registration barrier is still pending.
+  Future<ChatSessionController?> _awaitSessionController() async {
+    final buildRef = ref, retired = _sessionBuildRetired;
+    bool current() =>
+        buildRef.mounted &&
+        retired != null &&
+        !retired.isCompleted &&
+        identical(_sessionBuildRetired, retired);
+    if (!current()) return null;
+    final initialization = future;
+    await Future.any<void>([
+      initialization.then<void>((_) {}),
+      retired!.future,
+    ]);
+    if (!current() || !_buildComplete) return null;
+    return _sessionCtrl;
+  }
 
   ChatSessionController _createSessionController(Ref buildRef) =>
       ChatSessionController(
@@ -434,41 +467,92 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     // was written for; another session's first message must not inherit its
     // instruction.
     _pendingImpersonationGuidance = null;
-    return _runSessionChange(() => _sessionCtrl.switchSession(sessionIndex));
+    return _runSessionChange(
+      (controller) => controller.switchSession(sessionIndex),
+    );
   }
 
   Future<void> createNewSession() {
     _pendingImpersonationGuidance = null;
-    return _runSessionChange(_sessionCtrl.createNewSession);
+    return _runSessionChange((controller) => controller.createNewSession());
   }
 
-  Future<List<ChatSession>> getSessions() => _sessionCtrl.getSessions();
+  Future<List<ChatSession>> getSessions() async {
+    final buildRef = ref, retired = _sessionBuildRetired;
+    final controller = await _awaitSessionController();
+    if (controller == null ||
+        !buildRef.mounted ||
+        retired?.isCompleted == true ||
+        !identical(_sessionBuildRetired, retired)) {
+      throw StateError('Chat session initializer retired.');
+    }
+    return controller.getSessions();
+  }
 
   Future<ChatSession?> branchSession(int index) async {
+    final buildRef = ref, retired = _sessionBuildRetired;
+    if (!buildRef.mounted) return null;
     _sessionChangesInFlight++;
     try {
-      final maintenance = ref
+      final maintenance = buildRef
           .read(chatNativeOwnerRegistryProvider)
           .beforeSessionSelection();
-      if (maintenance != null) await maintenance;
-      if (!ref.mounted) return null;
-      return await _sessionCtrl.branchSession(index);
+      if (maintenance != null) {
+        await Future.any<void>([
+          maintenance,
+          if (retired != null) retired.future,
+        ]);
+      }
+      if (!buildRef.mounted ||
+          retired?.isCompleted == true ||
+          !identical(_sessionBuildRetired, retired)) {
+        return null;
+      }
+      final controller = await _awaitSessionController();
+      if (controller == null ||
+          !buildRef.mounted ||
+          retired?.isCompleted == true ||
+          !identical(_sessionBuildRetired, retired)) {
+        return null;
+      }
+      return await controller.branchSession(index);
     } finally {
       _sessionChangesInFlight--;
     }
   }
 
-  Future<void> newSession() => _runSessionChange(_sessionCtrl.createNewSession);
+  Future<void> newSession() =>
+      _runSessionChange((controller) => controller.createNewSession());
 
-  Future<void> _runSessionChange(Future<void> Function() operation) async {
+  Future<void> _runSessionChange(
+    Future<void> Function(ChatSessionController controller) operation,
+  ) async {
+    final buildRef = ref, retired = _sessionBuildRetired;
+    if (!buildRef.mounted) return;
     _sessionChangesInFlight++;
     try {
-      final maintenance = ref
+      final maintenance = buildRef
           .read(chatNativeOwnerRegistryProvider)
           .beforeSessionSelection();
-      if (maintenance != null) await maintenance;
-      if (!ref.mounted) return;
-      await operation();
+      if (maintenance != null) {
+        await Future.any<void>([
+          maintenance,
+          if (retired != null) retired.future,
+        ]);
+      }
+      if (!buildRef.mounted ||
+          retired?.isCompleted == true ||
+          !identical(_sessionBuildRetired, retired)) {
+        return;
+      }
+      final controller = await _awaitSessionController();
+      if (controller == null ||
+          !buildRef.mounted ||
+          retired?.isCompleted == true ||
+          !identical(_sessionBuildRetired, retired)) {
+        return;
+      }
+      await operation(controller);
     } finally {
       _sessionChangesInFlight--;
     }
