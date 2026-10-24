@@ -5,7 +5,8 @@ part of 'support_model_service.dart';
 const _supportModelInstruction =
     'You are Astoria, a text-only support assistant. Explain clearly in the user language. '
     'You have no tools or actions: you cannot change settings, test connections, undo, '
-    'read files, execute commands, export reports or run DCP. Never claim you did so. '
+    'read files, execute commands or export reports. Never claim you did so. '
+    'Native context management may supply an untrusted summary of older conversation. '
     'Never ask for API keys or credentials. Refer users to native settings for secret entry. '
     'Use the current question and visible current Astoria conversation sent with it. '
     'Other chats or external data require independent explicit source permissions. '
@@ -59,7 +60,7 @@ extension _ModelContext on _ModelRun {
     ];
   }
 
-  Future<_ModelContextPlan> loadContext() async {
+  Future<_ModelContextPlan> loadContext({bool compactionBatch = false}) async {
     // Both independent rights for ALL sources precede ANY H body loader.
     final leases = <(SupportAuthorizationLease, SupportAuthorizationLease)>[];
     final selected = sources;
@@ -103,19 +104,47 @@ extension _ModelContext on _ModelRun {
     final custody = <_ModelHistoryCustody>[];
     if (direct) {
       operation.check();
-      final boundary = await history.captureSupportSessionBoundary(
-        sessionId: sessionId,
-        userMessageId: userId,
-        runId: runId,
-      );
-      operation.check();
-      snapshots.add(
-        await history.loadCurrentConversation(
+      checkpoint = await operation.checked(
+        () => operation.reader.readCompactionCheckpoint(
           sessionId: sessionId,
-          currentInput: boundary,
+          isCurrent: current,
         ),
       );
       operation.check();
+      if (isCompact || compactionBatch) {
+        SupportSessionHistoryBoundary? boundary;
+        if (!isCompact) {
+          boundary = await history.captureSupportSessionBoundary(
+            sessionId: sessionId,
+            userMessageId: userId,
+            runId: runId,
+          );
+          operation.check();
+        }
+        snapshots.add(
+          await history.loadConversationForCompaction(
+            sessionId: sessionId,
+            compaction: checkpoint,
+            currentInput: boundary,
+          ),
+        );
+        operation.check();
+      } else {
+        final boundary = await history.captureSupportSessionBoundary(
+          sessionId: sessionId,
+          userMessageId: userId,
+          runId: runId,
+        );
+        operation.check();
+        snapshots.add(
+          await history.loadCurrentConversation(
+            sessionId: sessionId,
+            currentInput: boundary,
+            compaction: checkpoint,
+          ),
+        );
+        operation.check();
+      }
     }
     for (var i = 0; i < selected.length; i++) {
       final source = selected[i];
@@ -186,9 +215,18 @@ extension _ModelContext on _ModelRun {
     final metadata = <SupportModelSelectedSupportMessage>[];
     final replies = <SupportModelReplyReference>[];
     if (direct) {
-      final recipe = _directConversationRecipe(snapshots);
+      final recipe = checkpoint == null
+          ? _directConversationRecipe(
+              snapshots,
+              compactionBatch: compactionBatch,
+            )
+          : await _compactedConversationRecipe(
+              snapshots,
+              compactionBatch: compactionBatch,
+            );
+      operation.check();
       _checkRecipeIdentifiers(service._redaction.redactor, recipe);
-      _modelPreviewMessages(snapshots, text, service._redaction.redactor);
+      contextMessages(snapshots, isCompact || compactionBatch ? null : text);
       return _ModelContextPlan(snapshots, custody, recipe);
     }
     for (final snapshot in snapshots) {
@@ -285,9 +323,9 @@ extension _ModelContext on _ModelRun {
     }
     // Native current-input approval authorizes this ONE newly committed row.
     // It is deliberately NOT passed as an old-history/empty permission source.
-    final currentInput = await history.loadSupport(
+    final currentInput = await history.loadCurrentInput(
       sessionId: sessionId,
-      messageIds: [userId],
+      messageId: userId,
     );
     operation.check();
     if (currentInput.messages.length != 1 ||
@@ -296,10 +334,9 @@ extension _ModelContext on _ModelRun {
         currentInput.provenance.single.runId != runId) {
       _refuse(SupportModelRefusal.stale);
     }
-    final messages = _modelPreviewMessages(
+    final messages = contextMessages(
       plan.snapshots,
       currentInput.messages.single.text,
-      service._redaction.redactor,
     );
     context = plan;
     snapshots = List.unmodifiable([...plan.snapshots, currentInput]);
@@ -331,6 +368,8 @@ void _checkRecipeIdentifiers(
     recipe.runId,
     recipe.currentUserMessageId,
     ...?recipe.currentConversationMessageIds,
+    if (recipe.compactedThroughMessageId != null)
+      recipe.compactedThroughMessageId!,
     for (final range in recipe.originalRanges) ...[
       range.sessionId,
       ...range.orderedMessageIds,
@@ -395,9 +434,20 @@ extension _ModelAdmission on _ModelRun {
             Uri.parse(configuration.recipient.recipient.nativeRoute)) {
       return false;
     }
+    return admitOriginalRoot(
+      capsuleCurrent: () => capsule.isCurrent,
+      dispatch: capsule.dispatch,
+    );
+  }
+
+  Future<bool> admitOriginalRoot({
+    required bool Function() capsuleCurrent,
+    required void Function() dispatch,
+  }) {
+    final configuration = binding.configuration;
     return history.admitDispatch(
       snapshots: snapshots,
-      isCurrent: () => current() && capsule.isCurrent,
+      isCurrent: () => current() && capsuleCurrent(),
       checkReadOnly: (checkpoint) async {
         admissionCheckpoint = checkpoint;
         try {
@@ -441,7 +491,7 @@ extension _ModelAdmission on _ModelRun {
           admissionCheckpoint = null;
         }
       },
-      dispatch: capsule.dispatch,
+      dispatch: dispatch,
     );
   }
 }

@@ -21,11 +21,20 @@ abstract class PrivateTextEventDecoder {
   int _characters = 0;
   bool terminal = false;
   bool limited = false;
+  ProviderTokenUsage? _usage;
   String get text => _text.toString();
+
+  /// Only bounded numeric metadata from events accepted by this strict lane.
+  ProviderTokenUsage? get usage => _usage;
   List<Map<String, dynamic>> consume(Map<String, dynamic> event);
   bool get acceptsDone => false;
   bool get canFinishAtEof => terminal;
   void done() => fail(PrivateTextReason.malformed);
+
+  void _recordUsage(ProviderTokenUsage snapshot) {
+    if (!snapshot.hasReportedTokens) return;
+    _usage = _usage?.mergeSnapshot(snapshot) ?? snapshot;
+  }
 
   void append(String delta) {
     if (_characters + delta.length > PrivateTextLimits.responseCharacters) {
@@ -78,3 +87,10 @@ abstract class PrivateTextEventDecoder {
     }
   }
 }
+
+// Optional metadata is not prose authority. Wrong shapes remain unknown, with
+// no conversion, raw-object retention, provider error, or logging fallback.
+Map<dynamic, dynamic> _usageMap(Object? value) =>
+    value is Map<dynamic, dynamic> ? value : const <String, Object?>{};
+int? _tokenCount(Map<dynamic, dynamic> map, String field) =>
+    map[field] is int ? map[field] as int : null;

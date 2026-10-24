@@ -25,6 +25,7 @@ part 'native_provider_credential_metadata.dart';
 part 'native_provider_credential_broker.dart';
 part 'native_provider_ordinary_mutation.dart';
 part 'native_provider_ownership.dart';
+part 'native_provider_keyless_terminal_ownership.dart';
 
 enum NativeProviderPurpose { roleplay, studio, memoryBooks, astoria }
 

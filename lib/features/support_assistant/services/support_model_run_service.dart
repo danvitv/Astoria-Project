@@ -7,8 +7,9 @@ final class _ModelRun {
     this.text,
     this.userId,
     this.replyId,
-    this.runId,
-  ) {
+    this.runId, {
+    this.isCompact = false,
+  }) {
     for (final id in [userId, replyId, runId, sessionId]) {
       requireSupportPermissionId(id);
       if (id.length > 128) _refuse(SupportModelRefusal.unsafe);
@@ -48,6 +49,12 @@ final class _ModelRun {
   final SupportModelService service;
   final _ModelBinding binding;
   final String text, userId, replyId, runId;
+  final bool isCompact;
+  SupportCompactionCheckpoint? checkpoint;
+  bool compactInstalled = false;
+  PrivateTextOutcome? compactOutcome;
+  SupportAppActionRegistry? originalActions;
+  bool toolsResolved = false;
   String get sessionId => binding.sessionId;
   late final _ModelReadOperation operation;
   SupportTextContextRepo get history => operation.history;
@@ -127,6 +134,10 @@ final class _ModelRun {
   }
 
   Future<void> prepare() async {
+    if (isCompact) {
+      await prepareCompact();
+      return;
+    }
     try {
       operation.check();
       final user = await service._writes.enqueue(
@@ -150,8 +161,16 @@ final class _ModelRun {
       ); // No post-commit cancellation can turn this false.
       publish(user);
       operation.check();
-      final initial = await loadContext();
+      var initial = await loadManagedContext();
       operation.check();
+      if (binding.configuration.directConversation &&
+          binding.configuration.settings.dcpCompressionEnabled &&
+          _contextPressure(initial)) {
+        await compactContext(initial);
+        operation.check();
+        initial = await loadContext();
+        operation.check();
+      }
       final provenance = SupportModelProvenanceCodec.encodeForEncryptedStorage(
         initial.recipe,
       );
@@ -235,6 +254,11 @@ final class _ModelRun {
       operation.check();
       phase(SupportModelPhase.waiting);
       final configuration = binding.configuration;
+      if (hasNativeTools) {
+        outcome = await generateTools();
+        await finish(outcome);
+        return;
+      }
       // ONE original private admission owner. Native dispatch receives this
       // very instance, not a permissive generic transport or substitute capsule.
       final inner = PrivateTextTransport(
@@ -304,7 +328,7 @@ extension _ModelSettlement on _ModelRun {
     operation.close();
     phase(SupportModelPhase.settling);
     SupportModelMessage? message;
-    var saved = false;
+    var saved = compactInstalled && isCompact;
     try {
       if (expected != null && settlementValid) {
         final durable = await service._writes.enqueue(() {
@@ -363,6 +387,7 @@ extension _ModelSettlement on _ModelRun {
     }
     if (outcome != null) {
       final actualDispatch = outcome.dispatch;
+      final actualUsage = outcome.usage;
       // The coordinator can change DURING settlement awaits. Even a refused or
       // selected-away result must never return earlier unchecked text in a DTO.
       try {
@@ -378,6 +403,7 @@ extension _ModelSettlement on _ModelRun {
           reason: outcome.reason,
           httpStatus: outcome.httpStatus,
           dispatch: outcome.dispatch,
+          usage: actualUsage,
         );
       } catch (_) {
         outcome = PrivateTextOutcome(
@@ -385,10 +411,16 @@ extension _ModelSettlement on _ModelRun {
           text: '',
           reason: PrivateTextReason.sanitationLimit,
           dispatch: actualDispatch,
+          usage: actualUsage,
         );
       }
     }
     phase(SupportModelPhase.settled);
+    if (publicationCurrent && outcome != null) {
+      service._lastUsage = outcome.usage;
+      service._usageSession = sessionId;
+      service._usageRevision = binding.revision;
+    }
     if (identical(service._active, this)) service._active = null;
     completion.complete(
       SupportModelRunResult(
@@ -397,6 +429,7 @@ extension _ModelSettlement on _ModelRun {
         reason: reason,
         message: message,
         outcome: outcome,
+        compacted: compactInstalled,
       ),
     );
   }

@@ -11,6 +11,7 @@ final class SupportModelUiEmitter {
     this._workspaceCapture,
     this._runtimeCurrent,
     this._visibleConversation,
+    this._toolUi,
   );
   final SupportModelUiBridge _bridge;
   final Object _controller, _uiLifetime;
@@ -18,6 +19,7 @@ final class SupportModelUiEmitter {
   final SupportModelWorkspaceCapture? _workspaceCapture;
   final bool Function() _runtimeCurrent;
   final List<SupportModelConversationMessage> _visibleConversation;
+  final SupportModelToolUiPorts? _toolUi;
   bool _retired = false;
   SupportModelUiSend? _lastSend;
   bool get isCurrent => _current;
@@ -46,6 +48,12 @@ final class SupportModelUiEmitter {
     return send;
   }
 
+  SupportModelUiSend compact() {
+    final send = _bridge._send(this, '', 0, () => true, compact: true);
+    if (identical(_bridge._active, send)) _lastSend = send;
+    return send;
+  }
+
   void retire() {
     if (_retired) return;
     _retired = true;
@@ -66,8 +74,9 @@ final class SupportModelUiSend {
     this._text,
     this._draftRevision,
     this._isDraftCurrent,
-    this._runtimeCurrent,
-  );
+    this._runtimeCurrent, {
+    this._compact = false,
+  });
   final SupportModelUiBridge _bridge;
   final SupportModelUiEmitter _emitter;
   final SupportModelWorkspaceCapture? _capture;
@@ -75,6 +84,7 @@ final class SupportModelUiSend {
   final int _draftRevision;
   final bool Function() _isDraftCurrent;
   final bool Function() _runtimeCurrent;
+  final bool _compact;
   final _acceptance = Completer<bool>();
   final _preparation = Completer<SupportModelUiPreparation>();
   final _completion = Completer<SupportModelRunResult>();

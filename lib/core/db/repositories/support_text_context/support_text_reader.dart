@@ -10,6 +10,7 @@ final class _SupportTextReader {
     List<String> ids, {
     void Function()? checkpoint,
     bool directConversation = false,
+    bool boundedSuffix = false,
   }) async {
     checkpoint?.call();
     final header = await db
@@ -31,8 +32,9 @@ final class _SupportTextReader {
     if (header == null || header.readNullable<String>('title') == null) {
       _fail(SupportTextContextFailure.unavailable);
     }
-    if (header.read<int>('source_count') >
-        SupportTextContextRepo.maxSourceMessages) {
+    if (!boundedSuffix &&
+        header.read<int>('source_count') >
+            SupportTextContextRepo.maxSourceMessages) {
       _fail(SupportTextContextFailure.limited);
     }
     final title = await cipher.decrypt(

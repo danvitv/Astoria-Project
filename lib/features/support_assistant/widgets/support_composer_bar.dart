@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/widgets/glass_surface.dart';
 import '../../../shared/widgets/glaze_text_field.dart';
+import '../../../core/llm/provider_token_usage.dart';
 
 /// Exact emitted draft ownership, including content ABA before acceptance.
 final class SupportComposerDraft {
@@ -33,6 +34,9 @@ class SupportComposerBar extends StatefulWidget {
   final VoidCallback? onStop;
   final Object? nativeOwner;
   final bool enterToSend;
+  final VoidCallback? onCompact;
+  final ProviderTokenUsage? usage;
+  final bool usageIsCompaction;
 
   const SupportComposerBar({
     super.key,
@@ -47,6 +51,9 @@ class SupportComposerBar extends StatefulWidget {
     this.onStop,
     this.nativeOwner,
     this.enterToSend = true,
+    this.onCompact,
+    this.usage,
+    this.usageIsCompaction = false,
   });
 
   @override
@@ -204,6 +211,16 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
                   Text(_error!, style: TextStyle(color: context.cs.error)),
                 Row(
                   children: [
+                    if (widget.onCompact != null)
+                      IconButton(
+                        key: const ValueKey('support_composer_compact_btn'),
+                        tooltip:
+                            'Сжать старый контекст выбранной моделью; история останется',
+                        icon: const Icon(Icons.compress_rounded, size: 20),
+                        onPressed: busy || !widget.available
+                            ? null
+                            : widget.onCompact,
+                      ),
                     if (widget.onRunQuickDiagnostics != null)
                       IconButton(
                         key: const ValueKey('support_composer_diag_btn'),
@@ -267,6 +284,20 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
                         onPressed: widget.onStop,
                       ),
                   ],
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '${widget.usageIsCompaction ? 'Компакт' : 'Последний запрос'} · '
+                    'вход: ${widget.usage?.inputTokens ?? 'нет данных'} · '
+                    'выход: ${widget.usage?.outputTokens ?? 'нет данных'} · '
+                    'всего: ${widget.usage?.totalTokens ?? 'нет данных'}',
+                    key: const ValueKey('support_request_token_usage'),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: context.cs.onSurfaceVariant,
+                    ),
+                  ),
                 ),
               ],
             ),

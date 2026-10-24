@@ -94,12 +94,16 @@ final class SupportModelProvenance {
     required List<SupportModelSourceRange> originalRanges,
     required List<SupportModelReplyReference> directReplies,
     List<String>? currentConversationMessageIds,
+    String? compactedThroughMessageId,
   }) : supportSessionId = _identifier(supportSessionId),
        replyMessageId = _identifier(replyMessageId),
        runId = _identifier(runId),
        currentUserMessageId = _identifier(currentUserMessageId),
        originalRanges = _boundedCopy(originalRanges),
        directReplies = _boundedCopy(directReplies),
+       compactedThroughMessageId = compactedThroughMessageId == null
+           ? null
+           : _identifier(compactedThroughMessageId),
        currentConversationMessageIds = currentConversationMessageIds == null
            ? null
            : currentConversationMessageIds.isEmpty
@@ -107,6 +111,10 @@ final class SupportModelProvenance {
            : _messageIds(currentConversationMessageIds) {
     if (replyMessageId == currentUserMessageId) {
       _fail(SupportModelProvenanceFailure.invalidIdentity);
+    }
+    if (compactedThroughMessageId != null &&
+        currentConversationMessageIds == null) {
+      _fail(SupportModelProvenanceFailure.invalidSource);
     }
     if (this.currentConversationMessageIds?.any(
           (id) => id == replyMessageId || id == currentUserMessageId,
@@ -148,6 +156,9 @@ final class SupportModelProvenance {
   /// Null is the old v1 recipe. IDs are NOT external origins or reusable grants.
   /// Existing origin ranges/references remain unchanged and independently gated.
   final List<String>? currentConversationMessageIds;
+
+  /// v3 native checkpoint boundary. Not a grant, origin, or model instruction.
+  final String? compactedThroughMessageId;
 
   @override
   String toString() => 'SupportModelProvenance';

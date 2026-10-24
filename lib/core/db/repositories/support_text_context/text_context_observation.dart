@@ -135,8 +135,10 @@ final class _OwnedTextSnapshot implements SupportTextContextSnapshot {
     this._observation,
     this._stamp, {
     this._wholeSession,
+    this._boundedSuffix = false,
   });
   final SupportTextContextRepo _owner;
+  final bool _boundedSuffix;
   @override
   final SupportTextContextSource source;
   @override

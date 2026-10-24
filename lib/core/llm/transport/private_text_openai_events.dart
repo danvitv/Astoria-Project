@@ -20,6 +20,7 @@ final class _ChatEvents extends PrivateTextEventDecoder {
     require(choices is List);
     if ((choices as List).isEmpty) {
       require(event['usage'] is Map);
+      _recordUsage(_chatUsage(event['usage']));
       return [];
     }
     require(choices.length == 1 && choices.first is Map);
@@ -55,6 +56,7 @@ final class _ChatEvents extends PrivateTextEventDecoder {
       }
       _finish = reason as String;
     }
+    _recordUsage(_chatUsage(event['usage']));
     return [
       {
         'choices': [
@@ -87,6 +89,7 @@ final class _ResponsesEvents extends PrivateTextEventDecoder {
         if (detail is! Map || detail['reason'] != 'max_output_tokens') {
           fail(PrivateTextReason.providerError);
         }
+        _recordUsage(_responsesUsage(response['usage']));
         limited = true;
         terminal = true;
         return [];
@@ -98,6 +101,7 @@ final class _ResponsesEvents extends PrivateTextEventDecoder {
           fail(PrivateTextReason.providerError);
         }
         _validateOutput(map['output']);
+        _recordUsage(_responsesUsage(map['usage']));
         terminal = true;
         return [
           {
@@ -165,4 +169,38 @@ final class _ResponsesEvents extends PrivateTextEventDecoder {
     }
     require(finalText.toString() == text);
   }
+}
+
+ProviderTokenUsage _chatUsage(Object? value) {
+  final map = _usageMap(value);
+  return ProviderTokenUsage(
+    inputTokens: _tokenCount(map, 'prompt_tokens'),
+    outputTokens: _tokenCount(map, 'completion_tokens'),
+    totalTokens: _tokenCount(map, 'total_tokens'),
+    cachedInputTokens: _tokenCount(
+      _usageMap(map['prompt_tokens_details']),
+      'cached_tokens',
+    ),
+    reasoningTokens: _tokenCount(
+      _usageMap(map['completion_tokens_details']),
+      'reasoning_tokens',
+    ),
+  );
+}
+
+ProviderTokenUsage _responsesUsage(Object? value) {
+  final map = _usageMap(value);
+  return ProviderTokenUsage(
+    inputTokens: _tokenCount(map, 'input_tokens'),
+    outputTokens: _tokenCount(map, 'output_tokens'),
+    totalTokens: _tokenCount(map, 'total_tokens'),
+    cachedInputTokens: _tokenCount(
+      _usageMap(map['input_tokens_details']),
+      'cached_tokens',
+    ),
+    reasoningTokens: _tokenCount(
+      _usageMap(map['output_tokens_details']),
+      'reasoning_tokens',
+    ),
+  );
 }

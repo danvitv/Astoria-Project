@@ -17,6 +17,7 @@ enum SupportModelRefusal {
   lineageUnavailable,
   appendFailed,
   reservationFailed,
+  nothingToCompact,
   settlementFailed;
 
   String get label => switch (this) {
@@ -30,9 +31,11 @@ enum SupportModelRefusal {
     recipientRequired =>
       'Для внешних источников отдельно подтверди выбранного получателя.',
     unsupported =>
-      'Это подключение не поддерживает безопасный текстовый SSE-запрос.',
+      'Это подключение не поддерживает выбранный безопасный нативный запрос.',
     unsafe => 'Текст или параметры нельзя безопасно отправить.',
     tooLarge => 'Текст или выбранный контекст превышает допустимый размер.',
+    nothingToCompact =>
+      'Старого завершённого контекста пока недостаточно для компакта.',
     historyDenied =>
       'Для всей выбранной истории нужны отдельные разрешения чтения и отправки.',
     lineageUnavailable =>
@@ -53,6 +56,7 @@ enum SupportModelPhase {
   activity,
   settling,
   settled,
+  compacting,
 }
 
 /// Only sanitized, durable text. No cards, request, config, key or provenance.
@@ -97,11 +101,13 @@ final class SupportModelRunResult {
     required this.reason,
     this.message,
     this.outcome,
+    this.compacted = false,
   });
   final bool accepted, saved;
   final SupportModelRefusal reason;
   final SupportModelMessage? message;
   final PrivateTextOutcome? outcome;
+  final bool compacted;
   @override
   String toString() => 'SupportModelRunResult';
 }

@@ -84,6 +84,7 @@ extension SupportModelNativeInput on SupportModelService {
     required bool Function() isDraftCurrent,
     bool directConversation = false,
     List<SupportModelConversationMessage>? visibleConversation,
+    SupportModelToolUiPorts? toolUi,
   }) async {
     _ModelReadOperation? operation;
     try {
@@ -93,7 +94,7 @@ extension SupportModelNativeInput on SupportModelService {
       if (text.length > 8192) _refuse(SupportModelRefusal.tooLarge);
       if (directConversation &&
           (visibleConversation == null ||
-              visibleConversation.length > PrivateTextLimits.messages ||
+              visibleConversation.length > 100000 ||
               visibleConversation.any(
                 (message) =>
                     !const ['user', 'assistant'].contains(message.role) ||
@@ -154,6 +155,7 @@ extension SupportModelNativeInput on SupportModelService {
         isEmitterCurrent,
         isDraftCurrent,
         visibleConversation,
+        toolUi: toolUi,
       );
       if (!binding.current(draft: true)) _refuse(SupportModelRefusal.stale);
       return SupportModelInputEmission._(
@@ -174,6 +176,88 @@ extension SupportModelNativeInput on SupportModelService {
         operation.close();
         _emissions.remove(operation);
       }
+    }
+  }
+
+  /// Actual native compact control authorizes one summary operation to the exact
+  /// selected saved provider. No USER/reply rows or fabricated question.
+  Future<SupportModelRunResult> compact({
+    required Object controller,
+    required Object uiLifetime,
+    required bool Function() isEmitterCurrent,
+    required List<SupportModelConversationMessage> visibleConversation,
+  }) async {
+    _ModelReadOperation? emission;
+    try {
+      if (_active != null || _emissions.isNotEmpty) {
+        _refuse(SupportModelRefusal.busy);
+      }
+      final runtime = _runtime,
+          epoch = runtime.epoch,
+          lifetime = runtime.lifetime,
+          owner = runtime.writeOwner,
+          revision = _revisions.revision;
+      bool current() =>
+          _ownerCurrent &&
+          isEmitterCurrent() &&
+          runtime.alive &&
+          runtime.epoch == epoch &&
+          runtime.lifetime == lifetime &&
+          runtime.writeOwner == owner &&
+          _revisions.revision == revision &&
+          _revisions.isStable &&
+          runtime.configurationStable();
+      emission = _ModelReadOperation(this, current);
+      _emissions.add(emission);
+      final config = await _ModelConfiguration.read(
+        emission,
+        runtime.sessionId,
+        prime: true,
+        directConversation: true,
+      );
+      emission.check();
+      final binding = _ModelBinding(
+        this,
+        config,
+        controller,
+        uiLifetime,
+        0,
+        isEmitterCurrent,
+        () => true,
+        visibleConversation,
+      );
+      if (!binding.current()) _refuse(SupportModelRefusal.stale);
+      final run = _ModelRun(
+        this,
+        binding,
+        '',
+        _newId(),
+        _newId(),
+        _newId(),
+        isCompact: true,
+      );
+      _active = run;
+      emission.close();
+      _emissions.remove(emission);
+      emission = null;
+      run.phase(SupportModelPhase.compacting);
+      unawaited(run.prepare());
+      return await run.completion.future;
+    } on _ModelRefused catch (error) {
+      return SupportModelRunResult(
+        accepted: false,
+        saved: false,
+        reason: error.reason,
+      );
+    } catch (_) {
+      return const SupportModelRunResult(
+        accepted: false,
+        saved: false,
+        reason: SupportModelRefusal.unavailable,
+      );
+    } finally {
+      emission?.close();
+      if (emission != null) _emissions.remove(emission);
     }
   }
 

@@ -17,6 +17,7 @@ import 'widgets/support_message_list.dart';
 import 'widgets/support_sessions_panel.dart';
 import 'widgets/support_settings_panel.dart';
 import 'widgets/support_model_screen_controller.dart';
+import 'widgets/support_model_tool_native_ui.dart';
 import 'widgets/support_theme_entry.dart';
 import 'widgets/support_provider_entry.dart';
 import 'widgets/support_guidance_sheet.dart';
@@ -70,6 +71,7 @@ class _SupportAssistantScreenState
   bool _guidancePersistent = false, _guidanceBlocking = true;
   bool _showSendSnapshot = false;
   bool _sheetOpen = false;
+  SupportModelToolNativeUi? _toolUi;
 
   @override
   void initState() {
@@ -139,6 +141,7 @@ class _SupportAssistantScreenState
 
   @override
   void dispose() {
+    _toolUi?.dispose();
     _modelUi.removeListener(_modelUiChanged);
     _modelUi.dispose();
     _composerCtrl.dispose();
@@ -285,6 +288,11 @@ class _SupportAssistantScreenState
             bridge,
             _composerCtrl,
             workspace.activeSessionId,
+            toolUi: (_toolUi ??= SupportModelToolNativeUi(
+              context: context,
+              isOriginalUiCurrent: () => mounted,
+            )).ports,
+            isOriginalRouteCurrent: () => _toolUi?.isCurrent == true,
             visibleConversation: [
               for (final message in workspace.activeMessages)
                 if ((message.role == SupportMessageRole.user ||
@@ -397,14 +405,20 @@ class _SupportAssistantScreenState
                       '«Отправить» и Enter (если включён в общих настройках) сразу '
                       'отправляют вопрос и видимый текущий диалог выбранной модели. '
                       'Другие чаты и приватные источники требуют отдельных разрешений. '
-                      'Модель пока отвечает только текстом. Выбор установленной темы, режим dark/light/system '
-                      'и условный Undo доступны только через отдельное нативное '
-                      'подтверждение. Подготовка профиля провайдера и отдельный '
-                      'защищённый ввод ключа доступны в нативном окне провайдера; '
-                      'они не выбирают активное подключение и не проверяют провайдера. '
+                      'При нативном подключении модель может читать и менять безопасные '
+                      'настройки интерфейса, энергосбережение и установленную тему без '
+                      'повторного подтверждения отправки. Метаданные подключений доступны '
+                      'без ключей; создание и ограниченные изменения профиля требуют точного '
+                      'нативного подтверждения. Переход по разделам не изменяет их данные. '
+                      'Защищённый ввод ключа и Undo остаются отдельными нативными действиями. '
                       'Диагностику можно обсудить без выбора игровой сессии. '
                       'Автоматический сбор диагностических данных, Memory, '
-                      'инструменты, DCP и экспорт отчётов пока недоступны. '
+                      'правка содержимого других разделов, ремонт БД и экспорт отчётов недоступны. '
+                      'Компакт сжимает старый контекст выбранной моделью, не удаляя историю. '
+                      'DCP автоматически запускает компакт при давлении на контекст; '
+                      'внутри одного запроса также убирает точные дубли метаданных инструментов. '
+                      'Между запросами сохраняются ответы, но не скрытый журнал инструментов. '
+                      'счётчик показывает только токены из ответа провайдера. '
                       'Локальная помощь — отдельно, без сети.',
                       style: TextStyle(fontSize: 12),
                     ),
@@ -437,6 +451,12 @@ class _SupportAssistantScreenState
                 _sendWithGuidance(emitter, draft, workspace.activeSessionId),
             onLocalHelp: notifier.sendLocalHelp,
             onStop: activeSend?.stop,
+            onCompact: emitter == null ? null : () => _modelUi.compact(emitter),
+            usage: run.sessionId == workspace.activeSessionId
+                ? run.usage
+                : null,
+            usageIsCompaction:
+                run.sessionId == workspace.activeSessionId && run.isCompaction,
             onRunQuickDiagnostics: () =>
                 _handleSetupCardAction('connection_diagnostics'),
           ),

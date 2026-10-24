@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 import '../../models/support_models.dart';
 import '../../support/support_payload_cipher.dart';
@@ -17,6 +18,7 @@ part 'support/support_mutation_journal_contract.dart';
 part 'support/support_guarded_mutation_store.dart';
 part 'support/support_mutation_history_reader.dart';
 part 'support/support_mutation_history_types.dart';
+part 'support/support_compaction_store.dart';
 
 /// Exact committed snapshots, retained only by the native run owner.
 typedef SupportReplyReservation = ({

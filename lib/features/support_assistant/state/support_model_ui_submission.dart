@@ -9,6 +9,14 @@ final class _ModelUiSubmission {
 
   Future<SupportModelRunResult> run(SupportModelUiSend send) async {
     try {
+      if (send._compact) {
+        return await service.compact(
+          controller: send._emitter._controller,
+          uiLifetime: send._emitter._uiLifetime,
+          isEmitterCurrent: () => send._publicationCurrent && !send._stopped,
+          visibleConversation: send._emitter._visibleConversation,
+        );
+      }
       final emission = await service.emitInput(
         controller: send._emitter._controller,
         uiLifetime: send._emitter._uiLifetime,
@@ -18,6 +26,7 @@ final class _ModelUiSubmission {
         isDraftCurrent: send._isDraftCurrent,
         directConversation: true,
         visibleConversation: send._emitter._visibleConversation,
+        toolUi: send._emitter._toolUi,
       );
       if (emission.intent == null) {
         return SupportModelRunResult(

@@ -5,15 +5,23 @@ extension _KeylessOwnedOperation on ApiConfigRepo {
     String id,
     bool Function() isCurrent,
     Future<T> Function(bool Function(), int, _KeylessOperation) work,
-    void Function(T, Object?) publish,
-  ) async {
+    void Function(T, Object?) publish, {
+    KeylessApiConfigTerminalPlan? terminalPlan,
+    KeylessTerminalEffectPermit? terminalPermit,
+  }) async {
     KeylessNativeMutationLease? held;
     _KeylessOperation? operation;
 
     Future<void> releaseNative() async {
       final release = held;
       held = null; // No second release/retry, including throw-after-settlement.
-      if (release != null) await release.release();
+      if (release != null) {
+        try {
+          await release.release();
+        } finally {
+          if (terminalPermit != null) terminalPermit._closed = true;
+        }
+      }
     }
 
     void releaseProof() {
@@ -28,12 +36,15 @@ extension _KeylessOwnedOperation on ApiConfigRepo {
       _requireKeyless(_db.resolvedEngine.executor is! TransactionExecutor);
       final beforeStamp = _keyless.stamp;
       var ownFenceStarted = false;
+      bool callerCurrent() => terminalPermit?.current ?? isCurrent();
       bool admission() =>
-          isCurrent() && _keyless.pending == 0 && _keyless.stamp == beforeStamp;
+          callerCurrent() &&
+          _keyless.pending == 0 &&
+          _keyless.stamp == beforeStamp;
       // NativeOwner retains this guard for the whole lease. Its own repo fence
       // must not make that guard false; competing revisions still deny.
       bool originalOwner() {
-        if (!isCurrent()) return false;
+        if (!callerCurrent()) return false;
         if (!ownFenceStarted) {
           return _keyless.pending == 0 && _keyless.stamp == beforeStamp;
         }
@@ -44,10 +55,14 @@ extension _KeylessOwnedOperation on ApiConfigRepo {
       _requireKeyless(admission());
       final port = _keylessMutations;
       _requireKeyless(port != null);
-      final lease = await port!.acquire(
-        connectionId: id,
-        isCurrent: originalOwner,
-      );
+      final KeylessNativeMutationLease? lease;
+      if (terminalPlan != null && terminalPermit != null) {
+        _requireKeyless(port is KeylessNativeTerminalMutationPort);
+        lease = await (port as KeylessNativeTerminalMutationPort)
+            .acquireTerminal(plan: terminalPlan, permit: terminalPermit);
+      } else {
+        lease = await port!.acquire(connectionId: id, isCurrent: originalOwner);
+      }
       held = lease;
       _requireKeyless(admission() && lease != null && lease.isCurrent);
       final nativeLease = lease!;
@@ -63,7 +78,7 @@ extension _KeylessOwnedOperation on ApiConfigRepo {
             try {
               final fenceStamp = beforeStamp + 1;
               bool current() =>
-                  isCurrent() &&
+                  callerCurrent() &&
                   _keyless.pending == 1 &&
                   _keyless.stamp == fenceStamp &&
                   nativeLease.isCurrent &&
@@ -107,6 +122,7 @@ extension _KeylessOwnedOperation on ApiConfigRepo {
       } catch (_) {
         throw const KeylessApiConfigException();
       } finally {
+        if (terminalPermit != null) terminalPermit._closed = true;
         try {
           releaseProof();
         } catch (_) {

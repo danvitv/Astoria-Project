@@ -44,6 +44,8 @@ abstract final class SupportModelNativeProvenanceValidator {
         recipe.runId,
         recipe.currentUserMessageId,
         ...?recipe.currentConversationMessageIds,
+        if (recipe.compactedThroughMessageId != null)
+          recipe.compactedThroughMessageId!,
         for (final range in recipe.originalRanges) ...[
           range.sessionId,
           ...range.orderedMessageIds,

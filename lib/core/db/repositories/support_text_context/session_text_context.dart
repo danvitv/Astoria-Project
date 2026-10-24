@@ -9,12 +9,16 @@ final class _WholeSessionSpec {
     this._boundary, {
     this._sourceIdentity,
     this._directConversation = false,
+    this._compaction,
+    this._compactionBatch = false,
   });
   final SupportTextContextSource _source;
   final String _sessionId;
   final _OwnedSessionHistoryBoundary? _boundary;
   final Map<String, Object?>? _sourceIdentity;
   final bool _directConversation;
+  final SupportCompactionCheckpoint? _compaction;
+  final bool _compactionBatch;
 
   static Map<String, Object?> _identityOf(_TextRead read) => Map.unmodifiable({
     for (final key in const [
@@ -35,6 +39,8 @@ final class _WholeSessionSpec {
     _boundary,
     sourceIdentity: _identityOf(read),
     directConversation: _directConversation,
+    compaction: _compaction,
+    compactionBatch: _compactionBatch,
   );
 }
 
@@ -45,12 +51,30 @@ extension SupportSessionTextContext on SupportTextContextRepo {
   Future<SupportTextContextSnapshot> loadCurrentConversation({
     required String sessionId,
     required SupportSessionHistoryBoundary currentInput,
+    SupportCompactionCheckpoint? compaction,
   }) => _loadSession(
     _WholeSessionSpec(
       SupportTextContextSource.support,
       sessionId,
       _requireBoundary(sessionId, currentInput),
       directConversation: true,
+      compaction: compaction,
+    ),
+  );
+
+  /// Native compact is a summary operation, not an invented chat question.
+  Future<SupportTextContextSnapshot> loadConversationForCompaction({
+    required String sessionId,
+    SupportCompactionCheckpoint? compaction,
+    SupportSessionHistoryBoundary? currentInput,
+  }) => _loadSession(
+    _WholeSessionSpec(
+      SupportTextContextSource.support,
+      sessionId,
+      currentInput == null ? null : _requireBoundary(sessionId, currentInput),
+      directConversation: true,
+      compaction: compaction,
+      compactionBatch: true,
     ),
   );
 
@@ -129,6 +153,12 @@ extension SupportSessionTextContext on SupportTextContextRepo {
           ? _RoleplaySessionTextReader(
               _roleplay,
             ).read(spec._sessionId, _currentRedactor, checkpoint: checkpoint)
+          : spec._compaction != null ||
+                spec._boundary == null ||
+                spec._compactionBatch
+          ? _SupportCompactedTextReader(
+              _support,
+            ).read(spec, _currentRedactor, checkpoint: checkpoint)
           : _SupportSessionTextReader(_support).read(
               _requireBoundary(spec._sessionId, spec._boundary!),
               _currentRedactor,

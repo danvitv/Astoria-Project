@@ -6,10 +6,13 @@ part of 'support_model_service.dart';
 /// origins. Originless native local help remains originless in encrypted storage.
 extension _DirectConversationRecipe on _ModelRun {
   SupportModelProvenance _directConversationRecipe(
-    List<SupportTextContextSnapshot> snapshots,
-  ) {
+    List<SupportTextContextSnapshot> snapshots, {
+    bool compactionBatch = false,
+  }) {
     final own = snapshots.first;
-    final visible = binding.visibleConversation;
+    final visible = isCompact || compactionBatch
+        ? binding.visibleConversation?.take(own.messageIds.length).toList()
+        : binding.visibleConversation;
     if (own.source != SupportTextContextSource.support ||
         own.sessionId != sessionId ||
         own.provenance.length != own.messages.length ||

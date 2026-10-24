@@ -266,16 +266,17 @@ final class _ModelBinding {
     this.draftRevision,
     this.isEmitterCurrent,
     this.isDraftCurrent,
-    List<SupportModelConversationMessage>? visibleConversation,
-  ) : sessionId = service._runtime.sessionId,
-      lifetime = service._runtime.lifetime,
-      owner = service._runtime.writeOwner,
-      epoch = service._runtime.epoch,
-      revision = service._revisions.revision,
-      redactor = service._redaction.redactor,
-      visibleConversation = visibleConversation == null
-          ? null
-          : List.unmodifiable(visibleConversation);
+    List<SupportModelConversationMessage>? visibleConversation, {
+    this.toolUi,
+  }) : sessionId = service._runtime.sessionId,
+       lifetime = service._runtime.lifetime,
+       owner = service._runtime.writeOwner,
+       epoch = service._runtime.epoch,
+       revision = service._revisions.revision,
+       redactor = service._redaction.redactor,
+       visibleConversation = visibleConversation == null
+           ? null
+           : List.unmodifiable(visibleConversation);
   final SupportModelService service;
   final _ModelConfiguration configuration;
   final Object controller, uiLifetime;
@@ -284,6 +285,7 @@ final class _ModelBinding {
   final bool Function() isEmitterCurrent, isDraftCurrent;
   final SecretRedactor redactor;
   final List<SupportModelConversationMessage>? visibleConversation;
+  final SupportModelToolUiPorts? toolUi;
   SupportPermissionPreferences get policy => configuration.policy;
   SupportNativePermissionContext get nativeContext =>
       SupportNativePermissionContext(

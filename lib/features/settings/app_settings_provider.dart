@@ -457,11 +457,31 @@ abstract final class AppSettingsPreferences {
 }
 
 class AppSettingsNotifier extends AsyncNotifier<AppSettings> {
+  AppSettingsNotifier({
+    this._readPreferences,
+    Future<bool> Function()? readPowerSaveMode,
+  }) : _readPowerSaveMode = readPowerSaveMode ?? SystemSettings.isPowerSaveMode;
+
+  final Future<SharedPreferences> Function()? _readPreferences;
+  final Future<bool> Function() _readPowerSaveMode;
   StreamSubscription<bool>? _powerSaveSub;
+  Future<void> _writes = Future.value();
+  int _batteryModeIntent = 0;
+
+  Future<SharedPreferences> _preferences() =>
+      _readPreferences?.call() ?? ref.read(sharedPreferencesProvider.future);
+
+  // Ordinary saves, OS events and guarded patches share one persistence owner.
+  // A failed write must not poison the next operation's admission.
+  Future<T> _serialize<T>(Future<T> Function() operation) {
+    final result = _writes.then((_) => operation());
+    _writes = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return result;
+  }
 
   @override
   Future<AppSettings> build() async {
-    final prefs = await ref.read(sharedPreferencesProvider.future);
+    final prefs = await _preferences();
     var settings = AppSettingsPreferences.read(prefs);
     // Cache the toggles so the central [Haptics] gate can decide synchronously
     // in tap handlers and on message completion.
@@ -471,9 +491,7 @@ class AppSettingsNotifier extends AsyncNotifier<AppSettings> {
     // Under `system` the persisted flag is only the last known answer; ask the
     // OS for the current one before anything paints from it.
     if (settings.batterySaverMode == BatterySaverMode.system) {
-      settings = settings.copyWith(
-        batterySaver: await SystemSettings.isPowerSaveMode(),
-      );
+      settings = settings.copyWith(batterySaver: await _readPowerSaveMode());
     }
     _listenForPowerSaveChanges();
     return settings;
@@ -495,35 +513,281 @@ class AppSettingsNotifier extends AsyncNotifier<AppSettings> {
   }
 
   Future<void> _onPowerSaveChanged(bool powerSaving) async {
-    final current = state.value;
-    if (current == null) return;
-    if (current.batterySaverMode != BatterySaverMode.system) return;
-    if (current.batterySaver == powerSaving) return;
-    await save(current.copyWith(batterySaver: powerSaving));
+    await _serialize(() async {
+      final prefs = await _preferences();
+      if (!ref.mounted) return;
+      if (state.isLoading || state.hasError) return;
+      final current = state.value;
+      if (current == null ||
+          current.batterySaverMode != BatterySaverMode.system ||
+          current.batterySaver == powerSaving) {
+        return;
+      }
+      await _saveFields(prefs, {'batterySaver': powerSaving});
+    });
   }
 
   /// Sets what drives Battery Saver UI and resolves it in the same write, so
   /// the screen never shows a mode and an effect that disagree.
   Future<void> setBatterySaverMode(BatterySaverMode mode) async {
-    final current = state.value ?? const AppSettings();
+    final intent = ++_batteryModeIntent;
     final resolved = switch (mode) {
       BatterySaverMode.on => true,
       BatterySaverMode.off => false,
-      BatterySaverMode.system => await SystemSettings.isPowerSaveMode(),
+      BatterySaverMode.system => await _readPowerSaveMode(),
     };
-    await save(
-      current.copyWith(batterySaverMode: mode, batterySaver: resolved),
+    if (!ref.mounted || intent != _batteryModeIntent) return;
+    await _serialize(() async {
+      final prefs = await _preferences();
+      if (!ref.mounted || intent != _batteryModeIntent) return;
+      await future;
+      if (!ref.mounted || intent != _batteryModeIntent) return;
+      await _saveFields(prefs, {
+        'batterySaverMode': mode.name,
+        'batterySaver': resolved,
+      });
+    });
+  }
+
+  Future<void> save(AppSettings settings) {
+    // Capture intent before waiting, not a whole snapshot to replay later.
+    final before = AppSettingsPreferences.encode(
+      state.value ?? const AppSettings(),
+    );
+    final fields = AppSettingsPreferences.encode(settings)
+      ..removeWhere((key, value) => before[key] == value);
+    if (fields.containsKey('batterySaverMode')) ++_batteryModeIntent;
+    return _serialize(() async {
+      final prefs = await _preferences();
+      if (!ref.mounted) return;
+      await future;
+      if (!ref.mounted) return;
+      await _saveFields(prefs, fields);
+    });
+  }
+
+  /// Finite UI-only CAS. Readiness and OS resolution precede admission; only
+  /// selected fields (and the mode's resolved flag) are compared and written.
+  Future<AppSettingsPatchResult> patchUiPreferences({
+    required AppSettings expected,
+    required Map<String, Object?> values,
+    required bool Function() isCurrent,
+  }) async {
+    final fields = _uiFields(values);
+    if (fields == null) {
+      return const AppSettingsPatchResult(AppSettingsPatchCode.unavailable);
+    }
+    if (!_current(isCurrent)) {
+      return const AppSettingsPatchResult(AppSettingsPatchCode.stale);
+    }
+    late SharedPreferences prefs;
+    try {
+      prefs = await _preferences();
+      if (!_current(isCurrent)) {
+        return const AppSettingsPatchResult(AppSettingsPatchCode.stale);
+      }
+      if (fields.containsKey('batterySaverMode')) {
+        final mode = BatterySaverMode.values.byName(
+          fields['batterySaverMode'] as String,
+        );
+        fields['batterySaver'] = switch (mode) {
+          BatterySaverMode.on => true,
+          BatterySaverMode.off => false,
+          BatterySaverMode.system => await _readPowerSaveMode(),
+        };
+        if (!_current(isCurrent)) {
+          return const AppSettingsPatchResult(AppSettingsPatchCode.stale);
+        }
+      }
+    } catch (_) {
+      return AppSettingsPatchResult(
+        _current(isCurrent)
+            ? AppSettingsPatchCode.unavailable
+            : AppSettingsPatchCode.stale,
+      );
+    }
+    return _serialize(() async {
+      if (!_current(isCurrent)) {
+        return const AppSettingsPatchResult(AppSettingsPatchCode.stale);
+      }
+      final current = state;
+      if (current.isLoading || current.hasError || current.value == null) {
+        return const AppSettingsPatchResult(AppSettingsPatchCode.unavailable);
+      }
+      final actual = AppSettingsPreferences.encode(current.requireValue);
+      final observed = AppSettingsPreferences.encode(expected);
+      if (fields.keys.any((key) => actual[key] != observed[key])) {
+        return AppSettingsPatchResult(
+          AppSettingsPatchCode.conflict,
+          settings: current.requireValue,
+        );
+      }
+      final changed = Map<String, dynamic>.from(fields)
+        ..removeWhere((key, value) => actual[key] == value);
+      if (changed.isEmpty) {
+        return AppSettingsPatchResult(
+          AppSettingsPatchCode.noChange,
+          settings: current.requireValue,
+        );
+      }
+      if (!_current(isCurrent)) {
+        return const AppSettingsPatchResult(AppSettingsPatchCode.stale);
+      }
+      // No await between this admission and the first native setter. Once
+      // admitted, settle global facts even if the requesting UI/run goes away.
+      if (fields.containsKey('batterySaverMode')) ++_batteryModeIntent;
+      return _persistFields(prefs, changed);
+    });
+  }
+
+  bool _current(bool Function() isCurrent) {
+    try {
+      return ref.mounted && isCurrent();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _saveFields(
+    SharedPreferences prefs,
+    Map<String, dynamic> fields,
+  ) async {
+    final result = await _persistFields(prefs, fields);
+    if (result.code == AppSettingsPatchCode.storageUncertain) {
+      throw StateError('Settings persistence was not acknowledged.');
+    }
+  }
+
+  Future<AppSettingsPatchResult> _persistFields(
+    SharedPreferences prefs,
+    Map<String, dynamic> fields,
+  ) async {
+    final base = state.value;
+    if (fields.isEmpty) {
+      return AppSettingsPatchResult(
+        AppSettingsPatchCode.noChange,
+        settings: base,
+      );
+    }
+    final attempted = <String>{};
+    var uncertain = false;
+    try {
+      for (final entry in fields.entries) {
+        attempted.add(entry.key);
+        final value = entry.value;
+        final accepted = switch (value) {
+          bool() => await prefs.setBool(entry.key, value),
+          double() => await prefs.setDouble(entry.key, value),
+          String() => await prefs.setString(entry.key, value),
+          _ => false,
+        };
+        if (!accepted) {
+          throw StateError('Settings persistence was not acknowledged.');
+        }
+      }
+    } catch (_) {
+      uncertain = true;
+    }
+    AppSettings? settled;
+    try {
+      final canPublish =
+          ref.mounted &&
+          !state.isLoading &&
+          !state.hasError &&
+          state.value != null;
+      final merged = AppSettingsPreferences.encode(
+        canPublish ? state.requireValue : base ?? const AppSettings(),
+      );
+      final cached = AppSettingsPreferences.encode(
+        AppSettingsPreferences.read(prefs),
+      );
+      for (final key in attempted) {
+        merged[key] = cached[key];
+      }
+      settled = AppSettingsPreferences._fromMap(merged);
+      if (canPublish) {
+        Haptics.configure(enabled: settled.hapticFeedback);
+        Haptics.configureMessageVibration(enabled: settled.messageVibration);
+        state = AsyncData(settled);
+      }
+    } catch (_) {
+      // An unreadable cache cannot improve an already uncertain result. Native
+      // acknowledgements remain facts even when the owner cannot publish them.
+      settled = null;
+    }
+    return AppSettingsPatchResult(
+      uncertain
+          ? AppSettingsPatchCode.storageUncertain
+          : AppSettingsPatchCode.completed,
+      effect: uncertain
+          ? AppSettingsPatchEffect.uncertain
+          : AppSettingsPatchEffect.persisted,
+      settings: settled,
     );
   }
 
-  Future<void> save(AppSettings settings) async {
-    final prefs = await ref.read(sharedPreferencesProvider.future);
-    final normalized = supportedAppLanguages.contains(settings.language)
-        ? settings
-        : settings.copyWith(language: 'en');
-    await AppSettingsPreferences.write(prefs, normalized);
-    Haptics.configure(enabled: normalized.hapticFeedback);
-    Haptics.configureMessageVibration(enabled: normalized.messageVibration);
-    state = AsyncData(normalized);
+  static Map<String, dynamic>? _uiFields(Map<String, Object?> values) {
+    const booleans = {
+      'enterToSend',
+      'hideMessageId',
+      'hideGenerationTime',
+      'hideTokenCount',
+      'groupDialogs',
+      'hideTooltips',
+      'disableSwipeRegeneration',
+      'virtualKeyboardSend',
+      'forceMobileLayout',
+      'hapticFeedback',
+      'messageVibration',
+      'hideContextCard',
+    };
+    final fields = <String, dynamic>{};
+    for (final entry in values.entries) {
+      final value = entry.value;
+      if (booleans.contains(entry.key) && value is bool) {
+        final key = switch (entry.key) {
+          'groupDialogs' => 'dialogGrouping',
+          'forceMobileLayout' => 'gz_force_mobile_layout',
+          _ => entry.key,
+        };
+        fields[key] = value;
+      } else if (entry.key == 'chatMaxWidth' &&
+          value is num &&
+          value.isFinite &&
+          value >= 0 &&
+          value <= 2400) {
+        fields['gz_chat_max_width'] = value.toDouble();
+      } else if (entry.key == 'batterySaverMode' &&
+          value is String &&
+          BatterySaverMode.values.any((mode) => mode.name == value)) {
+        fields['batterySaverMode'] = value;
+      } else {
+        return null;
+      }
+    }
+    return fields.isEmpty ? null : fields;
   }
+}
+
+enum AppSettingsPatchCode {
+  completed,
+  noChange,
+  stale,
+  conflict,
+  unavailable,
+  storageUncertain,
+}
+
+enum AppSettingsPatchEffect { none, persisted, uncertain }
+
+/// Native result only; callers must explicitly project public UI fields.
+final class AppSettingsPatchResult {
+  const AppSettingsPatchResult(
+    this.code, {
+    this.effect = AppSettingsPatchEffect.none,
+    this.settings,
+  });
+  final AppSettingsPatchCode code;
+  final AppSettingsPatchEffect effect;
+  final AppSettings? settings;
 }

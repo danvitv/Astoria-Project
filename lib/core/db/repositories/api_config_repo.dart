@@ -15,6 +15,7 @@ import 'support_repo.dart';
 part 'api_config_keyless_contract.dart';
 part 'api_config_keyless_store.dart';
 part 'api_config_keyless_operation.dart';
+part 'api_config_keyless_terminal.dart';
 part 'api_config_keyless_ordinary_guard.dart';
 part 'api_config_keyless_shape.dart';
 part 'api_config_keyless_evidence.dart';

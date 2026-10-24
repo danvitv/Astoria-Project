@@ -32,7 +32,10 @@ abstract final class SupportModelProvenanceCodec {
     try {
       _ProvenanceJsonScanner(encoded).check();
       final value = jsonDecode(encoded);
-      final direct = value is Map<String, dynamic> && value['version'] == 2;
+      final direct =
+          value is Map<String, dynamic> &&
+          (value['version'] == 2 || value['version'] == 3);
+      final compacted = value is Map<String, dynamic> && value['version'] == 3;
       final root = _object(value, {
         'marker',
         'version',
@@ -43,10 +46,13 @@ abstract final class SupportModelProvenanceCodec {
         'originalRanges',
         'directReplies',
         if (direct) 'currentConversationMessageIds',
+        if (compacted) 'compactedThroughMessageId',
       });
       if (root['marker'] != marker ||
           root['version'] is! int ||
-          (root['version'] != version && root['version'] != 2)) {
+          (root['version'] != version &&
+              root['version'] != 2 &&
+              root['version'] != 3)) {
         _reject(SupportModelProvenanceFailure.unsupportedFormat);
       }
       final ranges = _array(root['originalRanges']);
@@ -66,6 +72,9 @@ abstract final class SupportModelProvenanceCodec {
         ],
         currentConversationMessageIds: direct
             ? _conversationIds(root['currentConversationMessageIds'])
+            : null,
+        compactedThroughMessageId: compacted
+            ? _string(root['compactedThroughMessageId'])
             : null,
       );
       return SupportModelProvenanceDecodeResult.valid(recipe);
@@ -196,7 +205,9 @@ final class _ProvenanceStorageWriter {
     _append('{"marker":');
     _text(SupportModelProvenanceCodec.marker);
     _append(
-      recipe.currentConversationMessageIds == null
+      recipe.compactedThroughMessageId != null
+          ? ',"version":3,"supportSessionId":'
+          : recipe.currentConversationMessageIds == null
           ? ',"version":1,"supportSessionId":'
           : ',"version":2,"supportSessionId":',
     );
@@ -243,6 +254,10 @@ final class _ProvenanceStorageWriter {
         _text(conversation[i]);
       }
       _append(']');
+    }
+    if (recipe.compactedThroughMessageId != null) {
+      _append(',"compactedThroughMessageId":');
+      _text(recipe.compactedThroughMessageId!);
     }
     _append('}');
     return buffer.toString();

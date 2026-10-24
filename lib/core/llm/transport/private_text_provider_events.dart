@@ -22,6 +22,7 @@ final class _AnthropicEvents extends PrivateTextEventDecoder {
             (message['content'] as List).isEmpty &&
             message['stop_reason'] == null,
       );
+      _recordUsage(_anthropicUsage(message['usage']));
       _started = true;
       return [];
     }
@@ -91,6 +92,7 @@ final class _AnthropicEvents extends PrivateTextEventDecoder {
           default:
             fail(PrivateTextReason.unsupported);
         }
+        _recordUsage(_anthropicUsage(event['usage']));
         _finished = true;
         return [];
       case 'message_stop':
@@ -162,6 +164,7 @@ final class _GeminiEvents extends PrivateTextEventDecoder {
       }
       terminal = true;
     }
+    _recordUsage(_geminiUsage(event['usageMetadata']));
     return [
       {
         'candidates': [
@@ -177,4 +180,25 @@ final class _GeminiEvents extends PrivateTextEventDecoder {
       },
     ];
   }
+}
+
+ProviderTokenUsage _anthropicUsage(Object? value) {
+  final map = _usageMap(value);
+  return ProviderTokenUsage(
+    inputTokens: _tokenCount(map, 'input_tokens'),
+    outputTokens: _tokenCount(map, 'output_tokens'),
+    cachedInputTokens: _tokenCount(map, 'cache_read_input_tokens'),
+    cacheCreationInputTokens: _tokenCount(map, 'cache_creation_input_tokens'),
+  );
+}
+
+ProviderTokenUsage _geminiUsage(Object? value) {
+  final map = _usageMap(value);
+  return ProviderTokenUsage(
+    inputTokens: _tokenCount(map, 'promptTokenCount'),
+    outputTokens: _tokenCount(map, 'candidatesTokenCount'),
+    totalTokens: _tokenCount(map, 'totalTokenCount'),
+    cachedInputTokens: _tokenCount(map, 'cachedContentTokenCount'),
+    reasoningTokens: _tokenCount(map, 'thoughtsTokenCount'),
+  );
 }

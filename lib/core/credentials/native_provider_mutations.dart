@@ -10,13 +10,47 @@ final class NativeConnectionStamp {
 }
 
 final class NativeConnectionAdmission {
-  NativeConnectionAdmission._(this._stamp, this._isOriginalOwner);
+  NativeConnectionAdmission._(
+    this._stamp,
+    this._isOriginalOwner, [
+    this._terminal,
+  ]);
   final NativeConnectionStamp _stamp;
   final bool Function() _isOriginalOwner;
+  final NativeKeylessTerminalEffectPort? _terminal;
   bool _claimed = false;
 
   @override
   String toString() => 'NativeConnectionAdmission';
+}
+
+/// Native keyless bridge only. Exact confirmation and original ROOT run before
+/// the owned source fence; its consumed effect cannot acquire network authority.
+abstract interface class NativeKeylessTerminalEffectPort {
+  Future<void> admitAtMutationStart();
+  bool get isCurrent;
+  bool consume();
+  bool get isRootCurrent;
+}
+
+/// Constructor-only native DI for one exact keyless bridge custody object.
+/// There is no public generic terminal-admission callback on the mutation owner.
+final class NativeKeylessTerminalEffectIssuer {
+  NativeKeylessTerminalEffectIssuer({
+    required this._mutations,
+    required this._effect,
+  });
+  final NativeConnectionMutationOwner _mutations;
+  final NativeKeylessTerminalEffectPort _effect;
+  bool _claimed = false;
+  NativeConnectionAdmission? admit(NativeConnectionStamp expected) {
+    if (_claimed) return null;
+    _claimed = true;
+    return _mutations._admitKeylessTerminal(
+      expected: expected,
+      effect: _effect,
+    );
+  }
 }
 
 /// Its own observer fences revoke old references, but not the original effect.
@@ -109,6 +143,13 @@ final class NativeConnectionMutationOwner {
       ? NativeConnectionAdmission._(expected, isOriginalOwner)
       : null;
 
+  NativeConnectionAdmission? _admitKeylessTerminal({
+    required NativeConnectionStamp expected,
+    required NativeKeylessTerminalEffectPort effect,
+  }) => isCurrent(expected) && effect.isCurrent && isCurrent(expected)
+      ? NativeConnectionAdmission._(expected, () => effect.isCurrent, effect)
+      : null;
+
   void addFenceListener(void Function() listener) {
     if (!_disposed) _fences.add(listener);
   }
@@ -165,10 +206,24 @@ final class NativeConnectionMutationOwner {
         if (!isCurrent(admission._stamp)) {
           throw const NativeProviderException(NativeProviderFailure.stale);
         }
+        final terminal = admission._terminal;
+        if (terminal != null) {
+          // Queue execution, not UI-return time. No native/source fence has yet
+          // opened. The exact opaque capsule is dispatched in original ROOT.
+          await terminal.admitAtMutationStart();
+          if (!isCurrent(admission._stamp) ||
+              !terminal.isCurrent ||
+              !terminal.consume() ||
+              !terminal.isRootCurrent) {
+            throw const NativeProviderException(NativeProviderFailure.stale);
+          }
+        }
         final activeLease = NativeConnectionOperationLease._(
           this,
           _revision,
-          admission._isOriginalOwner,
+          terminal == null
+              ? admission._isOriginalOwner
+              : () => terminal.isRootCurrent,
         );
         lease = activeLease;
         _active = activeLease;
@@ -197,8 +252,9 @@ final class NativeConnectionMutationOwner {
       }
     }
 
-    // First admission fences SYNCHRONOUSLY, before the first storage await.
-    // A queued operation still rechecks its original stamp at execution.
+    // Ordinary first admission fences synchronously before storage. Terminal
+    // keyless admission first awaits its exact read-only ROOT, then consumes its
+    // original capsule immediately before the fence. Queued stamps never rebase.
     final startNow = _ownedPending == 0;
     _ownedPending++;
     final result = startNow ? invoke() : _tail.then((_) => invoke());

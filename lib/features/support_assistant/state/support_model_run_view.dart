@@ -20,6 +20,9 @@ final class SupportModelRunView {
     this.transportReason = PrivateTextReason.none,
     this.runId,
     this.sessionId,
+    this.usage,
+    this.compacted = false,
+    this.isCompaction = false,
   });
   final SupportModelPhase? phase;
   final SupportModelRefusal reason;
@@ -29,6 +32,8 @@ final class SupportModelRunView {
   final PrivateTextDispatch dispatch;
   final PrivateTextReason transportReason;
   final String? runId, sessionId;
+  final ProviderTokenUsage? usage;
+  final bool compacted, isCompaction;
 
   bool isActiveRun(String? id, String session) =>
       busy && runId != null && id == runId && session == sessionId;
@@ -37,20 +42,25 @@ final class SupportModelRunView {
     if (reason != SupportModelRefusal.none) return reason.label;
     return switch (phase) {
       SupportModelPhase.preparing => 'Подготовка сообщения…',
+      SupportModelPhase.compacting => 'Сжатие старого контекста моделью…',
       SupportModelPhase.preview => 'Проверь точный текст перед отправкой.',
       SupportModelPhase.waiting => 'Ожидание ответа модели…',
       SupportModelPhase.activity => 'Получение ответа модели…',
       SupportModelPhase.settling => 'Сохранение результата…',
-      SupportModelPhase.settled => switch (status) {
-        PrivateTextStatus.complete => 'Ответ сохранён.',
-        PrivateTextStatus.stopped => 'Отправка остановлена.',
-        PrivateTextStatus.partial =>
-          'Сохранён неполный ответ; запрос завершился с ошибкой.',
-        PrivateTextStatus.limited =>
-          'Ответ ограничен; сохранён доступный безопасный текст.',
-        PrivateTextStatus.error => 'Запрос завершился без полного ответа.',
-        null => '',
-      },
+      SupportModelPhase.settled =>
+        isCompaction && compacted
+            ? 'Контекст сжат. Вся история сохранена.'
+            : switch (status) {
+                PrivateTextStatus.complete => 'Ответ сохранён.',
+                PrivateTextStatus.stopped => 'Отправка остановлена.',
+                PrivateTextStatus.partial =>
+                  'Сохранён неполный ответ; запрос завершился с ошибкой.',
+                PrivateTextStatus.limited =>
+                  'Ответ ограничен; сохранён доступный безопасный текст.',
+                PrivateTextStatus.error =>
+                  'Запрос завершился без полного ответа.',
+                null => '',
+              },
       null => '',
     };
   }

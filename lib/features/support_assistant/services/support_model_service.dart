@@ -18,6 +18,7 @@ import '../../../core/llm/transport/chat_transport_request.dart';
 import '../../../core/llm/native_saved_connection_source.dart';
 import '../../../core/llm/transport/native_provider_transport.dart';
 import '../../../core/llm/transport/private_text_transport.dart';
+import '../../../core/llm/transport/native_tool_transport.dart';
 import '../../../core/models/api_config.dart';
 import '../../../core/models/support_models.dart';
 import '../../../core/models/support_text_context.dart';
@@ -25,6 +26,8 @@ import '../../../core/support/support_payload_cipher.dart';
 import '../../../core/utils/id_generator.dart';
 import '../models/support_model_provenance.dart';
 import '../models/support_model_view.dart';
+import '../models/support_model_tool_ui_ports.dart';
+import '../models/support_app_action_context.dart';
 import '../models/support_permission_preferences.dart';
 import '../models/support_permission_provenance.dart';
 import '../models/support_permission_scope.dart';
@@ -37,8 +40,13 @@ import 'support_native_runtime.dart';
 import 'support_permission_codec.dart';
 import 'support_recipient_projection.dart';
 import 'support_workspace_settings_codec.dart';
+import 'support_context_policy.dart';
+import 'app_control/support_app_action_registry.dart';
+import 'support_model_tool_payloads.dart';
+import 'support_model_tool_outcome.dart';
 
 export '../models/support_model_view.dart';
+export '../models/support_model_tool_ui_ports.dart';
 
 part 'support_model_native_intent.dart';
 part 'support_model_read_service.dart';
@@ -46,6 +54,9 @@ part 'support_model_configuration_service.dart';
 part 'support_model_context_service.dart';
 part 'support_model_direct_conversation.dart';
 part 'support_model_run_service.dart';
+part 'support_model_compaction_service.dart';
+part 'support_model_compacted_recipe.dart';
+part 'support_model_tool_loop.dart';
 
 /// Native-only write scheduling seam; NEVER expose this service/scheduler to
 /// tools. HTTP and user-controlled preview are never enqueued here.
@@ -84,6 +95,9 @@ final class SupportModelService {
     NativeProviderPrivateTextDispatcher Function(PrivateTextTransport)?
     nativeDispatcher,
     SupportTextAdmissionContract? admissionContract,
+    NativeToolTransport? toolTransport,
+    SupportAppActionRegistry? appActions,
+    SupportAppActionRegistry Function()? appActionsFactory,
     String Function()? newId,
     int Function()? now,
     Timer Function(Duration, void Function()) scheduleTimer = Timer.new,
@@ -104,6 +118,9 @@ final class SupportModelService {
        _nativeMetadata = nativeMetadata,
        _nativeDispatcher = nativeDispatcher,
        _admissionContract = admissionContract,
+       _toolTransport = toolTransport,
+       _appActions = appActions,
+       _appActionsFactory = appActionsFactory,
        _newId = newId ?? generateId,
        _now = now ?? (() => DateTime.now().toUtc().millisecondsSinceEpoch),
        _scheduleTimer = scheduleTimer,
@@ -136,6 +153,9 @@ final class SupportModelService {
   final NativeProviderPrivateTextDispatcher Function(PrivateTextTransport)?
   _nativeDispatcher;
   final SupportTextAdmissionContract? _admissionContract;
+  final NativeToolTransport? _toolTransport;
+  final SupportAppActionRegistry? _appActions;
+  final SupportAppActionRegistry Function()? _appActionsFactory;
   final String Function() _newId;
   final int Function() _now;
   final Timer Function(Duration, void Function()) _scheduleTimer;
@@ -146,6 +166,9 @@ final class SupportModelService {
   late final void Function() _unlistenRuntime, _unlistenRegistry;
   final _emissions = <_ModelReadOperation>{};
   _ModelRun? _active;
+  ProviderTokenUsage? _lastUsage;
+  String? _usageSession;
+  int? _usageRevision;
   bool _alive = true;
 
   void _observeRedactor(SecretRedactor _) => _observe();

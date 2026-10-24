@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/support_model_tool_ui_ports.dart';
 import '../state/support_model_provider.dart';
 import 'support_composer_bar.dart';
 
@@ -27,6 +28,8 @@ final class SupportModelScreenController extends ChangeNotifier {
     TextEditingController controller,
     String session, {
     List<SupportModelConversationMessage> visibleConversation = const [],
+    SupportModelToolUiPorts? toolUi,
+    bool Function()? isOriginalRouteCurrent,
   }) {
     if (!identical(bridge, _bridge) ||
         !identical(controller, _controller) ||
@@ -47,8 +50,10 @@ final class SupportModelScreenController extends ChangeNotifier {
         controller: controller,
         uiLifetime: _lifetime,
         visibleConversation: _conversation,
+        toolUi: toolUi,
         isEmitterCurrent: () =>
             _alive &&
+            (isOriginalRouteCurrent?.call() ?? true) &&
             identical(binding, _binding) &&
             identical(controller, _controller),
       );
@@ -105,6 +110,21 @@ final class SupportModelScreenController extends ChangeNotifier {
     );
     // Acceptance is the original durable USER append, never HTTP success.
     return send.accepted;
+  }
+
+  void compact(SupportModelUiEmitter emitter) {
+    if (!_alive || _send != null || !identical(emitter, _emitter)) return;
+    refusal = SupportModelRefusal.none;
+    final send = _send = emitter.compact();
+    _changed();
+    unawaited(
+      send.finished.then((result) {
+        if (!_owns(emitter, send)) return;
+        if (emitter.isCurrent) refusal = result.reason;
+        _send = null;
+        _changed();
+      }),
+    );
   }
 
   void _changed() {

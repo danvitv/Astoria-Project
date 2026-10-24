@@ -245,9 +245,9 @@ class SupportSettingsPanel extends ConsumerWidget {
                 if (focus.includes(SupportSettingsFocus.dcp))
                   MenuSwitchItem(
                     key: const ValueKey('support_settings_dcp'),
-                    label: 'Предпочтение сжатия контекста (DCP)',
+                    label: 'Автоматическое управление контекстом (DCP)',
                     description:
-                        'Предпочтение сохраняется; runtime сжатия пока недоступен',
+                        'При давлении на лимит контекста выбранная модель сжимает старый префикс. История не удаляется. Это LLM-компакт; обрезки до последних N сообщений нет.',
                     value: settings.dcpCompressionEnabled,
                     onChanged: (value) => intent == null
                         ? null

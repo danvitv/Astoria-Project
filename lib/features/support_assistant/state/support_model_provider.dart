@@ -9,10 +9,12 @@ import '../../../core/state/credential_vault_provider.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../core/db/repositories/support_text_context_repo.dart';
 import '../../../core/llm/transport/native_provider_transport.dart';
+import '../../../core/llm/transport/native_tool_transport.dart';
 import '../services/support_model_service.dart';
 import 'support_model_dependencies.dart';
 import 'support_model_ui_bridge.dart';
 import 'support_native_provider.dart';
+import 'support_app_control_provider.dart';
 
 export 'support_model_ui_bridge.dart';
 
@@ -38,6 +40,8 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
   final workspace = ref.watch(supportModelWorkspaceBindingProvider);
   final custody = ref.watch(supportModelDatabaseCustodyProvider);
   final adapterFactory = ref.watch(supportModelPrivateAdapterFactoryProvider);
+  // Native tools cannot fall back to a saved row key. Legacy text-only fixture
+  // compositions need not construct any additional application capability graph.
   var alive = true;
   bool current() =>
       alive &&
@@ -55,6 +59,26 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
     adapterFactory: adapterFactory,
     isOwnerCurrent: current,
     writes: custody,
+    // Resolve ONCE only after this original native saved source was prepared.
+    // Legacy text-only fixtures never evaluate the application action graph.
+    appActionsFactory: native == null
+        ? null
+        : () {
+            if (!current() || !ref.mounted) {
+              throw StateError('Original model owner retired.');
+            }
+            return ref.read(supportAppActionRegistryProvider);
+          },
+    toolTransport: native == null
+        ? null
+        : NativeToolTransport(
+            credentials: native.credentials,
+            authIssuer: native.auth,
+            mutations: native.mutations,
+            routes: native.routes,
+            currentRedactor: () => redaction.redactor,
+            adapterFactory: adapterFactory,
+          ),
     nativeSources: native?.sources,
     nativeMetadata: native?.credentialReader,
     nativeDispatcher: native == null

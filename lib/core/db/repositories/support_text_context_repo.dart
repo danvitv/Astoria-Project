@@ -4,6 +4,7 @@ import '../../credentials/secret_redactor.dart';
 import '../../models/support_text_context.dart';
 import '../../support/support_payload_cipher.dart';
 import '../app_db.dart';
+import 'support_repo.dart';
 
 part 'support_text_context/support_text_reader.dart';
 part 'support_text_context/roleplay_text_reader.dart';
@@ -14,6 +15,7 @@ part 'support_text_context/session_text_context.dart';
 part 'support_text_context/session_history_boundary.dart';
 part 'support_text_context/roleplay_session_text_reader.dart';
 part 'support_text_context/support_session_text_reader.dart';
+part 'support_text_context/support_compacted_text_reader.dart';
 
 /// Trusted native-only structural/identity check, NOT origin rights or egress
 /// approval. Must be pure, synchronous and bounded: no reads/writes/publication,
@@ -77,6 +79,15 @@ final class SupportTextContextRepo {
     required List<String> messageIds,
   }) => _load(SupportTextContextSource.support, sessionId, messageIds);
 
+  /// Exact native current USER, never an ancestor/history loader. Large source
+  /// conversations do not enlarge this single-row projection.
+  Future<SupportTextContextSnapshot> loadCurrentInput({
+    required String sessionId,
+    required String messageId,
+  }) => _load(SupportTextContextSource.support, sessionId, [
+    messageId,
+  ], boundedSuffix: true);
+
   Future<SupportTextContextSnapshot> loadRoleplay({
     required String sessionId,
     required List<String> messageIds,
@@ -85,15 +96,21 @@ final class SupportTextContextRepo {
   Future<SupportTextContextSnapshot> _load(
     SupportTextContextSource source,
     String sessionId,
-    List<String> messageIds,
-  ) async {
+    List<String> messageIds, {
+    bool boundedSuffix = false,
+  }) async {
     try {
       if (_admissionOwnerRevoked) {
         _fail(SupportTextContextFailure.unavailable);
       }
       final ids = _selection(sessionId, messageIds);
       final before = await _stamp();
-      final read = await _read(source, sessionId, ids);
+      final read = await _read(
+        source,
+        sessionId,
+        ids,
+        boundedSuffix: boundedSuffix,
+      );
       final after = await _stamp();
       if (before != after) _fail(SupportTextContextFailure.stale);
       final messages = _sanitize(read, sessionId, ids);
@@ -107,6 +124,7 @@ final class SupportTextContextRepo {
         provenance,
         read,
         after,
+        boundedSuffix: boundedSuffix,
       );
     } on SupportTextContextException {
       rethrow;
@@ -147,6 +165,7 @@ final class SupportTextContextRepo {
                 snapshot.sessionId,
                 snapshot.messageIds,
                 checkpoint: checkpoint,
+                boundedSuffix: snapshot._boundedSuffix,
               ),
               snapshot.messageIds,
             )
@@ -176,10 +195,16 @@ final class SupportTextContextRepo {
     String sessionId,
     List<String> ids, {
     void Function()? checkpoint,
+    bool boundedSuffix = false,
   }) {
     final read = _db.transaction(
       () => source == SupportTextContextSource.support
-          ? _support.read(sessionId, ids, checkpoint: checkpoint)
+          ? _support.read(
+              sessionId,
+              ids,
+              checkpoint: checkpoint,
+              boundedSuffix: boundedSuffix,
+            )
           : _roleplay.read(sessionId, ids, checkpoint: checkpoint),
     );
     if (_nativeProvenanceValidator == null) return read;

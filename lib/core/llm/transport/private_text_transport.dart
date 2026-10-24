@@ -197,6 +197,9 @@ final class PrivateTextTransport {
       status: status,
       text: text,
       reason: reason,
+      // Invalid terminal/native settlement never upgrades status. Earlier
+      // accepted snapshots remain evidence; an unadmitted failure has none.
+      usage: adapter?.admittedFailed == true ? null : decoder?.usage,
       httpStatus: reason == PrivateTextReason.httpStatus
           ? adapter?.httpStatus
           : null,

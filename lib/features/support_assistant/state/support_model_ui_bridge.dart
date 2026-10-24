@@ -49,6 +49,7 @@ final class SupportModelUiBridge {
   SupportModelUiSend? _active;
   bool _alive = true;
   SupportModelRunView _view = const SupportModelRunView();
+  int? _usageEpoch, _usageRevision;
   SupportModelRunView get view => _view;
   Future<void> get drained => _drained.future;
 
@@ -67,6 +68,7 @@ final class SupportModelUiBridge {
     required Object uiLifetime,
     required bool Function() isEmitterCurrent,
     List<SupportModelConversationMessage> visibleConversation = const [],
+    SupportModelToolUiPorts? toolUi,
   }) {
     final runtime = _runtime,
         epoch = runtime.epoch,
@@ -88,6 +90,7 @@ final class SupportModelUiBridge {
       _workspace.capture(),
       runtimeCurrent,
       List.unmodifiable(visibleConversation),
+      toolUi,
     );
   }
 
@@ -112,6 +115,12 @@ final class SupportModelUiBridge {
   void _observe() {
     final send = _active;
     if (send == null) {
+      if (_view.sessionId != null &&
+          (_view.sessionId != _runtime.sessionId ||
+              _usageEpoch != _runtime.epoch ||
+              _usageRevision != _runtime.configurationRevision())) {
+        _publish(const SupportModelRunView());
+      }
       if (_view.busy != _workspace.busy) {
         _publish(
           SupportModelRunView(
@@ -134,8 +143,9 @@ final class SupportModelUiBridge {
     SupportModelUiEmitter emitter,
     String text,
     int draftRevision,
-    bool Function() isDraftCurrent,
-  ) {
+    bool Function() isDraftCurrent, {
+    bool compact = false,
+  }) {
     final capture = emitter._workspaceCapture;
     final ready = _workspace
         .capture(); // Readiness ONLY, never a new target owner.
@@ -147,6 +157,7 @@ final class SupportModelUiBridge {
       draftRevision,
       isDraftCurrent,
       emitter._runtimeCurrent,
+      compact: compact,
     );
     if (!_current || !emitter._current || capture == null || !capture.current) {
       send._completeRefusal(SupportModelRefusal.stale);
@@ -177,6 +188,8 @@ final class SupportModelUiBridge {
     if (identical(_active, send)) _active = null;
     _workspace.release(send);
     if (_current && _active == null) {
+      _usageEpoch = _runtime.epoch;
+      _usageRevision = _runtime.configurationRevision();
       _publish(
         send._publicationCurrent
             ? SupportModelRunView(
@@ -191,6 +204,9 @@ final class SupportModelUiBridge {
                     result.outcome?.reason ?? PrivateTextReason.none,
                 runId: send._runId,
                 sessionId: send._capture?.sessionId,
+                usage: result.outcome?.usage,
+                compacted: result.compacted,
+                isCompaction: send._compact,
               )
             : const SupportModelRunView(),
       );
@@ -233,6 +249,7 @@ final class SupportModelUiBridge {
         preview: phase == SupportModelPhase.preview ? send._preview : null,
         runId: send._runId,
         sessionId: send._capture?.sessionId,
+        isCompaction: send._compact,
       ),
     );
   }

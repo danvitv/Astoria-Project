@@ -1,4 +1,8 @@
-/// No provider objects, credentials, raw events, or reasoning cross this API.
+import '../provider_token_usage.dart';
+
+export '../provider_token_usage.dart' show ProviderTokenUsage;
+
+/// No provider objects, credentials, raw events, or reasoning text cross this API.
 enum PrivateTextStatus { complete, partial, stopped, limited, error }
 
 /// Actual adapter invocation, not socket-byte/remote-receipt proof.
@@ -31,6 +35,7 @@ final class PrivateTextOutcome {
     this.reason = PrivateTextReason.none,
     this.httpStatus,
     this.dispatch = PrivateTextDispatch.notAdmitted,
+    this.usage,
   });
 
   final PrivateTextStatus status;
@@ -40,6 +45,10 @@ final class PrivateTextOutcome {
   final PrivateTextReason reason;
   final int? httpStatus;
   final PrivateTextDispatch dispatch;
+
+  /// Numeric evidence from accepted strict events of this request only. It
+  /// does not prove completion and may be incomplete on partial/stopped runs.
+  final ProviderTokenUsage? usage;
 
   @override
   String toString() => 'PrivateTextOutcome(${status.name}, ${reason.name})';

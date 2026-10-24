@@ -4,10 +4,12 @@ import '../credentials/native_provider_credentials.dart';
 import '../db/repositories/api_config_repo.dart';
 import '../models/api_config.dart';
 
+part 'native_provider_keyless_terminal.dart';
+
 /// Constructor-owned bridge; neither repository nor tools can resolve a key.
 /// Retains one original native lease through the repository's TRUE outer commit.
 final class NativeProviderKeylessMutationBridge
-    implements KeylessNativeMutationPort {
+    implements KeylessNativeMutationPort, KeylessNativeTerminalMutationPort {
   NativeProviderKeylessMutationBridge({
     required this.mutations,
     required this.credentials,
@@ -38,9 +40,21 @@ final class NativeProviderKeylessMutationBridge
   }
 
   @override
+  Future<KeylessNativeMutationLease?> acquireTerminal({
+    required KeylessApiConfigTerminalPlan plan,
+    required KeylessTerminalEffectPermit permit,
+  }) => _terminalAcquire(plan: plan, permit: permit);
+
+  @override
   Future<KeylessNativeMutationLease?> acquire({
     required String connectionId,
     required bool Function() isCurrent,
+  }) => _acquire(connectionId: connectionId, isCurrent: isCurrent);
+
+  Future<KeylessNativeMutationLease?> _acquire({
+    required String connectionId,
+    required bool Function() isCurrent,
+    _NativeKeylessTerminalCustody? terminal,
   }) async {
     final prior = revisionFor(connectionId);
     if (prior is! NativeConnectionStamp) return null;
@@ -75,17 +89,35 @@ final class NativeProviderKeylessMutationBridge
       } else if (presence != NativeProviderCredentialPresence.absent) {
         return null; // Unknown/corrupt/disabled is never positive absence.
       }
-      final admission = mutations.admit(
-        expected: prior,
-        // Original policy, NOT the prior epoch invalidated by our own fence.
-        isOriginalOwner: () => _current(isCurrent),
-      );
+      final admission = terminal != null
+          ? NativeKeylessTerminalEffectIssuer(
+              mutations: mutations,
+              effect: terminal,
+            ).admit(prior)
+          : mutations.admit(
+              expected: prior,
+              // Original policy, NOT the prior epoch invalidated by our own fence.
+              isOriginalOwner: () => _current(isCurrent),
+            );
       if (admission == null) return null;
       final ready = Completer<_NativeKeylessLease?>();
       _NativeKeylessLease? held;
       final ownerDone = mutations.runOwned<void>(
         admission: admission,
         operation: (native) async {
+          if (terminal != null) {
+            final latest = await readSavedConnection(connectionId);
+            if (!native.isCurrent || (saved == null) != (latest == null)) {
+              throw const KeylessApiConfigException();
+            }
+            await credentials.verifyKeylessTerminalOwnership(
+              lease: native,
+              connectionId: connectionId,
+              saved: latest,
+              expectedHasKey: hasKey,
+            );
+            if (!native.isCurrent) throw const KeylessApiConfigException();
+          }
           // Protected preparation is deliberately BEFORE DB create. Failure can
           // leave only a deny-only orphan marker, never a legacy-dispatchable row.
           if (saved == null) {
@@ -142,7 +174,13 @@ final class NativeProviderKeylessMutationBridge
             lease._settled.complete();
           },
           onError: (Object _, StackTrace _) {
-            if (!ready.isCompleted) ready.complete(null);
+            if (!ready.isCompleted) {
+              if (terminal?.hasAdmittedEffect == true) {
+                ready.completeError(const KeylessApiConfigException());
+              } else {
+                ready.complete(null);
+              }
+            }
             final lease = held;
             if (lease != null) {
               lease._failed = true;
@@ -153,6 +191,9 @@ final class NativeProviderKeylessMutationBridge
       );
       return await ready.future;
     } catch (_) {
+      if (terminal?.hasAdmittedEffect == true) {
+        throw const KeylessApiConfigException();
+      }
       return null; // No DB effect has been admitted; never forward secret causes.
     }
   }
