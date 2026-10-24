@@ -1,5 +1,7 @@
 // ignore_for_file: lines_longer_than_80_chars
 
+import 'dart:convert';
+
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -166,7 +168,7 @@ void main() {
   });
 
   group('StudioLedgerPrompt', () {
-    test('all prompt paths separate current input and share clock rules', () {
+    test('all prompt paths require time even when no other state changes', () {
       for (final (blocks, engine) in [
         (const <StudioPresetBlock>[], StudioLedgerEngine.currentReconciled),
         (const <StudioPresetBlock>[], StudioLedgerEngine.legacyTurnOnly),
@@ -174,7 +176,7 @@ void main() {
           const [
             StudioPresetBlock(
               id: 'ledger_system',
-              content: 'Maintain continuity.',
+              content: 'Maintain continuity. Omit unchanged values.',
               injectionPoint: 'ledger',
               section: 'ledger',
             ),
@@ -186,7 +188,11 @@ void main() {
           finalAssistantText: 'Она снова открыла дверь.',
           currentUserText: 'Спустя полчаса. Следующая сцена.',
           recentHistoryText: 'User: Пропустим прошлую ночь.\nAssistant: Утро.',
-          currentTrackers: const [],
+          currentTrackers: _makeTrackers('session', {
+            'world:time': '11:11',
+            'world:date': '09.04.2026',
+            'world:day': '0',
+          }),
           recentMemoryEntries: const [],
           ledgerBlocks: blocks,
           engine: engine,
@@ -197,12 +203,93 @@ void main() {
           ),
         );
         expect(prompt, contains(StudioLedgerPrompt.gameClockRules));
+        expect(
+          prompt,
+          contains(
+            'Every per-turn response MUST include exactly one set operation for world:time',
+          ),
+        );
+        expect(prompt, contains('even when time has not advanced'));
+        expect(prompt, contains('explain in evidence why no time elapsed'));
+        expect(
+          prompt,
+          contains('Also show the resulting clock in the visible ledger'),
+        );
+        expect(prompt, contains('still return the required world:time'));
+        expect(prompt, contains('knowledgeFacts may be empty'));
+        expect(prompt, contains('do not fabricate missing components'));
+        expect(
+          prompt,
+          contains('Do not add a fixed number of minutes mechanically'),
+        );
+        expect(prompt, isNot(contains('include it with empty arrays')));
+        expect(prompt, isNot(contains('output empty arrays')));
+        if (blocks.isNotEmpty) {
+          expect(
+            prompt.lastIndexOf(StudioLedgerPrompt.gameClockRules),
+            greaterThan(prompt.indexOf('Omit unchanged values.')),
+          );
+        }
+        final template = RegExp(
+          r'<glaze_memory_export>\n([^\n]+)\n</glaze_memory_export>',
+        ).firstMatch(prompt)!.group(1)!;
+        expect(template, StudioLedgerPrompt.turnExportTemplate);
+        final result = parser.parse(
+          '<glaze_memory_export>\n'
+          '${template.replaceFirst('HH:MM', '11:11')}\n'
+          '</glaze_memory_export>',
+          clockPolicy: const LedgerClockPolicy.turn(
+            current: GameTimeState(time: '11:11', date: '09.04.2026', day: 0),
+          ),
+        );
+        expect(result.rejectedOps, isEmpty);
+        expect(result.export!.ops, hasLength(1));
+        expect(result.export!.ops.single.key, 'world:time');
+        expect(result.export!.ops.single.value, '11:11');
         final currentUser = RegExp(
           r'<current_user_turn>\n([\s\S]*?)\n</current_user_turn>',
         ).firstMatch(prompt)!.group(1)!;
         expect(currentUser, 'Спустя полчаса. Следующая сцена.');
         expect(currentUser, isNot(contains('прошлую ночь')));
       }
+    });
+
+    test('required template can return elapsed time without other changes', () {
+      final result = parser.parse(
+        '<glaze_memory_export>\n'
+        '${StudioLedgerPrompt.turnExportTemplate.replaceFirst('HH:MM', '11:13')}\n'
+        '</glaze_memory_export>',
+        clockPolicy: const LedgerClockPolicy.turn(
+          current: GameTimeState(time: '11:11', date: '09.04.2026', day: 0),
+        ),
+      );
+      expect(result.rejectedOps, isEmpty);
+      expect(result.export!.ops.single.value, '11:13');
+      expect(result.export!.ops.single.eventState, 'completed');
+      expect(result.export!.knowledgeFacts, isEmpty);
+    });
+
+    test('required template permits coordinated midnight date and day ops', () {
+      final payload =
+          jsonDecode(StudioLedgerPrompt.turnExportTemplate)
+              as Map<String, dynamic>;
+      final ops = payload['ops'] as List<dynamic>;
+      (ops.single as Map<String, dynamic>)['value'] = '00:02';
+      ops.addAll([
+        {'op': 'set', 'key': 'world:date', 'value': '10.04.2026'},
+        {'op': 'set', 'key': 'world:day', 'value': '1'},
+      ]);
+      final result = parser.parse(
+        '<glaze_memory_export>\n${jsonEncode(payload)}\n</glaze_memory_export>',
+        clockPolicy: const LedgerClockPolicy.turn(
+          current: GameTimeState(time: '23:59', date: '09.04.2026', day: 0),
+        ),
+      );
+      expect(result.rejectedOps, isEmpty);
+      expect(
+        {for (final op in result.export!.ops) op.key: op.value},
+        {'world:time': '00:02', 'world:date': '10.04.2026', 'world:day': '1'},
+      );
     });
 
     test('injects full values only for relevant existing state', () {
@@ -269,7 +356,7 @@ void main() {
       );
 
       expect(prompt, contains('<glaze_memory_export>'));
-      expect(prompt, contains('{"ops":[],"knowledgeFacts":[]}'));
+      expect(prompt, contains(StudioLedgerPrompt.turnExportTemplate));
       expect(prompt, contains('Allowed ops: set, delete'));
       expect(prompt, isNot(contains('rename_entity')));
       expect(prompt, isNot(contains('accepted assistant prose as evidence')));

@@ -94,12 +94,12 @@ $finalAssistantText
 ${buildCurrentUserTurnBlock(currentUserText)}
 
 Now produce the Studio Ledger output. You MUST return BOTH blocks below.
-The <glaze_memory_export> block is MANDATORY — even when there is nothing
-to write, include it with empty arrays. Do not omit it under any circumstance.
+The <glaze_memory_export> block is MANDATORY, including the current clock
+even when no other state changes. Do not omit it under any circumstance.
 
 Required response template (follow this exact structure):
 <glaze_memory_export>
-{"ops":[],"knowledgeFacts":[]}
+$turnExportTemplate
 </glaze_memory_export>
 <glaze_knowledge_cleanup>
 {"ops":[]}
@@ -110,8 +110,9 @@ Compact continuity snapshot here.
 
 The <glaze_memory_export> block MUST come first, before <studio_ledger>.
 It must contain a single JSON object with "ops" and "knowledgeFacts" arrays.
-When there are no state changes or knowledge facts, output empty arrays —
-do NOT skip the block.
+When there are no other state changes, still return the required world:time
+operation. knowledgeFacts may be empty. Replace template placeholders with
+the actual clock value and evidence; do NOT skip the block.
 
 The <glaze_knowledge_cleanup> block is OPTIONAL. Include it only when you
 need to rename a descriptive alias entity to a canonical identity. Use:
@@ -186,12 +187,12 @@ ${buildCurrentUserTurnBlock(currentUserText)}
 $gameClockRules
 
 Now produce the Studio Ledger output. You MUST return BOTH blocks below.
-The <glaze_memory_export> block is MANDATORY — even when there is nothing
-to write, include it with empty arrays. Do not omit it under any circumstance.
+The <glaze_memory_export> block is MANDATORY, including the current clock
+even when no other state changes. Do not omit it under any circumstance.
 
 Required response template (follow this exact structure):
 <glaze_memory_export>
-{"ops":[],"knowledgeFacts":[]}
+$turnExportTemplate
 </glaze_memory_export>
 <studio_ledger>
 Compact continuity snapshot here.
@@ -199,7 +200,9 @@ Compact continuity snapshot here.
 
 The <glaze_memory_export> block MUST come first, before <studio_ledger>.
 It must contain a single JSON object with "ops" and "knowledgeFacts" arrays.
-When there are no state changes or knowledge facts, output empty arrays.
+When there are no other state changes, still return the required world:time
+operation. knowledgeFacts may be empty. Replace template placeholders with
+the actual clock value and evidence; do NOT skip the block.
 
 Ops format:
 {"ops":[{"op":"set","key":"npc:Name.field","value":"…","evidence":"…","eventState":"completed"}],"knowledgeFacts":[]}
@@ -244,6 +247,12 @@ knowledgeFacts rules:
       '<current_user_turn>\n${text.trim().isEmpty ? '(no new user turn)' : text}\n'
       '</current_user_turn>';
 
+  /// Minimum per-turn export shape; the model supplies actual values/evidence.
+  static const String turnExportTemplate =
+      '{"ops":[{"op":"set","key":"world:time","value":"HH:MM",'
+      '"evidence":"Reason for elapsed time or for remaining in the same moment",'
+      '"eventState":"completed"}],"knowledgeFacts":[]}';
+
   /// Runtime contract shared by built-in, user-preset, and compatibility paths.
   /// Elapsed time is a narrative estimate; code validates the clock tuple only.
   static const String gameClockRules =
@@ -251,6 +260,21 @@ knowledgeFacts rules:
 - Maintain a complete tuple: 24-hour HH:MM, real calendar date DD.MM.YYYY,
   and zero-based RP day. Never invent a missing month or year. If canon gives
   only a month and year, day-of-month = 1 + world:day (Day 0 = the 1st).
+- Every per-turn response MUST include exactly one set operation for world:time
+  in the <glaze_memory_export> ops array, even when time has not advanced.
+  Return the resulting current time as HH:MM, not merely a time mention in
+  <studio_ledger>. Also show the resulting clock in the visible ledger.
+- If this is still the same moment, explicitly repeat the current world:time
+  from <current_state> and explain in evidence why no time elapsed. Unchanged
+  time is an explicit clock decision, never a reason to omit the operation.
+  If time advanced, evidence must describe the elapsed events or user timeskip.
+  Use eventState completed for the resulting current clock, not a future plan.
+- Include world:date and world:day set operations whenever they change. If
+  they are unchanged, preserve their current values; do not reset the calendar
+  or RP day merely to return world:time.
+- If a complete canonical clock is unavailable, explicitly report that in
+  <studio_ledger>; do not fabricate missing components or emit placeholder
+  clock values. This is the only exception to the required clock operation.
 - Independently estimate elapsed time from the scene: conversation, travel,
   waiting, work, rest, and scene transitions. There is no five-minute cap and
   no requirement for a numeric time or duration to appear in the prose.

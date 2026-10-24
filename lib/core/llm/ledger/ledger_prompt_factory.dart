@@ -94,12 +94,12 @@ $finalAssistantText
 ${StudioLedgerPrompt.buildCurrentUserTurnBlock(currentUserText)}
 
 Now produce the Studio Ledger output. You MUST return BOTH blocks below.
-The <glaze_memory_export> block is MANDATORY — even when there is nothing
-to write, include it with empty arrays. Do not omit it under any circumstance.
+The <glaze_memory_export> block is MANDATORY, including the current clock
+even when no other state changes. Do not omit it under any circumstance.
 
 Required response template (follow this exact structure):
 <glaze_memory_export>
-{"ops":[],"knowledgeFacts":[]}
+${StudioLedgerPrompt.turnExportTemplate}
 </glaze_memory_export>
 <glaze_knowledge_cleanup>
 {"ops":[]}
@@ -110,8 +110,9 @@ Compact continuity snapshot here.
 
 The <glaze_memory_export> block MUST come first, before <studio_ledger>.
 It must contain a single JSON object with "ops" and "knowledgeFacts" arrays.
-When there are no state changes or knowledge facts, output empty arrays —
-do NOT skip the block.
+When there are no other state changes, still return the required world:time
+operation. knowledgeFacts may be empty. Replace template placeholders with
+the actual clock value and evidence; do NOT skip the block.
 
 The <glaze_knowledge_cleanup> block is OPTIONAL. Include it only when you
 need to rename a descriptive alias entity to a canonical identity. Use:
