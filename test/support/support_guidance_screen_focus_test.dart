@@ -105,8 +105,7 @@ void main() {
             );
             await tester.pump();
             await f.tap(tester, find.text('Сохранить идентификатор'));
-          case SupportGuidanceTarget.temperature ||
-              SupportGuidanceTarget.maxTokens:
+          case SupportGuidanceTarget.temperature:
             final range = tester.widget<MenuRangeItem>(chosen);
             final slider = find.descendant(
               of: chosen,
@@ -120,11 +119,17 @@ void main() {
                 Offset(bounds.left + bounds.width * 0.8, bounds.center.dy),
               ),
             );
-            expect(
-              range.value,
-              entry.key == SupportGuidanceTarget.temperature
-                  ? before.temperature
-                  : before.maxTokens.toDouble(),
+            expect(range.value, before.temperature);
+          case SupportGuidanceTarget.maxTokens:
+            final input = find.descendant(
+              of: chosen,
+              matching: find.byType(TextField),
+            );
+            await f.turns.real(tester, () => tester.enterText(input, '131072'));
+            await tester.pump();
+            await f.turns.real(
+              tester,
+              () => tester.testTextInput.receiveAction(TextInputAction.done),
             );
           case SupportGuidanceTarget.reasoning:
             await f.tap(tester, chosen);
@@ -166,7 +171,7 @@ void main() {
             expect(saved.temperature, isNot(before.temperature));
             expect(saved.maxTokens, before.maxTokens);
           case SupportGuidanceTarget.maxTokens:
-            expect(saved.maxTokens, isNot(before.maxTokens));
+            expect(saved.maxTokens, 131072);
             expect(saved.temperature, before.temperature);
           case SupportGuidanceTarget.reasoning:
             expect(saved.reasoningEffort, SupportReasoningEffort.high);

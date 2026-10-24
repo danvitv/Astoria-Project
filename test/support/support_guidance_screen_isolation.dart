@@ -9,6 +9,7 @@ import 'package:glaze_flutter/core/state/credential_vault_provider.dart';
 import 'package:glaze_flutter/core/state/db_provider.dart';
 import 'package:glaze_flutter/features/settings/app_settings_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_model_dependencies.dart';
+import 'package:glaze_flutter/features/support_assistant/state/support_model_catalog_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_native_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_workspace_provider.dart';
 import 'package:glaze_flutter/shared/shell/nav_height_provider.dart';
@@ -39,6 +40,7 @@ final class GuidanceScreenIsolation extends ProviderObserver {
       secretRedactorProvider,
       apiConfigRepoProvider,
       nativeProviderRuntimeProvider,
+      supportModelCatalogProvider,
       connectionRevisionRegistryProvider,
       chatSourceMutationRegistryProvider,
       supportSessionStoreProvider,

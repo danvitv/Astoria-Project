@@ -16,6 +16,7 @@ import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/api_config_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/support_repo.dart';
 import 'package:glaze_flutter/core/models/api_config.dart';
+import 'package:glaze_flutter/core/llm/provider_model_catalog.dart';
 import 'package:glaze_flutter/core/models/support_models.dart' as db;
 import 'package:glaze_flutter/core/state/credential_vault_provider.dart';
 import 'package:glaze_flutter/core/state/db_provider.dart';
@@ -26,6 +27,7 @@ import 'package:glaze_flutter/features/support_assistant/models/support_permissi
 import 'package:glaze_flutter/features/support_assistant/services/support_native_consent_controller.dart';
 import 'package:glaze_flutter/features/support_assistant/services/support_native_runtime.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_model_provider.dart';
+import 'package:glaze_flutter/features/support_assistant/state/support_model_catalog_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_native_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_workspace_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/support_assistant_screen.dart';
@@ -58,12 +60,14 @@ final class GuidanceScreenFixture {
   GuidanceScreenFixture({
     this.screen = true,
     this.connections = const [guidanceProfile],
+    this.catalogFactory,
   });
   static const session = 'guidance-own-current', other = 'guidance-own-other';
   static const newest = 'guidance-game-newest', older = 'guidance-game-older';
   static const bodyCanary = 'SYNTHETIC_UNREAD_HISTORY_8d21';
   final bool screen;
   final List<ApiConnectionMetadata> connections;
+  final ProviderModelCatalog? Function()? catalogFactory;
   final isolation = GuidanceScreenIsolation();
   late final turns = GuidanceScreenTurns(isolation.guarded);
   late final GuidanceMemoryDatabase database;
@@ -125,6 +129,7 @@ final class GuidanceScreenFixture {
     container = ProviderContainer(
       observers: [isolation],
       overrides: [
+        supportModelCatalogProvider.overrideWithValue(catalogFactory?.call()),
         appDbProvider.overrideWithValue(database),
         supportRepoProvider.overrideWithValue(repo),
         supportPayloadCipherProvider.overrideWithValue(cipher),
@@ -672,6 +677,7 @@ void guidanceScreenTest(
   Future<void> Function(WidgetTester tester, GuidanceScreenFixture f) body, {
   bool screen = true,
   List<ApiConnectionMetadata> connections = const [guidanceProfile],
+  ProviderModelCatalog? Function()? catalogFactory,
 }) {
   testWidgets(name, (tester) async {
     tester.view.physicalSize = const Size(550, 1100);
@@ -681,6 +687,7 @@ void guidanceScreenTest(
     final fixture = GuidanceScreenFixture(
       screen: screen,
       connections: connections,
+      catalogFactory: catalogFactory,
     );
     await fixture.run(tester, () => body(tester, fixture));
   });

@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:glaze_flutter/core/credentials/api_connection_metadata.dart';
-import 'package:glaze_flutter/core/credentials/credential_metadata.dart';
+import 'package:glaze_flutter/core/models/api_config.dart';
+import 'package:glaze_flutter/core/llm/provider_model_catalog.dart';
 import 'package:glaze_flutter/features/support_assistant/models/support_workspace_models.dart';
 import 'package:glaze_flutter/shared/widgets/menu_group.dart';
 
 import 'support_guidance_screen_fixture.dart';
+import '../core/provider_model_catalog_fixture.dart';
 
 List<Object?> _values(SupportAssistantSettings settings) => [
   settings.mode,
@@ -17,28 +18,18 @@ List<Object?> _values(SupportAssistantSettings settings) => [
   settings.dcpCompressionEnabled,
 ];
 
-ApiConnectionMetadata _profile(
-  String id,
-  String model, {
-  String endpoint = 'https://synthetic.invalid/v1/chat/completions',
-  String protocol = 'openai',
-  String mode = 'chat',
-}) => ApiConnectionMetadata(
-  connectionId: id,
-  displayName: 'Synthetic saved profile',
-  providerId: 'openai',
-  protocol: protocol,
-  mode: mode,
-  endpoint: endpoint,
-  model: model,
-  llmCredential: CredentialMetadata.absent,
-  embeddingCredential: CredentialMetadata.absent,
-  embeddingUseSame: false,
-  embeddingEnabled: false,
-  embeddingEndpoint: '',
-  embeddingModel: '',
-  embeddingLlmPresetId: '',
-);
+ModelCatalogHarness _catalog() {
+  final h = ModelCatalogHarness(
+    ApiConfig(
+      id: guidanceProfile.connectionId,
+      endpoint: guidanceProfile.endpoint,
+      model: guidanceProfile.model,
+      apiKey: 'SYNTHETIC_CATALOG_KEY_72',
+    ),
+  );
+  addTearDown(h.close);
+  return h;
+}
 
 Future<void> _open(WidgetTester tester, GuidanceScreenFixture f) async {
   await f.tapKey(tester, 'support_guidance_model');
@@ -46,8 +37,10 @@ Future<void> _open(WidgetTester tester, GuidanceScreenFixture f) async {
 }
 
 void main() {
+  late ModelCatalogHarness catalog;
+  ProviderModelCatalog factory() => (catalog = _catalog()).service;
   guidanceScreenTest(
-    'saved-model dropdown deduplicates only the same endpoint and edits a draft',
+    'dropdown loads actual provider models once and only final Save changes settings',
     (tester, f) async {
       await f.action(
         tester,
@@ -59,30 +52,31 @@ void main() {
       await f.idle(tester);
       final before = f.state.settings;
       await _open(tester, f);
+      await f.turns.until(
+        tester,
+        () =>
+            catalog.requests.length == 1 &&
+            find.text('Загрузка моделей…').evaluate().isEmpty,
+        label: 'the original HTTP catalog future is published',
+      );
       await f.tapKey(tester, 'support_model_dropdown');
 
-      for (final id in [
-        'current-choice',
-        'synthetic-model',
-        'synthetic-next',
-      ]) {
+      for (final id in ['provider-first', 'provider-next']) {
         expect(
           find.byKey(ValueKey('support_model_option_$id')),
           findsOneWidget,
         );
       }
-      for (final id in [
-        'foreign-origin',
-        'foreign-protocol',
-        'embedding-only',
-      ]) {
+      for (final id in ['current-choice', 'synthetic-model']) {
         expect(find.byKey(ValueKey('support_model_option_$id')), findsNothing);
       }
-      expect(find.text('bad\nmodel'), findsNothing);
-      await f.tapKey(tester, 'support_model_option_synthetic-next');
+      expect(catalog.requests.single.method, 'GET');
+      expect(catalog.requests.single.uri.path, '/v1/models');
+      expect(catalog.requests.single.data, isNull);
+      await f.tapKey(tester, 'support_model_option_provider-next');
       expect(
         tester.widget<TextField>(find.byType(TextField)).controller!.text,
-        'synthetic-next',
+        'provider-next',
       );
       expect(
         f.state.settings,
@@ -90,31 +84,19 @@ void main() {
         reason: 'An option is not confirmation.',
       );
       expect(
-        find.byKey(const ValueKey('support_model_option_synthetic-next')),
+        find.byKey(const ValueKey('support_model_option_provider-next')),
         findsNothing,
       );
 
       await f.tap(tester, find.text('Сохранить идентификатор'));
       await f.idle(tester);
-      expect(f.state.settings.modelId, 'synthetic-next');
+      expect(f.state.settings.modelId, 'provider-next');
       expect(f.state.settings.apiConfigId, before.apiConfigId);
       expect((await f.saved(tester)).grants, isEmpty);
       f.noReadersOrWire();
     },
     screen: false,
-    connections: [
-      guidanceProfile,
-      _profile('duplicate', 'synthetic-model'),
-      _profile('next', 'synthetic-next'),
-      _profile(
-        'other-host',
-        'foreign-origin',
-        endpoint: 'https://other.invalid/v1/chat/completions',
-      ),
-      _profile('other-protocol', 'foreign-protocol', protocol: 'anthropic'),
-      _profile('embedding', 'embedding-only', mode: 'embedding'),
-      _profile('invalid', 'bad\nmodel'),
-    ],
+    catalogFactory: factory,
   );
 
   guidanceScreenTest(
@@ -123,7 +105,7 @@ void main() {
       await _open(tester, f);
       await f.tapKey(tester, 'support_model_dropdown');
       expect(
-        find.text('Сохранённых моделей нет. Укажи идентификатор ниже.'),
+        find.text('Список моделей пуст. Укажи идентификатор ниже.'),
         findsOneWidget,
       );
       await f.reveal(tester, find.byType(TextField));
@@ -143,7 +125,7 @@ void main() {
   );
 
   guidanceScreenTest(
-    'a saved option after session replacement cannot mutate either session',
+    'a provider option after session replacement cannot mutate either session',
     (tester, f) async {
       await f.action(
         tester,
@@ -152,10 +134,17 @@ void main() {
       await f.idle(tester);
       final before = f.state.settings;
       await _open(tester, f);
+      await f.turns.until(
+        tester,
+        () =>
+            catalog.requests.length == 1 &&
+            find.text('Загрузка моделей…').evaluate().isEmpty,
+        label: 'the original HTTP catalog response is available',
+      );
       await f.tapKey(tester, 'support_model_dropdown');
       final original = tester
           .widget<MenuItem>(
-            find.byKey(const ValueKey('support_model_option_synthetic-model')),
+            find.byKey(const ValueKey('support_model_option_provider-first')),
           )
           .onTap;
       await f.turns.real(tester, () async {
@@ -177,5 +166,6 @@ void main() {
       f.noReadersOrWire();
     },
     screen: false,
+    catalogFactory: factory,
   );
 }
