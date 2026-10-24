@@ -93,14 +93,26 @@ final class SupportModelProvenance {
     required String currentUserMessageId,
     required List<SupportModelSourceRange> originalRanges,
     required List<SupportModelReplyReference> directReplies,
+    List<String>? currentConversationMessageIds,
   }) : supportSessionId = _identifier(supportSessionId),
        replyMessageId = _identifier(replyMessageId),
        runId = _identifier(runId),
        currentUserMessageId = _identifier(currentUserMessageId),
        originalRanges = _boundedCopy(originalRanges),
-       directReplies = _boundedCopy(directReplies) {
+       directReplies = _boundedCopy(directReplies),
+       currentConversationMessageIds = currentConversationMessageIds == null
+           ? null
+           : currentConversationMessageIds.isEmpty
+           ? const []
+           : _messageIds(currentConversationMessageIds) {
     if (replyMessageId == currentUserMessageId) {
       _fail(SupportModelProvenanceFailure.invalidIdentity);
+    }
+    if (this.currentConversationMessageIds?.any(
+          (id) => id == replyMessageId || id == currentUserMessageId,
+        ) ==
+        true) {
+      _fail(SupportModelProvenanceFailure.currentInputOverlap);
     }
     if (originalRanges.length + directReplies.length >
         SupportModelProvenanceLimits.maxDeclarationsAndReferences) {
@@ -131,6 +143,11 @@ final class SupportModelProvenance {
   final String currentUserMessageId;
   final List<SupportModelSourceRange> originalRanges;
   final List<SupportModelReplyReference> directReplies;
+
+  /// v2: visible current-chat text authorized by this reply's original Send.
+  /// Null is the old v1 recipe. IDs are NOT external origins or reusable grants.
+  /// Existing origin ranges/references remain unchanged and independently gated.
+  final List<String>? currentConversationMessageIds;
 
   @override
   String toString() => 'SupportModelProvenance';

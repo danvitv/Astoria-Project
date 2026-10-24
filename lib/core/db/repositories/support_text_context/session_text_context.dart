@@ -8,11 +8,13 @@ final class _WholeSessionSpec {
     this._sessionId,
     this._boundary, {
     this._sourceIdentity,
+    this._directConversation = false,
   });
   final SupportTextContextSource _source;
   final String _sessionId;
   final _OwnedSessionHistoryBoundary? _boundary;
   final Map<String, Object?>? _sourceIdentity;
+  final bool _directConversation;
 
   static Map<String, Object?> _identityOf(_TextRead read) => Map.unmodifiable({
     for (final key in const [
@@ -32,10 +34,26 @@ final class _WholeSessionSpec {
     _sessionId,
     _boundary,
     sourceIdentity: _identityOf(read),
+    directConversation: _directConversation,
   );
 }
 
 extension SupportSessionTextContext on SupportTextContextRepo {
+  /// Direct native Send's own visible USER/assistant conversation only. This
+  /// distinct recipe never discovers another session or exports policy/tool
+  /// rows. The caller owns exact Send authority, not a persisted history grant.
+  Future<SupportTextContextSnapshot> loadCurrentConversation({
+    required String sessionId,
+    required SupportSessionHistoryBoundary currentInput,
+  }) => _loadSession(
+    _WholeSessionSpec(
+      SupportTextContextSource.support,
+      sessionId,
+      _requireBoundary(sessionId, currentInput),
+      directConversation: true,
+    ),
+  );
+
   /// Fresh bounded complete visible history of exactly this native session.
   /// Session consent and exact prompt approval remain the caller's obligations.
   Future<SupportTextContextSnapshot> loadRoleplaySessionHistory({
@@ -114,6 +132,7 @@ extension SupportSessionTextContext on SupportTextContextRepo {
           : _SupportSessionTextReader(_support).read(
               _requireBoundary(spec._sessionId, spec._boundary!),
               _currentRedactor,
+              directConversation: spec._directConversation,
               checkpoint: checkpoint,
             ),
     );

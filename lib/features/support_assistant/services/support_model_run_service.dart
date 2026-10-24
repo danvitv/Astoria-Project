@@ -81,6 +81,7 @@ final class _ModelRun {
 
   bool references(String id, String message) =>
       (id == sessionId && (message == userId || message == replyId)) ||
+      (binding.configuration.directConversation && id == sessionId) ||
       sources.any(
         (s) =>
             (s.kind == SupportSourceKind.supportHistory
@@ -189,8 +190,17 @@ final class _ModelRun {
       preparation.complete(
         SupportModelPreparation._(preview, SupportModelRefusal.none),
       );
-      preparing = false;
-      phase(SupportModelPhase.preview);
+      if (binding.configuration.directConversation) {
+        // The original Send authorizes this exact saved destination, immutable
+        // input and visible current conversation. Actual-wire admission remains.
+        operation.check();
+        preparing = false;
+        running = true;
+        unawaited(generate());
+      } else {
+        preparing = false;
+        phase(SupportModelPhase.preview);
+      }
     } on _ModelRefused catch (error) {
       reason = error.reason;
     } on SupportAuthorizationDenied {

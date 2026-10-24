@@ -43,6 +43,7 @@ abstract final class SupportModelNativeProvenanceValidator {
         recipe.replyMessageId,
         recipe.runId,
         recipe.currentUserMessageId,
+        ...?recipe.currentConversationMessageIds,
         for (final range in recipe.originalRanges) ...[
           range.sessionId,
           ...range.orderedMessageIds,

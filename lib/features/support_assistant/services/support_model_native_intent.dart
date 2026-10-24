@@ -82,6 +82,8 @@ extension SupportModelNativeInput on SupportModelService {
     required String text,
     required bool Function() isEmitterCurrent,
     required bool Function() isDraftCurrent,
+    bool directConversation = false,
+    List<SupportModelConversationMessage>? visibleConversation,
   }) async {
     _ModelReadOperation? operation;
     try {
@@ -89,6 +91,17 @@ extension SupportModelNativeInput on SupportModelService {
         _refuse(SupportModelRefusal.busy);
       }
       if (text.length > 8192) _refuse(SupportModelRefusal.tooLarge);
+      if (directConversation &&
+          (visibleConversation == null ||
+              visibleConversation.length > PrivateTextLimits.messages ||
+              visibleConversation.any(
+                (message) =>
+                    !const ['user', 'assistant'].contains(message.role) ||
+                    message.id.length > 128 ||
+                    message.text.length > 65536,
+              ))) {
+        _refuse(SupportModelRefusal.unsafe);
+      }
       if (draftRevision < 0 || text.trim().isEmpty) {
         _refuse(SupportModelRefusal.unsafe);
       }
@@ -121,6 +134,7 @@ extension SupportModelNativeInput on SupportModelService {
         operation,
         id,
         prime: true,
+        directConversation: directConversation,
       );
       operation.check();
       // The saved source retains this original operation, including Stop and
@@ -139,6 +153,7 @@ extension SupportModelNativeInput on SupportModelService {
         draftRevision,
         isEmitterCurrent,
         isDraftCurrent,
+        visibleConversation,
       );
       if (!binding.current(draft: true)) _refuse(SupportModelRefusal.stale);
       return SupportModelInputEmission._(

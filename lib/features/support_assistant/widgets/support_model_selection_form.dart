@@ -116,8 +116,8 @@ class _ModelSelectionState extends State<SupportModelSelectionForm> {
       header: 'Выбор модели',
       description:
           'Модели загружаются с выбранного провайдера. Открытие списка не отправляет '
-          'prompt и не запускает генерацию. Отправка каждого точного prompt '
-          'подтверждается отдельно.',
+          'prompt и не запускает генерацию. «Отправить» в чате сразу передаёт '
+          'вопрос и видимый текущий диалог выбранной модели.',
       items: [
         MenuSelectorItem(
           key: const ValueKey('support_model_dropdown'),

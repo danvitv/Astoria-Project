@@ -24,12 +24,8 @@ class SupportSendSettingsSnapshot extends StatelessWidget {
     if (!settingsAvailable) return 'Настройки Астории ещё недоступны.';
     if (!settings.hasConfiguredModel) return 'Не выбраны подключение и модель.';
     if (refusal != SupportModelRefusal.none) return refusal.label;
-    if (!recipientConfirmed) {
-      return 'Отправка не началась: получатель запроса ещё не подтверждён. '
-          'Выбранный профиль сам по себе не подтверждает получателя.';
-    }
-    return 'Получатель подтверждён. Отправка начнётся только после подтверждения '
-        'точного prompt. Ключ проверяется внутри доверенного транспорта.';
+    return '«Отправить» сразу передаёт вопрос и видимый текущий диалог '
+        'выбранной модели. Ключ проверяется внутри доверенного транспорта.';
   }
 
   static String _yes(bool value) => value ? 'да' : 'нет';
@@ -50,7 +46,7 @@ class SupportSendSettingsSnapshot extends StatelessWidget {
           Text(
             'Профиль выбран: ${_yes(settings.apiConfigId?.isNotEmpty == true)}; '
             'модель выбрана: ${_yes(settings.modelId?.isNotEmpty == true)}; '
-            'получатель подтверждён: ${_yes(recipientConfirmed)}.',
+            'получатель для внешних источников подтверждён: ${_yes(recipientConfirmed)}.',
           ),
           Text(
             'Лимит ответа: ${settings.maxTokens == -1 ? "не передаётся (-1)" : settings.maxTokens}; '
@@ -60,7 +56,7 @@ class SupportSendSettingsSnapshot extends StatelessWidget {
           Text(
             'Ролевая сессия выбрана: ${_yes(scope?.gameSessionId != null)}; '
             'передача ролевой истории: ${_yes(permissions?.allows(SupportPermission.modelGameHistory) == true)}; '
-            'передача истории Астории: ${_yes(permissions?.allows(SupportPermission.modelSupportHistory) == true)}.',
+            'видимый текущий диалог Астории передаётся с отправкой.',
           ),
           const Text(
             'Состояние ключа этим снимком не проверялось; '
@@ -68,8 +64,8 @@ class SupportSendSettingsSnapshot extends StatelessWidget {
           ),
           const Text(
             'Для обычного разговора и начала диагностики игровая сессия '
-            'не нужна. Без отдельных разрешений история и диагностические '
-            'данные не читаются и не отправляются.',
+            'не нужна. Другие чаты и диагностические данные без отдельных '
+            'разрешений не читаются и не отправляются.',
           ),
         ],
       ),

@@ -235,7 +235,7 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
                           keyboardType: TextInputType.multiline,
                           textInputAction: TextInputAction.newline,
                           isDense: true,
-                          hint: 'Сообщение в историю (без API-ключей)…',
+                          hint: 'Сообщение Астории (без API-ключей)…',
                         ),
                       ),
                     ),
@@ -243,7 +243,7 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
                       key: const ValueKey('support_composer_send_btn'),
                       tooltip: widget.available
                           ? (widget.onNativeSend != null
-                                ? 'Проверить текст и отправить модели'
+                                ? 'Отправить модели'
                                 : 'Сохранить сообщение')
                           : 'Отправка недоступна',
                       icon: busy

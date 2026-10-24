@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/state/credential_vault_provider.dart';
 import '../../shared/shell/desktop/desktop_layout_provider.dart';
 import '../../shared/theme/app_colors.dart';
 import '../../shared/widgets/glaze_scaffold.dart';
@@ -21,13 +22,12 @@ import 'widgets/support_provider_entry.dart';
 import 'widgets/support_guidance_sheet.dart';
 import 'widgets/support_card_view.dart';
 import 'widgets/support_send_settings_snapshot.dart';
-import 'widgets/support_privacy_review_sheet.dart';
 import 'services/support_guidance_planner.dart';
+import 'services/support_message_display_projection.dart';
 import 'models/support_permission_scope.dart';
 import 'state/support_native_provider.dart';
 
 part 'support_screen_guidance.dart';
-part 'support_screen_recipient.dart';
 
 /// Center workspace screen for Astoria Assistant (`/support`).
 ///
@@ -103,6 +103,13 @@ class _SupportAssistantScreenState
 
   void _retainGuidance() {
     setState(() => _guidancePersistent = true);
+  }
+
+  void _clearSendGuidance() {
+    setState(() {
+      _guidance = const [];
+      _showSendSnapshot = false;
+    });
   }
 
   @override
@@ -250,6 +257,12 @@ class _SupportAssistantScreenState
     // Runtime consent changes also expire idle emitters. Rebuild the displayed
     // composer so the NEXT explicit Send binds a fresh owner, never an old draft.
     ref.watch(supportNativeViewProvider);
+    // Match the feed's current-policy body projection. Watching this snapshot
+    // also refreshes idle emitters when policy changes but stored bodies do not.
+    // Active original sends retain their existing snapshot and custody fences.
+    final display = SupportMessageDisplayProjection(
+      redactor: ref.watch(secretRedactorProvider),
+    );
     final enterToSend = ref.watch(
       appSettingsProvider.select(
         (settings) => settings.asData?.value.enterToSend ?? false,
@@ -268,7 +281,27 @@ class _SupportAssistantScreenState
         : const SupportModelRunView();
     final emitter = bridge == null
         ? null
-        : _modelUi.bindView(bridge, _composerCtrl, workspace.activeSessionId);
+        : _modelUi.bindView(
+            bridge,
+            _composerCtrl,
+            workspace.activeSessionId,
+            visibleConversation: [
+              for (final message in workspace.activeMessages)
+                if ((message.role == SupportMessageRole.user ||
+                        message.role == SupportMessageRole.assistant) &&
+                    const [
+                      'complete',
+                      'limited',
+                      'stopped',
+                      'error',
+                    ].contains(message.status))
+                  SupportModelConversationMessage(
+                    id: message.id,
+                    role: message.role.name,
+                    text: display.project(message.body),
+                  ),
+            ],
+          );
     if (bridge == null) _modelUi.retireView();
     final activeSend = _modelUi.active;
     final activeTitle = workspace.activeSession?.title ?? 'Астория Ассистент';
@@ -361,8 +394,10 @@ class _SupportAssistantScreenState
                     key: ValueKey('support_text_only_notice'),
                     padding: EdgeInsets.symmetric(vertical: 8),
                     child: Text(
-                      'Модель отвечает только текстом после отдельного подтверждения '
-                      'точного prompt. Выбор установленной темы, режим dark/light/system '
+                      '«Отправить» и Enter (если включён в общих настройках) сразу '
+                      'отправляют вопрос и видимый текущий диалог выбранной модели. '
+                      'Другие чаты и приватные источники требуют отдельных разрешений. '
+                      'Модель пока отвечает только текстом. Выбор установленной темы, режим dark/light/system '
                       'и условный Undo доступны только через отдельное нативное '
                       'подтверждение. Подготовка профиля провайдера и отдельный '
                       'защищённый ввод ключа доступны в нативном окне провайдера; '

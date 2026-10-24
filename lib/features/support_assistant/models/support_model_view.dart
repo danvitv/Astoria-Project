@@ -22,12 +22,13 @@ enum SupportModelRefusal {
   String get label => switch (this) {
     none => '',
     busy => 'Предыдущая отправка ещё не завершена.',
-    stale => 'Контекст отправки изменился. Повтори проверку.',
+    stale => 'Контекст отправки изменился. Повтори отправку.',
     cancelled => 'Отправка остановлена.',
     deadline => 'Время ожидания истекло. Запрос остановлен.',
     noModel =>
       'Модель не выбрана. Доступна отдельная локальная помощь без сети.',
-    recipientRequired => 'Сначала явно выбери и подтверди получателя и модель.',
+    recipientRequired =>
+      'Для внешних источников отдельно подтверди выбранного получателя.',
     unsupported =>
       'Это подключение не поддерживает безопасный текстовый SSE-запрос.',
     unsafe => 'Текст или параметры нельзя безопасно отправить.',
@@ -76,6 +77,17 @@ final class SupportModelPreviewText {
   final String role, text;
   @override
   String toString() => 'SupportModelPreviewText';
+}
+
+/// Exact body-only current conversation emitted by the native view at Send.
+/// Display authority only: no origin, source permission, keys or serializer.
+final class SupportModelConversationMessage {
+  const SupportModelConversationMessage({
+    required this.id,
+    required this.role,
+    required this.text,
+  });
+  final String id, role, text;
 }
 
 final class SupportModelRunResult {

@@ -31,7 +31,9 @@ abstract final class SupportModelProvenanceCodec {
   ) {
     try {
       _ProvenanceJsonScanner(encoded).check();
-      final root = _object(jsonDecode(encoded), const {
+      final value = jsonDecode(encoded);
+      final direct = value is Map<String, dynamic> && value['version'] == 2;
+      final root = _object(value, {
         'marker',
         'version',
         'supportSessionId',
@@ -40,10 +42,11 @@ abstract final class SupportModelProvenanceCodec {
         'currentUserMessageId',
         'originalRanges',
         'directReplies',
+        if (direct) 'currentConversationMessageIds',
       });
       if (root['marker'] != marker ||
           root['version'] is! int ||
-          root['version'] != version) {
+          (root['version'] != version && root['version'] != 2)) {
         _reject(SupportModelProvenanceFailure.unsupportedFormat);
       }
       final ranges = _array(root['originalRanges']);
@@ -61,6 +64,9 @@ abstract final class SupportModelProvenanceCodec {
         directReplies: [
           for (final reference in references) _reference(reference),
         ],
+        currentConversationMessageIds: direct
+            ? _conversationIds(root['currentConversationMessageIds'])
+            : null,
       );
       return SupportModelProvenanceDecodeResult.valid(recipe);
     } on SupportModelProvenanceException catch (error) {
@@ -85,6 +91,13 @@ abstract final class SupportModelProvenanceCodec {
     required List<SupportModelSelectedSupportMessage> selectedSupportMessages,
   }) {
     try {
+      if (proposedReply.currentConversationMessageIds != null ||
+          selectedSupportMessages.any(
+            (m) => m.provenance?.currentConversationMessageIds != null,
+          )) {
+        // v1 range authority cannot interpret v2 direct-current-chat consent.
+        _reject(SupportModelProvenanceFailure.unavailableRecipe);
+      }
       return _ProvenanceGraphVerifier(
         proposedReply,
         selectedRanges,
@@ -128,6 +141,14 @@ List<dynamic> _array(Object? value) {
 String _string(Object? value) {
   if (value is! String) _reject(SupportModelProvenanceFailure.invalidEncoding);
   return value;
+}
+
+List<String> _conversationIds(Object? value) {
+  if (value is! List<dynamic> ||
+      value.length > SupportModelProvenanceLimits.maxIdsPerSource) {
+    _reject(SupportModelProvenanceFailure.limitExceeded);
+  }
+  return [for (final id in value) _string(id)];
 }
 
 SupportModelSourceRange _range(Object? value) {
@@ -174,7 +195,11 @@ final class _ProvenanceStorageWriter {
   String encode(SupportModelProvenance recipe) {
     _append('{"marker":');
     _text(SupportModelProvenanceCodec.marker);
-    _append(',"version":1,"supportSessionId":');
+    _append(
+      recipe.currentConversationMessageIds == null
+          ? ',"version":1,"supportSessionId":'
+          : ',"version":2,"supportSessionId":',
+    );
     _text(recipe.supportSessionId);
     _append(',"replyMessageId":');
     _text(recipe.replyMessageId);
@@ -209,7 +234,17 @@ final class _ProvenanceStorageWriter {
       _text(reference.runId);
       _append('}');
     }
-    _append(']}');
+    _append(']');
+    final conversation = recipe.currentConversationMessageIds;
+    if (conversation != null) {
+      _append(',"currentConversationMessageIds":[');
+      for (var i = 0; i < conversation.length; i++) {
+        if (i != 0) _append(',');
+        _text(conversation[i]);
+      }
+      _append(']');
+    }
+    _append('}');
     return buffer.toString();
   }
 

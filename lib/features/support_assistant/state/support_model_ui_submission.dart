@@ -16,6 +16,8 @@ final class _ModelUiSubmission {
         text: send._text,
         isEmitterCurrent: () => send._publicationCurrent && !send._stopped,
         isDraftCurrent: send._isDraftCurrent,
+        directConversation: true,
+        visibleConversation: send._emitter._visibleConversation,
       );
       if (emission.intent == null) {
         return SupportModelRunResult(
@@ -47,7 +49,8 @@ final class _ModelUiSubmission {
       if (!current && prepared.preview != null) {
         service.cancelPreview(prepared.preview!);
       }
-      if (current && send._preview != null) onPhase(SupportModelPhase.preview);
+      // Direct sends start on their ORIGINAL native intent. No UI prompt sheet
+      // or second approval callback participates in the generation lifecycle.
       return await submission.finished;
     } catch (_) {
       service.stop();

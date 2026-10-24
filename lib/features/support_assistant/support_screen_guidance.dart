@@ -37,10 +37,15 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
     final runtime = controller.runtime;
     final policy = runtime.snapshot.preferences;
     final scope = policy?.scope;
-    final recipientConfirmed = runtime.recipientConfirmed;
-    final requested = const SupportGuidancePlanner().targetsFor(
-      text: draft.text,
-    );
+    final requested = const SupportGuidancePlanner()
+        .targetsFor(text: draft.text)
+        .where(
+          (target) =>
+              target != SupportGuidanceTarget.recipient &&
+              target != SupportGuidanceTarget.supportSession &&
+              target != SupportGuidanceTarget.modelSupportHistory,
+        )
+        .toList();
     final needed = requested
         .where((target) {
           final permission = target.permission;
@@ -50,7 +55,7 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
               scope?.gameHistoryExtent != SupportHistoryExtent.wholeSession,
             SupportGuidanceTarget.supportSession =>
               scope?.supportHistoryExtent != SupportHistoryExtent.wholeSession,
-            SupportGuidanceTarget.recipient => !recipientConfirmed,
+            SupportGuidanceTarget.recipient => false,
             SupportGuidanceTarget.themeScope =>
               scope?.safeCategories.contains(SupportSafeCategory.theme) != true,
             SupportGuidanceTarget.connectionsScope =>
@@ -64,21 +69,6 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
       r'диагност|diagnos|последн[а-я]* сесси|recent sessions',
       caseSensitive: false,
     ).hasMatch(draft.text);
-    final needsModel =
-        diagnostics ||
-        requested.isEmpty ||
-        requested.any(
-          (target) => switch (target) {
-            SupportGuidanceTarget.recipient ||
-            SupportGuidanceTarget.modelGameHistory ||
-            SupportGuidanceTarget.modelSupportHistory ||
-            SupportGuidanceTarget.modelGameData ||
-            SupportGuidanceTarget.modelSafeSettingsDiagnostics ||
-            SupportGuidanceTarget.modelPromptProviderSnippets ||
-            SupportGuidanceTarget.modelAttachments => true,
-            _ => false,
-          },
-        );
     final ordered = <SupportGuidanceTarget>{
       ...needed.where(
         (target) =>
@@ -86,16 +76,11 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
             target == SupportGuidanceTarget.supportSession ||
             target == SupportGuidanceTarget.readGameData,
       ),
-      if (needsModel && emitter != null && !recipientConfirmed)
-        SupportGuidanceTarget.recipient,
       ...needed,
     }.take(4).toList(growable: false);
     // A conversation does not grant access to game history or diagnostics.
     // Optional data proposals must not prevent an otherwise valid plain prompt.
-    final blocked =
-        emitter == null ||
-        (needsModel && !recipientConfirmed) ||
-        (!needsModel && ordered.isNotEmpty);
+    final blocked = emitter == null;
     final proposals = <SupportGuidanceTarget>{
       if (diagnostics) SupportGuidanceTarget.gameSession,
       ...ordered,
@@ -112,14 +97,14 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
         draft,
         session,
       );
-      if (emitter != null && needsModel && !recipientConfirmed) {
-        // Send itself opens the prerequisite, not another card/menu detour.
-        return _reviewRecipientFromSend(session);
-      }
       // A proposal is not acceptance: preserve the draft, do not grant or resend.
       return Future.value(false);
     }
-    _publishGuidance(proposals, draft, session, blocking: false);
+    if (proposals.isNotEmpty) {
+      _publishGuidance(proposals, draft, session, blocking: false);
+    } else {
+      _clearSendGuidance();
+    }
     final originalController = _guidanceController;
     final originalLifetime = _guidanceLifetime;
     final accepted = _modelUi.send(emitter, draft, context);

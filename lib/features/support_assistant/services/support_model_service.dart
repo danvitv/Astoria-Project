@@ -44,6 +44,7 @@ part 'support_model_native_intent.dart';
 part 'support_model_read_service.dart';
 part 'support_model_configuration_service.dart';
 part 'support_model_context_service.dart';
+part 'support_model_direct_conversation.dart';
 part 'support_model_run_service.dart';
 
 /// Native-only write scheduling seam; NEVER expose this service/scheduler to

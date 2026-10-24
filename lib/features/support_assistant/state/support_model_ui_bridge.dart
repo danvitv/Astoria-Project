@@ -66,6 +66,7 @@ final class SupportModelUiBridge {
     required Object controller,
     required Object uiLifetime,
     required bool Function() isEmitterCurrent,
+    List<SupportModelConversationMessage> visibleConversation = const [],
   }) {
     final runtime = _runtime,
         epoch = runtime.epoch,
@@ -86,6 +87,7 @@ final class SupportModelUiBridge {
       isEmitterCurrent,
       _workspace.capture(),
       runtimeCurrent,
+      List.unmodifiable(visibleConversation),
     );
   }
 

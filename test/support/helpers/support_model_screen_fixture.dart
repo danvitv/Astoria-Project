@@ -54,6 +54,7 @@ final class ModelScreenFixture {
     this.confirm = true,
     this.topic,
     this.enterToSend = true,
+    this.oldBody = excluded,
   }) {
     db = _ScreenDatabase(NativeDatabase.memory().interceptWith(sql));
     vault = CredentialVault(storage: storage, buildChannel: 'synthetic_screen');
@@ -82,6 +83,7 @@ final class ModelScreenFixture {
   final bool configured, confirm;
   final bool enterToSend;
   final String? topic;
+  final String oldBody;
   final isolation = ModelProviderIsolation();
   final primitive = NativeInputCipher();
   final sql = NativeInputSql();
@@ -104,6 +106,9 @@ final class ModelScreenFixture {
   bool quiet = false;
   int status = 200;
   String response = chatComplete('Safe actual screen answer');
+  // Test-only observation at the existing final fake adapter factory. A null
+  // hook preserves all existing defaults; it grants no admission or fake result.
+  void Function(ModelProviderHttpAdapter adapter)? onFinalAdapter;
   final api = const ApiConfig(
     id: 'screen-api',
     name: 'Synthetic screen API',
@@ -188,6 +193,7 @@ final class ModelScreenFixture {
       ),
     );
     adapters.add(adapter);
+    onFinalAdapter?.call(adapter);
     if (!adapterCreated.isCompleted) adapterCreated.complete(adapter);
     return adapter;
   }
@@ -285,11 +291,11 @@ final class ModelScreenFixture {
       );
     }
     await repo.putMessage(
-      const SupportMessage(
+      SupportMessage(
         id: 'old',
         sessionId: session,
         role: 'assistant',
-        body: excluded,
+        body: oldBody,
         createdAt: 2,
       ),
     );
@@ -422,6 +428,7 @@ final class ModelScreenFixture {
           sql.afterWrite = null;
           storage.beforeRead = null;
           storage.beforeWrite = null;
+          onFinalAdapter = null;
           // Capture original drained bridge BEFORE disposal, never look up late.
           final originals = List.of(bridges);
           await captureFailure(

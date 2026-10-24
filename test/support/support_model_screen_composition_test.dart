@@ -5,24 +5,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/db/repositories/api_config_repo.dart';
 import 'package:glaze_flutter/core/models/support_models.dart';
-import 'package:glaze_flutter/features/support_assistant/state/support_model_provider.dart';
-import 'package:glaze_flutter/features/support_assistant/state/support_native_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/models/support_workspace_models.dart';
+import 'package:glaze_flutter/features/support_assistant/state/support_model_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_composer_bar.dart';
-import 'package:glaze_flutter/features/support_assistant/widgets/support_model_prompt_preview_sheet.dart';
-import 'package:glaze_flutter/features/support_assistant/widgets/support_plain_markdown.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_message_list.dart';
-import 'package:glaze_flutter/shared/widgets/glaze_action_button.dart';
+import 'package:glaze_flutter/features/support_assistant/widgets/support_plain_markdown.dart';
 import 'package:glaze_flutter/shared/widgets/sheet_view.dart';
 
 import '../llm/transport/_private_text_fixture.dart';
+import 'helpers/support_model_provider_fixture_http.dart';
 import 'helpers/support_model_screen_fixture.dart';
-import 'support_recipient_send_helpers.dart';
 
 const _send = ValueKey('support_composer_send_btn');
 const _stop = ValueKey('support_composer_stop_btn');
-const _confirm = ValueKey('support_prompt_preview_confirm');
-const _cancel = ValueKey('support_prompt_preview_cancel');
+const _visible = 'Safe visible legacy conversation';
 
 TextEditingController _draft(WidgetTester tester) => tester
     .widget<SupportComposerBar>(find.byType(SupportComposerBar))
@@ -33,16 +29,15 @@ String _paint(WidgetTester tester) => tester
     .map((widget) => widget.text)
     .join('\n');
 
-// Service phase reporting precedes the bridge's actual finished-result publish.
 bool _isTerminal(SupportModelRunView view) =>
     view.phase == SupportModelPhase.settled && !view.busy;
 
+// Subscribe BEFORE the action on its ORIGINAL issuer. An earlier terminal state
+// cannot satisfy a later turn; neither a preview nor a replacement read is used.
 Future<SupportModelRunView> _phase(
-  ModelScreenFixture fixture,
+  SupportModelUiBridge original,
   bool Function(SupportModelRunView) predicate,
 ) {
-  final original = fixture.bridge;
-  if (predicate(original.view)) return Future.value(original.view);
   final reached = Completer<SupportModelRunView>();
   late final void Function() stop;
   stop = original.listen(() {
@@ -55,8 +50,28 @@ Future<SupportModelRunView> _phase(
   return reached.future;
 }
 
+Future<void> _release(SupportModelUiBridge original) => Future.any([
+  _phase(original, (view) => !view.busy).then((_) {}),
+  original.drained,
+]);
+
+Future<void> _sendDirect(
+  WidgetTester tester,
+  ModelScreenFixture fixture, {
+  String text = 'Exact native current question',
+  bool duplicate = false,
+}) {
+  final callback = tester.widget<IconButton>(find.byKey(_send)).onPressed!;
+  final controller = _draft(tester);
+  return fixture.action(tester, () {
+    controller.text = text;
+    callback();
+    if (duplicate) callback();
+  });
+}
+
 // Measure the control's ORIGINAL outer ListView/Scrollable and the owning
-// SheetView's whole positioned header, not its title text or an unrelated list.
+// settings SheetView header. Removed prompt sheets have no geometry contract.
 ({Rect control, Rect visible, Finder scrollable}) _sheetControlBounds(
   WidgetTester tester,
   Finder control,
@@ -80,8 +95,6 @@ Future<SupportModelRunView> _phase(
         : find.text(sheetWidget.title!),
   );
   expect(title, findsOneWidget);
-  // SheetView paints this header above Positioned.fill(body). Its absent
-  // bottom constraint distinguishes the actual header from the body viewport.
   final header = find.descendant(
     of: sheet,
     matching: find.ancestor(
@@ -156,7 +169,6 @@ Future<void> _revealSheetControl(
     final distance = delta
         .clamp(-bounds.visible.height / 2, bounds.visible.height / 2)
         .toDouble();
-    // The start/end stay in the measured uncovered viewport of this owner.
     await fixture.action(tester, () {
       expect(
         tester
@@ -169,113 +181,12 @@ Future<void> _revealSheetControl(
               ),
             ),
         isTrue,
-        reason: 'The scroll gesture must hit the original owning Scrollable.',
       );
       return tester.dragFrom(bounds.visible.center, Offset(0, distance));
     });
     await tester.pumpAndSettle();
   }
   _expectSheetControl(tester, control, list);
-}
-
-Future<SupportModelPreview> _openPreview(
-  WidgetTester tester,
-  ModelScreenFixture fixture, {
-  String text = 'Exact **native** current question',
-}) async {
-  final callback = tester.widget<IconButton>(find.byKey(_send)).onPressed!;
-  // Capture BEFORE the first await/Send. Closed adapters from earlier approved
-  // sends remain in fixture history; this preview must create/fetch nothing new.
-  final adapters = fixture.adapters;
-  final before = [
-    for (final adapter in adapters)
-      (
-        adapter: adapter,
-        fetches: adapter.fetches,
-        options: adapter.options,
-        upload: adapter.upload,
-        responseListens: adapter.native.responseListens,
-      ),
-  ];
-  final preview = await fixture.signal(
-    tester,
-    () => _phase(fixture, (view) => view.preview != null),
-    label: 'original Send preview',
-  );
-  final controller = _draft(tester);
-  await fixture.action(tester, () {
-    controller.text = text;
-    callback();
-    callback(); // Same-turn duplicate MUST remain one actual native send.
-  });
-  final view = await fixture.finish(tester, preview);
-  // An idle-started route ticker takes its epoch from its FIRST frame. A lone
-  // 400 ms pump can therefore leave the original sheet at entrance value zero.
-  await tester.pump();
-  expect(find.byType(SupportModelPromptPreviewSheet), findsOneWidget);
-  final route = ModalRoute.of<bool>(
-    tester.element(find.byType(SupportModelPromptPreviewSheet)),
-  )!;
-  expect(route, isA<ModalBottomSheetRoute<bool>>());
-  await tester.pump(route.transitionDuration);
-  // Installed simulation completes only at time > duration, not equality.
-  await tester.pump(const Duration(microseconds: 1));
-  expect(route.animation!.status, AnimationStatus.completed);
-  expect(route.isCurrent, isTrue);
-  final list = find.byKey(const ValueKey('support_prompt_preview_scroll'));
-  // Both first actions must fit WITHOUT scrolling; keep this geometry contract.
-  _expectSheetControl(tester, find.byKey(_cancel), list);
-  _expectSheetControl(tester, find.byKey(_confirm), list);
-  expect(fixture.adapters, same(adapters));
-  expect(adapters, hasLength(before.length));
-  for (var i = 0; i < before.length; i++) {
-    final prior = before[i];
-    expect(adapters[i], same(prior.adapter));
-    expect(prior.adapter.fetches, prior.fetches);
-    expect(prior.adapter.options, same(prior.options));
-    expect(prior.adapter.upload, prior.upload);
-    expect(prior.adapter.native.responseListens, prior.responseListens);
-  }
-  expect(
-    fixture.state.isBusy,
-    isFalse,
-    reason: 'Preview is outside durable/local FIFO.',
-  );
-  return view.preview!;
-}
-
-Future<void> _confirmPreview(WidgetTester tester, ModelScreenFixture fixture) =>
-    _tapPreviewDecision(tester, fixture, confirmed: true);
-
-Future<void> _tapPreviewDecision(
-  WidgetTester tester,
-  ModelScreenFixture fixture, {
-  required bool confirmed,
-}) async {
-  final list = find.byKey(const ValueKey('support_prompt_preview_scroll'));
-  final control = find.byKey(confirmed ? _confirm : _cancel);
-  final route = ModalRoute.of<bool>(
-    tester.element(find.byType(SupportModelPromptPreviewSheet)),
-  )!;
-  final popped = await fixture.signal(
-    tester,
-    () => route.popped,
-    label: 'original ${confirmed ? 'Confirm' : 'Cancel'} gesture route result',
-  );
-  // Do not align an already-visible first action to viewport top: SheetView's
-  // interactive header overlays that area and would receive the tap instead.
-  await fixture.action(tester, () {
-    expect(route.isCurrent, isTrue);
-    _expectSheetControl(tester, find.byKey(_cancel), list);
-    _expectSheetControl(tester, find.byKey(_confirm), list);
-    expect(tester.widget<GlazeActionButton>(control).onTap, isNotNull);
-    return tester.tap(control);
-  });
-  expect(
-    await fixture.finish(tester, popped),
-    confirmed,
-    reason: 'The actual gesture must decide before any retained callback runs.',
-  );
 }
 
 void main() {
@@ -293,7 +204,7 @@ void main() {
         if (topic != null) {
           final refreshed = await f.signal(
             tester,
-            () => f.workspace.refresh(),
+            f.workspace.refresh,
             label: 'post-frame topic refresh',
           );
           await f.finish(tester, refreshed);
@@ -301,16 +212,15 @@ void main() {
           expect(f.state.lastHandledTopic, topic);
         }
         final before = f.state.activeMessages.length;
-        final controller = _draft(tester);
         await f.action(tester, () async {
-          controller.text = 'Help without network';
+          _draft(tester).text = 'Help without network';
           await tester.tap(
             find.byKey(const ValueKey('support_composer_local_help_btn')),
           );
         });
         final refreshed = await f.signal(
           tester,
-          () => f.workspace.refresh(),
+          f.workspace.refresh,
           label: 'original local-help FIFO refresh',
         );
         await f.finish(tester, refreshed);
@@ -325,52 +235,21 @@ void main() {
     });
   }
 
-  for (final configured in [false, true]) {
-    testWidgets(
-      'actual ${configured ? 'unconfirmed' : 'no model'} Send keeps draft and never falls back',
-      (tester) async {
-        final f = ModelScreenFixture(configured: configured, confirm: false);
-        await f.run(tester, () async {
-          final controller = _draft(tester);
-          final before = f.state.activeMessages.map((m) => m.id).toList();
-          if (configured) {
-            // Send now opens recipient review, not a model refusal/run.
-            final route = await openRecipientFromSend(
-              tester,
-              f,
-              text: 'Retained prerequisite draft',
-            );
-            expect(f.adapters, isEmpty);
-            expect(f.state.activeMessages.map((m) => m.id), before);
-            await decideRecipient(tester, f, route, confirmed: false);
-            expect(
-              f.container
-                  .read(supportNativeConsentControllerProvider)
-                  .runtime
-                  .recipientConfirmed,
-              isFalse,
-            );
-          } else {
-            await f.action(tester, () async {
-              controller.text = 'Retained prerequisite draft';
-              await tester.tap(find.byKey(_send));
-            });
-          }
-          await tester.pumpAndSettle();
-          expect(controller.text, 'Retained prerequisite draft');
-          expect(f.adapters, isEmpty);
-          expect(f.state.activeMessages.map((m) => m.id), before);
-          expect(find.byType(SupportModelPromptPreviewSheet), findsNothing);
-          if (!configured) {
-            expect(
-              find.text(SupportModelRefusal.noModel.label),
-              findsOneWidget,
-            );
-          }
-        });
-      },
-    );
-  }
+  testWidgets('actual no-model Send keeps draft and never falls back', (
+    tester,
+  ) async {
+    final f = ModelScreenFixture(configured: false, confirm: false);
+    await f.run(tester, () async {
+      final controller = _draft(tester);
+      final before = f.state.activeMessages.map((m) => m.id).toList();
+      await _sendDirect(tester, f, text: 'Retained prerequisite draft');
+      await tester.pumpAndSettle();
+      expect(controller.text, 'Retained prerequisite draft');
+      expect(f.adapters, isEmpty);
+      expect(f.state.activeMessages.map((m) => m.id), before);
+      expect(find.text(SupportModelRefusal.noModel.label), findsOneWidget);
+    });
+  });
 
   testWidgets(
     'actual settings/manual model picker only projects metadata and never probes',
@@ -399,28 +278,22 @@ void main() {
           return tester.tap(selector);
         });
         await tester.pumpAndSettle();
-        // The explicit null catalog port keeps this a manual/no-network fixture.
         expect(find.text('Модель Астории'), findsOneWidget);
         expect(find.text('Идентификатор модели'), findsOneWidget);
         expect(f.adapters, isEmpty);
         expect(find.textContaining(ModelScreenFixture.key), findsNothing);
         expect(find.textContaining('SYNTHETIC_STALE_VAULT_KEY'), findsNothing);
         expect(
-          find.textContaining(
-            'Открытие списка не отправляет prompt и не запускает генерацию.',
-          ),
+          find.textContaining('Открытие списка не отправляет prompt'),
           findsOneWidget,
         );
-        await f.action(
-          tester,
-          () => f.router.routerDelegate.navigatorKey.currentState!.pop(),
-        );
-        await tester.pumpAndSettle();
-        await f.action(
-          tester,
-          () => f.router.routerDelegate.navigatorKey.currentState!.pop(),
-        );
-        await tester.pumpAndSettle();
+        for (var route = 0; route < 2; route++) {
+          await f.action(
+            tester,
+            () => f.router.routerDelegate.navigatorKey.currentState!.pop(),
+          );
+          await tester.pumpAndSettle();
+        }
       });
     },
   );
@@ -438,12 +311,11 @@ void main() {
           controller.text = 'Retained emitted Send';
           f.workspace.selectSession(ModelScreenFixture.other);
           f.workspace.selectSession(ModelScreenFixture.session);
-          // Before any await/rebuild: the original emitted callback stays stale.
           oldCallback();
         });
         final refreshed = await f.signal(
           tester,
-          () => f.workspace.refresh(),
+          f.workspace.refresh,
           label: 'retained Send session-ABA refresh',
         );
         await f.finish(tester, refreshed);
@@ -456,52 +328,29 @@ void main() {
   );
 
   testWidgets(
-    'actual full safe preview, once confirm, exact private wire and durable order',
+    'actual direct duplicate latch, safe private wire and durable order',
     (tester) async {
-      final f = ModelScreenFixture();
+      final f = ModelScreenFixture(confirm: false, oldBody: _visible);
       await f.run(tester, () async {
-        final preview = await _openPreview(
-          tester,
-          f,
-          text: 'Exact **question** ${ModelScreenFixture.secret}',
-        );
-        expect(
-          _draft(tester).text,
-          isEmpty,
-          reason: 'Durable acceptance precedes user decision.',
-        );
-        final sheet = tester.widget<SupportModelPromptPreviewSheet>(
-          find.byType(SupportModelPromptPreviewSheet),
-        );
-        expect(sheet.values.originLabel, preview.recipient.originLabel);
-        expect(sheet.values.operationLabel, preview.recipient.operationLabel);
-        expect(sheet.values.modelLabel, 'screen-selected-model');
-        expect(
-          sheet.values.sections.map((s) => s.text),
-          preview.messages.map((m) => m.text),
-        );
-        expect(sheet.values.sections.last.text, contains('Exact **question**'));
-        expect(
-          sheet.values.sections.last.text,
-          isNot(contains(ModelScreenFixture.secret)),
-        );
-        final before = f.state.activeMessages.map((m) => m.id).toList();
+        final original = await f.action(tester, () => f.bridge);
         final terminal = await f.signal(
           tester,
-          () => _phase(f, _isTerminal),
-          label: 'original approved terminal',
+          () => _phase(original, _isTerminal),
+          label: 'original direct Send completion',
         );
-        final decision = sheet.onDecision;
-        await _confirmPreview(tester, f);
-        await f.action(tester, () => decision(true)); // No second approval.
+        const text = 'Exact **question** ${ModelScreenFixture.secret}';
+        final safeText = f.redaction.redactor.redactText(text);
+        await _sendDirect(tester, f, text: text, duplicate: true);
         final result = await f.finish(tester, terminal);
         await tester.pumpAndSettle();
         expect(result.accepted, isTrue);
         expect(result.saved, isTrue);
         expect(result.dispatch, PrivateTextDispatch.admitted);
+        expect(_draft(tester).text, isEmpty);
         expect(f.adapters, hasLength(1));
         final adapter = f.adapters.single;
         expect(adapter.fetches, 1);
+        expect(adapter.options!.method, 'POST');
         expect(adapter.options!.uri.toString(), f.api.endpoint);
         expect(
           adapter.options!.headers['Authorization'],
@@ -511,88 +360,112 @@ void main() {
         expect(wire['model'], 'screen-selected-model');
         expect(wire['temperature'], 0.25);
         expect(wire['max_tokens'], 512);
-        expect(wire['messages'], [
-          for (final m in preview.messages) {'role': m.role, 'content': m.text},
+        final messages = (wire['messages'] as List)
+            .cast<Map<String, dynamic>>();
+        expect(messages.where((m) => m['role'] != 'system'), [
+          {'role': 'assistant', 'content': _visible},
+          {'role': 'user', 'content': safeText},
         ]);
-        expect(adapter.upload, isNot(contains(ModelScreenFixture.excluded)));
-        expect(adapter.upload, isNot(contains(ModelScreenFixture.secret)));
-        expect(adapter.upload, isNot(contains(ModelScreenFixture.key)));
-        expect(f.state.activeMessages.map((m) => m.id), before);
-        expect(
-          f.state.activeMessages.where((m) => m.runId == preview.runId),
-          hasLength(2),
+        for (final excluded in [
+          ModelScreenFixture.excluded,
+          ModelScreenFixture.secret,
+          ModelScreenFixture.key,
+          'SYNTHETIC_STALE_VAULT_KEY',
+        ]) {
+          expect(adapter.upload, isNot(contains(excluded)));
+        }
+        final owned = f.state.activeMessages
+            .where((m) => m.runId == result.runId)
+            .toList();
+        expect(owned, hasLength(2));
+        expect(owned.map((m) => m.role), [
+          SupportMessageRole.user,
+          SupportMessageRole.assistant,
+        ]);
+        expect(owned.first.body, safeText);
+        expect(owned.last.status, 'complete');
+        expect(owned.last.createdAt.isAfter(owned.first.createdAt), isTrue);
+        final durable = await f.signal(
+          tester,
+          () => f.repo.getMessagesForSession(ModelScreenFixture.session),
+          label: 'original direct durable order',
         );
-        expect(f.state.activeMessages.last.status, 'complete');
-        // The settings snapshot can occupy the first viewport of the lazy feed.
-        // Reveal the actual sanitized reply instead of assuming it is mounted.
+        final rows = await f.finish(tester, durable);
+        expect(rows.map((m) => m.id), f.state.activeMessages.map((m) => m.id));
         final answer = find.byWidgetPredicate(
           (widget) =>
               widget is SupportPlainMarkdown &&
               widget.text.contains('Safe actual screen answer'),
         );
-        final feedState = tester.state<ScrollableState>(
-          find
-              .descendant(
-                of: find.byType(SupportMessageList),
-                matching: find.byType(Scrollable),
-              )
-              .first,
-        );
-        final originalFeed = find.byElementPredicate(
-          (element) => identical(element, feedState.context),
-        );
+        final feed = find
+            .descendant(
+              of: find.byType(SupportMessageList),
+              matching: find.byType(Scrollable),
+            )
+            .first;
         await f.action(
           tester,
-          () =>
-              tester.scrollUntilVisible(answer, 250, scrollable: originalFeed),
+          () => tester.scrollUntilVisible(answer, 250, scrollable: feed),
         );
         expect(_paint(tester), contains('Safe actual screen answer'));
-        expect(
-          find.byKey(const ValueKey('support_text_only_notice')),
-          findsOneWidget,
-        );
       });
     },
   );
 
   for (final failure in ['append', 'terminal']) {
     testWidgets(
-      'actual $failure failure preserves truthful composer acceptance without raw error',
+      'actual $failure failure preserves truthful direct acceptance without raw error',
       (tester) async {
-        final f = ModelScreenFixture();
+        final f = ModelScreenFixture(confirm: false, oldBody: _visible)
+          ..quiet = failure == 'terminal'
+          ..response = '';
         await f.run(tester, () async {
           final controller = _draft(tester);
-          SupportModelPreview? preview;
-          if (failure == 'terminal') {
-            preview = await _openPreview(tester, f);
-            expect(controller.text, isEmpty);
-            await f.action(
-              tester,
-              () => controller.text = 'New typing before failed settlement',
-            );
-          } else {
-            await f.action(
-              tester,
-              () => controller.text = 'Unaccepted failed append draft',
-            );
-          }
-          f.primitive.afterEncrypt = (aad) async {
-            if (aad.contains('support_messages')) {
-              throw StateError('RAW_CIPHER_PRIVATE_CANARY');
-            }
-          };
+          final original = await f.action(tester, () => f.bridge);
           final terminal = await f.signal(
             tester,
-            () => _phase(f, _isTerminal),
-            label: 'original $failure failure terminal',
+            () => _phase(original, _isTerminal),
+            label: 'original $failure failure completion',
           );
-          if (preview != null) {
-            await _confirmPreview(tester, f);
+          void failWrites() {
+            f.primitive.afterEncrypt = (aad) async {
+              if (aad.contains('support_messages')) {
+                throw StateError('RAW_CIPHER_PRIVATE_CANARY');
+              }
+            };
+          }
+
+          if (failure == 'append') {
+            await f.action(tester, failWrites);
+            await _sendDirect(
+              tester,
+              f,
+              text: 'Unaccepted failed append draft',
+            );
           } else {
-            await f.action(tester, () => tester.tap(find.byKey(_send)));
+            final created = await f.signal(
+              tester,
+              () => f.adapterCreated.future,
+              label: 'original accepted fault adapter',
+            );
+            await _sendDirect(tester, f);
+            final adapter = await f.finish(tester, created);
+            final listening = await f.signal(
+              tester,
+              () => adapter.responseListening,
+              label: 'original accepted fault response subscription',
+            );
+            await f.finish(tester, listening);
+            await tester.pump();
+            expect(controller.text, isEmpty);
+            await f.action(tester, () async {
+              controller.text = 'New typing before failed settlement';
+              failWrites();
+              await tester.tap(find.byKey(_stop));
+            });
           }
           final result = await f.finish(tester, terminal);
-          f.primitive.afterEncrypt = null;
+          await f.action(tester, () => f.primitive.afterEncrypt = null);
           await tester.pumpAndSettle();
           expect(result.accepted, failure == 'terminal');
           expect(result.saved, isFalse);
@@ -606,73 +479,16 @@ void main() {
             find.textContaining('RAW_CIPHER_PRIVATE_CANARY'),
             findsNothing,
           );
-          expect(find.byType(SupportModelPromptPreviewSheet), findsNothing);
-          if (preview != null) {
-            expect(
-              f.state.activeMessages
-                  .singleWhere((m) => m.id == preview!.replyMessageId)
-                  .body,
-              isEmpty,
-            );
-          } else {
+          if (failure == 'append') {
             expect(
               f.state.activeMessages.where((m) => m.runId != null),
               isEmpty,
             );
             expect(f.adapters, isEmpty);
+          } else {
+            expect(f.state.activeMessages.last.body, isEmpty);
+            expect(f.adapters.single.fetches, 1);
           }
-        });
-      },
-    );
-  }
-
-  for (final dismissal in [
-    'cancel',
-    'back',
-    'barrier',
-    'system-back',
-    'unmount',
-  ]) {
-    testWidgets(
-      'actual preview $dismissal cancels original but durable user stays accepted',
-      (tester) async {
-        final f = ModelScreenFixture();
-        await f.run(tester, () async {
-          final preview = await _openPreview(tester, f);
-          final decision = tester
-              .widget<SupportModelPromptPreviewSheet>(
-                find.byType(SupportModelPromptPreviewSheet),
-              )
-              .onDecision;
-          final terminal = await f.signal(
-            tester,
-            () => _phase(f, (v) => !v.busy),
-            label: 'original $dismissal preview release',
-          );
-          switch (dismissal) {
-            case 'cancel':
-              await _tapPreviewDecision(tester, f, confirmed: false);
-            case 'back':
-              final sheet = tester.widget<SheetView>(find.byType(SheetView));
-              await f.action(tester, sheet.onBack!);
-            case 'barrier':
-              await f.action(tester, () => tester.tapAt(const Offset(4, 4)));
-            case 'system-back':
-              await f.action(tester, tester.binding.handlePopRoute);
-            case 'unmount':
-              await tester.pumpWidget(const SizedBox.shrink());
-          }
-          await f.action(tester, () => decision(true));
-          // Retired UI may project idle instead of a terminal label. This waits
-          // original claim release, not a guessed duration or speculative row.
-          await f.finish(tester, terminal);
-          await tester.pumpAndSettle();
-          expect(f.adapters, isEmpty);
-          final users = f.state.activeMessages.where(
-            (m) => m.id == preview.userMessageId,
-          );
-          expect(users, hasLength(1));
-          expect(find.byType(SupportModelPromptPreviewSheet), findsNothing);
         });
       },
     );
@@ -688,20 +504,23 @@ void main() {
     testWidgets(
       'actual emitted $invalidation before first awaited read never appends/rebinds',
       (tester) async {
-        final f = ModelScreenFixture();
+        final f = ModelScreenFixture(confirm: false);
         await f.run(tester, () async {
           final gate = await f.action(tester, f.barrier);
-          var paused = false;
-          f.primitive.beforeDecrypt = (_) async {
-            if (!paused) {
-              paused = true;
-              await gate.wait();
-            }
-          };
+          await f.action(tester, () {
+            var paused = false;
+            f.primitive.beforeDecrypt = (_) async {
+              if (!paused) {
+                paused = true;
+                await gate.wait();
+              }
+            };
+          });
           final original = await f.action(tester, () => f.bridge);
-          final idle = await f.signal(
+          final preparing = await f.signal(
             tester,
-            () => _phase(f, (v) => v.phase == SupportModelPhase.preparing),
+            () =>
+                _phase(original, (v) => v.phase == SupportModelPhase.preparing),
             label: 'original pre-read preparing',
           );
           final entered = await f.signal(
@@ -710,18 +529,13 @@ void main() {
             label: 'original decrypt barrier entered',
           );
           final controller = _draft(tester);
-          await f.action(tester, () async {
-            controller.text = 'ABA draft';
-            await tester.tap(find.byKey(_send));
-          });
+          await _sendDirect(tester, f, text: 'ABA draft');
           await f.finish(tester, entered);
-          await f.finish(tester, idle);
+          await f.finish(tester, preparing);
           await tester.pump();
           final released = await f.signal(
             tester,
-            () => invalidation == 'issuer'
-                ? original.drained
-                : _phase(f, (v) => !v.busy).then((_) {}),
+            () => _release(original),
             label: 'original pre-read $invalidation release',
           );
           switch (invalidation) {
@@ -756,7 +570,7 @@ void main() {
           await f.finish(tester, released);
           final refreshed = await f.signal(
             tester,
-            () => f.workspace.refresh(),
+            f.workspace.refresh,
             label: 'original pre-read $invalidation workspace refresh',
           );
           await f.finish(tester, refreshed);
@@ -774,134 +588,223 @@ void main() {
     );
   }
 
+  // These complement the new direct custody cohort: source body/membership,
+  // session ABA and the saved API row (not its UI settings or deletion signal).
+  for (final invalidation in [
+    'source body',
+    'source membership',
+    'session ABA',
+    'API row',
+  ]) {
+    testWidgets('actual $invalidation at final fake-adapter ROOT denies wire', (
+      tester,
+    ) async {
+      final f = ModelScreenFixture(confirm: false, oldBody: _visible);
+      await f.run(tester, () async {
+        final original = await f.action(tester, () => f.bridge);
+        final gate = await f.action(tester, f.barrier);
+        final entered = await f.signal(
+          tester,
+          () => gate.entered.future,
+          label: 'original final-adapter ROOT entered',
+        );
+        await f.action(tester, () {
+          f.onFinalAdapter = (_) {
+            f.sql.afterSelect = (statement, _) async {
+              if (statement == 'PRAGMA busy_timeout' && !gate.released) {
+                // This provisional SQL fault runs in the ORIGINAL transaction
+                // zone before its first main-data read. Never await an outside
+                // DB writer while holding this ROOT barrier: it would deadlock.
+                f.sql.afterSelect = null;
+                switch (invalidation) {
+                  case 'source body':
+                    final old = await f.repo.getMessageById('old');
+                    await f.repo.putMessage(
+                      old!.copyWith(body: 'Changed visible source'),
+                    );
+                  case 'source membership':
+                    await f.repo.putMessage(
+                      const SupportMessage(
+                        id: 'new-historical-row',
+                        sessionId: ModelScreenFixture.session,
+                        role: 'user',
+                        body: 'Not in the original emitted conversation',
+                        createdAt: 3,
+                      ),
+                    );
+                  case 'API row':
+                    await ApiConfigRepo(f.db).put(
+                      f.api.copyWith(
+                        endpoint: 'https://changed.invalid/v1/chat/completions',
+                      ),
+                    );
+                  case 'session ABA':
+                    break;
+                }
+                await gate.wait();
+              }
+            };
+          };
+        });
+        await _sendDirect(
+          tester,
+          f,
+          text: 'Original accepted final-boundary USER',
+        );
+        await f.finish(tester, entered);
+        await tester.pump();
+        final adapter = f.adapters.single;
+        expect(adapter.fetches, 0);
+        expect(original.view.busy, isTrue);
+        expect(_draft(tester).text, isEmpty);
+        final released = await f.signal(
+          tester,
+          () => _release(original),
+          label: 'original final $invalidation release',
+        );
+        if (invalidation == 'session ABA') {
+          await f.action(tester, () {
+            f.workspace.selectSession(ModelScreenFixture.other);
+            f.workspace.selectSession(ModelScreenFixture.session);
+          });
+        }
+        await f.action(tester, () {
+          f.onFinalAdapter = null;
+          f.sql.afterSelect = null;
+          gate.release();
+        });
+        await f.finish(tester, released);
+        final refreshed = await f.signal(
+          tester,
+          f.workspace.refresh,
+          label: 'original final $invalidation workspace refresh',
+        );
+        await f.finish(tester, refreshed);
+        final durable = await f.signal(
+          tester,
+          () => f.repo.getMessagesForSession(ModelScreenFixture.session),
+          label: 'original accepted USER after final invalidation',
+        );
+        final rows = await f.finish(tester, durable);
+        expect(
+          rows.where(
+            (m) =>
+                m.role == 'user' &&
+                m.body == 'Original accepted final-boundary USER',
+          ),
+          hasLength(1),
+        );
+        expect(f.adapters, [same(adapter)]);
+        expect(adapter.fetches, 0);
+        expect(adapter.upload, isNull);
+        expect(adapter.native.responseListens, 0);
+      });
+    });
+  }
+
   testWidgets(
-    'accepted immutable input survives later typing, quiet SSE Stop is real and old Stop cannot cancel replacement',
+    'accepted direct input survives later typing and old quiet-SSE Stop cannot cancel replacement',
     (tester) async {
-      final f = ModelScreenFixture()
+      final f = ModelScreenFixture(confirm: false, oldBody: _visible)
         ..quiet = true
         ..response = '';
       await f.run(tester, () async {
-        final first = await _openPreview(tester, f);
-        final controller = _draft(tester);
-        await f.action(
-          tester,
-          () => controller.text = 'New draft while reviewing',
-        );
+        final original = await f.action(tester, () => f.bridge);
         final created = await f.signal(
           tester,
           () => f.adapterCreated.future,
-          label: 'original quiet adapter created',
+          label: 'original quiet adapter',
         );
-        await _confirmPreview(tester, f);
+        await _sendDirect(tester, f);
         final adapter = await f.finish(tester, created);
         final listening = await f.signal(
           tester,
           () => adapter.responseListening,
-          label: 'actual quiet SSE subscription',
+          label: 'original quiet response subscription',
         );
         await f.finish(tester, listening);
         await tester.pump();
-        expect(controller.text, 'New draft while reviewing');
-        expect(find.byKey(_stop).hitTestable(), findsOneWidget);
+        final controller = _draft(tester);
+        await f.action(
+          tester,
+          () => controller.text = 'New draft while waiting',
+        );
         final oldStop = tester.widget<IconButton>(find.byKey(_stop)).onPressed!;
         final terminal = await f.signal(
           tester,
-          () => _phase(f, _isTerminal),
-          label: 'original quiet Stop terminal',
+          () => _phase(original, _isTerminal),
+          label: 'original quiet Stop completion',
         );
         final cancelled = await f.signal(
           tester,
           () => adapter.cancelObserved.future,
-          label: 'actual quiet CancelToken observation',
+          label: 'original quiet CancelToken',
         );
         final unsubscribed = await f.signal(
           tester,
           () => adapter.native.responseCancelled.future,
-          label: 'actual quiet response subscription cancellation',
+          label: 'original quiet response cancellation',
         );
         await f.action(tester, oldStop);
         await f.finish(tester, cancelled);
         await f.finish(tester, unsubscribed);
-        await f.finish(tester, terminal);
+        final first = await f.finish(tester, terminal);
         await tester.pumpAndSettle();
-        expect(controller.text, 'New draft while reviewing');
-        expect(
-          f.state.activeMessages
-              .singleWhere((m) => m.id == first.replyMessageId)
-              .status,
-          'stopped',
-        );
-        expect(f.adapters, [same(adapter)]);
+        expect(controller.text, 'New draft while waiting');
+        expect(f.state.activeMessages.last.status, 'stopped');
         expect(adapter.fetches, 1);
         expect(adapter.native.responseListens, 1);
         expect(adapter.closed, isTrue);
-        final second = await _openPreview(
+        final secondAdapter = await f.action(
           tester,
-          f,
-          text: 'Replacement current question',
+          Completer<ModelProviderHttpAdapter>.new,
         );
-        await f.action(tester, () {
-          oldStop();
-          expect(second.isCurrent, isTrue);
-        });
+        await f.action(tester, () => f.onFinalAdapter = secondAdapter.complete);
+        final next = await f.signal(
+          tester,
+          () => secondAdapter.future,
+          label: 'replacement original quiet adapter',
+        );
+        await _sendDirect(tester, f, text: 'Replacement current question');
+        final replacement = await f.finish(tester, next);
+        final replacementListening = await f.signal(
+          tester,
+          () => replacement.responseListening,
+          label: 'replacement actual quiet response subscription',
+        );
+        await f.finish(tester, replacementListening);
+        await tester.pump();
+        final replacementRun = original.view.runId;
+        expect(replacementRun, isNot(first.runId));
+        await f.action(tester, oldStop);
+        expect(original.view.busy, isTrue);
+        expect(original.view.runId, replacementRun);
+        expect(replacement.cancelObserved.isCompleted, isFalse);
+        expect(replacement.closed, isFalse);
         final secondTerminal = await f.signal(
           tester,
-          () => _phase(f, (v) => !v.busy),
-          label: 'replacement preview release',
+          () => _phase(original, _isTerminal),
+          label: 'replacement current Stop completion',
         );
-        await _tapPreviewDecision(tester, f, confirmed: false);
+        final secondCancelled = await f.signal(
+          tester,
+          () => replacement.cancelObserved.future,
+          label: 'replacement current CancelToken',
+        );
+        await f.action(tester, () => tester.tap(find.byKey(_stop)));
+        await f.finish(tester, secondCancelled);
         await f.finish(tester, secondTerminal);
-        await tester.pumpAndSettle();
-        expect(f.adapters, hasLength(1));
-        expect(f.adapters.single, same(adapter));
-        expect(adapter.fetches, 1);
-        expect(adapter.native.responseListens, 1);
-      });
-    },
-  );
-
-  testWidgets(
-    'accepted preview invalidation and retained confirmation cannot touch a new session/run',
-    (tester) async {
-      final f = ModelScreenFixture();
-      await f.run(tester, () async {
-        await _openPreview(tester, f);
-        final oldDecision = tester
-            .widget<SupportModelPromptPreviewSheet>(
-              find.byType(SupportModelPromptPreviewSheet),
-            )
-            .onDecision;
-        final released = await f.signal(
-          tester,
-          () => _phase(f, (v) => !v.busy),
-          label: 'original accepted preview session retirement',
-        );
-        await f.action(
-          tester,
-          () => f.workspace.selectSession(ModelScreenFixture.other),
-        );
-        await f.finish(tester, released);
-        final refreshed = await f.signal(
-          tester,
-          () => f.workspace.refresh(),
-          label: 'new-session workspace refresh',
-        );
-        await f.finish(tester, refreshed);
-        await tester.pumpAndSettle();
-        await f.action(tester, () => oldDecision(true));
-        expect(f.adapters, isEmpty);
-        expect(find.byType(SupportModelPromptPreviewSheet), findsNothing);
-        expect(f.state.activeSessionId, ModelScreenFixture.other);
-        expect(f.state.activeMessages, isEmpty);
+        expect(f.adapters, [same(adapter), same(replacement)]);
+        expect(replacement.fetches, 1);
       });
     },
   );
 
   for (final error in [false, true]) {
     testWidgets(
-      'actual ${error ? 'error' : 'split secret/reasoning/delta'} never paints raw provider data',
+      'actual direct ${error ? 'error' : 'split secret/reasoning/delta'} never paints raw provider data',
       (tester) async {
-        final f = ModelScreenFixture()
+        final f = ModelScreenFixture(confirm: false, oldBody: _visible)
           ..quiet = !error
           ..status = error ? 500 : 200;
         f.response = error
@@ -919,33 +822,24 @@ void main() {
                   ) +
                   chatDelta(ModelScreenFixture.secret.substring(15));
         await f.run(tester, () async {
-          await _openPreview(tester, f);
+          final original = await f.action(tester, () => f.bridge);
           final terminal = await f.signal(
             tester,
-            () => _phase(f, _isTerminal),
-            label: 'original raw-data $error terminal',
+            () => _phase(original, _isTerminal),
+            label: 'original direct raw-data $error completion',
           );
           final activity = error
               ? null
               : await f.signal(
                   tester,
-                  () => _phase(f, (v) => v.phase == SupportModelPhase.activity),
+                  () => _phase(
+                    original,
+                    (v) => v.phase == SupportModelPhase.activity,
+                  ),
                   label: 'original withheld raw activity',
                 );
-          await _confirmPreview(tester, f);
+          await _sendDirect(tester, f);
           if (!error) {
-            final created = await f.signal(
-              tester,
-              () => f.adapterCreated.future,
-              label: 'original raw-data adapter created',
-            );
-            final adapter = await f.finish(tester, created);
-            final listening = await f.signal(
-              tester,
-              () => adapter.responseListening,
-              label: 'actual raw-data SSE subscription',
-            );
-            await f.finish(tester, listening);
             await f.finish(tester, activity!);
             await tester.pump();
             expect(_paint(tester), isNot(contains('Safe prefix')));
@@ -954,11 +848,14 @@ void main() {
           }
           await f.finish(tester, terminal);
           await tester.pumpAndSettle();
-          final painted = _paint(tester);
-          expect(painted, isNot(contains(ModelScreenFixture.secret)));
-          expect(painted, isNot(contains('RAW_PROVIDER_CANARY')));
-          expect(painted, isNot(contains('REASONING_CANARY')));
-          expect(find.textContaining('RAW_PROVIDER_CANARY'), findsNothing);
+          for (final raw in [
+            ModelScreenFixture.secret,
+            'RAW_PROVIDER_CANARY',
+            'REASONING_CANARY',
+          ]) {
+            expect(_paint(tester), isNot(contains(raw)));
+            expect(find.textContaining(raw), findsNothing);
+          }
           expect(
             f.state.activeMessages.last.status,
             error ? 'error' : 'stopped',
@@ -1020,7 +917,6 @@ void main() {
         expect(
           find.byKey(const ValueKey('support_message_status_old')),
           findsNothing,
-          reason: 'Legacy complete appearance is unchanged.',
         );
         final scrollable = find
             .descendant(
@@ -1048,61 +944,42 @@ void main() {
 
   for (final width in [390.0, 1100.0]) {
     testWidgets(
-      'actual $width preview measured inset and quiet Stop remain hit-testable at 1.5 scale',
+      'actual $width direct Send and quiet Stop are hit-testable at 1.5 scale',
       (tester) async {
         tester.view.physicalSize = Size(width, 1000);
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
-        final f = ModelScreenFixture()
+        final f = ModelScreenFixture(confirm: false, oldBody: _visible)
           ..quiet = true
           ..response = '';
         await f.run(tester, () async {
           await tester.pumpWidget(f.host(scale: 1.5));
           await tester.pumpAndSettle();
-          await _openPreview(tester, f);
-          final list = find.byKey(
-            const ValueKey('support_prompt_preview_scroll'),
-          );
-          final sheet = find.byType(SheetView);
-          expect(sheet, findsOneWidget);
-          expect(
-            MediaQuery.paddingOf(tester.element(list)).top,
-            greaterThan(0),
-          );
-          expect(
-            tester.getRect(find.byKey(_cancel)).top,
-            greaterThanOrEqualTo(
-              tester
-                  .getRect(
-                    find.byKey(const ValueKey('support_prompt_preview_header')),
-                  )
-                  .bottom,
-            ),
-          );
-          expect(find.byKey(_cancel).hitTestable(), findsOneWidget);
-          _expectSheetControl(tester, find.byKey(_cancel), list);
-          _expectSheetControl(tester, find.byKey(_confirm), list);
-          expect(find.byKey(_confirm).hitTestable(), findsOneWidget);
-          await _confirmPreview(tester, f);
+          expect(find.byKey(_send).hitTestable(), findsOneWidget);
+          final original = await f.action(tester, () => f.bridge);
           final created = await f.signal(
             tester,
             () => f.adapterCreated.future,
             label: 'original $width geometry adapter',
           );
+          await f.action(tester, () async {
+            _draft(tester).text = 'Scaled direct question';
+            await tester.tap(find.byKey(_send));
+          });
           final adapter = await f.finish(tester, created);
           final listening = await f.signal(
             tester,
             () => adapter.responseListening,
-            label: 'actual $width geometry SSE subscription',
+            label: 'original $width geometry response subscription',
           );
           await f.finish(tester, listening);
           await tester.pump();
           expect(find.byKey(_stop).hitTestable(), findsOneWidget);
           final terminal = await f.signal(
             tester,
-            () => _phase(f, _isTerminal),
-            label: 'original $width geometry Stop terminal',
+            () => _phase(original, _isTerminal),
+            label: 'original $width geometry Stop completion',
           );
           await f.action(tester, () => tester.tap(find.byKey(_stop)));
           await f.finish(tester, terminal);
@@ -1150,8 +1027,6 @@ void main() {
         await f.finish(tester, priming);
         await f.action(tester, () {
           f.redaction.removeListener(observePriming);
-          // Read only the actual invalidated replacement in the real zone; the
-          // captured original drain/controller remain the assertions' owners.
           f.bridge;
         });
         final providers = await f.signal(

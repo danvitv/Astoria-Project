@@ -10,6 +10,7 @@ final class _SupportSessionTextReader {
     _OwnedSessionHistoryBoundary boundary,
     SecretRedactor Function() currentRedactor, {
     void Function()? checkpoint,
+    bool directConversation = false,
   }) async {
     final current = await _sessionBoundaryRow(
       _reader.db,
@@ -42,7 +43,7 @@ final class _SupportSessionTextReader {
           THEN 1 ELSE 0 END AS shape_valid,
         CASE WHEN created_at < ? OR (created_at = ? AND id < ?)
           THEN 1 ELSE 0 END AS before_current,
-        CASE WHEN status = 'complete' THEN 1 ELSE 0 END AS complete
+        CASE WHEN ${directConversation ? "role IN ('user', 'assistant') AND status IN ('complete', 'limited', 'stopped', 'error')" : "status = 'complete'"} THEN 1 ELSE 0 END AS complete
       FROM support_messages WHERE session_id = ?
       ORDER BY created_at ASC, id ASC
       LIMIT ${SupportTextContextRepo.maxSourceMessages + 1}
@@ -80,7 +81,12 @@ final class _SupportSessionTextReader {
     }
     final read = ids.isEmpty
         ? empty
-        : await _reader.read(boundary._sessionId, ids, checkpoint: checkpoint);
+        : await _reader.read(
+            boundary._sessionId,
+            ids,
+            checkpoint: checkpoint,
+            directConversation: directConversation,
+          );
     checkpoint?.call();
     return (
       _TextRead._session(read, [current, ...rows]),

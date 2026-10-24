@@ -9,6 +9,7 @@ final class _ModelConfiguration {
     this.policy,
     this.recipient,
     this.nativeSource,
+    this.directConversation,
   );
   final SupportAssistantSettings settings;
   final ApiConfig api;
@@ -16,6 +17,7 @@ final class _ModelConfiguration {
   final SupportPermissionPreferences policy;
   final SupportResolvedRecipient recipient;
   final NativePreparedSavedConnection? nativeSource;
+  final bool directConversation;
 
   static Future<_ModelConfiguration> read(
     _ModelReadOperation operation,
@@ -23,8 +25,10 @@ final class _ModelConfiguration {
     bool prime = false,
     void Function()? checkpoint,
     _ModelConfiguration? original,
+    bool directConversation = false,
   }) async {
     final s = operation.service;
+    directConversation = original?.directConversation ?? directConversation;
     // Capture BEFORE settings/API/prompt awaits. Admission retains the exact
     // original prepared source; it never mints a replacement authorization.
     final sources = s._nativeSources;
@@ -145,26 +149,36 @@ final class _ModelConfiguration {
                 recipient.recipient.nativeRoute)) {
       _refuse(SupportModelRefusal.unsupported);
     }
-    if (!runtime.recipientConfirmed ||
-        runtime.recipient is! SupportResolvedRecipient ||
-        !recipient.recipient.sameAs(policy.recipient) ||
-        !recipient.recipient.sameAs(
-          (runtime.recipient as SupportResolvedRecipient).recipient,
-        ) ||
-        !recipient.context.sameAs(runtime.recipientContext) ||
+    if ((!directConversation &&
+            (!runtime.recipientConfirmed ||
+                runtime.recipient is! SupportResolvedRecipient ||
+                !recipient.recipient.sameAs(policy.recipient) ||
+                !recipient.recipient.sameAs(
+                  (runtime.recipient as SupportResolvedRecipient).recipient,
+                ) ||
+                !recipient.context.sameAs(runtime.recipientContext))) ||
         !_samePolicy(policy, runtime.snapshot.preferences)) {
       _refuse(SupportModelRefusal.recipientRequired);
     }
     operation.check();
     if (!sourceCurrent()) _refuse(SupportModelRefusal.stale);
     checkpoint?.call();
-    return _ModelConfiguration(settings, api, key, policy, recipient, prepared);
+    return _ModelConfiguration(
+      settings,
+      api,
+      key,
+      policy,
+      recipient,
+      prepared,
+      directConversation,
+    );
   }
 
   bool sameAs(_ModelConfiguration other) =>
       api == other.api &&
       key == other.key &&
       identical(nativeSource, other.nativeSource) &&
+      directConversation == other.directConversation &&
       _sameSettings(settings, other.settings) &&
       _samePolicy(policy, other.policy) &&
       recipient.recipient.sameAs(other.recipient.recipient) &&
@@ -252,12 +266,16 @@ final class _ModelBinding {
     this.draftRevision,
     this.isEmitterCurrent,
     this.isDraftCurrent,
+    List<SupportModelConversationMessage>? visibleConversation,
   ) : sessionId = service._runtime.sessionId,
       lifetime = service._runtime.lifetime,
       owner = service._runtime.writeOwner,
       epoch = service._runtime.epoch,
       revision = service._revisions.revision,
-      redactor = service._redaction.redactor;
+      redactor = service._redaction.redactor,
+      visibleConversation = visibleConversation == null
+          ? null
+          : List.unmodifiable(visibleConversation);
   final SupportModelService service;
   final _ModelConfiguration configuration;
   final Object controller, uiLifetime;
@@ -265,6 +283,7 @@ final class _ModelBinding {
   final String sessionId;
   final bool Function() isEmitterCurrent, isDraftCurrent;
   final SecretRedactor redactor;
+  final List<SupportModelConversationMessage>? visibleConversation;
   SupportPermissionPreferences get policy => configuration.policy;
   SupportNativePermissionContext get nativeContext =>
       SupportNativePermissionContext(
@@ -292,11 +311,12 @@ final class _ModelBinding {
           service._revisions.revision == revision &&
           r.configurationStable() &&
           r.configurationRevision() == revision &&
-          r.recipientConfirmed &&
-          r.recipient is SupportResolvedRecipient &&
-          configuration.recipient.recipient.sameAs(
-            (r.recipient as SupportResolvedRecipient).recipient,
-          ) &&
+          (configuration.directConversation ||
+              (r.recipientConfirmed &&
+                  r.recipient is SupportResolvedRecipient &&
+                  configuration.recipient.recipient.sameAs(
+                    (r.recipient as SupportResolvedRecipient).recipient,
+                  ))) &&
           _samePolicy(policy, r.snapshot.preferences) &&
           (configuration.nativeSource?.isCurrent ?? true) &&
           identical(redactor, service._redaction.redactor);

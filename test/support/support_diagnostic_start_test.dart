@@ -3,168 +3,103 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:glaze_flutter/features/support_assistant/services/support_local_reply_service.dart';
-import 'package:glaze_flutter/features/support_assistant/state/support_native_provider.dart';
-import 'package:glaze_flutter/features/support_assistant/state/support_model_provider.dart';
-import 'package:glaze_flutter/features/support_assistant/widgets/support_composer_bar.dart';
-import 'package:glaze_flutter/features/support_assistant/widgets/support_model_prompt_preview_sheet.dart';
-import 'package:glaze_flutter/features/support_assistant/widgets/support_send_settings_snapshot.dart';
-import 'package:glaze_flutter/features/support_assistant/widgets/support_privacy_review_sheet.dart';
 import 'package:glaze_flutter/features/support_assistant/models/support_permission_preferences.dart';
 import 'package:glaze_flutter/features/support_assistant/models/support_workspace_models.dart';
+import 'package:glaze_flutter/features/support_assistant/services/support_local_reply_service.dart';
+import 'package:glaze_flutter/features/support_assistant/state/support_model_provider.dart';
+import 'package:glaze_flutter/features/support_assistant/state/support_native_provider.dart';
+import 'package:glaze_flutter/features/support_assistant/widgets/support_composer_bar.dart';
+import 'package:glaze_flutter/features/support_assistant/widgets/support_model_prompt_preview_sheet.dart';
+import 'package:glaze_flutter/features/support_assistant/widgets/support_privacy_review_sheet.dart';
 
 import 'helpers/support_model_screen_fixture.dart';
 
-Future<SupportModelRunView> _phase(
-  ModelScreenFixture f,
-  bool Function(SupportModelRunView) reached,
-) {
-  final original = f.bridge;
-  if (reached(original.view)) return Future.value(original.view);
-  final result = Completer<SupportModelRunView>();
+// Register on the ORIGINAL issuer before Send; a previous terminal state cannot
+// satisfy this turn and no replacement bridge is looked up after the await.
+Future<SupportModelRunView> _terminal(SupportModelUiBridge original) {
+  final reached = Completer<SupportModelRunView>();
   late final void Function() stop;
   stop = original.listen(() {
-    if (reached(original.view) && !result.isCompleted) {
+    if (!reached.isCompleted &&
+        original.view.phase == SupportModelPhase.settled &&
+        !original.view.busy) {
       stop();
-      result.complete(original.view);
+      reached.complete(original.view);
     }
   });
   addTearDown(stop);
-  return result.future;
+  return reached.future;
 }
 
 void main() {
-  for (final question in [
-    'Привет, расскажи о себе',
-    'Начнём диагностику, какую сессию разобрать?',
-  ]) {
-    testWidgets(
-      '$question opens exact native prompt without selecting game or sharing history',
-      (tester) async {
-        final f = ModelScreenFixture();
-        await f.run(tester, () async {
-          final p = f.container
-              .read(supportNativeConsentControllerProvider)
-              .runtime
-              .snapshot
-              .preferences!;
-          expect(p.scope?.gameSessionId, isNull);
-          expect(p.allows(SupportPermission.modelGameHistory), isFalse);
-          expect(p.allows(SupportPermission.modelSupportHistory), isFalse);
-          expect(p.allows(SupportPermission.readDiagnostics), isFalse);
-          expect(p.allows(SupportPermission.readSafeSettings), isFalse);
-          final signal = await f.signal(
-            tester,
-            () => _phase(f, (v) => v.preview != null),
-            label: 'original no-history send preview',
-          );
-          final draft = tester
-              .widget<SupportComposerBar>(find.byType(SupportComposerBar))
-              .controller;
-          await f.action(tester, () async {
-            draft.text = question;
-            await tester.tap(
-              find.byKey(const ValueKey('support_composer_send_btn')),
-            );
-          });
-          final view = await f.finish(tester, signal);
-          final preview = view.preview!;
-          expect(preview.gameMessages, 0);
-          expect(preview.supportMessages, 0);
-          expect(preview.messages.last.text, question);
-          expect(
-            preview.messages.map((m) => m.text).join(),
-            isNot(contains(ModelScreenFixture.excluded)),
-          );
-          expect(f.adapters, isEmpty);
-          await tester.pump();
-          final route = ModalRoute.of<bool>(
-            tester.element(find.byType(SupportModelPromptPreviewSheet)),
-          )!;
-          await tester.pump(
-            route.transitionDuration + const Duration(microseconds: 1),
-          );
-          final finished = await f.signal(
-            tester,
-            () => _phase(
-              f,
-              (v) => v.phase == SupportModelPhase.settled && !v.busy,
-            ),
-            label: 'original approved send drain',
-          );
-          await f.action(
-            tester,
-            () => tester.tap(
-              find.byKey(const ValueKey('support_prompt_preview_confirm')),
-            ),
-          );
-          await f.finish(tester, finished);
-          await tester.pumpAndSettle();
-          expect(f.adapters, hasLength(1));
-          expect(f.adapters.single.fetches, 1);
-          final body =
-              jsonDecode(f.adapters.single.upload!) as Map<String, dynamic>;
-          expect(
-            jsonEncode(body['messages']),
-            isNot(contains(ModelScreenFixture.excluded)),
-          );
-          expect(draft.text, isEmpty);
-          expect(f.state.settings.apiConfigId, f.settings.apiConfigId);
-          expect(
-            f.container
-                .read(supportNativeConsentControllerProvider)
-                .runtime
-                .snapshot
-                .preferences!
-                .scope
-                ?.gameSessionId,
-            isNull,
-          );
-        });
-      },
-    );
-  }
-
   testWidgets(
-    'unconfirmed greeting shows real safe snapshot, exact blocker and retained draft without wire',
+    'direct diagnostic question needs no game selection or diagnostic/history grants and makes one private request',
     (tester) async {
-      final f = ModelScreenFixture(confirm: false);
+      const question = 'Начнём диагностику, какую сессию разобрать?';
+      const visible = 'Safe visible local diagnostic conversation';
+      final f = ModelScreenFixture(confirm: false, oldBody: visible);
       await f.run(tester, () async {
+        final controller = f.container.read(
+          supportNativeConsentControllerProvider,
+        );
+        final originalPolicy = controller.runtime.snapshot.preferences!;
+        expect(originalPolicy.scope?.gameSessionId, isNull);
+        expect(controller.runtime.recipientConfirmed, isFalse);
+        for (final permission in [
+          SupportPermission.modelGameHistory,
+          SupportPermission.modelSupportHistory,
+          SupportPermission.readDiagnostics,
+          SupportPermission.readSafeSettings,
+        ]) {
+          expect(originalPolicy.allows(permission), isFalse);
+        }
+        final original = await f.action(tester, () => f.bridge);
+        final finished = await f.signal(
+          tester,
+          () => _terminal(original),
+          label: 'original direct diagnostic completion',
+        );
         final draft = tester
             .widget<SupportComposerBar>(find.byType(SupportComposerBar))
             .controller;
         await f.action(tester, () async {
-          draft.text = 'Привет, расскажи о себе';
+          draft.text = question;
           await tester.tap(
             find.byKey(const ValueKey('support_composer_send_btn')),
           );
         });
-        for (
-          var turn = 0;
-          turn < 100 &&
-              find.byType(SupportPrivacyReviewSheet).evaluate().isEmpty;
-          turn++
-        ) {
-          await tester.pump();
-          await f.action(tester, () => Future<void>.delayed(Duration.zero));
+        final result = await f.finish(tester, finished);
+        await tester.pumpAndSettle();
+        expect(result.accepted, isTrue);
+        expect(result.saved, isTrue);
+        expect(f.adapters, hasLength(1));
+        final adapter = f.adapters.single;
+        expect(adapter.fetches, 1);
+        expect(adapter.options!.method, 'POST');
+        expect(adapter.options!.uri.toString(), f.api.endpoint);
+        final body = jsonDecode(adapter.upload!) as Map<String, dynamic>;
+        final messages = (body['messages'] as List)
+            .cast<Map<String, dynamic>>();
+        expect(messages.where((m) => m['role'] != 'system'), [
+          {'role': 'assistant', 'content': visible},
+          {'role': 'user', 'content': question},
+        ]);
+        for (final excluded in [
+          ModelScreenFixture.excluded,
+          ModelScreenFixture.secret,
+          ModelScreenFixture.key,
+          'SYNTHETIC_STALE_VAULT_KEY',
+        ]) {
+          expect(adapter.upload, isNot(contains(excluded)));
         }
-        expect(find.byType(SupportPrivacyReviewSheet), findsOneWidget);
-        final snapshot = tester.widget<SupportSendSettingsSnapshot>(
-          find.byType(SupportSendSettingsSnapshot),
-        );
-        expect(snapshot.settings.maxTokens, 512);
-        expect(snapshot.settings.temperature, 0.25);
-        expect(snapshot.settings.hasConfiguredModel, isTrue);
-        expect(snapshot.recipientConfirmed, isFalse);
-        expect(
-          snapshot.reason,
-          contains('получатель запроса ещё не подтверждён'),
-        );
-        expect(find.textContaining(ModelScreenFixture.key), findsNothing);
-        expect(draft.text, 'Привет, расскажи о себе');
-        expect(f.adapters, isEmpty);
+        expect(find.byType(SupportPrivacyReviewSheet), findsNothing);
         expect(find.byType(SupportModelPromptPreviewSheet), findsNothing);
-        expect(f.state.activeMessages.map((m) => m.id), ['old']);
+        expect(draft.text, isEmpty);
+        expect(f.state.settings.apiConfigId, f.settings.apiConfigId);
+        expect(controller.runtime.recipientConfirmed, isFalse);
+        final currentPolicy = controller.runtime.snapshot.preferences!;
+        expect(currentPolicy.scope?.gameSessionId, isNull);
+        expect(currentPolicy.grants, originalPolicy.grants);
       });
     },
   );

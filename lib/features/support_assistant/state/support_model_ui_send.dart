@@ -10,12 +10,14 @@ final class SupportModelUiEmitter {
     this._isEmitterCurrent,
     this._workspaceCapture,
     this._runtimeCurrent,
+    this._visibleConversation,
   );
   final SupportModelUiBridge _bridge;
   final Object _controller, _uiLifetime;
   final bool Function() _isEmitterCurrent;
   final SupportModelWorkspaceCapture? _workspaceCapture;
   final bool Function() _runtimeCurrent;
+  final List<SupportModelConversationMessage> _visibleConversation;
   bool _retired = false;
   SupportModelUiSend? _lastSend;
   bool get isCurrent => _current;

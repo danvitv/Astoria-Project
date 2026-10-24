@@ -9,6 +9,7 @@ final class _SupportTextReader {
     String sessionId,
     List<String> ids, {
     void Function()? checkpoint,
+    bool directConversation = false,
   }) async {
     checkpoint?.call();
     final header = await db
@@ -67,7 +68,7 @@ final class _SupportTextReader {
       WITH ordered AS (
         SELECT id,
                CASE WHEN role IN ('user', 'assistant', 'system') THEN role END AS role,
-               CASE WHEN status = 'complete' THEN status END AS status,
+               CASE WHEN status IN (${directConversation ? "'complete', 'limited', 'stopped', 'error'" : "'complete'"}) THEN status END AS status,
                created_at, rowid AS native_identity,
                ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) - 1 AS native_order
         FROM support_messages WHERE session_id = ?
@@ -88,7 +89,10 @@ final class _SupportTextReader {
       final role = row.readNullable<String>('role');
       if (row.read<String>('id') != ids[i] ||
           !const ['user', 'assistant', 'system'].contains(role) ||
-          row.readNullable<String>('status') != 'complete' ||
+          !(directConversation
+                  ? const ['complete', 'limited', 'stopped', 'error']
+                  : const ['complete'])
+              .contains(row.readNullable<String>('status')) ||
           row.read<int>('run_valid') != 1 ||
           row.read<int>('created_at') < 0 ||
           row.read<int>('created_at') > 8640000000000) {
