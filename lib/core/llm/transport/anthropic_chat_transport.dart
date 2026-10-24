@@ -209,7 +209,10 @@ class AnthropicChatTransport implements ChatTransport {
     final body = <String, dynamic>{
       'model': request.model,
       'messages': messages,
-      'max_tokens': request.maxTokens > 0 ? request.maxTokens : 4096,
+      // -1 explicitly omits the output limit, even if the provider requires it.
+      // Preserve the legacy fallback for other non-positive callers.
+      if (request.maxTokens != -1)
+        'max_tokens': request.maxTokens > 0 ? request.maxTokens : 4096,
       'stream': request.stream,
     };
     if (systemParts.isNotEmpty) body['system'] = systemParts;
@@ -242,7 +245,8 @@ class AnthropicChatTransport implements ChatTransport {
     // 5. Thinking config.
     if (useThinking) {
       final budget = calculateClaudeBudgetTokens(
-        maxTokens: body['max_tokens'] as int,
+        // This fallback sizes thinking only; it must not invent an output limit.
+        maxTokens: body['max_tokens'] as int? ?? 4096,
         reasoningEffort: request.omitReasoningEffort
             ? 'auto'
             : request.reasoningEffort ?? 'auto',
@@ -251,8 +255,8 @@ class AnthropicChatTransport implements ChatTransport {
       );
       if (budget is int) {
         // Traditional thinking: max_tokens must leave room for response.
-        final currentMax = body['max_tokens'] as int;
-        if (currentMax <= _minThinkResponseTokens) {
+        final currentMax = body['max_tokens'] as int?;
+        if (currentMax != null && currentMax <= _minThinkResponseTokens) {
           body['max_tokens'] = currentMax + _minThinkResponseTokens;
         }
         body['thinking'] = {'type': 'enabled', 'budget_tokens': budget};

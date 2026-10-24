@@ -8,6 +8,7 @@ import 'credential_route.dart';
 import 'credential_slot.dart';
 import 'credential_vault.dart';
 import 'secret_redaction_coordinator.dart';
+import 'provider_models_endpoint.dart';
 
 export 'credential_metadata.dart';
 export 'credential_route.dart';

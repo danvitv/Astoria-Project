@@ -5,6 +5,7 @@ import '../credentials/credential_vault.dart';
 import '../credentials/native_provider_credentials.dart';
 import '../credentials/secret_redaction_coordinator.dart';
 import '../llm/native_saved_connection_source.dart';
+import '../llm/provider_model_catalog.dart';
 import '../llm/transport/native_provider_transport.dart';
 import '../models/api_config.dart';
 import 'native_provider_mutation_bridge.dart';
@@ -64,6 +65,14 @@ final class NativeProviderRuntime {
       currentRedactor: () => redaction.redactor,
       adapterFactory: adapterFactory,
     );
+    models = ProviderModelCatalog(
+      readSavedConnection: readSavedConnection,
+      credentials: credentials,
+      auth: auth,
+      mutations: mutations,
+      redaction: redaction,
+      adapterFactory: adapterFactory,
+    );
     mutations.addFenceListener(_onNativeFence);
   }
 
@@ -79,6 +88,7 @@ final class NativeProviderRuntime {
   late final NativeProviderOrdinaryMutationGuard ordinaryMutations;
   late final NativeSavedConnectionSourceResolver sources;
   late final NativeProviderTransportFactory transports;
+  late final ProviderModelCatalog models;
   void Function()? _finishNativeRevision;
   bool _openingNativeRevision = false;
   bool _disposed = false;

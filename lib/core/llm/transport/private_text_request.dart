@@ -94,8 +94,8 @@ final class PrivateTextRequestPlan {
         input.messages.isEmpty ||
         input.messages.length > PrivateTextLimits.messages ||
         input.messages.last['role'] != 'user' ||
-        input.maxTokens < 1 ||
-        input.maxTokens > 65536 ||
+        (input.maxTokens != -1 &&
+            (input.maxTokens < 1 || input.maxTokens > 0x7fffffff)) ||
         !input.temperature.isFinite ||
         !input.topP.isFinite ||
         !input.frequencyPenalty.isFinite ||

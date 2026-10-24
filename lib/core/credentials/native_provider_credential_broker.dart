@@ -13,14 +13,30 @@ final class NativeProviderDispatchBinding {
     this.route,
     this.connection,
     this.purpose,
-    this._isCurrent,
-  );
+    this._isCurrent, {
+    this._modelCatalog = false,
+  });
   final CredentialRoute route;
   final NativeProviderConnectionIdentity connection;
   final NativeProviderPurpose purpose;
   final bool Function() _isCurrent;
+  final bool _modelCatalog;
   bool get isCurrent => _current(_isCurrent);
-  String get method => 'POST';
+  String get method => _modelCatalog ? 'GET' : 'POST';
+
+  Uri get modelsEndpoint => providerModelsEndpoint(
+    Uri.parse(connection.endpoint),
+    connection.useResponsesApi ? 'openai_responses' : connection.protocol,
+  );
+
+  /// Catalog custody cannot be reused for generation or another destination.
+  void requireModelListRequest({required Uri uri, required String method}) {
+    _requireCurrent(() => isCurrent);
+    if (!_modelCatalog || method != 'GET' || uri != modelsEndpoint) {
+      throw const NativeProviderException(NativeProviderFailure.denied);
+    }
+    _requireCurrent(() => isCurrent);
+  }
 
   /// URI must be the actual final SECRET-FREE URI. Gemini native transport uses
   /// x-goog-api-key auth, never a key query. Its only fixed query is alt=sse.
@@ -34,6 +50,9 @@ final class NativeProviderDispatchBinding {
     required bool stream,
   }) {
     _requireCurrent(() => isCurrent);
+    if (_modelCatalog) {
+      throw const NativeProviderException(NativeProviderFailure.denied);
+    }
     var expected = route.endpoint;
     if (route.protocol == CredentialProtocol.gemini) {
       final action = stream ? ':streamGenerateContent' : ':generateContent';
@@ -95,6 +114,49 @@ final class NativeProviderCredentialBroker {
     isCurrent: () => _usable(original, isCurrent),
     transport: _transport,
   );
+
+  /// A native model-picker gesture permits catalog metadata, not a prompt. Use
+  /// the key only at its unchanged approved server, independent of generation
+  /// purpose; the resulting binding is GET-only and never leaves native code.
+  Future<void> dispatchModelList(
+    SavedConnectionAuth original, {
+    required bool Function() isCurrent,
+  }) async {
+    final owner = _credentials;
+    bool current() =>
+        _current(isCurrent) &&
+        owner._mutations.isCurrent(original._stamp) &&
+        !owner._disabled.contains(original.connection.id);
+    _requireCurrent(current);
+    final record = await owner._serialize(
+      () => owner._readRecord(original.connection.id),
+    );
+    _requireCurrent(current);
+    final row = owner._mutations._row(original.connection);
+    if (record == null ||
+        !record.active ||
+        record.connection != original.connection ||
+        record.purposes.isEmpty ||
+        row == null ||
+        row.conflicting) {
+      throw const NativeProviderException(NativeProviderFailure.denied);
+    }
+    final binding = NativeProviderDispatchBinding._(
+      record.routes.first,
+      original.connection,
+      record.purposes.first,
+      current,
+      modelCatalog: true,
+    );
+    try {
+      _requireCurrent(current);
+      await _transport(binding, record.secret);
+      _requireCurrent(current);
+    } catch (_) {
+      _requireCurrent(current);
+      throw const NativeProviderException(NativeProviderFailure.unavailable);
+    }
+  }
 
   bool _usable(
     NativeProviderCredentialObservation original,

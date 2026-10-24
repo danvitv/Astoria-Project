@@ -10,8 +10,8 @@ final class _NativeWirePlan {
     SecretRedactor redactor,
   ) {
     _nativeRequire(
-      input.maxTokens > 0 &&
-          input.maxTokens <= 65536 &&
+      (input.maxTokens == -1 ||
+              (input.maxTokens > 0 && input.maxTokens <= 0x7fffffff)) &&
           input.temperature.isFinite &&
           input.topP.isFinite &&
           input.frequencyPenalty.isFinite &&
