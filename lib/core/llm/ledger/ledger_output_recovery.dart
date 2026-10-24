@@ -4,6 +4,7 @@ import '../../models/agent_operation_record.dart';
 import '../../models/knowledge_cleanup.dart';
 import '../../models/studio_ledger_export.dart';
 import '../json_repair.dart';
+import 'ledger_clock_normalization.dart';
 
 class LedgerOutputRecovery {
   const LedgerOutputRecovery();
@@ -69,7 +70,11 @@ UNTRUSTED_INPUT_BASE64_END''';
     for (final fragment in fragments) {
       try {
         if (fragment.containsKey('op') && fragment.containsKey('key')) {
-          sourceOps.add(LedgerOp.fromJson(fragment));
+          // Match the parser's numeric clock spelling, but only after strict
+          // source decoding; malformed field types are still not evidence.
+          sourceOps.add(
+            LedgerClockNormalization.normalizeOp(LedgerOp.fromJson(fragment)),
+          );
         } else if (fragment.containsKey('knowerKey') &&
             fragment.containsKey('subjectKey') &&
             fragment.containsKey('predicate') &&

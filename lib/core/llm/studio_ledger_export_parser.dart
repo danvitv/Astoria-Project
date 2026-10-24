@@ -6,6 +6,7 @@ import 'json_repair.dart';
 import '../models/character_knowledge_fact.dart';
 import '../models/studio_ledger_export.dart';
 import 'game_time.dart';
+import 'ledger/ledger_clock_normalization.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // StudioLedgerExportParser
@@ -200,7 +201,9 @@ class StudioLedgerExportParser {
         rejectedOps.add('${op.op} ${op.key}: $reason');
         debugPrint('[StudioLedger] rejected op ${op.op} ${op.key}: $reason');
       } else {
-        validatedOps.add(op);
+        validatedOps.add(
+          _isClockKey(op.key) ? LedgerClockNormalization.normalizeOp(op) : op,
+        );
       }
     }
 
@@ -486,10 +489,16 @@ class StudioLedgerExportParser {
           'eventState': '',
         };
       }
+      final key = _stringValue(map['key']);
+      final rawValue = map['value'];
+      // Diagnostic coercion must not turn a clock array/object into a number.
+      final value = _isClockKey(key) && rawValue is! String && rawValue is! num
+          ? ''
+          : _stringValue(rawValue);
       return {
         'op': _stringValue(map['op']),
-        'key': _stringValue(map['key']),
-        'value': _stringValue(map['value']),
+        'key': key,
+        'value': value,
         'evidence': _stringValue(map['evidence']),
         'eventState': _stringValue(map['eventState']),
       };
@@ -663,6 +672,7 @@ class StudioLedgerExportParser {
 
   /// The model estimates elapsed time. This guard validates the resulting
   /// clock tuple only; it does not require lexical evidence or cap the advance.
+  /// Valid numeric op values are canonicalized before reaching this guard.
   String? _validateClockPatch(List<LedgerOp> ops, LedgerClockPolicy policy) {
     if (ops.isEmpty) return null;
     if (policy.mode == LedgerClockWriteMode.rejectAll) {

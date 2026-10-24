@@ -1275,11 +1275,10 @@ Ledger text.
       ('world:time', '09:59', 'cannot move backward'),
       ('world:time', '00:01', 'cannot move backward'),
       ('world:time', '25:00', 'canonical 24-hour HH:MM'),
-      ('world:time', '10:5', 'canonical 24-hour HH:MM'),
       ('world:date', '31.02.2026', 'canonical DD.MM.YYYY'),
       ('world:date', '02.01.2026', 'same number of days'),
       ('world:day', '-1', 'non-negative integer'),
-      ('world:day', '01', 'non-negative integer'),
+      ('world:day', '01', 'same number of days'),
       ('world:day', '1', 'same number of days'),
     ]) {
       test('rejects invalid or inconsistent $key=$value', () {
@@ -1296,6 +1295,20 @@ Ledger text.
         expect(result.rejectedOps.single, contains(reason));
       });
     }
+
+    test('accepts numeric time formatting and returns a canonical op', () {
+      final result = parser.parse(
+        '<glaze_memory_export>{"ops":['
+        '{"op":"set","key":"world:time","value":"10:5"},'
+        '{"op":"set","key":"world:location","value":"gate"}'
+        ']}</glaze_memory_export>',
+        clockPolicy: const LedgerClockPolicy.turn(
+          current: GameTimeState(time: '10:00', date: '01.01.2026', day: 0),
+        ),
+      );
+      expect(result.export!.ops.map((op) => op.value), ['10:05', 'gate']);
+      expect(result.rejectedOps, isEmpty);
+    });
 
     test('rejects clock deletion and duplicate components atomically', () {
       for (final clockOps in [
