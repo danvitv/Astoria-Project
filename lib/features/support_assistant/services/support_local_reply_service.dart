@@ -12,6 +12,11 @@ class SupportLocalReplyService {
     if (targets.contains(SupportGuidanceTarget.themeSetup)) {
       return 'theme_setup';
     }
+    if (RegExp(
+      r'диагност|diagnos|последн[а-я]* сесси|recent sessions',
+    ).hasMatch(lower)) {
+      return 'diagnostics';
+    }
     if (targets.contains(SupportGuidanceTarget.providerSetup)) {
       return 'provider_setup';
     }
@@ -41,6 +46,15 @@ class SupportLocalReplyService {
     final targets = _guidance.targetsFor(text: text, topic: topic);
     String body;
     switch (topic) {
+      case 'diagnostics':
+        body =
+            'Можно начать диагностику без выбора игровой сессии. '
+            'Вот список твоих последних сессий — какую хочешь разобрать? '
+            'Открой список ниже. Сообщения не читались; выбор сессии '
+            'сам по себе не разрешает чтение или передачу истории. $disclaimer';
+        cards.add(
+          const SupportGuidanceCard(target: SupportGuidanceTarget.gameSession),
+        );
       case 'theme_setup':
         body =
             'Нужные область и доступ можно рассмотреть прямо здесь. Затем нативный процесс покажет точный план темы для подтверждения. $disclaimer';

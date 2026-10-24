@@ -103,10 +103,13 @@ class _GuidanceSheetState extends ConsumerState<SupportGuidanceSheet> {
               ? const Center(
                   child: Text('Сессия изменилась. Предложение устарело.'),
                 )
-              : sessionSource != null
+              : sessionSource != null ||
+                    target == SupportGuidanceTarget.recipient
               ? SingleChildScrollView(
                   child: SupportPrivacyGroup(
                     initialSessionSource: sessionSource,
+                    initialRecipientReview:
+                        target == SupportGuidanceTarget.recipient,
                   ),
                 )
               : SupportSettingsPanel(

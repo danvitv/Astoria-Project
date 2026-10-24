@@ -19,6 +19,7 @@ import 'widgets/support_theme_entry.dart';
 import 'widgets/support_provider_entry.dart';
 import 'widgets/support_guidance_sheet.dart';
 import 'widgets/support_card_view.dart';
+import 'widgets/support_send_settings_snapshot.dart';
 import 'services/support_guidance_planner.dart';
 import 'models/support_permission_scope.dart';
 import 'state/support_native_provider.dart';
@@ -61,6 +62,10 @@ class _SupportAssistantScreenState
   List<SupportGuidanceTarget> _guidance = const [];
   SupportComposerDraft? _guidanceDraft;
   String? _guidanceSession;
+  Object? _guidanceController;
+  int? _guidanceLifetime;
+  bool _guidancePersistent = false, _guidanceBlocking = true;
+  bool _showSendSnapshot = false;
   bool _sheetOpen = false;
 
   @override
@@ -76,14 +81,25 @@ class _SupportAssistantScreenState
 
   void _publishGuidance(
     List<SupportGuidanceTarget> targets,
-    SupportComposerDraft draft,
-    String session,
-  ) {
+    SupportComposerDraft? draft,
+    String session, {
+    bool blocking = true,
+  }) {
     setState(() {
       _guidance = targets;
       _guidanceDraft = draft;
       _guidanceSession = session;
+      final controller = ref.read(supportNativeConsentControllerProvider);
+      _guidanceController = controller;
+      _guidanceLifetime = controller.runtime.lifetime;
+      _guidancePersistent = draft == null;
+      _guidanceBlocking = blocking;
+      _showSendSnapshot = true;
     });
+  }
+
+  void _retainGuidance() {
+    setState(() => _guidancePersistent = true);
   }
 
   @override
@@ -204,6 +220,23 @@ class _SupportAssistantScreenState
           context,
           'Memory Books настраиваются в нужной ролевой сессии. Переход к ним из ассистента пока недоступен; настройки не изменены.',
         );
+      case 'connection_diagnostics':
+      case 'diagnostics':
+        final workspace = ref.read(supportWorkspaceProvider);
+        if (!workspace.settingsAvailable ||
+            workspace.activeSessionId.isEmpty ||
+            workspace.isBusy ||
+            _modelUi.active != null) {
+          return;
+        }
+        // A native start button is not a fabricated user message or a data grant.
+        // Show the current snapshot/catalog invitation without writing history.
+        _publishGuidance(
+          const [SupportGuidanceTarget.gameSession],
+          null,
+          workspace.activeSessionId,
+          blocking: false,
+        );
       default:
         GlazeToast.show(context, 'Исполнитель этого действия пока недоступен.');
     }
@@ -323,9 +356,10 @@ class _SupportAssistantScreenState
                       'подтверждение. Подготовка профиля провайдера и отдельный '
                       'защищённый ввод ключа доступны в нативном окне провайдера; '
                       'они не выбирают активное подключение и не проверяют провайдера. '
-                      'Memory, инструменты, DCP, '
-                      'диагностика и экспорт отчётов '
-                      'пока недоступны. Локальная помощь — отдельно, без сети.',
+                      'Диагностику можно обсудить без выбора игровой сессии. '
+                      'Автоматический сбор диагностических данных, Memory, '
+                      'инструменты, DCP и экспорт отчётов пока недоступны. '
+                      'Локальная помощь — отдельно, без сети.',
                       style: TextStyle(fontSize: 12),
                     ),
                   ),

@@ -9,11 +9,13 @@ import '../../../shared/widgets/glaze_switch.dart';
 import '../../../shared/widgets/menu_group.dart';
 import '../models/support_native_view.dart';
 import '../models/support_permission_preferences.dart';
+import '../models/support_permission_scope.dart';
 import '../models/support_recipient_resolution.dart';
 import '../services/support_native_consent_controller.dart';
 import '../state/support_native_provider.dart';
 import 'support_session_scope_sheet.dart';
 import 'support_privacy_review_sheet.dart';
+import 'support_permission_help_sheet.dart';
 
 typedef _PrivacyAction =
     Future<bool?> Function(
@@ -29,9 +31,11 @@ class SupportPrivacyGroup extends ConsumerStatefulWidget {
     super.key,
     this.focusedPermission,
     this.initialSessionSource,
+    this.initialRecipientReview = false,
   });
   final SupportPermission? focusedPermission;
   final SupportConsentSelectionSource? initialSessionSource;
+  final bool initialRecipientReview;
   @override
   ConsumerState<SupportPrivacyGroup> createState() => _PrivacyGroupState();
 }
@@ -46,6 +50,7 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
   String? _failureSession;
   int? _failureLifetime;
   bool _initialSessionOpened = false;
+  bool _initialRecipientOpened = false;
 
   @override
   void initState() {
@@ -81,6 +86,22 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
     super.dispose();
   }
 
+  bool _canRunDisplayed(
+    SupportNativeConsentController controller,
+    SupportNativeDisplayedIntent? displayedIntent,
+    Object panelToken,
+  ) {
+    if (_busy || !mounted || !identical(panelToken, _panelToken)) return false;
+    final route = ModalRoute.of(context);
+    return route?.isActive != false &&
+        route?.animation?.status != AnimationStatus.reverse &&
+        identical(
+          controller,
+          ref.read(supportNativeConsentControllerProvider),
+        ) &&
+        controller.isDisplayedIntentCurrent(displayedIntent);
+  }
+
   Future<void> _run(
     SupportNativeConsentController controller,
     SupportNativeDisplayedIntent? displayedIntent,
@@ -88,16 +109,9 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
     _PrivacyAction action, {
     bool local = false,
   }) async {
-    if (_busy || !mounted || !identical(panelToken, _panelToken)) return;
     // The controller AND opaque intent come from the emitted view. Reading the
     // provider here only rejects replacement; it must never rebind old values.
-    if (!identical(
-          controller,
-          ref.read(supportNativeConsentControllerProvider),
-        ) ||
-        !controller.isDisplayedIntentCurrent(displayedIntent)) {
-      return;
-    }
+    if (!_canRunDisplayed(controller, displayedIntent, panelToken)) return;
     // Capture every dependency before the first await; never use Ref afterwards.
     final runtime = controller.runtime;
     final session = runtime.sessionId, lifetime = runtime.lifetime;
@@ -228,6 +242,94 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
     });
   }
 
+  void _help(
+    SupportNativeConsentController controller,
+    SupportNativeView view,
+    Object panelToken,
+    SupportPermission right,
+    _RunDisplayed run,
+    _RunDisplayed runLocal,
+    SupportConsentSelectionRepo repo,
+  ) {
+    if (!_canRunDisplayed(controller, view.displayedIntent, panelToken) ||
+        !controller.runtime.snapshot.isAvailable) {
+      return;
+    }
+    final help = SupportPermissionHelp.forRight(
+      right,
+      controller.runtime.snapshot.preferences!,
+      needsRecipientConfirmation: !controller.runtime.recipientConfirmed,
+    );
+    switch (help) {
+      case SupportPermissionHelp.gameHistory:
+        _history(runLocal, repo, SupportConsentSelectionSource.roleplay);
+      case SupportPermissionHelp.supportHistory:
+        _history(runLocal, repo, SupportConsentSelectionSource.support);
+      case SupportPermissionHelp.recipient:
+        _review(run);
+      case SupportPermissionHelp.safeSettings:
+      case SupportPermissionHelp.connections:
+        runLocal((c, review, current) async {
+          if (!current()) return false;
+          final category = await SupportPermissionHelpSheet.show(
+            context,
+            help: help,
+            runtime: c.runtime,
+            isCurrent: current,
+          );
+          if (!current()) return false;
+          return switch (category) {
+            SupportSafeCategory.theme => c.selectTheme(review, true),
+            SupportSafeCategory.connections => c.selectConnections(
+              review,
+              true,
+            ),
+            _ => null,
+          };
+        });
+      default:
+        _explain(controller, view.displayedIntent, panelToken, help);
+    }
+  }
+
+  Future<void> _explain(
+    SupportNativeConsentController controller,
+    SupportNativeDisplayedIntent? displayedIntent,
+    Object panelToken,
+    SupportPermissionHelp help,
+  ) async {
+    // Fixed unsupported explanations are UI only: do not prepare a review,
+    // refresh SQL or resolve a recipient just to say a loader is absent.
+    if (!_canRunDisplayed(controller, displayedIntent, panelToken)) return;
+    final runtime = controller.runtime;
+    final owner = runtime.writeOwner, lifetime = runtime.lifetime;
+    final session = runtime.sessionId;
+    final operation = ++_operation;
+    bool ownsPanel() =>
+        mounted &&
+        operation == _operation &&
+        identical(panelToken, _panelToken) &&
+        identical(controller, _controller);
+    bool current() =>
+        ownsPanel() &&
+        runtime.alive &&
+        runtime.sessionId == session &&
+        runtime.lifetime == lifetime &&
+        runtime.writeOwner == owner &&
+        controller.isDisplayedIntentCurrent(displayedIntent);
+    setState(() => _busy = true);
+    try {
+      await SupportPermissionHelpSheet.show(
+        context,
+        help: help,
+        runtime: runtime,
+        isCurrent: current,
+      );
+    } finally {
+      if (ownsPanel()) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Consumer(
     builder: (context, ref, _) => _contents(
@@ -278,6 +380,16 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
         if (mounted && identical(panelToken, _panelToken)) {
           _history(runLocal, repo, initial);
         }
+      });
+    }
+    if (!_initialRecipientOpened &&
+        widget.initialRecipientReview &&
+        available &&
+        !busy) {
+      _initialRecipientOpened = true;
+      // The recipient card gesture opens review directly, never confirms it.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && identical(panelToken, _panelToken)) _review(run);
       });
     }
     return MenuCollapsibleSection(
@@ -393,6 +505,25 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
                       view.rights.firstWhere((v) => v.right == right),
                       busy,
                       _localRight(right) ? runLocal : run,
+                      !available
+                          ? null
+                          : () => _help(
+                              controller,
+                              view,
+                              panelToken,
+                              right,
+                              run,
+                              runLocal,
+                              repo,
+                            ),
+                      controller.runtime.snapshot.isAvailable
+                          ? SupportPermissionHelp.forRight(
+                              right,
+                              controller.runtime.snapshot.preferences!,
+                              needsRecipientConfirmation:
+                                  view.needsRecipientConfirmation,
+                            )
+                          : null,
                     ),
               ],
             ),
@@ -427,24 +558,33 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
     );
   }
 
-  Widget _right(SupportNativeRightView right, bool busy, _RunDisplayed run) =>
-      _Toggle(
-        key: ValueKey('support_privacy_${right.right.name}'),
-        label: 'support_privacy_right_${right.right.name}'.tr(),
-        description:
-            (!right.available && !right.enabled
-                    ? 'support_privacy_right_unavailable'
-                    : 'support_privacy_prerequisite')
-                .tr(),
-        value: right.enabled,
-        onChanged: busy || (!right.available && !right.enabled)
-            ? null
-            : (enabled) => run(
-                (c, r, current) => current()
-                    ? c.setGrant(r, right.right, enabled)
-                    : Future.value(false),
-              ),
-      );
+  Widget _right(
+    SupportNativeRightView right,
+    bool busy,
+    _RunDisplayed run,
+    VoidCallback? onBlockedTap,
+    SupportPermissionHelp? help,
+  ) => _Toggle(
+    key: ValueKey('support_privacy_${right.right.name}'),
+    label: 'support_privacy_right_${right.right.name}'.tr(),
+    description: !right.available && !right.enabled && help != null
+        ? help.description
+        : (!right.available && !right.enabled
+                  ? 'support_privacy_right_unavailable'
+                  : 'support_privacy_prerequisite')
+              .tr(),
+    value: right.enabled,
+    onBlockedTap: !busy && !right.available && !right.enabled
+        ? onBlockedTap
+        : null,
+    onChanged: busy || (!right.available && !right.enabled)
+        ? null
+        : (enabled) => run(
+            (c, r, current) => current()
+                ? c.setGrant(r, right.right, enabled)
+                : Future.value(false),
+          ),
+  );
 
   static String _availabilityKey(SupportPermissionAvailability value) =>
       switch (value) {
@@ -496,8 +636,8 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
   ];
 }
 
-// MenuSwitchItem has a non-null callback. GlazeSwitch directly supplies a real
-// disabled control without an extra inclusion switch or a misleading no-op.
+// Blocked rights keep a disabled switch. Its hit area and the row can open a
+// prerequisite review without pretending that the switch changed value.
 class _Toggle extends StatelessWidget {
   const _Toggle({
     super.key,
@@ -505,13 +645,15 @@ class _Toggle extends StatelessWidget {
     required this.description,
     required this.value,
     required this.onChanged,
+    this.onBlockedTap,
   });
   final String label, description;
   final bool value;
   final ValueChanged<bool>? onChanged;
+  final VoidCallback? onBlockedTap;
   @override
   Widget build(BuildContext context) => InkWell(
-    onTap: onChanged == null ? null : () => onChanged!(!value),
+    onTap: onChanged == null ? onBlockedTap : () => onChanged!(!value),
     child: Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -522,7 +664,14 @@ class _Toggle extends StatelessWidget {
           Text(description, style: Theme.of(context).textTheme.bodySmall),
           Align(
             alignment: Alignment.centerRight,
-            child: GlazeSwitch(value: value, onChanged: onChanged),
+            child: onBlockedTap == null
+                ? GlazeSwitch(value: value, onChanged: onChanged)
+                : InkWell(
+                    onTap: onBlockedTap,
+                    child: IgnorePointer(
+                      child: GlazeSwitch(value: value, onChanged: null),
+                    ),
+                  ),
           ),
         ],
       ),

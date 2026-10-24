@@ -630,12 +630,19 @@ void _narrowRoleplayReads(
       '\$.reasoning',
       '\$.swipes',
       '\$.imagePath',
-      'session_vars_json',
       'draft',
       'avatar_path',
       'description',
     ]) {
       expect(sql, isNot(contains(forbidden.toLowerCase())));
+    }
+    if (sessions) {
+      // Only the ordinary picker's branch timestamp is extracted for ordering.
+      expect(sql, contains(r'$.branchedat'));
+      expect(sql, isNot(contains(r'$.sessionname')));
+      expect(sql, isNot(contains('select session_vars_json')));
+    } else {
+      expect(sql, isNot(contains('session_vars_json')));
     }
     expect(read.returnedRows!, lessThanOrEqualTo(sessions ? 51 : 2000));
     if (target != null) {

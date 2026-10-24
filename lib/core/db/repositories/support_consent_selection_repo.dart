@@ -6,6 +6,7 @@ import '../app_db.dart';
 import 'support_repo.dart';
 
 part 'support_consent_selection/roleplay_selection_projection.dart';
+part 'support_consent_selection/roleplay_session_catalog.dart';
 part 'support_consent_selection/support_selection_projection.dart';
 part 'support_consent_selection/selection_projection_values.dart';
 part 'support_consent_selection/session_metadata_projection.dart';

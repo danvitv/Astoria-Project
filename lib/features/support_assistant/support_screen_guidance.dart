@@ -60,7 +60,12 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
           };
         })
         .toList(growable: false);
+    final diagnostics = RegExp(
+      r'диагност|diagnos|последн[а-я]* сесси|recent sessions',
+      caseSensitive: false,
+    ).hasMatch(draft.text);
     final needsModel =
+        diagnostics ||
         requested.isEmpty ||
         requested.any(
           (target) => switch (target) {
@@ -75,16 +80,6 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
           },
         );
     final ordered = <SupportGuidanceTarget>{
-      if (needsModel && emitter != null) ...[
-        if (scope?.safeCategories.contains(SupportSafeCategory.connections) !=
-            true)
-          SupportGuidanceTarget.connectionsScope,
-        if (policy?.allows(
-              SupportGuidanceTarget.readSafeSettings.permission!,
-            ) !=
-            true)
-          SupportGuidanceTarget.readSafeSettings,
-      ],
       ...needed.where(
         (target) =>
             target == SupportGuidanceTarget.gameSession ||
@@ -95,11 +90,21 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
         SupportGuidanceTarget.recipient,
       ...needed,
     }.take(4).toList(growable: false);
-    if (ordered.isNotEmpty || emitter == null) {
+    // A conversation does not grant access to game history or diagnostics.
+    // Optional data proposals must not prevent an otherwise valid plain prompt.
+    final blocked =
+        emitter == null ||
+        (needsModel && view.needsRecipientConfirmation) ||
+        (!needsModel && ordered.isNotEmpty);
+    final proposals = <SupportGuidanceTarget>{
+      if (diagnostics) SupportGuidanceTarget.gameSession,
+      ...ordered,
+    }.take(4).toList(growable: false);
+    if (blocked) {
       if (emitter == null) _modelUi.rejectNoModel();
       _publishGuidance(
-        ordered.isNotEmpty
-            ? ordered
+        proposals.isNotEmpty
+            ? proposals
             : const [
                 SupportGuidanceTarget.connection,
                 SupportGuidanceTarget.providerSetup,
@@ -111,18 +116,55 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
       // silently resend, enable a permission, or call the model here.
       return Future.value(false);
     }
-    return _modelUi.send(emitter, draft, context);
+    _publishGuidance(proposals, draft, session, blocking: false);
+    final originalController = _guidanceController;
+    final originalLifetime = _guidanceLifetime;
+    final accepted = _modelUi.send(emitter, draft, context);
+    accepted.then((value) {
+      if (mounted &&
+          value &&
+          identical(originalController, _guidanceController) &&
+          identical(
+            originalController,
+            ref.read(supportNativeConsentControllerProvider),
+          ) &&
+          originalLifetime == _guidanceLifetime &&
+          controller.runtime.lifetime == originalLifetime &&
+          controller.runtime.sessionId == session &&
+          draft.isCurrent() &&
+          _guidanceSession == session) {
+        _retainGuidance();
+      }
+    }, onError: (_) {});
+    return accepted;
   }
 
   Iterable<Widget> _pendingGuidance(String session) sync* {
-    if (_guidance.isEmpty ||
+    final controller = ref.read(supportNativeConsentControllerProvider);
+    if (!_showSendSnapshot ||
         _guidanceSession != session ||
-        _guidanceDraft?.isCurrent() != true) {
+        !identical(_guidanceController, controller) ||
+        _guidanceLifetime != controller.runtime.lifetime ||
+        (!_guidancePersistent && _guidanceDraft?.isCurrent() != true)) {
       return;
     }
-    yield const Text(
-      'Для этого предлагаю нужные настройки ниже. Ничего не включено; '
-      'твой текст сохранён в поле. После выбора отправь его снова.',
+    final workspace = ref.watch(supportWorkspaceProvider);
+    yield SupportSendSettingsSnapshot(
+      settings: workspace.settings,
+      permissions: controller.runtime.snapshot.preferences,
+      recipientConfirmed: !controller.view.needsRecipientConfirmation,
+      settingsAvailable: workspace.settingsAvailable,
+      refusal: _modelUi.refusal,
+    );
+    if (_guidance.isEmpty) return;
+    yield Text(
+      _guidanceBlocking
+          ? 'Для этого предлагаю нужные настройки ниже. Ничего не включено; '
+                'твой текст сохранён в поле. После выбора отправь его снова.'
+          : 'Можно начать диагностику без выбора игровой сессии. '
+                'Вот список последних сессий — какую хочешь разобрать? '
+                'Открой список ниже: это только метаданные. '
+                'Содержимое требует отдельных разрешений.',
       key: ValueKey('support_contextual_guidance'),
     );
     for (final target in _guidance) {

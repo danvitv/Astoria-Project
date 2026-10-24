@@ -71,54 +71,6 @@ final class _RoleplaySelectionProjection {
     );
   }
 
-  Future<SupportConsentSessionPage> sessions(int offset, int limit) async {
-    SupportConsentSessionPage unavailable() => SupportConsentSessionPage(
-      items: const [],
-      status: SupportConsentSelectionStatus.unavailable,
-    );
-    if (!_validPage(
-      offset,
-      limit,
-      SupportConsentSelectionRepo.maxSessionPageSize,
-    )) {
-      return unavailable();
-    }
-    try {
-      final rows = await db
-          .customSelect(
-            '''
-        SELECT $_columns FROM chat_sessions s
-        LEFT JOIN characters c ON c.char_id = s.character_id
-        WHERE $_visible
-        ORDER BY s.updated_at DESC, s.session_id ASC LIMIT ? OFFSET ?
-      ''',
-            variables: [Variable.withInt(limit + 1), Variable.withInt(offset)],
-          )
-          .get();
-      final redactor = currentRedactor();
-      final source = rows.take(limit).toList();
-      final options = source
-          .map((row) => _option(row, redactor))
-          .nonNulls
-          .toList();
-      final next =
-          rows.length > limit &&
-              offset + limit <= SupportConsentSelectionRepo.maxOffset
-          ? offset + limit
-          : null;
-      return SupportConsentSessionPage(
-        items: options,
-        omittedCount: source.length - options.length,
-        status: rows.length > limit
-            ? SupportConsentSelectionStatus.limited
-            : SupportConsentSelectionStatus.available,
-        nextOffset: next,
-      );
-    } catch (_) {
-      return unavailable();
-    }
-  }
-
   Future<SupportConsentMessagePage> messages(
     String? sessionId,
     int offset,

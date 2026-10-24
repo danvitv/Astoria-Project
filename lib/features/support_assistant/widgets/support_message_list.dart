@@ -112,7 +112,9 @@ class _AstoriaWelcomeBanner extends StatelessWidget {
           'Выбор сессии — область доступа, а не автоматическое разрешение. '
           'Перед запросом модели подтверждаются получатель и точный prompt. '
           'Тема и подключение настраиваются в отдельных нативных окнах. '
-          'Исполнители Memory, инструментов, DCP, диагностики и экспорта пока недоступны.',
+          'Диагностику можно обсудить без выбора игровой сессии. '
+          'Автоматический сбор диагностических данных, Memory, инструменты, '
+          'DCP и экспорт пока недоступны.',
       actions: const [
         QuickActionItem(
           id: 'theme_setup',
@@ -131,8 +133,8 @@ class _AstoriaWelcomeBanner extends StatelessWidget {
         ),
         QuickActionItem(
           id: 'connection_diagnostics',
-          label: 'О диагностике',
-          subtitle: 'Исполнитель проверок пока недоступен',
+          label: 'Начать диагностику',
+          subtitle: 'Снимок настроек и список последних сессий',
         ),
         QuickActionItem(
           id: 'support_report',

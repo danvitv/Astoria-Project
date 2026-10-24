@@ -32,6 +32,8 @@ class _SessionScopeState extends State<SupportSessionScopeSheet> {
   SupportConsentSessionPage? _page;
   SupportNativeSessionChoice? _choice;
   bool _busy = true, _decided = false;
+  bool _catalogLoading = true;
+  String? _pendingSession;
   int _read = 0;
   String? _notice;
   bool _retired = false;
@@ -80,6 +82,8 @@ class _SessionScopeState extends State<SupportSessionScopeSheet> {
     final read = ++_read;
     setState(() {
       _busy = true;
+      _catalogLoading = true;
+      _pendingSession = null;
       _choice = null;
       _notice = null;
     });
@@ -95,13 +99,17 @@ class _SessionScopeState extends State<SupportSessionScopeSheet> {
       } else {
         final page = await original.repo.listRoleplaySessions(offset: offset);
         if (!current || read != _read || !_sameOwner(original)) return;
-        setState(() => _page = page);
+        setState(() {
+          _page = page;
+          _catalogLoading = false;
+        });
         final oldId =
             original.controller.runtime.localContext.scope?.gameSessionId;
         final proposed =
             page.items.where((v) => v.sessionId == oldId).firstOrNull ??
             page.items.firstOrNull;
         if (proposed != null) {
+          _pendingSession = proposed.sessionId;
           final choice = await original.controller.prepareSessionHistory(
             original.review,
             original.source,
@@ -119,16 +127,27 @@ class _SessionScopeState extends State<SupportSessionScopeSheet> {
         setState(() => _notice = 'Не удалось проверить область сессии.');
       }
     } finally {
-      if (current && read == _read) setState(() => _busy = false);
+      if (current && read == _read) {
+        setState(() {
+          _busy = false;
+          _catalogLoading = false;
+          _pendingSession = null;
+        });
+      }
     }
   }
 
   Future<void> _choose(SupportConsentSessionOption option) async {
-    if (!current || _busy) return;
+    if (!current ||
+        _catalogLoading ||
+        (_busy && _pendingSession == option.sessionId)) {
+      return;
+    }
     final original = widget;
     final read = ++_read;
     setState(() {
       _busy = true;
+      _pendingSession = option.sessionId;
       _choice = null;
       _notice = null;
     });
@@ -148,7 +167,12 @@ class _SessionScopeState extends State<SupportSessionScopeSheet> {
         setState(() => _notice = 'Не удалось проверить выбранную сессию.');
       }
     } finally {
-      if (current && read == _read) setState(() => _busy = false);
+      if (current && read == _read) {
+        setState(() {
+          _busy = false;
+          _pendingSession = null;
+        });
+      }
     }
   }
 
@@ -189,6 +213,11 @@ class _SessionScopeState extends State<SupportSessionScopeSheet> {
                   : 'Предлагаю ранее выбранную или последнюю доступную ролевую сессию. Можно выбрать другую.',
             ),
             const SizedBox(height: 12),
+            if (!current)
+              const Text(
+                'Область или настройки изменились. Закрой это окно '
+                'и открой выбор снова — старое подтверждение не действует.',
+              ),
             const Text(
               'Это область всей сессии, включая её новые обычные сообщения. '
               'Выбор области не включает чтение, передачу модели или репорт. '
@@ -197,7 +226,7 @@ class _SessionScopeState extends State<SupportSessionScopeSheet> {
             ),
             if (_page case final page?)
               IgnorePointer(
-                ignoring: !current || _busy,
+                ignoring: !current || _catalogLoading,
                 child: MenuGroup(
                   header: 'Доступные сессии — только метаданные',
                   items: [

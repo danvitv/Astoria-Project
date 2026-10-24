@@ -109,7 +109,8 @@ class _SupportOutputTokenFieldState extends State<SupportOutputTokenField> {
     child: IgnorePointer(
       ignoring: widget.intent?.isCurrent != true,
       child: MenuFieldItem(
-        label: 'Лимит ответа, токены',
+        label: 'Лимит ответа',
+        description: 'Токены',
         controller: _controller,
         keyboardType: const TextInputType.numberWithOptions(signed: true),
         helper: _error ?? _hint,
