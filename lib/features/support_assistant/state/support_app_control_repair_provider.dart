@@ -4,6 +4,7 @@ import '../../../core/db/repositories/database_maintenance_repo.dart';
 import '../../../core/db/repositories/session_repair_repo.dart';
 import '../../../core/state/chat_source_mutation_provider.dart';
 import '../../../core/state/db_provider.dart';
+import '../../chat/state/chat_native_owner_registry.dart';
 import '../models/support_app_action.dart';
 import '../services/app_control/support_app_integrity_adapter.dart';
 import '../services/app_control/support_app_repair_runtime.dart';
@@ -40,6 +41,10 @@ final supportAppControlRepairAdaptersProvider =
         now: now,
       );
       final sessions = SupportAppSessionRepairAdapter(
+        analysisOwners: ref.watch(chatNativeOwnerRegistryProvider),
+        captureAnalysisJobs: native is SupportAppNativeRepairPort
+            ? native.captureAnalysisReadGuard
+            : null,
         repo: SessionRepairRepo(db, support),
         now: now,
         runtime: SupportAppRepairRuntime(

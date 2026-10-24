@@ -1,5 +1,6 @@
 import '../../../../core/db/models/session_repair.dart';
 import '../../../../core/db/repositories/session_repair_repo.dart';
+import '../../../chat/state/chat_native_owner_registry.dart';
 import '../../models/support_app_action.dart';
 import 'support_app_repair_runtime.dart';
 
@@ -29,10 +30,14 @@ final class SupportAppSessionRepairAdapter implements SupportAppActionAdapter {
     required this.repo,
     required this.runtime,
     required this.now,
+    this.analysisOwners,
+    this.captureAnalysisJobs,
   });
   final SessionRepairRepo repo;
   final SupportAppRepairRuntime runtime;
   final int Function() now;
+  final ChatNativeOwnerRegistry? analysisOwners;
+  final bool Function()? Function()? captureAnalysisJobs;
   final _sessions = SupportAppRepairCustody<_RepairSession>();
   final _targets = SupportAppRepairCustody<_RepairRecord>();
   final _receipts = SupportAppRepairCustody<_RepairReceipt>();
@@ -58,13 +63,14 @@ final class SupportAppSessionRepairAdapter implements SupportAppActionAdapter {
     SupportAppActionDefinition(
       name: 'astoria_session_integrity',
       description:
-          'Inspect selected session structure or actual recorded hashes; never narrative truth.',
+          'Inspect structure, recorded hashes, or grounded latest-turn Ledger facts. Analysis is advisory; it cannot edit the compiled Ledger contract.',
       risk: SupportAppActionRisk.metadata,
       fields: {
         'session': _handle,
         'operation': SupportAppActionField.choice([
           'inspect',
           'recordedHashes',
+          'analyzeLedger',
         ]),
         'offset': const SupportAppActionField.integer(0, 63),
       },
@@ -105,6 +111,51 @@ final class SupportAppSessionRepairAdapter implements SupportAppActionAdapter {
     if (action == 'astoria_session_integrity') {
       final session = _sessions.read(arguments['session']! as String, context);
       if (session == null) return null;
+      if (arguments['operation'] == 'analyzeLedger') {
+        if (arguments.containsKey('offset')) {
+          throw const SupportAppActionRefused(
+            SupportAppActionCode.invalidArguments,
+          );
+        }
+        final owners = analysisOwners;
+        final owner = owners?.existing(session.id);
+        final revision = owners?.revision;
+        final checkpoint = runtime.checkpoint(session.id);
+        final jobsCurrent = captureAnalysisJobs?.call();
+        if (owner == null ||
+            checkpoint == null ||
+            owners == null ||
+            jobsCurrent == null)
+          return null;
+        bool current() =>
+            context.current &&
+            runtime.current &&
+            jobsCurrent() &&
+            owners.isCurrent &&
+            owners.revision == revision &&
+            owners.retains(owner, session.id) &&
+            identical(owners.existing(session.id), owner) &&
+            runtime.unchanged(session.id, checkpoint);
+        return SupportAppPreparedAction(
+          target: arguments['session']! as String,
+          observation: owner,
+          observationIsCurrent: current,
+          execute: (admitted) async {
+            bool readCurrent() => current() && admitted();
+            if (!readCurrent()) return _refused();
+            final data = await repo.inspectLedgerAnalysis(
+              targetSessionId: session.id,
+              supportSessionId: context.sessionId,
+              isCurrent: readCurrent,
+            );
+            if (!readCurrent()) return _refused();
+            return SupportAppActionOutcome(
+              SupportAppActionCode.completed,
+              data: data,
+            );
+          },
+        );
+      }
       final checkpoint = runtime.checkpoint(session.id);
       if (checkpoint == null) return null;
       bool current() => runtime.current && context.current;

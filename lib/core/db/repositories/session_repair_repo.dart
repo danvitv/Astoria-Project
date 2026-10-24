@@ -4,6 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 
 import '../../llm/game_time.dart';
+import '../../llm/studio_ledger_prompt.dart';
 import '../../models/chat_message.dart';
 import '../../models/support_models.dart';
 import '../app_db.dart';
@@ -19,6 +20,7 @@ part 'session_repair/inspection.dart';
 part 'session_repair/ledger_validation.dart';
 part 'session_repair/mutation_store.dart';
 part 'session_repair/recorded_hash_inspection.dart';
+part 'session_repair/ledger_analysis.dart';
 
 /// Native-only, two-operation repair owner. Nothing here grants body disclosure,
 /// mutation approval, source admission or a global mutex. The application must
@@ -33,6 +35,15 @@ final class SessionRepairRepo {
   final SupportRepo _support;
   final _RepairRawStore _raw;
   static const journalDomain = 'session.repair';
+
+  /// Fixed structural facts only. No private text is transferred out of SQLite.
+  Future<Map<String, Object?>> inspectLedgerAnalysis({
+    required String targetSessionId,
+    required String supportSessionId,
+    required bool Function() isCurrent,
+  }) => _LedgerAnalysisReader(
+    this,
+  ).read(targetSessionId, supportSessionId, isCurrent);
 
   Future<SessionRepairInspection> inspect({
     required String targetSessionId,

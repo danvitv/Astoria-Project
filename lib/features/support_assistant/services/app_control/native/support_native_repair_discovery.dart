@@ -56,6 +56,7 @@ final class SupportNativeRepairDiscovery implements SupportAppActionAdapter {
               'receipts',
               'inspect',
               'recordedHashes',
+              'analyzeLedger',
             ]),
           },
           requiredFields: {'operation'},
@@ -145,10 +146,13 @@ final class SupportNativeRepairDiscovery implements SupportAppActionAdapter {
       final records = <Map<String, Object?>>[];
       int count;
       if (action == 'astoria_session_integrity') {
-        final rows = await chats.getAllSessionMetadata();
+        final page = await chats.getControlSessionMetadata(
+          offset: offset,
+          isCurrent: () => context.current,
+        );
         if (!context.current) return null;
-        count = rows.length;
-        for (final row in rows.skip(offset).take(16)) {
+        count = page.count;
+        for (final row in page.rows) {
           final handle = sessions.bindSession(row.sessionId, context);
           _retain(_sessions, handle, (context, row.sessionId));
           records.add({
@@ -195,17 +199,41 @@ final class SupportNativeRepairDiscovery implements SupportAppActionAdapter {
     if (action == 'astoria_database_health') input.remove('operation');
     if (action == 'astoria_session_integrity' && input['session'] is! String)
       return null;
+    final analysis =
+        action == 'astoria_session_integrity' &&
+        input['operation'] == 'analyzeLedger';
+    final binding = analysis ? _sessions[input['session']] : null;
+    bool originalBinding() {
+      final retained = _sessions[input['session']];
+      // Records have value semantics, not stable object identity. The actual
+      // original context object and its native target are the custody anchors.
+      return context.current &&
+          binding != null &&
+          retained != null &&
+          identical(binding.$1, context) &&
+          identical(retained.$1, context) &&
+          retained.$2 == binding.$2;
+    }
+
+    if (analysis && !originalBinding()) return null;
     final SupportAppActionAdapter underlying =
         action.startsWith('astoria_database_') ? integrity : sessions;
     final prepared = await underlying.prepare(action, input, context);
-    if (prepared == null) return null;
+    if (prepared == null || (analysis && !originalBinding())) return null;
     return SupportAppPreparedAction(
       target: prepared.target,
       observation: prepared.observation,
-      observationIsCurrent: prepared.observationIsCurrent,
+      observationIsCurrent: analysis
+          ? () => originalBinding() && prepared.observationIsCurrent()
+          : prepared.observationIsCurrent,
       preview: prepared.preview,
       execute: (current) async {
-        final result = await prepared.execute(current);
+        final result = await prepared.execute(
+          analysis ? () => current() && originalBinding() : current,
+        );
+        if (analysis && !originalBinding()) {
+          return SupportAppActionOutcome(SupportAppActionCode.stale);
+        }
         if (action == 'astoria_session_integrity' &&
             input['operation'] == 'inspect') {
           final session = _sessions[input['session']];

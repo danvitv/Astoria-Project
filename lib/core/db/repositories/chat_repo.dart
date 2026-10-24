@@ -121,6 +121,64 @@ class ChatRepo implements SyncChatStore {
     return rows.map(_projectedMetadata).toList();
   }
 
+  /// Native control discovery, without titles, message bodies or session vars.
+  Future<
+    ({
+      List<({String sessionId, int sessionIndex, int messageCount})> rows,
+      int count,
+    })
+  >
+  getControlSessionMetadata({
+    required int offset,
+    int limit = 16,
+    required bool Function() isCurrent,
+  }) {
+    if (offset < 0 || offset > 63 || limit < 1 || limit > 16) {
+      throw ArgumentError('Invalid control metadata page');
+    }
+    void requireCurrent() {
+      if (!isCurrent()) throw StateError('Control metadata source retired');
+    }
+
+    requireCurrent();
+    return _db.transaction(() async {
+      requireCurrent();
+      final count = await _db
+          .customSelect(
+            'SELECT count(*) AS n FROM chat_sessions',
+            readsFrom: {_db.chatSessions},
+          )
+          .getSingle();
+      requireCurrent();
+      final rows = await _db
+          .customSelect(
+            r'''SELECT session_id, session_index,
+         CASE WHEN length(CAST(messages_json AS BLOB)) <= 524288 THEN
+           CASE WHEN json_valid(messages_json) THEN
+             CASE WHEN json_type(messages_json) = 'array'
+               THEN json_array_length(messages_json) ELSE 0 END
+             ELSE 0 END
+           ELSE 0 END AS message_count
+        FROM chat_sessions ORDER BY updated_at DESC, session_id LIMIT ? OFFSET ?''',
+            variables: [Variable.withInt(limit), Variable.withInt(offset)],
+            readsFrom: {_db.chatSessions},
+          )
+          .get();
+      requireCurrent();
+      return (
+        rows: [
+          for (final row in rows)
+            (
+              sessionId: row.read<String>('session_id'),
+              sessionIndex: row.read<int>('session_index'),
+              messageCount: row.read<int>('message_count'),
+            ),
+        ],
+        count: count.read<int>('n'),
+      );
+    });
+  }
+
   // Project only fields used by the list. Session variables and the last message
   // can contain large Studio payloads/swipes even in a short chat; transferring
   // and decoding either whole JSON object makes draft notifications expensive.

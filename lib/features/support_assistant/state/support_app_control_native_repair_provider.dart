@@ -111,6 +111,15 @@ final class SupportAppNativeRepairPort
   final ChatNativeOwnerRegistry owners;
   final bool Function() original;
   final SupportNativeSessionMaintenanceOwners? maintenance;
+
+  /// Read fence only: retain already-loaded job inventories without warming a
+  /// controller/provider, manufacturing a queue, or admitting a source effect.
+  bool Function()? captureAnalysisReadGuard() {
+    if (!isCurrent) return null;
+    final jobs = _captureNativeJobInventory(ref);
+    return jobs == null ? null : () => isCurrent && jobs();
+  }
+
   @override
   bool get isCurrent => original() && owners.isCurrent;
   @override
