@@ -5,6 +5,8 @@ import '../../models/persona.dart';
 import '../../utils/platform_paths.dart';
 import '../../application/sync_repo_interfaces.dart';
 
+part 'persona_app_control.dart';
+
 class PersonaRepo implements SyncPersonaStore {
   final AppDatabase _db;
   PersonaRepo(this._db);

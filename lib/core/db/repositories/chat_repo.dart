@@ -11,6 +11,8 @@ import 'session_deletion_queries.dart';
 import '../../models/chat_message.dart';
 import '../../application/sync_repo_interfaces.dart';
 
+part 'chat_native_maintenance_source.dart';
+
 class _PreparedUserMessageAppend {
   const _PreparedUserMessageAppend({
     required this.messagesJson,
@@ -26,6 +28,25 @@ class _PreparedUserMessageAppend {
 class ChatRepo implements SyncChatStore {
   final AppDatabase _db;
   ChatRepo(this._db);
+  bool usesDatabase(AppDatabase database) => identical(_db, database);
+
+  /// Read-only native maintenance projection; not a chat/UI hydration path.
+  Future<ChatNativeMaintenanceSource?> readNativeMaintenanceSource(
+    String sessionId,
+    bool Function() isCurrent,
+  ) async {
+    if (!isCurrent() || _db.resolvedEngine.executor is TransactionExecutor)
+      return null;
+    try {
+      // This owner chooses a read-only metadata snapshot before the repair
+      // owner's later outer effect transaction. Never borrow ROOT's transaction.
+      return await _db.transaction(
+        () => _ChatNativeMaintenanceReader(_db).read(sessionId, isCurrent),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<T> transaction<T>(Future<T> Function() action) =>
       _db.transaction(action);

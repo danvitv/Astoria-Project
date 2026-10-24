@@ -6,6 +6,8 @@ import '../app_db.dart';
 import '../../models/preset.dart';
 import '../../application/sync_repo_interfaces.dart';
 
+part 'preset_app_control.dart';
+
 class PresetRepo implements SyncPresetStore {
   final AppDatabase _db;
   PresetRepo(this._db);

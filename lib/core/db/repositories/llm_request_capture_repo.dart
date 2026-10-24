@@ -15,6 +15,11 @@ final class ExactLlmPromptCapture {
   final String prompt;
 }
 
+final class LlmCaptureControlCounts {
+  const LlmCaptureControlCounts({required this.requests, required this.events});
+  final int requests, events;
+}
+
 /// Local bounded persistence sink for sanitized transport request captures.
 final class LlmRequestCaptureRepo
     implements LlmRequestCaptureSink, LlmCallEventSink {
@@ -99,6 +104,26 @@ final class LlmRequestCaptureRepo
       ..limit(limit);
     return query.get();
   }
+
+  /// Counts only: SELECT never materializes eventJson, request bodies, errors,
+  /// endpoints, model names or user-supplied stage/artifact identifiers.
+  Future<LlmCaptureControlCounts> inspectControlCounts(String sessionId) =>
+      db.transaction(() async {
+        final captures = db.llmRequestCaptureRows.id.count();
+        final requestQuery = db.selectOnly(db.llmRequestCaptureRows)
+          ..addColumns([captures])
+          ..where(db.llmRequestCaptureRows.sessionId.equals(sessionId));
+        final events = db.llmCallEventRows.id.count();
+        final eventQuery = db.selectOnly(db.llmCallEventRows)
+          ..addColumns([events])
+          ..where(db.llmCallEventRows.sessionId.equals(sessionId));
+        final requestRow = await requestQuery.getSingle();
+        final eventRow = await eventQuery.getSingle();
+        return LlmCaptureControlCounts(
+          requests: requestRow.read(captures) ?? 0,
+          events: eventRow.read(events) ?? 0,
+        );
+      });
 
   /// Stamps [messageId] over the generation-phase rows of one turn.
   ///

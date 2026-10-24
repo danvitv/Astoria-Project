@@ -7,12 +7,26 @@ import '../app_db.dart';
 import '../tables.dart';
 import '../../models/memory_book.dart';
 import '../../models/memory_entry_revisions.dart';
+import '../../models/memory_source_manifest.dart';
 import '../../services/memory_prompt_presets.dart';
 import '../../state/memory_settings_provider.dart';
 import '../../utils/time_helpers.dart';
 import '../../application/sync_repo_interfaces.dart';
+import 'chat_repo.dart';
+import 'memory_catalog_repo.dart';
 
 part 'memory_book_repo.g.dart';
+
+/// Native-only exact row observation. Never serialize this into tool metadata.
+final class MemoryBookControlObservation {
+  MemoryBookControlObservation._(this._row, this.book);
+  final MemoryBookRow _row;
+  final MemoryBook book;
+}
+
+final class _MemoryBookControlRetired implements Exception {
+  const _MemoryBookControlRetired();
+}
 
 @DriftAccessor(tables: [MemoryBookRows])
 class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
@@ -21,6 +35,193 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
   MemoryBookRepo(super.db, this._ref);
 
   final Ref _ref;
+
+  /// Strict observation for conditional control; corrupt blobs are unavailable,
+  /// not silently repaired through the ordinary compatibility reader.
+  Future<MemoryBookControlObservation?> observeForControl(
+    String sessionId,
+  ) async {
+    final row = await (select(
+      memoryBookRows,
+    )..where((t) => t.sessionId.equals(sessionId))).getSingleOrNull();
+    if (row == null) return null;
+    try {
+      final entries = (jsonDecode(row.entriesJson) as List)
+          .map((e) => MemoryEntry.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(growable: false);
+      final drafts = (jsonDecode(row.pendingDraftsJson) as List)
+          .map((d) => MemoryDraft.fromJson(Map<String, dynamic>.from(d as Map)))
+          .toList(growable: false);
+      final settings = MemoryBookSettings.fromJson(
+        jsonDecode(row.settingsJson) as Map<String, dynamic>,
+      );
+      return MemoryBookControlObservation._(
+        row,
+        MemoryBook(
+          id: 'memorybook_$sessionId',
+          sessionId: sessionId,
+          entries: entries,
+          pendingDrafts: drafts,
+          settings: settings,
+          lastProcessedMessageCount: row.lastProcessedMessageCount,
+          updatedAt: row.updatedAt,
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Creates an empty local book without importing global automation/network
+  /// defaults. The session existence check and insert share one transaction.
+  Future<bool> createEmptyForControl({
+    required String sessionId,
+    required bool enabled,
+    required bool Function() isCurrent,
+  }) => transaction(() async {
+    if (!isCurrent()) return false;
+    final session = await ChatRepo(attachedDatabase).getById(sessionId);
+    if (session == null || !isCurrent()) return false;
+    final settings = MemoryBookSettings(
+      enabled: enabled,
+      autoCreateEnabled: false,
+      autoGenerateEnabled: false,
+      vectorSearchEnabled: false,
+      consolidationEnabled: false,
+    );
+    final inserted = await into(memoryBookRows).insertReturningOrNull(
+      MemoryBookRowsCompanion.insert(
+        sessionId: sessionId,
+        settingsJson: Value(jsonEncode(settings.toJson())),
+        updatedAt: Value(currentTimestampSeconds()),
+      ),
+      mode: InsertMode.insertOrIgnore,
+    );
+    return inserted != null;
+  });
+
+  /// Scalar settings patch only. Raw unknown settings and all body/history blobs
+  /// are preserved; an exact SQL row predicate is the final compare-and-swap.
+  Future<bool> patchSettingsForControl({
+    required MemoryBookControlObservation expected,
+    required Map<String, Object?> fields,
+    required bool Function() isCurrent,
+  }) => transaction(() async {
+    const allowed = {
+      'enabled',
+      'maxInjectedEntries',
+      'maxInjectedTokens',
+      'memoryExcerptingEnabled',
+      'memoryPackingMode',
+      'injectionTarget',
+      'sourceWindowExclusion',
+      'factualContinuityGuardEnabled',
+    };
+    if (fields.isEmpty ||
+        fields.keys.any((k) => !allowed.contains(k)) ||
+        !isCurrent())
+      return false;
+    final settings = Map<String, dynamic>.from(
+      jsonDecode(expected._row.settingsJson) as Map,
+    )..addAll(fields);
+    // Enforce model types without replacing unrelated/unknown serialized fields.
+    MemoryBookSettings.fromJson(settings);
+    return await (update(
+          memoryBookRows,
+        )..where((t) => _controlPredicate(t, expected._row))).write(
+          MemoryBookRowsCompanion(
+            settingsJson: Value(jsonEncode(settings)),
+            updatedAt: Value(currentTimestampSeconds()),
+          ),
+        ) ==
+        1;
+  });
+
+  /// Local draft flag only; content, source manifest and error are unchanged.
+  Future<bool> setDraftVectorForControl({
+    required MemoryBookControlObservation expected,
+    required String draftId,
+    required bool vectorSearch,
+    required bool Function() isCurrent,
+  }) => transaction(() async {
+    if (!isCurrent()) return false;
+    final drafts = (jsonDecode(expected._row.pendingDraftsJson) as List)
+        .map((d) => Map<String, dynamic>.from(d as Map))
+        .toList();
+    final matches = drafts.where((d) => d['id'] == draftId).toList();
+    if (matches.length != 1 ||
+        !const {
+          'pending_generation',
+          'pending_approval',
+          'error',
+          'needs_regeneration',
+        }.contains(matches.single['status']))
+      return false;
+    matches.single['vectorSearch'] = vectorSearch;
+    return await (update(
+          memoryBookRows,
+        )..where((t) => _controlPredicate(t, expected._row))).write(
+          MemoryBookRowsCompanion(
+            pendingDraftsJson: Value(jsonEncode(drafts)),
+            updatedAt: Value(currentTimestampSeconds()),
+          ),
+        ) ==
+        1;
+  });
+
+  /// Rebuilds only the disposable local catalog from the exact durable book.
+  /// No embeddings, graph purge, generation or paid network work is dispatched.
+  Future<bool> rebuildCatalogForControl({
+    required MemoryBookControlObservation expected,
+    required MemoryCatalogRepo catalog,
+    required bool Function() isCurrent,
+  }) async {
+    try {
+      return await transaction(() async {
+        if (!identical(catalog.db, attachedDatabase) || !isCurrent())
+          return false;
+        final row = await (select(
+          memoryBookRows,
+        )..where((t) => _controlPredicate(t, expected._row))).getSingleOrNull();
+        if (row == null || !isCurrent()) return false;
+        final session = await ChatRepo(
+          attachedDatabase,
+        ).getById(expected.book.sessionId);
+        if (session == null ||
+            !isCurrent() ||
+            expected.book.entries.any(
+              (entry) =>
+                  entry.source == 'agentic' ||
+                  entry.sourceManifest != null &&
+                      entry.sourceManifest!.validate(
+                            entry.messageIds,
+                            session.messages,
+                          ) !=
+                          MemorySourceValidity.verified,
+            )) {
+          return false;
+        }
+        await catalog.rebuildForMemoryBook(expected.book);
+        // The nested rebuild belongs to this transaction; a lost native lease
+        // rolls the derived replacement back, never unauthorized publication.
+        if (!isCurrent()) throw const _MemoryBookControlRetired();
+        return true;
+      });
+    } on _MemoryBookControlRetired {
+      return false;
+    }
+  }
+
+  Expression<bool> _controlPredicate(
+    $MemoryBookRowsTable table,
+    MemoryBookRow row,
+  ) =>
+      table.sessionId.equals(row.sessionId) &
+      table.settingsJson.equals(row.settingsJson) &
+      table.entriesJson.equals(row.entriesJson) &
+      table.pendingDraftsJson.equals(row.pendingDraftsJson) &
+      table.lastProcessedMessageCount.equals(row.lastProcessedMessageCount) &
+      table.updatedAt.equals(row.updatedAt);
 
   Future<MemoryBook> ensureForSession(String sessionId) async {
     final existing = await getBySessionId(sessionId);

@@ -8,7 +8,10 @@ import '../../models/studio_config.dart';
 import '../../models/studio_agent_codec.dart';
 import '../../models/studio_preset_block_migration.dart';
 import '../../models/studio_preset_codec.dart';
+import '../../models/studio_preset_validation.dart';
 import '../app_db.dart';
+
+part 'studio_preset_app_control.dart';
 
 class StudioPresetRepo implements SyncStudioPresetStore {
   final AppDatabase db;
@@ -88,9 +91,11 @@ class StudioPresetRepo implements SyncStudioPresetStore {
     final hasFinal = safeAgents.any(
       (agent) => StudioControllerOntology.specForAgent(agent)?.isFinal ?? false,
     );
-    final hadFinal = storedPreset != null &&
+    final hadFinal =
+        storedPreset != null &&
         storedPreset.agents.any(
-          (agent) => StudioControllerOntology.specForAgent(agent)?.isFinal ?? false,
+          (agent) =>
+              StudioControllerOntology.specForAgent(agent)?.isFinal ?? false,
         );
     final hasThink = safeAgents.any(
       (agent) => StudioControllerOntology.specForAgent(agent)?.id == 'think',

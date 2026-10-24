@@ -74,6 +74,12 @@ final class SupportTextContextRepo {
   final _nativeProvenanceSessions = Expando<String>();
   bool _admissionOwnerRevoked = false;
 
+  /// Native instance/lifetime pointer check only; no body, SQL or path access.
+  bool retainsNativeDataSource(NativeDataSourceIdentity source) =>
+      !_admissionOwnerRevoked &&
+      source.belongsTo(_db) &&
+      identical(_db.nativeDataSourceIdentity, source);
+
   Future<SupportTextContextSnapshot> loadSupport({
     required String sessionId,
     required List<String> messageIds,

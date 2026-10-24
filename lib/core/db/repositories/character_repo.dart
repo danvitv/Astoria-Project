@@ -12,6 +12,8 @@ import '../../utils/platform_paths.dart';
 import '../../application/sync_repo_interfaces.dart';
 import 'character_deletion_repo.dart';
 
+part 'character_app_control.dart';
+
 enum CharacterSortField { name, date, lastChat }
 
 enum CharacterSortDir { asc, desc }

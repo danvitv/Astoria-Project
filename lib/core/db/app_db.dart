@@ -6,7 +6,9 @@ import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqlite3/sqlite3.dart' as sqlite;
 
+import '../services/database_snapshot_service.dart';
 import '../models/studio_preset_block_migration.dart';
 import '../models/studio_preset_codec.dart';
 import '../models/studio_agent_codec.dart';
@@ -18,6 +20,7 @@ import '../utils/time_helpers.dart';
 import 'tables.dart';
 
 part 'app_db.g.dart';
+part 'native_data_source_identity.dart';
 part 'migrations/database_integrity.dart';
 part 'migrations/studio_legacy.dart';
 part 'studio_preset_seed.dart';
@@ -96,15 +99,58 @@ part 'migrations/upgrade_v137.dart';
   ],
 )
 class AppDatabase extends _$AppDatabase {
-  AppDatabase() : super(_openConnection());
+  factory AppDatabase() => AppDatabase._native(_AppDatabaseNativeFile());
 
-  AppDatabase.forTesting(super.e);
+  AppDatabase._native(_AppDatabaseNativeFile native)
+    : _nativeFile = native,
+      super(_openConnection(native));
+
+  AppDatabase.forTesting(super.e) : _nativeFile = null;
+
+  /// Native composition only: file identity comes from THIS opened SQLite
+  /// connection, not from a separately supplied path. Memory/attached sources
+  /// remain usable as databases but do not acquire native snapshot authority.
+  factory AppDatabase.openedNative(
+    sqlite.Database connection, {
+    bool closeUnderlyingOnClose = true,
+  }) {
+    final native = _AppDatabaseNativeFile.fromOpened(connection);
+    return AppDatabase._openedNative(
+      NativeDatabase.opened(
+        connection,
+        closeUnderlyingOnClose: closeUnderlyingOnClose,
+      ),
+      native,
+    );
+  }
+
+  AppDatabase._openedNative(QueryExecutor executor, this._nativeFile)
+    : super(executor);
+
+  final _AppDatabaseNativeFile? _nativeFile;
+  NativeDataSourceIdentity? _nativeIdentity;
+
+  /// No path/value getter. Null until the original native executor has opened.
+  NativeDataSourceIdentity? get nativeDataSourceIdentity {
+    final native = _nativeFile;
+    if (native == null || !native.current) return null;
+    return _nativeIdentity ??= NativeDataSourceIdentity._(this, native);
+  }
+
+  @override
+  Future<void> close() {
+    _nativeFile?.retire(); // Invalidate BEFORE the async executor close.
+    return super.close();
+  }
 
   @override
   int get schemaVersion => 137;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
+    beforeOpen: (_) async {
+      _nativeFile?.markOpened();
+    },
     onCreate: (Migrator m) async {
       await m.createAll();
       final now = currentTimestampSeconds();
@@ -153,7 +199,7 @@ class AppDatabase extends _$AppDatabase {
       _AppDatabaseStudioLegacyMigrations(this).purgeRetiredAgenticMicroMemory();
 }
 
-LazyDatabase _openConnection() {
+LazyDatabase _openConnection(_AppDatabaseNativeFile native) {
   return LazyDatabase(() async {
     final dbFolder = await getAppDataDir();
     final dir = Directory(dbFolder);
@@ -161,6 +207,8 @@ LazyDatabase _openConnection() {
       await dir.create(recursive: true);
     }
     final file = File(p.join(dbFolder, 'astoria.db'));
+    if (native.retired) throw StateError('Native database owner retired.');
+    native.file = file; // SAME private File passed to the actual executor.
     return NativeDatabase.createInBackground(file);
   });
 }

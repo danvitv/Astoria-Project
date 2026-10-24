@@ -6,6 +6,8 @@ import '../app_db.dart';
 import '../../models/lorebook.dart';
 import '../../application/sync_repo_interfaces.dart';
 
+part 'lorebook_app_control.dart';
+
 class LorebookRepo implements SyncLorebookStore {
   final AppDatabase _db;
   LorebookRepo(this._db);
