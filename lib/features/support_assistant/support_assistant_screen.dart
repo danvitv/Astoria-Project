@@ -8,6 +8,7 @@ import '../../shared/widgets/glaze_scaffold.dart';
 import '../../shared/widgets/glaze_error_block.dart';
 import '../../shared/widgets/glaze_toast.dart';
 import '../../shared/widgets/sheet_view.dart';
+import '../settings/app_settings_provider.dart';
 import 'state/support_workspace_provider.dart';
 import 'state/support_model_provider.dart';
 import 'widgets/support_composer_bar.dart';
@@ -20,11 +21,13 @@ import 'widgets/support_provider_entry.dart';
 import 'widgets/support_guidance_sheet.dart';
 import 'widgets/support_card_view.dart';
 import 'widgets/support_send_settings_snapshot.dart';
+import 'widgets/support_privacy_review_sheet.dart';
 import 'services/support_guidance_planner.dart';
 import 'models/support_permission_scope.dart';
 import 'state/support_native_provider.dart';
 
 part 'support_screen_guidance.dart';
+part 'support_screen_recipient.dart';
 
 /// Center workspace screen for Astoria Assistant (`/support`).
 ///
@@ -244,6 +247,14 @@ class _SupportAssistantScreenState
 
   @override
   Widget build(BuildContext context) {
+    // Runtime consent changes also expire idle emitters. Rebuild the displayed
+    // composer so the NEXT explicit Send binds a fresh owner, never an old draft.
+    ref.watch(supportNativeViewProvider);
+    final enterToSend = ref.watch(
+      appSettingsProvider.select(
+        (settings) => settings.asData?.value.enterToSend ?? false,
+      ),
+    );
     final isDesktop = isDesktopLayout(context);
     final workspace = ref.watch(supportWorkspaceProvider);
     final notifier = ref.read(supportWorkspaceProvider.notifier);
@@ -376,6 +387,7 @@ class _SupportAssistantScreenState
           SupportComposerBar(
             controller: _composerCtrl,
             sessionId: workspace.activeSessionId,
+            enterToSend: enterToSend,
             busy:
                 workspace.isBusy ||
                 workspace.isLoading ||

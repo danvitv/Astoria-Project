@@ -51,7 +51,7 @@ void main() {
   );
 
   testWidgets(
-    'recipient guidance opens native review directly, but still requires a separate final gesture',
+    'Send opens native recipient review directly, but still requires a separate final gesture',
     (tester) async {
       final f = ModelScreenFixture(confirm: false);
       await f.run(tester, () async {
@@ -65,11 +65,6 @@ void main() {
             find.byKey(const ValueKey('support_composer_send_btn')),
           );
         });
-        await tester.pumpAndSettle();
-        final card = find.byKey(const ValueKey('support_guidance_recipient'));
-        await Scrollable.ensureVisible(tester.element(card), alignment: 0.5);
-        await tester.pump();
-        await f.action(tester, () => tester.tap(card));
         for (
           var turn = 0;
           turn < 100 &&
@@ -109,6 +104,7 @@ void main() {
         );
         await f.action(tester, () => tester.tap(cancel));
         expect(await f.finish(tester, cancelled), isFalse);
+        await tester.pump();
         await tester.pump(
           route.reverseTransitionDuration + const Duration(microseconds: 1),
         );

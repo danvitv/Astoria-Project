@@ -27,6 +27,7 @@ import 'package:glaze_flutter/core/support/support_payload_cipher.dart';
 import 'package:glaze_flutter/features/settings/app_settings_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/services/support_workspace_store.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_model_provider.dart';
+import 'package:glaze_flutter/features/support_assistant/state/support_model_catalog_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_native_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_workspace_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/support_assistant_screen.dart';
@@ -52,6 +53,7 @@ final class ModelScreenFixture {
     this.configured = true,
     this.confirm = true,
     this.topic,
+    this.enterToSend = true,
   }) {
     db = _ScreenDatabase(NativeDatabase.memory().interceptWith(sql));
     vault = CredentialVault(storage: storage, buildChannel: 'synthetic_screen');
@@ -78,6 +80,7 @@ final class ModelScreenFixture {
   static const key = 'SYNTHETIC_SCREEN_ROW_KEY_13847';
   static const excluded = 'SYNTHETIC_SCREEN_UNSELECTED_63194';
   final bool configured, confirm;
+  final bool enterToSend;
   final String? topic;
   final isolation = ModelProviderIsolation();
   final primitive = NativeInputCipher();
@@ -211,6 +214,7 @@ final class ModelScreenFixture {
       shellHeaderProvider,
       supportConnectionsProvider,
       nativeProviderAdapterFactoryProvider,
+      supportModelCatalogProvider,
     });
     container = ProviderContainer(
       observers: [isolation],
@@ -228,6 +232,8 @@ final class ModelScreenFixture {
           () => isolation.block('undeclared native provider wire adapter'),
         ),
         supportConnectionsProvider.overrideWithValue(const []),
+        // This fixture exercises prompt transport, not provider catalog GETs.
+        supportModelCatalogProvider.overrideWithValue(null),
         supportConnectionMetadataProvider.overrideWith(
           (_) => isolation.block('bulk model/metadata startup'),
         ),
@@ -241,7 +247,7 @@ final class ModelScreenFixture {
           (_) => isolation.block('production migration'),
         ),
         appSettingsProvider.overrideWith(
-          () => _ScreenSettings(isolation.block),
+          () => _ScreenSettings(isolation.block, enterToSend),
         ),
         themeProvider.overrideWith((_) => _ScreenTheme(isolation.block)),
         sharedPreferencesProvider.overrideWith(
@@ -320,6 +326,10 @@ final class ModelScreenFixture {
     expect(review, isNotNull);
     expect(await controller.confirmRecipient(review!), isTrue);
   }
+
+  void changeEnterToSendForTest(bool value) =>
+      (container.read(appSettingsProvider.notifier) as _ScreenSettings)
+          .changeEnterToSendForTest(value);
 
   Widget host({double scale = 1}) => UncontrolledProviderScope(
     container: container,
@@ -501,10 +511,12 @@ final class _ScreenDatabase extends AppDatabase {
 
 class _ScreenSettings extends AsyncNotifier<AppSettings>
     implements AppSettingsNotifier {
-  _ScreenSettings(this.block);
+  _ScreenSettings(this.block, this.initialEnterToSend);
   final Never Function(String) block;
+  final bool initialEnterToSend;
   @override
-  Future<AppSettings> build() async => const AppSettings(
+  Future<AppSettings> build() async => AppSettings(
+    enterToSend: initialEnterToSend,
     batterySaver: true,
     batterySaverMode: BatterySaverMode.on,
     hapticFeedback: false,
@@ -512,6 +524,8 @@ class _ScreenSettings extends AsyncNotifier<AppSettings>
     allowMessageScripts: false,
     showOurPicks: false,
   );
+  void changeEnterToSendForTest(bool value) =>
+      state = AsyncData(state.requireValue.copyWith(enterToSend: value));
   @override
   dynamic noSuchMethod(Invocation invocation) => block('settings command');
 }

@@ -37,7 +37,7 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
     final runtime = controller.runtime;
     final policy = runtime.snapshot.preferences;
     final scope = policy?.scope;
-    final view = controller.view;
+    final recipientConfirmed = runtime.recipientConfirmed;
     final requested = const SupportGuidancePlanner().targetsFor(
       text: draft.text,
     );
@@ -50,7 +50,7 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
               scope?.gameHistoryExtent != SupportHistoryExtent.wholeSession,
             SupportGuidanceTarget.supportSession =>
               scope?.supportHistoryExtent != SupportHistoryExtent.wholeSession,
-            SupportGuidanceTarget.recipient => view.needsRecipientConfirmation,
+            SupportGuidanceTarget.recipient => !recipientConfirmed,
             SupportGuidanceTarget.themeScope =>
               scope?.safeCategories.contains(SupportSafeCategory.theme) != true,
             SupportGuidanceTarget.connectionsScope =>
@@ -86,7 +86,7 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
             target == SupportGuidanceTarget.supportSession ||
             target == SupportGuidanceTarget.readGameData,
       ),
-      if (needsModel && emitter != null && view.needsRecipientConfirmation)
+      if (needsModel && emitter != null && !recipientConfirmed)
         SupportGuidanceTarget.recipient,
       ...needed,
     }.take(4).toList(growable: false);
@@ -94,7 +94,7 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
     // Optional data proposals must not prevent an otherwise valid plain prompt.
     final blocked =
         emitter == null ||
-        (needsModel && view.needsRecipientConfirmation) ||
+        (needsModel && !recipientConfirmed) ||
         (!needsModel && ordered.isNotEmpty);
     final proposals = <SupportGuidanceTarget>{
       if (diagnostics) SupportGuidanceTarget.gameSession,
@@ -112,8 +112,11 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
         draft,
         session,
       );
-      // Proposal is not acceptance: preserve the draft, never append twice,
-      // silently resend, enable a permission, or call the model here.
+      if (emitter != null && needsModel && !recipientConfirmed) {
+        // Send itself opens the prerequisite, not another card/menu detour.
+        return _reviewRecipientFromSend(session);
+      }
+      // A proposal is not acceptance: preserve the draft, do not grant or resend.
       return Future.value(false);
     }
     _publishGuidance(proposals, draft, session, blocking: false);
@@ -152,7 +155,7 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
     yield SupportSendSettingsSnapshot(
       settings: workspace.settings,
       permissions: controller.runtime.snapshot.preferences,
-      recipientConfirmed: !controller.view.needsRecipientConfirmation,
+      recipientConfirmed: controller.runtime.recipientConfirmed,
       settingsAvailable: workspace.settingsAvailable,
       refusal: _modelUi.refusal,
     );

@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/db/repositories/api_config_repo.dart';
 import 'package:glaze_flutter/core/models/support_models.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_model_provider.dart';
+import 'package:glaze_flutter/features/support_assistant/state/support_native_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/models/support_workspace_models.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_composer_bar.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_model_prompt_preview_sheet.dart';
@@ -16,6 +17,7 @@ import 'package:glaze_flutter/shared/widgets/sheet_view.dart';
 
 import '../llm/transport/_private_text_fixture.dart';
 import 'helpers/support_model_screen_fixture.dart';
+import 'support_recipient_send_helpers.dart';
 
 const _send = ValueKey('support_composer_send_btn');
 const _stop = ValueKey('support_composer_stop_btn');
@@ -331,31 +333,40 @@ void main() {
         await f.run(tester, () async {
           final controller = _draft(tester);
           final before = f.state.activeMessages.map((m) => m.id).toList();
-          final settled = configured
-              ? await f.signal(
-                  tester,
-                  () => _phase(f, _isTerminal),
-                  label: 'original unconfirmed Send refusal',
-                )
-              : null;
-          await f.action(tester, () async {
-            controller.text = 'Retained prerequisite draft';
-            await tester.tap(find.byKey(_send));
-          });
-          if (settled != null) await f.finish(tester, settled);
+          if (configured) {
+            // Send now opens recipient review, not a model refusal/run.
+            final route = await openRecipientFromSend(
+              tester,
+              f,
+              text: 'Retained prerequisite draft',
+            );
+            expect(f.adapters, isEmpty);
+            expect(f.state.activeMessages.map((m) => m.id), before);
+            await decideRecipient(tester, f, route, confirmed: false);
+            expect(
+              f.container
+                  .read(supportNativeConsentControllerProvider)
+                  .runtime
+                  .recipientConfirmed,
+              isFalse,
+            );
+          } else {
+            await f.action(tester, () async {
+              controller.text = 'Retained prerequisite draft';
+              await tester.tap(find.byKey(_send));
+            });
+          }
           await tester.pumpAndSettle();
           expect(controller.text, 'Retained prerequisite draft');
           expect(f.adapters, isEmpty);
           expect(f.state.activeMessages.map((m) => m.id), before);
           expect(find.byType(SupportModelPromptPreviewSheet), findsNothing);
-          expect(
-            find.text(
-              configured
-                  ? SupportModelRefusal.recipientRequired.label
-                  : SupportModelRefusal.noModel.label,
-            ),
-            findsOneWidget,
-          );
+          if (!configured) {
+            expect(
+              find.text(SupportModelRefusal.noModel.label),
+              findsOneWidget,
+            );
+          }
         });
       },
     );
@@ -388,9 +399,7 @@ void main() {
           return tester.tap(selector);
         });
         await tester.pumpAndSettle();
-        // Distinguish a missed selector gesture from the separate source defect:
-        // _ManualModelForm supplies description without MenuGroup.header, so the
-        // kit omits the notice. Keep its positive rendering assertion below.
+        // The explicit null catalog port keeps this a manual/no-network fixture.
         expect(find.text('Модель Астории'), findsOneWidget);
         expect(find.text('Идентификатор модели'), findsOneWidget);
         expect(f.adapters, isEmpty);
@@ -398,7 +407,7 @@ void main() {
         expect(find.textContaining('SYNTHETIC_STALE_VAULT_KEY'), findsNothing);
         expect(
           find.textContaining(
-            'Список моделей и доступность здесь не запрашиваются.',
+            'Открытие списка не отправляет prompt и не запускает генерацию.',
           ),
           findsOneWidget,
         );
@@ -514,6 +523,29 @@ void main() {
           hasLength(2),
         );
         expect(f.state.activeMessages.last.status, 'complete');
+        // The settings snapshot can occupy the first viewport of the lazy feed.
+        // Reveal the actual sanitized reply instead of assuming it is mounted.
+        final answer = find.byWidgetPredicate(
+          (widget) =>
+              widget is SupportPlainMarkdown &&
+              widget.text.contains('Safe actual screen answer'),
+        );
+        final feedState = tester.state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byType(SupportMessageList),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
+        final originalFeed = find.byElementPredicate(
+          (element) => identical(element, feedState.context),
+        );
+        await f.action(
+          tester,
+          () =>
+              tester.scrollUntilVisible(answer, 250, scrollable: originalFeed),
+        );
         expect(_paint(tester), contains('Safe actual screen answer'));
         expect(
           find.byKey(const ValueKey('support_text_only_notice')),

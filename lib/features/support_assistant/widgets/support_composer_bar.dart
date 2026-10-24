@@ -1,4 +1,8 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/widgets/glass_surface.dart';
@@ -28,6 +32,7 @@ class SupportComposerBar extends StatefulWidget {
   final Future<bool> Function(String)? onLocalHelp;
   final VoidCallback? onStop;
   final Object? nativeOwner;
+  final bool enterToSend;
 
   const SupportComposerBar({
     super.key,
@@ -41,6 +46,7 @@ class SupportComposerBar extends StatefulWidget {
     this.onLocalHelp,
     this.onStop,
     this.nativeOwner,
+    this.enterToSend = true,
   });
 
   @override
@@ -53,6 +59,7 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
   int _ownership = 0;
   int _draftRevision = 0;
   late String _lastText;
+  final _inputFocus = FocusNode();
 
   @override
   void initState() {
@@ -70,6 +77,7 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
 
   @override
   void dispose() {
+    _inputFocus.dispose();
     widget.controller.removeListener(_draftChanged);
     _ownership++;
     super.dispose();
@@ -158,6 +166,28 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
     final busy = _sending || widget.busy;
     final emitted = widget;
     final emittedOwnership = _ownership;
+    KeyEventResult draftKey(FocusNode node, KeyEvent event) {
+      if (!mounted ||
+          !node.hasFocus ||
+          event is! KeyDownEvent ||
+          !identical(emitted, widget) ||
+          emittedOwnership != _ownership ||
+          emitted.enterToSend != widget.enterToSend ||
+          !emitted.enterToSend ||
+          (event.logicalKey != LogicalKeyboardKey.enter &&
+              event.logicalKey != LogicalKeyboardKey.numpadEnter) ||
+          HardwareKeyboard.instance.isShiftPressed ||
+          (widget.controller.value.composing.isValid &&
+              !widget.controller.value.composing.isCollapsed) ||
+          ((defaultTargetPlatform == TargetPlatform.android ||
+                  defaultTargetPlatform == TargetPlatform.iOS) &&
+              View.of(context).viewInsets.bottom > 0)) {
+        return KeyEventResult.ignored;
+      }
+      unawaited(_submit(emitted, emittedOwnership));
+      return KeyEventResult.handled;
+    }
+
     return SafeArea(
       top: false,
       child: Padding(
@@ -195,12 +225,18 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
                               ),
                       ),
                     Expanded(
-                      child: GlazeTextField(
-                        key: const ValueKey('support_composer_input'),
-                        controller: widget.controller,
-                        maxLines: 4,
-                        isDense: true,
-                        hint: 'Сообщение в историю (без API-ключей)…',
+                      child: Focus(
+                        onKeyEvent: draftKey,
+                        child: GlazeTextField(
+                          key: const ValueKey('support_composer_input'),
+                          controller: widget.controller,
+                          focusNode: _inputFocus,
+                          maxLines: 4,
+                          keyboardType: TextInputType.multiline,
+                          textInputAction: TextInputAction.newline,
+                          isDense: true,
+                          hint: 'Сообщение в историю (без API-ключей)…',
+                        ),
                       ),
                     ),
                     IconButton(

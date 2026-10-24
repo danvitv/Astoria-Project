@@ -9,6 +9,7 @@ import 'package:glaze_flutter/features/support_assistant/state/support_model_pro
 import 'package:glaze_flutter/features/support_assistant/widgets/support_composer_bar.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_model_prompt_preview_sheet.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_send_settings_snapshot.dart';
+import 'package:glaze_flutter/features/support_assistant/widgets/support_privacy_review_sheet.dart';
 import 'package:glaze_flutter/features/support_assistant/models/support_permission_preferences.dart';
 import 'package:glaze_flutter/features/support_assistant/models/support_workspace_models.dart';
 
@@ -138,7 +139,16 @@ void main() {
             find.byKey(const ValueKey('support_composer_send_btn')),
           );
         });
-        await tester.pumpAndSettle();
+        for (
+          var turn = 0;
+          turn < 100 &&
+              find.byType(SupportPrivacyReviewSheet).evaluate().isEmpty;
+          turn++
+        ) {
+          await tester.pump();
+          await f.action(tester, () => Future<void>.delayed(Duration.zero));
+        }
+        expect(find.byType(SupportPrivacyReviewSheet), findsOneWidget);
         final snapshot = tester.widget<SupportSendSettingsSnapshot>(
           find.byType(SupportSendSettingsSnapshot),
         );

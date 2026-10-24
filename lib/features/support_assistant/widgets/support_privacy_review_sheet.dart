@@ -28,6 +28,8 @@ class SupportPrivacyReviewSheet extends StatefulWidget {
 class _ReviewSheetState extends State<SupportPrivacyReviewSheet> {
   late final void Function() _stop;
   bool _closed = false;
+  ModalRoute<bool>? _route;
+  NavigatorState? _navigator;
 
   @override
   void initState() {
@@ -44,10 +46,31 @@ class _ReviewSheetState extends State<SupportPrivacyReviewSheet> {
     super.dispose();
   }
 
-  void _finish(bool confirmed) {
-    if (_closed || (confirmed && !widget.isCurrent())) return;
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _route ??= ModalRoute.of<bool>(context);
+    _navigator ??= Navigator.of(context);
+  }
+
+  @override
+  void deactivate() {
     _closed = true;
-    Navigator.of(context).pop(confirmed);
+    super.deactivate();
+  }
+
+  void _finish(bool confirmed) {
+    if (!mounted ||
+        _closed ||
+        _route?.isCurrent != true ||
+        (confirmed && !widget.isCurrent()) ||
+        !mounted ||
+        _closed ||
+        _route?.isCurrent != true) {
+      return;
+    }
+    _closed = true;
+    _navigator?.pop(confirmed);
   }
 
   @override
@@ -141,7 +164,12 @@ class _ReviewSheetState extends State<SupportPrivacyReviewSheet> {
                 tone: widget.recovery
                     ? GlazeActionTone.destructive
                     : GlazeActionTone.primary,
-                onTap: current ? () => _finish(true) : null,
+                onTap:
+                    current &&
+                        (widget.recovery ||
+                            recipient is SupportResolvedRecipient)
+                    ? () => _finish(true)
+                    : null,
               ),
             ),
             Padding(
