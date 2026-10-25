@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -104,10 +105,22 @@ class _DatabaseRecoveryScreenState
                         style: Theme.of(context).textTheme.headlineSmall,
                       ),
                       const SizedBox(height: 16),
-                      const Text(
-                        'The normal application is not open. Nothing is restored by a command-line flag. '
-                        'Choose a local .db backup, review the fixed destination, then use the destructive button below.',
+                      Text(
+                        Platform.isAndroid
+                            ? 'This cold-start recovery surface opened from the Android launcher shortcut. '
+                                  'Choose a self-contained .db backup, review the destination, then approve replacement. '
+                                  'The launcher action itself grants no file or restore approval.'
+                            : 'The normal application is not open. Nothing is restored by a command-line flag. '
+                                  'Choose a local .db backup, review the fixed destination, then use the destructive button below.',
                       ),
+                      if (Platform.isAndroid) ...[
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Android’s picker makes a private cache copy; that copy is checked, not the external original. '
+                          'Use an exported main-only backup. Missing sidecars in the copy do not prove that the original had no WAL. '
+                          'Only the verified logical original is retained; no raw four-file archive is promised.',
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       if (widget.targetPath case final target?) ...[
                         const Text('This installation’s exact destination:'),
@@ -226,11 +239,16 @@ class _DatabaseRecoveryScreenState
 
 String _message(DatabaseRestoreCode code) => switch (code) {
   DatabaseRestoreCode.busy =>
-    'Another process owns startup. No migration or normal database open was attempted.',
+    Platform.isAndroid
+        ? 'Astoria still owns startup. Removing its Activity or recent-task card is not a process stop. '
+              'Use Android App info → Force stop, then the launcher’s Database recovery shortcut. No database was opened here.'
+        : 'Another process owns startup. No migration or normal database open was attempted.',
   DatabaseRestoreCode.interruptedRequiresFreshConfirmation =>
     'An interrupted-restore marker blocks startup. It will not be cleared or replayed.',
   DatabaseRestoreCode.unsupported =>
-    'This recovery mode requires an existing canonical local Windows installation and supported storage.',
+    Platform.isAndroid
+        ? 'The native Android storage or SQLite identity mechanism is unsupported. No replacement was authorized.'
+        : 'This recovery mode requires an existing canonical local Windows installation and supported storage.',
   DatabaseRestoreCode.originalRestored =>
     'SQLite reported the logical original restored. Normal fallback is deliberately not automatic.',
   DatabaseRestoreCode.unavailable =>

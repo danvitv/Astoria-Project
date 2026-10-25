@@ -13,12 +13,15 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:sqlite3/unstable/ffi_bindings.dart' as nsql;
 
 import '../../support/support_payload_cipher.dart';
+import '../../services/android_snapshot_namespace.dart';
 import '../app_db.dart';
 import 'chat_repo.dart';
 import 'support_repo.dart';
 
 part 'database_restore/restore_state.dart';
 part 'database_restore/restore_startup_owner.dart';
+part 'database_restore/restore_file_port.dart';
+part 'database_restore/restore_android_files.dart';
 part 'database_restore/restore_windows.dart';
 part 'database_restore/restore_sqlite.dart';
 part 'database_restore/restore_schema.dart';
@@ -26,6 +29,8 @@ part 'database_restore/restore_digest.dart';
 part 'database_restore/restore_originals.dart';
 part 'database_restore/restore_owner.dart';
 part 'database_restore/restore_engine.dart';
+part 'database_restore/restore_unix_identity.dart';
+part 'database_restore/restore_android_sqlite.dart';
 
 /// Offline native composition only. This has NO default source, data-root
 /// lookup, provider drain, model authority, startup integration or GUI consent.

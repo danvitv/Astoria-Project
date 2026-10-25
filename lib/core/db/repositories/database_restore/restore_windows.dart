@@ -2,8 +2,39 @@ part of '../database_restore_repo.dart';
 
 /// The only dynamically opened DLL is the Windows system DLL. SQLite controls
 /// below borrow the already loaded module; no SQLite DLL/VFS is loaded here.
-final class _RestoreWindows {
+final class _RestoreWindows implements _RestoreFilePort {
   _RestoreWindows() : _dll = DynamicLibrary.open('kernel32.dll');
+  @override
+  p.Context get paths => p.windows;
+  @override
+  String? get androidDataRoot => null;
+  @override
+  void releaseOwnedProofs() {}
+  @override
+  List<_RestorePin> pinAncestors(String parent) {
+    final chain = <String>[];
+    var path = parent;
+    while (true) {
+      chain.add(path);
+      final next = p.windows.dirname(path);
+      if (next == path) break;
+      path = next;
+    }
+    final pins = <_RestorePin>[];
+    try {
+      for (final path in chain.reversed) {
+        requirePath(path);
+        pins.add(pin(path, directory: true));
+      }
+      return pins;
+    } catch (_) {
+      for (final value in pins.reversed) {
+        value.close();
+      }
+      rethrow;
+    }
+  }
+
   final DynamicLibrary _dll;
   late final _alloc = _dll
       .lookupFunction<
@@ -287,7 +318,7 @@ final class _RestoreWindows {
       } finally {
         free(output.cast());
       }
-      return _RestorePin(this, handle, path, (
+      return _RestoreWindowsPin(this, handle, path, (
         info[7],
         info[11],
         info[12],
@@ -428,8 +459,14 @@ final class _RestoreWindows {
   }
 }
 
-final class _RestorePin {
-  _RestorePin(this.api, this.handle, this.path, this.identity, this.directory);
+final class _RestoreWindowsPin implements _RestorePin {
+  _RestoreWindowsPin(
+    this.api,
+    this.handle,
+    this.path,
+    this.identity,
+    this.directory,
+  );
   final _RestoreWindows api;
   final Pointer<Void> handle;
   final String path;

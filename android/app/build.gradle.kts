@@ -127,6 +127,7 @@ android {
 
     defaultConfig {
         applicationId = "app.astoria.flutter$channelApplicationIdSuffix"
+        resValue("string", "recovery_launcher_package", "app.astoria.flutter$channelApplicationIdSuffix")
         manifestPlaceholders["appLabel"] = channelAppLabel
         val dropboxKey = rootProject.file("../.env").takeIf { it.exists() }
             ?.readLines()?.firstOrNull { it.startsWith("DROPBOX_APP_KEY=") }

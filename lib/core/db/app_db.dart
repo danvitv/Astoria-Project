@@ -123,9 +123,26 @@ class AppDatabase extends _$AppDatabase {
     sqlite.Database connection, {
     bool closeUnderlyingOnClose = true,
     void Function()? checkSnapshotSource,
+    AndroidSnapshotNamespace? androidSnapshotNamespace,
   }) {
     final native = _AppDatabaseNativeFile.fromOpened(connection);
     native.checkSnapshotSource = checkSnapshotSource;
+    if (androidSnapshotNamespace != null) {
+      final file = native.file;
+      if (!Platform.isAndroid ||
+          file == null ||
+          !p.posix.isWithin(androidSnapshotNamespace.dataRoot, file.path) ||
+          p.posix.basename(file.path) != 'astoria.db') {
+        throw StateError('Accepted native snapshot namespace unavailable');
+      }
+      // Install on THIS retained raw, not another opened/background connection.
+      BackgroundDatabaseSnapshotWorker.install(
+        connection,
+        sourcePath: file.path,
+        privateStageRoot: androidSnapshotNamespace.workerStageRoot,
+      );
+      native.androidSnapshotNamespace = androidSnapshotNamespace;
+    }
     return AppDatabase._openedNative(
       NativeDatabase.opened(
         connection,

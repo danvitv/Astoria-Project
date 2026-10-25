@@ -21,6 +21,17 @@ final class AndroidSnapshotNamespace {
   }
 
   static Future<AndroidSnapshotNamespace?> forSource(File source) async {
+    final namespace = await forStartup();
+    if (namespace == null ||
+        !p.posix.isWithin(namespace.dataRoot, source.path) ||
+        p.posix.basename(source.path) != 'astoria.db')
+      return null;
+    return namespace;
+  }
+
+  /// Existing Context metadata only. In particular, do not call path_provider's
+  /// documents/cache accessors: those may create directories before admission.
+  static Future<AndroidSnapshotNamespace?> forStartup() async {
     if (!Platform.isAndroid) return null;
     try {
       final root = await const MethodChannel(
@@ -29,9 +40,7 @@ final class AndroidSnapshotNamespace {
       if (root == null ||
           !p.posix.isAbsolute(root) ||
           root.contains('\u0000') ||
-          p.posix.normalize(root) != root ||
-          !p.posix.isWithin(root, source.path) ||
-          p.posix.basename(source.path) != 'astoria.db')
+          p.posix.normalize(root) != root)
         return null;
       return AndroidSnapshotNamespace._(root);
     } catch (_) {

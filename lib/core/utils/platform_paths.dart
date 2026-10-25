@@ -42,6 +42,29 @@ Future<String> getAppDataDir() async {
   return base;
 }
 
+/// Spelling only, matching Android path_provider's getDir("flutter") layout.
+/// Native startup pins prove the existing anchor; absent descendants stay absent.
+({Directory startupDirectory, File target}) resolveAndroidStartupPaths(
+  String canonicalApplicationData,
+) {
+  if (!p.posix.isAbsolute(canonicalApplicationData) ||
+      p.posix.normalize(canonicalApplicationData) != canonicalApplicationData ||
+      canonicalApplicationData.contains('\u0000')) {
+    throw UnsupportedError('Android startup anchor unavailable');
+  }
+  return (
+    startupDirectory: Directory(canonicalApplicationData),
+    target: File(
+      p.posix.join(
+        canonicalApplicationData,
+        'app_flutter',
+        'Astoria',
+        'astoria.db',
+      ),
+    ),
+  );
+}
+
 /// Resolves a stored avatar/gallery/etc. path for display.
 ///
 /// iOS changes the app sandbox container UUID on every reinstall/OS update, so

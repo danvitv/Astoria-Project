@@ -73,6 +73,14 @@ final class AcceptedDatabaseRestore {
   }
   final NativeDatabaseRestoreOwner _owner;
   final AppDatabase _database;
+  bool belongsToStartup(NativeDatabaseStartupOwner startup) =>
+      identical(_owner._startup, startup) &&
+      identical(startup._restore, _owner) &&
+      _owner._state == _RestoreState.accepted &&
+      !_owner._retired &&
+      !_database.isClosing &&
+      _owner._wrapper?.closed == false &&
+      identical(_owner._wrapper?.database, _database);
   AppDatabase get database {
     if (_owner._state != _RestoreState.accepted || _owner._retired) {
       throw const DatabaseRestoreException(DatabaseRestoreCode.closed);

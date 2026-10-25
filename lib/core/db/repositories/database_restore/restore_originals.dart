@@ -22,7 +22,7 @@ final class _RestoreOriginals {
 
   static _RestoreOriginals create(NativeDatabaseRestoreOwner owner) {
     final stage = owner._windows.createStage(
-      p.windows.dirname(owner._targetPath),
+      owner._windows.paths.dirname(owner._targetPath),
     );
     return _RestoreOriginals(
       owner,
@@ -42,7 +42,7 @@ final class _RestoreOriginals {
       owner._check,
     );
     owner._check();
-    final path = p.windows.join(stage, 'original.db');
+    final path = windows.paths.join(stage, 'original.db');
     final file = nativePin = windows.pin(path, create: true, write: true);
     _ownedFiles.add(path);
     raw = native.open(path, OpenMode.readWrite);
@@ -57,51 +57,56 @@ final class _RestoreOriginals {
     _verified = true;
     // Original logical damage does NOT demand current candidate registration,
     // FK/payload semantics or a different application version to be readable.
-    for (final suffix in ['', '-wal', '-shm', '-journal']) {
-      owner._check();
-      final sourcePath = '${owner._targetPath}$suffix';
-      if (!windows.exists(sourcePath)) {
-        _observations[suffix] = (false, 0, null);
-        continue;
-      }
-      final input = windows.pin(sourcePath);
-      _observationPins.add(input);
-      _RestorePin? output;
-      final copyPath = p.windows.join(
-        stage,
-        suffix.isEmpty ? 'main.raw' : '${suffix.substring(1)}.raw',
-      );
-      try {
-        output = windows.pin(copyPath, create: true, write: true);
-        _observationPins.add(output);
-        _ownedFiles.add(copyPath);
-        final size = input.length;
-        final hash = await windows.copyOrHash(
-          input,
-          owner._check,
-          output: output,
+    // Closing any ordinary descriptor for the live target inode would release
+    // process-owned POSIX locks. Android retains ONLY the verified logical
+    // SQLite backup; Windows's four raw observations remain unchanged.
+    if (windows is _RestoreWindows) {
+      for (final suffix in ['', '-wal', '-shm', '-journal']) {
+        owner._check();
+        final sourcePath = '${owner._targetPath}$suffix';
+        if (!windows.exists(sourcePath)) {
+          _observations[suffix] = (false, 0, null);
+          continue;
+        }
+        final input = windows.pin(sourcePath);
+        _observationPins.add(input);
+        _RestorePin? output;
+        final copyPath = p.windows.join(
+          stage,
+          suffix.isEmpty ? 'main.raw' : '${suffix.substring(1)}.raw',
         );
-        owner._check();
-        output.close();
-        output = null;
-        final retained = windows.pin(copyPath, immutable: true);
-        _rawPins.add(retained);
-        if (retained.length != size ||
-            await windows.copyOrHash(retained, owner._check) != hash)
-          _refuse(DatabaseRestoreCode.recoveryRequired);
-        owner._check();
-        _observations[suffix] = (true, size, hash);
-      } catch (error, stack) {
-        owner._work.remember(error, stack);
-        rethrow;
-      } finally {
-        output?.close();
-        input.close();
+        try {
+          output = windows.pin(copyPath, create: true, write: true);
+          _observationPins.add(output);
+          _ownedFiles.add(copyPath);
+          final size = input.length;
+          final hash = await windows.copyOrHash(
+            input,
+            owner._check,
+            output: output,
+          );
+          owner._check();
+          output.close();
+          output = null;
+          final retained = windows.pin(copyPath, immutable: true);
+          _rawPins.add(retained);
+          if (retained.length != size ||
+              await windows.copyOrHash(retained, owner._check) != hash)
+            _refuse(DatabaseRestoreCode.recoveryRequired);
+          owner._check();
+          _observations[suffix] = (true, size, hash);
+        } catch (error, stack) {
+          owner._work.remember(error, stack);
+          rethrow;
+        } finally {
+          output?.close();
+          input.close();
+        }
       }
     }
     owner._check();
     marker = windows.pin(owner._markerPath, create: true, write: true);
-    windows.writeMarker(marker!, p.windows.basename(stage));
+    windows.writeMarker(marker!, windows.paths.basename(stage));
     owner._check();
   }
 
@@ -116,7 +121,7 @@ final class _RestoreOriginals {
   void recordInterruption() {
     if (owner._windows.exists(owner._markerPath)) return;
     marker = owner._windows.pin(owner._markerPath, create: true, write: true);
-    owner._windows.writeMarker(marker!, p.windows.basename(stage));
+    owner._windows.writeMarker(marker!, owner._windows.paths.basename(stage));
   }
 
   void closeConnections() {
@@ -135,6 +140,11 @@ final class _RestoreOriginals {
   Future<void> releaseAfterAcceptance() async {
     if (_released) return;
     owner._check();
+    // SQLite-created sidecars lack exclusive owned-file proof on Android.
+    // Keep the original by default rather than deleting by guessed paths.
+    if (owner._windows.androidDataRoot != null) {
+      _refuse(DatabaseRestoreCode.unsupported);
+    }
     // Release only this stage's original connection; accepted target stays live.
     closeConnections();
     // End recoverable-original custody BEFORE the first destructive deletion.

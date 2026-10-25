@@ -5,7 +5,10 @@ part of '../database_restore_repo.dart';
 /// Retain this owner until process termination, not main/runApp/widget return.
 final class NativeDatabaseStartupOwner {
   NativeDatabaseStartupOwner._(this._windows, this._targetPath);
-  final _RestoreWindows _windows;
+  final _RestoreFilePort _windows;
+  AndroidSnapshotNamespace? _androidSnapshotNamespace;
+  AndroidSnapshotNamespace? get androidSnapshotNamespace =>
+      _androidSnapshotNamespace;
   final String _targetPath;
   final _directories = <_RestorePin>[];
   _RestorePin? _kernel;
@@ -75,20 +78,65 @@ final class NativeDatabaseStartupOwner {
   bool get normalOpeningBlocked =>
       _closed || _blocked || _accepted || _normalClaimed || _restore != null;
 
+  /// Existing Android Context anchor; no documents/cache directory lookup or
+  /// creation, candidate, key or SQLite module is involved in acquisition.
+  static NativeDatabaseStartupOwner acquireAndroid({
+    required AndroidSnapshotNamespace namespace,
+  }) {
+    if (!Platform.isAndroid) _refuse(DatabaseRestoreCode.unsupported);
+    final root = namespace.dataRoot;
+    final target = p.posix.join(root, 'app_flutter', 'Astoria', 'astoria.db');
+    final files = _RestoreAndroidFiles(root);
+    final owner = NativeDatabaseStartupOwner._(files, target)
+      .._androidSnapshotNamespace = namespace;
+    try {
+      owner._directories.addAll(files.pinAncestors(root));
+      owner._kernel = files.pin(
+        p.posix.join(root, '.astoria-restore-startup.lock'),
+        lock: true,
+      );
+      owner._checkMarker();
+      return owner;
+    } catch (error, stack) {
+      owner._kernel?.close();
+      for (final pin in owner._directories.reversed) {
+        pin.close();
+      }
+      Error.throwWithStackTrace(
+        DatabaseRestoreException(
+          error is DatabaseRestoreException
+              ? error.code
+              : DatabaseRestoreCode.unsupported,
+        ),
+        stack,
+      );
+    }
+  }
+
+  bool get recoveryTargetAvailable {
+    _checkMarker();
+    if (normalOpeningBlocked) return false;
+    return _windows.exists(_targetPath);
+  }
+
   _RestorePin _pinKernel(String path) {
-    _windows.requirePath(path);
-    return _windows.text(path, (name) {
+    final windows = _windows;
+    if (windows is! _RestoreWindows) {
+      throw const DatabaseRestoreException(DatabaseRestoreCode.unsupported);
+    }
+    windows.requirePath(path);
+    return windows.text(path, (name) {
       // Resolve both lazy FFI bindings BEFORE CreateFileW: a first GetLastError
       // symbol lookup after failure can overwrite the actual sharing error.
-      final open = _windows._open;
-      final lastError = _windows._error;
+      final open = windows._open;
+      final lastError = windows._error;
       lastError();
       // Reuse Core's binding/pin, with immediate OS error classification: only
       // real sharing/lock conflict is busy; ACL/other open failures unsupported.
       final handle = open(name, 0x80000000, 0, nullptr, 4, 0x00200000, nullptr);
       // Capture before even Dart handle validation (which may enter the VM).
       final error = lastError();
-      if (!_windows._valid(handle)) {
+      if (!windows._valid(handle)) {
         _refuse(
           error == 32 || error == 33
               ? DatabaseRestoreCode.busy
@@ -96,13 +144,13 @@ final class NativeDatabaseStartupOwner {
         );
       }
       try {
-        final info = _windows.information(handle);
+        final info = windows.information(handle);
         if ((info[0] & 0x410) != 0 || info[10] != 1) {
           _refuse(DatabaseRestoreCode.unsupported);
         }
-        final output = _windows.allocate(1024).cast<Uint16>();
+        final output = windows.allocate(1024).cast<Uint16>();
         try {
-          final length = _windows._finalName(handle, output, 512, 0);
+          final length = windows._finalName(handle, output, 512, 0);
           if (length == 0 ||
               length >= 512 ||
               !p.windows.equals(
@@ -112,15 +160,15 @@ final class NativeDatabaseStartupOwner {
             _refuse(DatabaseRestoreCode.unsupported);
           }
         } finally {
-          _windows.free(output.cast());
+          windows.free(output.cast());
         }
-        return _RestorePin(_windows, handle, path, (
+        return _RestoreWindowsPin(windows, handle, path, (
           info[7],
           info[11],
           info[12],
         ), false);
       } catch (_) {
-        _windows.closeHandle(handle);
+        windows.closeHandle(handle);
         rethrow;
       }
     });
@@ -141,12 +189,12 @@ final class NativeDatabaseStartupOwner {
     try {
       // A missing parent means absent marker; access/reparse/other failures are
       // NOT absence. Pin an existing parent for the complete observation.
-      final parent = p.windows.dirname(_targetPath);
+      final parent = _windows.paths.dirname(_targetPath);
       if (_windows.exists(parent)) {
         final pin = _windows.pin(parent, directory: true);
         try {
           if (_windows.exists(
-            p.windows.join(parent, '.astoria-restore-interrupted'),
+            _windows.paths.join(parent, '.astoria-restore-interrupted'),
           )) {
             _blocked = true;
           }

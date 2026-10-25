@@ -24,6 +24,48 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 
 class MainActivity : FlutterActivity() {
+    companion object {
+        private const val RECOVERY_ACTION = "app.astoria.flutter.RECOVERY"
+    }
+
+    // A launcher shortcut selects only the cold-start surface. Never forward
+    // intent paths, route payloads, entrypoint arguments or prior approvals.
+    override fun getDartEntrypointFunctionName(): String =
+        if (intent.action == RECOVERY_ACTION) "databaseRecoveryMain"
+        else super.getDartEntrypointFunctionName()
+
+    override fun getDartEntrypointArgs(): List<String>? =
+        if (intent.action == RECOVERY_ACTION) emptyList()
+        else super.getDartEntrypointArgs()
+
+    override fun getCachedEngineId(): String? =
+        if (intent.action == RECOVERY_ACTION) null else super.getCachedEngineId()
+
+    override fun getCachedEngineGroupId(): String? =
+        if (intent.action == RECOVERY_ACTION) null else super.getCachedEngineGroupId()
+
+    override fun getInitialRoute(): String? =
+        if (intent.action == RECOVERY_ACTION) "/" else super.getInitialRoute()
+
+    override fun shouldHandleDeeplinking(): Boolean =
+        intent.action != RECOVERY_ACTION && super.shouldHandleDeeplinking()
+
+    override fun onNewIntent(incoming: Intent) {
+        if (incoming.action != RECOVERY_ACTION) {
+            super.onNewIntent(incoming)
+            return
+        }
+        val surfaceOnly = Intent(RECOVERY_ACTION)
+        setIntent(surfaceOnly)
+        super.onNewIntent(surfaceOnly)
+        // An existing Activity/engine is not a cold process. Do not restart,
+        // release storage, or claim that its writers have drained.
+        flutterEngine?.dartExecutor?.binaryMessenger?.let { messenger ->
+            MethodChannel(messenger, "app.astoria.flutter/recovery_entry")
+                .invokeMethod("requiresColdStart", null)
+        }
+    }
+
     private var pendingPermissionResult: MethodChannel.Result? = null
     private val wallpaperPermissionCode = 9911
     private var powerSaveReceiver: BroadcastReceiver? = null

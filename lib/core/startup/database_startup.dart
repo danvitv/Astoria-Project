@@ -4,20 +4,25 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
-import '../constants/build_channel.dart';
-import '../credentials/credential_storage.dart';
-import '../credentials/credential_vault.dart';
+import '../services/android_snapshot_namespace.dart';
 import '../db/app_db.dart';
 import '../db/repositories/database_restore_repo.dart';
 import '../db/repositories/llm_request_capture_repo.dart';
 import '../state/credential_vault_provider.dart';
 import '../state/db_provider.dart';
-import '../support/support_payload_cipher.dart';
 import '../utils/platform_paths.dart';
+import 'database_recovery_credentials.dart';
+
+export 'database_recovery_credentials.dart';
 
 enum DatabaseStartupSelection { normal, recovery, rejected }
+
+/// Android mode selection belongs to the launcher entrypoint, never CLI payloads.
+DatabaseStartupSelection parseAndroidDatabaseStartupArguments(
+  List<String> args,
+) => args.isEmpty
+    ? DatabaseStartupSelection.normal
+    : DatabaseStartupSelection.rejected;
 
 /// Arguments select a surface, never a file, approval or persisted action.
 DatabaseStartupSelection parseDatabaseStartupArguments(List<String> args) {
@@ -26,27 +31,6 @@ DatabaseStartupSelection parseDatabaseStartupArguments(List<String> args) {
     return DatabaseStartupSelection.recovery;
   }
   return DatabaseStartupSelection.rejected;
-}
-
-/// Compose only after a fresh picker result. Neither construction reads storage.
-/// Retain these SAME owners when entering the normal application after recovery.
-final class DatabaseRecoveryCredentials {
-  DatabaseRecoveryCredentials({required this.storage, required String channel})
-    : vault = CredentialVault(storage: storage, buildChannel: channel) {
-    cipher = SupportPayloadCipher(vault: vault);
-  }
-
-  factory DatabaseRecoveryCredentials.native() => DatabaseRecoveryCredentials(
-    storage: FlutterSecureCredentialStorage(
-      const FlutterSecureStorage(),
-      buildChannel: buildChannel,
-    ),
-    channel: buildChannel,
-  );
-
-  final CredentialStorage storage;
-  final CredentialVault vault;
-  late final SupportPayloadCipher cipher;
 }
 
 /// Process-owned storage, not a widget/scope lifetime or global writer drain.
@@ -67,7 +51,7 @@ final class ProcessDatabaseStartup {
       target = null,
       environment = null,
       _openNormal = null {
-    if (Platform.isWindows) {
+    if (Platform.isWindows || Platform.isAndroid) {
       throw const DatabaseRestoreException(DatabaseRestoreCode.unavailable);
     }
   }
@@ -88,6 +72,22 @@ final class ProcessDatabaseStartup {
     );
   }
 
+  static Future<ProcessDatabaseStartup> acquireAndroid() async {
+    final namespace = await AndroidSnapshotNamespace.forStartup();
+    if (namespace == null) {
+      throw const DatabaseRestoreException(DatabaseRestoreCode.unavailable);
+    }
+    final paths = resolveAndroidStartupPaths(namespace.dataRoot);
+    final owner = NativeDatabaseStartupOwner.acquireAndroid(
+      namespace: namespace,
+    );
+    return ProcessDatabaseStartup._android(owner, paths.target);
+  }
+
+  ProcessDatabaseStartup._android(this.startupOwner, this.target)
+    : environment = null,
+      _openNormal = _openFixedNormal;
+
   final NativeDatabaseStartupOwner? startupOwner;
   final File? target;
   final Map<String, String>? environment;
@@ -105,6 +105,8 @@ final class ProcessDatabaseStartup {
   LlmRequestCaptureRepo get capture =>
       _capture ?? (throw StateError('Startup not admitted'));
   bool get normalOpeningBlocked => startupOwner?.normalOpeningBlocked ?? false;
+  bool get recoveryTargetAvailable =>
+      startupOwner?.recoveryTargetAvailable ?? false;
   bool get storageBootstrapAdmitted =>
       _storageBootstrapAdmitted && !_fixtureClosed;
 
@@ -132,6 +134,10 @@ final class ProcessDatabaseStartup {
     if (_database != null || _opening != null || startupOwner == null) {
       throw const DatabaseRestoreException(DatabaseRestoreCode.stale);
     }
+    if (!accepted.belongsToStartup(startupOwner!)) {
+      throw const DatabaseRestoreException(DatabaseRestoreCode.stale);
+    }
+    credentials.enableNormalStorage(accepted, startupOwner!);
     _accepted = accepted;
     _credentials = credentials;
     _install(accepted.database); // The exact already-open wrapper/raw.

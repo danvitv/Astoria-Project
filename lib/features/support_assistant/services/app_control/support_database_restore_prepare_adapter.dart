@@ -43,7 +43,11 @@ final class SupportDatabaseRestorePrepareAdapter
         return SupportAppActionOutcome(
           SupportAppActionCode.unavailable,
           data: {
-            'status': Platform.isWindows ? 'restartRequired' : 'unsupported',
+            'status': Platform.isWindows
+                ? 'restartRequired'
+                : Platform.isAndroid
+                ? 'androidColdStartRequired'
+                : 'unsupported',
             'restore': 'noRestore',
           },
         );

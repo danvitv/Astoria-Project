@@ -65,6 +65,7 @@ extension _RestoreEngine on NativeDatabaseRestoreOwner {
         AppDatabase.openedNative(
           _target!.database,
           closeUnderlyingOnClose: false,
+          androidSnapshotNamespace: _startup?.androidSnapshotNamespace,
         ),
       );
       await _RestoreAcceptance.accept(
@@ -97,7 +98,10 @@ extension _RestoreEngine on NativeDatabaseRestoreOwner {
     } catch (error, stack) {
       _work.remember(error, stack);
       if (_effectStarted) return _reverse();
-      if (_work.pending != 0) {
+      if (_work.pending != 0 ||
+          (_windows.androidDataRoot != null &&
+              error is DatabaseRestoreException &&
+              error.code == DatabaseRestoreCode.recoveryRequired)) {
         _state = _RestoreState.blocked;
         return const DatabaseRestoreResult._(
           DatabaseRestoreCode.recoveryRequired,

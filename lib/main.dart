@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:easy_localization/easy_localization.dart';
@@ -16,7 +17,9 @@ import 'core/db/repositories/database_restore_repo.dart';
 import 'core/startup/database_startup.dart';
 import 'core/startup/windows_startup_migrations.dart';
 import 'core/utils/platform_paths.dart';
+import 'core/navigation/router.dart' show rootNavigatorKey;
 import 'features/database_recovery/database_recovery_controller.dart';
+import 'features/database_recovery/database_recovery_entry_notice.dart';
 import 'features/database_recovery/database_recovery_screen.dart';
 
 final appRestartKey = GlobalKey();
@@ -24,10 +27,33 @@ final appRestartKey = GlobalKey();
 // Deliberately retained until OS termination. No Dart/widget lifecycle closes
 // this guard or pretends that all application writers have drained.
 ProcessDatabaseStartup? _processDatabaseStartup;
+AndroidRecoveryEntryNotice? _recoveryEntryNotice;
 
 Future<void> main(List<String> args) async {
+  final selection = Platform.isAndroid
+      ? parseAndroidDatabaseStartupArguments(args)
+      : parseDatabaseStartupArguments(args);
+  await _startProcess(selection);
+}
+
+/// Android launcher recovery Activity uses a dedicated cold-process entrypoint.
+/// No intent file/approval/route arguments or persisted selector are accepted.
+@pragma('vm:entry-point')
+Future<void> databaseRecoveryMain() => _startProcess(
+  Platform.isAndroid
+      ? DatabaseStartupSelection.recovery
+      : DatabaseStartupSelection.rejected,
+);
+
+Future<void> _startProcess(DatabaseStartupSelection selection) async {
   WidgetsFlutterBinding.ensureInitialized();
-  final selection = parseDatabaseStartupArguments(args);
+  if (Platform.isAndroid) {
+    _recoveryEntryNotice ??= AndroidRecoveryEntryNotice(
+      isNormalCurrent: () =>
+          _processDatabaseStartup?.storageBootstrapAdmitted == true,
+      context: () => rootNavigatorKey.currentContext,
+    )..install();
+  }
   ProcessDatabaseStartup process;
   if (Platform.isWindows) {
     try {
@@ -41,12 +67,26 @@ Future<void> main(List<String> args) async {
       );
       return; // Fail closed: no migrations, prefs, key or ordinary providers.
     }
+  } else if (Platform.isAndroid) {
+    try {
+      process = await ProcessDatabaseStartup.acquireAndroid();
+      _processDatabaseStartup = process;
+    } catch (error) {
+      await _showRecovery(
+        block: error is DatabaseRestoreException
+            ? error.code
+            : DatabaseRestoreCode.unsupported,
+      );
+      return;
+    }
   } else {
     process = ProcessDatabaseStartup.otherPlatforms();
     _processDatabaseStartup = process;
   }
   if (selection == DatabaseStartupSelection.rejected ||
-      (selection == DatabaseStartupSelection.recovery && !Platform.isWindows) ||
+      (selection == DatabaseStartupSelection.recovery &&
+          !Platform.isWindows &&
+          !Platform.isAndroid) ||
       process.normalOpeningBlocked) {
     await _showRecovery(
       process: process,
@@ -64,7 +104,7 @@ Future<void> main(List<String> args) async {
     await process.openNormal(() => _bootstrapNormal(process));
     _publishNormal(process);
   } catch (_) {
-    if (!Platform.isWindows) rethrow;
+    if (!Platform.isWindows && !Platform.isAndroid) rethrow;
     await _showRecovery(
       process: process,
       block: DatabaseRestoreCode.recoveryRequired,
@@ -76,6 +116,14 @@ Future<void> _showRecovery({
   ProcessDatabaseStartup? process,
   DatabaseRestoreCode? block,
 }) async {
+  var recoveryAvailable = false;
+  if (block == null && process != null) {
+    try {
+      recoveryAvailable = process.recoveryTargetAvailable;
+    } catch (_) {
+      block = DatabaseRestoreCode.unsupported;
+    }
+  }
   try {
     await initDesktopWindow(persistGeometry: false);
   } catch (_) {
@@ -87,8 +135,7 @@ Future<void> _showRecovery({
       controller: DatabaseRecoveryController(
         process: process,
         initialBlock: block,
-        recoveryAvailable:
-            block == null && process?.target?.existsSync() == true,
+        recoveryAvailable: recoveryAvailable,
         bootstrap: () => _bootstrapNormal(process!),
         publishNormal: _publishNormal,
       ),
@@ -221,6 +268,16 @@ void _publishNormal(ProcessDatabaseStartup process) {
       child: _RestartableApp(process: _processDatabaseStartup!),
     ),
   );
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final notice = _recoveryEntryNotice;
+    if (notice != null) {
+      // The original notice owns its route future; this is not a storage action.
+      final original = notice.presentPending();
+      unawaited(
+        original.then<void>((_) {}, onError: (Object _, StackTrace _) {}),
+      );
+    }
+  });
 }
 
 class _RestartableApp extends StatefulWidget {
