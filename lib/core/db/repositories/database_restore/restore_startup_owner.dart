@@ -14,6 +14,7 @@ final class NativeDatabaseStartupOwner {
   _RestorePin? _kernel;
   NativeDatabaseRestoreOwner? _restore;
   bool _blocked = false;
+  DatabaseRestoreCode? _blockReason;
   bool _normalClaimed = false;
   bool _accepted = false;
   bool _closed = false;
@@ -77,6 +78,12 @@ final class NativeDatabaseStartupOwner {
 
   bool get normalOpeningBlocked =>
       _closed || _blocked || _accepted || _normalClaimed || _restore != null;
+
+  DatabaseRestoreCode? get normalOpeningBlockReason {
+    if (_closed) return DatabaseRestoreCode.closed;
+    if (_blocked) return _blockReason ?? DatabaseRestoreCode.recoveryRequired;
+    return normalOpeningBlocked ? DatabaseRestoreCode.stale : null;
+  }
 
   /// Existing Android Context anchor; no documents/cache directory lookup or
   /// creation, candidate, key or SQLite module is involved in acquisition.
@@ -192,19 +199,24 @@ final class NativeDatabaseStartupOwner {
       final parent = _windows.paths.dirname(_targetPath);
       if (_windows.exists(parent)) {
         final pin = _windows.pin(parent, directory: true);
+        var markerExists = false;
         try {
-          if (_windows.exists(
+          markerExists = _windows.exists(
             _windows.paths.join(parent, '.astoria-restore-interrupted'),
-          )) {
-            _blocked = true;
-          }
+          );
           pin.check();
         } finally {
           pin.close();
         }
+        if (markerExists) {
+          _blocked = true;
+          _blockReason =
+              DatabaseRestoreCode.interruptedRequiresFreshConfirmation;
+        }
       }
     } catch (_) {
       _blocked = true;
+      _blockReason ??= DatabaseRestoreCode.startupInspectionFailed;
     }
   }
 
@@ -213,7 +225,7 @@ final class NativeDatabaseStartupOwner {
   void claimNormalOpening() {
     _checkMarker();
     if (_blocked) {
-      _refuse(DatabaseRestoreCode.interruptedRequiresFreshConfirmation);
+      _refuse(normalOpeningBlockReason!);
     }
     if (_accepted || _normalClaimed || _restore != null) {
       _refuse(DatabaseRestoreCode.stale);
@@ -224,7 +236,7 @@ final class NativeDatabaseStartupOwner {
   void _requireRestoreAdmission() {
     _checkMarker();
     if (_blocked) {
-      _refuse(DatabaseRestoreCode.interruptedRequiresFreshConfirmation);
+      _refuse(normalOpeningBlockReason!);
     }
     if (_accepted || _normalClaimed || _restore != null) {
       _refuse(DatabaseRestoreCode.stale);

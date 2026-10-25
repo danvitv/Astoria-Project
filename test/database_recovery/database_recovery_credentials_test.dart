@@ -15,12 +15,53 @@ import 'package:glaze_flutter/core/startup/database_startup.dart';
 import 'package:glaze_flutter/core/support/support_payload_cipher.dart';
 import 'package:glaze_flutter/core/utils/platform_paths.dart';
 import 'package:glaze_flutter/features/database_recovery/database_recovery_entry_notice.dart';
+import 'package:glaze_flutter/features/database_recovery/database_recovery_controller.dart';
+import 'package:glaze_flutter/features/database_recovery/database_recovery_screen.dart';
 import 'package:glaze_flutter/shared/widgets/glaze_action_button.dart';
 
 import 'database_recovery_fixture.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets(
+    'Startup inspection failure shows no restore claim or backup wizard',
+    (tester) async {
+      var effects = 0;
+      final controller = DatabaseRecoveryController(
+        process: null,
+        initialBlock: DatabaseRestoreCode.startupInspectionFailed,
+        bootstrap: () async {
+          effects++;
+        },
+        publishNormal: (_) {
+          effects++;
+        },
+        picker: () async {
+          effects++;
+          return null;
+        },
+        credentialsFactory: () {
+          effects++;
+          throw StateError('No key access');
+        },
+      );
+      await tester.pumpWidget(DatabaseRecoveryApp(controller: controller));
+      await tester.pumpAndSettle();
+      expect(find.text('Astoria — запуск остановлен'), findsOneWidget);
+      expect(find.textContaining('Наличие маркера'), findsOneWidget);
+      expect(find.textContaining('маркер'), findsOneWidget);
+      expect(
+        find.textContaining('An interrupted-restore marker'),
+        findsNothing,
+      );
+      expect(find.textContaining('After fresh approval'), findsNothing);
+      expect(find.byKey(const ValueKey('recovery-pick')), findsNothing);
+      expect(find.byKey(const ValueKey('recovery-confirm')), findsNothing);
+      expect(effects, 0);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets(
     'Hot Android entry only shows a fixed notice after normal admission',

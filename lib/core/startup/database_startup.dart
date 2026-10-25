@@ -105,6 +105,8 @@ final class ProcessDatabaseStartup {
   LlmRequestCaptureRepo get capture =>
       _capture ?? (throw StateError('Startup not admitted'));
   bool get normalOpeningBlocked => startupOwner?.normalOpeningBlocked ?? false;
+  DatabaseRestoreCode? get normalOpeningBlockReason =>
+      startupOwner?.normalOpeningBlockReason;
   bool get recoveryTargetAvailable =>
       startupOwner?.recoveryTargetAvailable ?? false;
   bool get storageBootstrapAdmitted =>

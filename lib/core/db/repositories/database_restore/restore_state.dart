@@ -13,6 +13,7 @@ enum DatabaseRestoreCode {
   originalRestored,
   recoveryRequired,
   interruptedRequiresFreshConfirmation,
+  startupInspectionFailed,
   closed,
 }
 

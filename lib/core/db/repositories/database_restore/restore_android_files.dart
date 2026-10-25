@@ -46,6 +46,7 @@ final class _RestoreAndroidFiles implements _RestoreFilePort {
         'astoria_snapshot_info',
         'astoria_snapshot_close',
         'astoria_restore_uid',
+        'astoria_restore_permissions',
         'astoria_restore_entry_kind',
         'astoria_restore_candidate_file',
         'astoria_restore_startup_lock',
@@ -105,6 +106,11 @@ final class _RestoreAndroidFiles implements _RestoreFilePort {
   late final _uid = _library.lookupFunction<Uint64 Function(), int Function()>(
     'astoria_restore_uid',
   )();
+  late final _permissions = _library
+      .lookupFunction<
+        Int32 Function(Pointer<Void>),
+        int Function(Pointer<Void>)
+      >('astoria_restore_permissions');
   late final _entryKind = _library
       .lookupFunction<
         Int32 Function(Pointer<Void>, Pointer<Char>),
@@ -751,7 +757,7 @@ final class _RestoreAndroidPin implements _RestorePin {
     final type = value[2] & 0xf000;
     final actual = (value[0], value[1], 0);
     if (value[3] != api._uid ||
-        (value[2] & 0x12) != 0 ||
+        api._permissions(handle) != 0 ||
         type != (directory ? 0x4000 : 0x8000) ||
         (!directory && value[4] != 1) ||
         (_identity != null && _identity != actual)) {

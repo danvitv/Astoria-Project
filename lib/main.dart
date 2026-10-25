@@ -91,7 +91,7 @@ Future<void> _startProcess(DatabaseStartupSelection selection) async {
     await _showRecovery(
       process: process,
       block: process.normalOpeningBlocked
-          ? DatabaseRestoreCode.interruptedRequiresFreshConfirmation
+          ? process.normalOpeningBlockReason
           : DatabaseRestoreCode.unsupported,
     );
     return;

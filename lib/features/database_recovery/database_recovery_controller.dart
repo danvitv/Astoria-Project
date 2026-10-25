@@ -83,7 +83,7 @@ final class DatabaseRecoveryController extends Notifier<DatabaseRecoveryState> {
         (process == null
             ? DatabaseRestoreCode.unavailable
             : process!.normalOpeningBlocked
-            ? DatabaseRestoreCode.interruptedRequiresFreshConfirmation
+            ? process!.normalOpeningBlockReason
             : null);
     return block == null
         ? DatabaseRecoveryState(

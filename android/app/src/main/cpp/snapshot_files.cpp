@@ -6,6 +6,7 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "app_namespace_permissions.h"
 
 #define EXPORTED extern "C" __attribute__((visibility("default")))
 
@@ -104,7 +105,7 @@ int release(Pin* pin) {
   return 0;
 }
 
-Pin* canonical_root(const char* path, unsigned forbidden_mode) {
+Pin* canonical_root(const char* path) {
   if (!path || path[0] != '/' || std::strlen(path) > 4096) return nullptr;
   char* spelling = ::strdup(path + 1);
   if (!spelling) return nullptr;
@@ -122,8 +123,10 @@ Pin* canonical_root(const char* path, unsigned forbidden_mode) {
   }
   std::free(spelling);
   struct stat value{};
-  if (pin && (!info(pin, &value) || value.st_uid != getuid() ||
-      (value.st_mode & forbidden_mode) != 0)) { release(pin); pin = nullptr; }
+  if (pin && (!info(pin, &value) || !astoria::app_owned_permissions(
+      value.st_mode, value.st_uid, value.st_gid, getuid()))) {
+    release(pin); pin = nullptr;
+  }
   return pin;
 }
 }  // namespace
@@ -165,8 +168,10 @@ EXPORTED Pin* astoria_snapshot_directory(Pin* parent, const char* name, int crea
   Pin* result = retain(openat(parent->fd, name, O_PATH | O_DIRECTORY |
       O_NOFOLLOW | O_CLOEXEC), parent, name);
   struct stat value{};
-  if (result && (!info(result, &value) || value.st_uid != getuid() ||
-      (value.st_mode & 0022) != 0)) { release(result); result = nullptr; }
+  if (result && (!info(result, &value) || !astoria::app_owned_permissions(
+      value.st_mode, value.st_uid, value.st_gid, getuid()))) {
+    release(result); result = nullptr;
+  }
   return result;
 }
 
@@ -255,7 +260,8 @@ constexpr uint64_t kRestoreMaxBytes = 268435456;
 constexpr const char* kRestoreLock = ".astoria-restore-startup.lock";
 
 bool restore_mode(const struct stat& value, bool directory) {
-  return value.st_uid == getuid() && (value.st_mode & 0022) == 0 &&
+  return astoria::app_owned_permissions(value.st_mode, value.st_uid,
+      value.st_gid, getuid()) &&
       (directory ? S_ISDIR(value.st_mode) :
           (S_ISREG(value.st_mode) && value.st_nlink == 1));
 }
@@ -323,10 +329,18 @@ bool sync_restore_directory(Pin* pin) {
 
 EXPORTED uint64_t astoria_restore_uid() { return static_cast<uint64_t>(getuid()); }
 
-// Restore admits app-owned read/traverse permissions but never group/other
-// writing. The snapshot export above keeps its original private-root policy.
+// Admit the application's own primary/cache group, never another app's group
+// or world writing. Snapshot export keeps its separate strict-root policy.
 EXPORTED Pin* astoria_restore_root(const char* path) {
-  return canonical_root(path, 0022);
+  return canonical_root(path);
+}
+
+// Revalidate the actual descriptor's uid, gid and mode without changing the
+// existing six-word snapshot metadata ABI or exposing libc's stat layout.
+EXPORTED int astoria_restore_permissions(Pin* pin) {
+  struct stat value{};
+  if (!pin || !current(pin) || !info(pin, &value)) return -1;
+  return restore_mode(value, S_ISDIR(value.st_mode)) ? 0 : -1;
 }
 
 // Missing means ONLY ENOENT for this known no-follow component. ENOTDIR, ACL,

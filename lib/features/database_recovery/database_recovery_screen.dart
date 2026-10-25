@@ -101,46 +101,55 @@ class _DatabaseRecoveryScreenState
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
-                        'Astoria offline recovery',
+                        blocked
+                            ? 'Astoria — запуск остановлен'
+                            : 'Astoria offline recovery',
                         style: Theme.of(context).textTheme.headlineSmall,
                       ),
                       const SizedBox(height: 16),
-                      Text(
-                        Platform.isAndroid
-                            ? 'This cold-start recovery surface opened from the Android launcher shortcut. '
-                                  'Choose a self-contained .db backup, review the destination, then approve replacement. '
-                                  'The launcher action itself grants no file or restore approval.'
-                            : 'The normal application is not open. Nothing is restored by a command-line flag. '
-                                  'Choose a local .db backup, review the fixed destination, then use the destructive button below.',
-                      ),
-                      if (Platform.isAndroid) ...[
-                        const SizedBox(height: 12),
+                      if (blocked)
                         const Text(
-                          'Android’s picker makes a private cache copy; that copy is checked, not the external original. '
-                          'Use an exported main-only backup. Missing sidecars in the copy do not prove that the original had no WAL. '
-                          'Only the verified logical original is retained; no raw four-file archive is promised.',
+                          'Astoria не прошла проверку запуска. Не удаляй данные приложения '
+                          'и не выбирай резервную копию, чтобы обойти эту ошибку.',
+                        ),
+                      if (!blocked) ...[
+                        Text(
+                          Platform.isAndroid
+                              ? 'This cold-start recovery surface opened from the Android launcher shortcut. '
+                                    'Choose a self-contained .db backup, review the destination, then approve replacement. '
+                                    'The launcher action itself grants no file or restore approval.'
+                              : 'The normal application is not open. Nothing is restored by a command-line flag. '
+                                    'Choose a local .db backup, review the fixed destination, then use the destructive button below.',
+                        ),
+                        if (Platform.isAndroid) ...[
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Android’s picker makes a private cache copy; that copy is checked, not the external original. '
+                            'Use an exported main-only backup. Missing sidecars in the copy do not prove that the original had no WAL. '
+                            'Only the verified logical original is retained; no raw four-file archive is promised.',
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        if (widget.targetPath case final target?) ...[
+                          const Text('This installation’s exact destination:'),
+                          SelectableText(target),
+                          const SizedBox(height: 12),
+                        ],
+                        if (state.selectedPath case final source?) ...[
+                          const Text(
+                            'Selected backup (private to this recovery screen):',
+                          ),
+                          SelectableText(source),
+                          const SizedBox(height: 12),
+                        ],
+                        const Text(
+                          'After fresh approval, opening SQLite for writing can recover or change native journals '
+                          'and sidecars before copying begins. Astoria retains a logical original made by native SQLite backup '
+                          'after that bootstrap; this is not a byte-identical four-file guarantee or power-loss repair. '
+                          'Unreadable database headers and missing installation vault keys cannot be reconstructed. '
+                          'Originals remain retained by default.',
                         ),
                       ],
-                      const SizedBox(height: 16),
-                      if (widget.targetPath case final target?) ...[
-                        const Text('This installation’s exact destination:'),
-                        SelectableText(target),
-                        const SizedBox(height: 12),
-                      ],
-                      if (state.selectedPath case final source?) ...[
-                        const Text(
-                          'Selected backup (private to this recovery screen):',
-                        ),
-                        SelectableText(source),
-                        const SizedBox(height: 12),
-                      ],
-                      const Text(
-                        'After fresh approval, opening SQLite for writing can recover or change native journals '
-                        'and sidecars before copying begins. Astoria retains a logical original made by native SQLite backup '
-                        'after that bootstrap; this is not a byte-identical four-file guarantee or power-loss repair. '
-                        'Unreadable database headers and missing installation vault keys cannot be reconstructed. '
-                        'Originals remain retained by default.',
-                      ),
                       const SizedBox(height: 20),
                       if (state.code != null || state.keyFailure != null) ...[
                         GlazeErrorBlock(
@@ -245,6 +254,9 @@ String _message(DatabaseRestoreCode code) => switch (code) {
         : 'Another process owns startup. No migration or normal database open was attempted.',
   DatabaseRestoreCode.interruptedRequiresFreshConfirmation =>
     'An interrupted-restore marker blocks startup. It will not be cleared or replayed.',
+  DatabaseRestoreCode.startupInspectionFailed =>
+    'Не удалось проверить каталог приложения. Наличие маркера прерванного '
+        'восстановления не подтверждено. Эта проверка не открывала рабочую БД.',
   DatabaseRestoreCode.unsupported =>
     Platform.isAndroid
         ? 'The native Android storage or SQLite identity mechanism is unsupported. No replacement was authorized.'

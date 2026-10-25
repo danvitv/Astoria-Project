@@ -141,6 +141,10 @@ void main() {
               ),
             ),
           );
+          expect(
+            startup.normalOpeningBlockReason,
+            DatabaseRestoreCode.interruptedRequiresFreshConfirmation,
+          );
           // Removing the fixture marker does not un-latch a blocked owner.
           marker.deleteSync();
           expect(
@@ -166,6 +170,53 @@ void main() {
           paths.target.parent.deleteSync();
           anchor.deleteSync();
         }
+      }
+    },
+    skip: !Platform.isWindows,
+  );
+
+  test(
+    'Startup inspection failure is not an observed restore marker',
+    () {
+      final anchor = Directory(
+        r'C:\Users\Даниил\AppData\Local\Temp\opencode',
+      ).createTempSync('startup-inspection-');
+      final paths = resolveWindowsStartupPaths({'APPDATA': anchor.path});
+      final malformedParent = File(paths.target.parent.path);
+      NativeDatabaseStartupOwner? startup;
+      try {
+        malformedParent.writeAsStringSync('TEST_ONLY_NOT_A_DIRECTORY');
+        startup = NativeDatabaseStartupOwner.acquire(
+          existingStartupDirectory: anchor,
+          target: paths.target,
+        );
+        expect(startup.normalOpeningBlocked, true);
+        expect(
+          startup.normalOpeningBlockReason,
+          DatabaseRestoreCode.startupInspectionFailed,
+        );
+        expect(
+          () => startup!.claimNormalOpening(),
+          throwsA(_restoreCode(DatabaseRestoreCode.startupInspectionFailed)),
+        );
+        expect(malformedParent.readAsStringSync(), 'TEST_ONLY_NOT_A_DIRECTORY');
+        startup.closeForTesting();
+        startup = null;
+        malformedParent.deleteSync();
+        paths.target.parent.createSync();
+        startup = NativeDatabaseStartupOwner.acquire(
+          existingStartupDirectory: anchor,
+          target: paths.target,
+        );
+        expect(startup.normalOpeningBlockReason, isNull);
+        startup.claimNormalOpening();
+        expect(paths.target.existsSync(), false);
+      } finally {
+        startup?.closeForTesting();
+        if (malformedParent.existsSync()) malformedParent.deleteSync();
+        if (paths.target.parent.existsSync()) paths.target.parent.deleteSync();
+        File('${anchor.path}\\.astoria-restore-startup.lock').deleteSync();
+        anchor.deleteSync();
       }
     },
     skip: !Platform.isWindows,
