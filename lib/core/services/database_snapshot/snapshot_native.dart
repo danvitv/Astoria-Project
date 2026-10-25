@@ -14,7 +14,8 @@ final class NativeDatabaseSnapshotOwner {
   }) : _registeredTables = Set.unmodifiable(registeredTableNames),
        _borrowedSource = null,
        _checkBorrowedSource = null,
-       _inReadTransaction = null;
+       _inReadTransaction = null,
+       _backgroundSource = null;
 
   /// SAME raw source with retained real native proof and the original Drift
   /// executor's transaction fence. No new SQLite source connection is opened.
@@ -32,7 +33,20 @@ final class NativeDatabaseSnapshotOwner {
        _isSourceCurrent = isSourceCurrent,
        _borrowedSource = source,
        _checkBorrowedSource = checkSource,
-       _inReadTransaction = inReadTransaction;
+       _inReadTransaction = inReadTransaction,
+       _backgroundSource = null;
+
+  NativeDatabaseSnapshotOwner.androidPrivate({
+    required NativeBackgroundDatabaseSnapshotSource source,
+    required String destinationPath,
+  }) : _sourcePath = source.sourcePath,
+       _destinationPath = destinationPath,
+       _registeredTables = source.registeredTableNames,
+       _isSourceCurrent = source.isCurrent,
+       _borrowedSource = null,
+       _checkBorrowedSource = null,
+       _inReadTransaction = null,
+       _backgroundSource = source;
 
   final String _sourcePath;
   final String _destinationPath;
@@ -41,6 +55,7 @@ final class NativeDatabaseSnapshotOwner {
   final Database? _borrowedSource;
   final void Function()? _checkBorrowedSource;
   final Future<void> Function(Future<void> Function())? _inReadTransaction;
+  final NativeBackgroundDatabaseSnapshotSource? _backgroundSource;
   DatabaseSnapshotIdentityFailure? _identityFailure;
 
   /// A failed native proof gate only. Never exposes path/error/file metadata,

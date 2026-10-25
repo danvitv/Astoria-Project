@@ -348,7 +348,7 @@ final class _WindowsApi {
 }
 
 /// Native file ID and an immutable no-write/no-delete-share retained handle.
-final class _WindowsPin {
+final class _WindowsPin implements _SnapshotImmutablePin {
   _WindowsPin(
     this.api,
     this.handle,
@@ -369,6 +369,7 @@ final class _WindowsPin {
   bool _hashing = false;
   bool _closeRequested = false;
 
+  @override
   int get length {
     if (closed || _closeRequested) {
       throw const _SnapshotFailure(DatabaseSnapshotStatus.stale);
@@ -396,6 +397,7 @@ final class _WindowsPin {
     }
   }
 
+  @override
   Future<Digest> hash(_SnapshotGuard guard) async {
     if (_hashing) {
       throw const _SnapshotFailure(DatabaseSnapshotStatus.unavailable);
@@ -523,6 +525,7 @@ final class _WindowsPin {
     return info[8] * 0x100000000 + info[9];
   }
 
+  @override
   void close() {
     if (!closed) {
       if (_hashing) {

@@ -18,6 +18,14 @@ abstract interface class SupportBackupOriginalDatabaseRoot
   );
 }
 
+/// Optional narrow mobile proposal on the SAME audited original ROOT.
+abstract interface class SupportBackupAppPrivateDatabaseRoot
+    implements SupportBackupOriginalDatabaseRoot {
+  String? proposeAppPrivateSnapshotDestination(
+    SupportAppActionContext original,
+  );
+}
+
 /// Framework UI port only. Production is SupportBackupNativeUi, which invokes
 /// FilePicker and renders an exact native confirmation; tests replace this port
 /// with a synthetic framework dialog, never the snapshot/filesystem service.
@@ -44,8 +52,7 @@ final class SupportBackupNativeFileHost implements SupportAppConfirmationPort {
       'зашифрованные данные и сохранённые байты учётных данных. '
       'Внешнее хранилище ключей, настройки и медиа не включаются. '
       'Astoria не отправляет этот файл в сеть или модели. '
-      'Синхронизация выбранной папки другим ПО не проверяется: '
-      'выбери локальную несинхронизируемую папку. Существующий файл не заменяется. '
+      'Существующий файл не заменяется. '
       'Проверяется локальный снимок, а не восстановление, доступность ключей '
       'или гарантированная сохранность при сбое диска.';
   static const preview = <String, Object?>{

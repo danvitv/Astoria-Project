@@ -65,12 +65,16 @@ final class DatabaseSnapshotResult {
     this.handle,
     this.tableCount = 0,
     this.byteCount = 0,
+    this.publicationOccurred = false,
   });
 
   final DatabaseSnapshotStatus status;
   final VerifiedDatabaseSnapshot? handle;
   final int tableCount;
   final int byteCount;
+  final bool publicationOccurred;
+  bool get wasPublished =>
+      publicationOccurred || status == DatabaseSnapshotStatus.verified;
 
   // Database ciphertext and credential bytes survive unchanged. No external
   // vault, preferences, .env or media are read or included. Key availability
@@ -156,12 +160,18 @@ final class _SnapshotRecord {
     required this.pin,
     required this.digest,
     required this.verifiedAt,
-    required this.schema,
+    required this.tableCount,
   });
-  final _WindowsPin pin;
+  final _SnapshotImmutablePin pin;
   final Digest digest;
   final DateTime verifiedAt;
-  final _SnapshotSchema schema;
+  final int tableCount;
   DatabaseSnapshotStatus get verificationStatus =>
       DatabaseSnapshotStatus.verified;
+}
+
+abstract interface class _SnapshotImmutablePin {
+  int get length;
+  Future<Digest> hash(_SnapshotGuard guard);
+  void close();
 }

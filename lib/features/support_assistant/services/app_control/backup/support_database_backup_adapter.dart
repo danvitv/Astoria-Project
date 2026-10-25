@@ -99,60 +99,83 @@ final class SupportDatabaseBackupAdapter implements SupportAppActionAdapter {
     DatabaseSnapshotService? service;
     SupportBackupRootLease? custody;
     var published = false;
-    try {
-      custody = await root.admitBackupFile(selection, context);
-      if (custody == null || !current()) return _outcome('unavailable');
-      bool live() => current() && custody!.isCurrent && current();
-      final owner = selection.consume(custody: custody, isCurrent: live);
-      if (owner == null || !live()) return _outcome('unavailable');
-      service = DatabaseSnapshotService(native: owner);
-      _services.add(service);
-      final control = DatabaseSnapshotControl(isCurrent: live);
-      unawaited(context.cancelToken.whenCancel.then((_) => control.cancel()));
-      if (context.cancelToken.isCancelled) control.cancel();
-      if (!live()) return _outcome('cancelled');
-      final created = await service.create(control: control);
-      // The native no-replace publication is factual even if Stop arrives now.
-      published = created.status == DatabaseSnapshotStatus.verified;
-      if (!live()) {
+    Future<SupportAppActionOutcome> perform() async {
+      try {
+        final admittedCustody = await root.admitBackupFile(selection, context);
+        custody = admittedCustody;
+        if (admittedCustody == null || !current())
+          return _outcome('unavailable');
+        bool live() => current() && admittedCustody.isCurrent && current();
+        final owner = selection.consume(
+          custody: admittedCustody,
+          isCurrent: live,
+        );
+        if (owner == null || !live()) return _outcome('unavailable');
+        final snapshots = DatabaseSnapshotService(native: owner);
+        service = snapshots;
+        _services.add(snapshots);
+        final control = DatabaseSnapshotControl(isCurrent: live);
+        unawaited(context.cancelToken.whenCancel.then((_) => control.cancel()));
+        if (context.cancelToken.isCancelled) control.cancel();
+        if (!live()) return _outcome('cancelled');
+        final created = await snapshots.create(control: control);
+        // The native no-replace publication is factual even if Stop arrives now.
+        published = created.wasPublished;
+        if (!live()) {
+          return _outcome(
+            context.cancelToken.isCancelled ? 'cancelled' : 'uncertain',
+            published: published,
+          );
+        }
+        if (!published) return _outcome(_status(created.status));
+        final exactHandle =
+            created.handle; // Opaque native capability, never JSON.
+        if (exactHandle == null) return _outcome('uncertain', published: true);
+        final checked = await snapshots.verifyHandle(
+          exactHandle,
+          control: control,
+        );
+        if (!live()) {
+          return _outcome(
+            context.cancelToken.isCancelled ? 'cancelled' : 'uncertain',
+            published: true,
+          );
+        }
+        final verified =
+            checked.status == DatabaseSnapshotStatus.verified &&
+            identical(checked.handle, exactHandle);
+        return _outcome(
+          verified
+              ? 'verified'
+              : checked.status == DatabaseSnapshotStatus.verified
+              ? 'uncertain'
+              : _status(checked.status),
+          published: true,
+        );
+      } catch (_) {
         return _outcome(
           context.cancelToken.isCancelled ? 'cancelled' : 'uncertain',
           published: published,
         );
       }
-      if (!published) return _outcome(_status(created.status));
-      final exactHandle =
-          created.handle; // Opaque native capability, never JSON.
-      if (exactHandle == null) return _outcome('uncertain', published: true);
-      final checked = await service.verifyHandle(exactHandle, control: control);
-      if (!live()) {
-        return _outcome(
-          context.cancelToken.isCancelled ? 'cancelled' : 'uncertain',
-          published: true,
-        );
-      }
-      final verified =
-          checked.status == DatabaseSnapshotStatus.verified &&
-          identical(checked.handle, exactHandle);
-      return _outcome(
-        verified
-            ? 'verified'
-            : checked.status == DatabaseSnapshotStatus.verified
-            ? 'uncertain'
-            : _status(checked.status),
-        published: true,
-      );
-    } catch (_) {
-      return _outcome(
-        context.cancelToken.isCancelled ? 'cancelled' : 'uncertain',
-        published: published,
-      );
-    } finally {
-      service?.dispose(); // Release pins only; never delete a published backup.
-      _services.remove(service);
-      custody?.close();
-      _busy = false;
     }
+
+    late final SupportAppActionOutcome outcome;
+    try {
+      outcome = await perform();
+    } finally {
+      try {
+        // Settle pin release BEFORE reporting the factual native outcome.
+        service?.dispose();
+      } finally {
+        _services.remove(service);
+        custody?.close();
+        _busy = false;
+      }
+    }
+    return service?.hasUnsettledRelease == true
+        ? _outcome('uncertain', published: published)
+        : outcome;
   }
 
   String _status(DatabaseSnapshotStatus status) => switch (status) {

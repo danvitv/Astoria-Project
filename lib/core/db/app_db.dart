@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
@@ -10,6 +11,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 
 import '../services/database_snapshot_service.dart';
+import '../services/android_snapshot_namespace.dart';
+import 'repositories/database_background_snapshot_source_repo.dart';
 import '../models/studio_preset_block_migration.dart';
 import '../models/studio_preset_codec.dart';
 import '../models/studio_agent_codec.dart';
@@ -158,10 +161,18 @@ class AppDatabase extends _$AppDatabase {
   Future<void> _closeNative() {
     final native = _nativeFile;
     native?.retire(); // Invalidate BEFORE the async executor close.
-    if (native == null || native._borrowed.isEmpty) return super.close();
+    if (native == null) return super.close();
+    if (native._borrowed.isEmpty && native._unsettledSnapshots.isEmpty) {
+      return super.close();
+    }
     // Join original borrowed transaction futures, never just their canceled
     // controls or a synchronous SnapshotService.dispose notification.
-    return native.drain().then((_) => super.close());
+    return native.drain().then((_) {
+      if (native._unsettledSnapshots.isNotEmpty) {
+        throw StateError('Original native snapshot resources not settled');
+      }
+      return super.close();
+    });
   }
 
   @override
@@ -228,9 +239,35 @@ LazyDatabase _openConnection(_AppDatabaseNativeFile native, {File? fixedFile}) {
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
-    final file = fixedFile ?? File(p.join(dbFolder, 'astoria.db'));
+    final canonicalFolder = Platform.isAndroid
+        ? await dir.resolveSymbolicLinks()
+        : dbFolder;
+    final file = fixedFile ?? File(p.join(canonicalFolder, 'astoria.db'));
+    final snapshotNamespace = await AndroidSnapshotNamespace.forSource(file);
     if (native.retired) throw StateError('Native database owner retired.');
     native.file = file; // SAME private File passed to the actual executor.
+    native.androidSnapshotNamespace = snapshotNamespace;
+    if (snapshotNamespace != null) {
+      return NativeDatabase.createInBackground(
+        file,
+        readPool: 0,
+        setup: _androidSnapshotWorkerSetup(
+          file.path,
+          snapshotNamespace.workerStageRoot,
+        ),
+      );
+    }
     return NativeDatabase.createInBackground(file);
   });
 }
+
+// A maker with ONLY immutable strings in its isolate capture context.
+void Function(sqlite.Database) _androidSnapshotWorkerSetup(
+  String sourcePath,
+  String stageRoot,
+) =>
+    (source) => BackgroundDatabaseSnapshotWorker.install(
+      source,
+      sourcePath: sourcePath,
+      privateStageRoot: stageRoot,
+    );

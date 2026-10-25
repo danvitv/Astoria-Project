@@ -278,13 +278,22 @@ extension _ModelTools on _ModelRun {
 
 /// The same read operation admits a finite domain capsule, not an effect future.
 final class _ModelDomainTerminalRoot
-    implements SupportBackupOriginalDatabaseRoot {
+    implements SupportBackupAppPrivateDatabaseRoot {
   _ModelDomainTerminalRoot(this._run)
     : _backupSource = _run.service._db.nativeDataSourceIdentity;
   final _ModelRun _run;
   final NativeDataSourceIdentity? _backupSource;
   SupportAppActionContext? _originalContext;
   bool _backupRetired = false;
+
+  @override
+  String? proposeAppPrivateSnapshotDestination(
+    SupportAppActionContext original,
+  ) {
+    final source = _backupSource;
+    if (source == null || !retainsBackupSource(source, original)) return null;
+    return source.proposeAppPrivateSnapshotDestination();
+  }
 
   void bindOriginalContext(SupportAppActionContext original) {
     if (_originalContext != null || !identical(original.domainRoot, this)) {

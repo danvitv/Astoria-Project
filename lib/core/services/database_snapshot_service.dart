@@ -9,11 +9,16 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 import 'package:sqlite3/unstable/ffi_bindings.dart' as nsql;
+import 'android_snapshot_namespace.dart';
 
 part 'database_snapshot/snapshot_models.dart';
 part 'database_snapshot/snapshot_native.dart';
 part 'database_snapshot/snapshot_sqlite.dart';
 part 'database_snapshot/snapshot_windows.dart';
+part 'database_snapshot/snapshot_worker.dart';
+part 'database_snapshot/snapshot_android_files.dart';
+part 'database_snapshot/snapshot_background_source.dart';
+part 'database_snapshot/snapshot_android.dart';
 
 /// A native-only prerequisite for recovery, not an app backup or restore API.
 /// Construction belongs to the source connection owner, never a model/tool.
@@ -25,6 +30,10 @@ final class DatabaseSnapshotService {
   bool _running = false;
   bool _disposed = false;
   Future<void>? _active;
+  bool _recordReleaseFailed = false;
+
+  /// Actual ambiguous pin release, not evidence that publication did not happen.
+  bool get hasUnsettledRelease => _recordReleaseFailed;
 
   Future<T> _observe<T>(Future<T> operation) {
     _active = operation.then<void>(
@@ -49,6 +58,8 @@ final class DatabaseSnapshotService {
   Future<DatabaseSnapshotResult> _create(
     DatabaseSnapshotControl control,
   ) async {
+    if (_native._backgroundSource != null)
+      return _createAndroidSnapshot(control);
     final fence = _native._inReadTransaction;
     if (fence == null) return _createSnapshot(control);
     try {
@@ -153,7 +164,7 @@ final class DatabaseSnapshotService {
         pin: pin,
         digest: digest,
         verifiedAt: DateTime.now().toUtc(),
-        schema: expected,
+        tableCount: expected.counts.length,
       );
       return DatabaseSnapshotResult(
         DatabaseSnapshotStatus.verified,
@@ -219,7 +230,7 @@ final class DatabaseSnapshotService {
       return DatabaseSnapshotResult(
         DatabaseSnapshotStatus.verified,
         handle: handle,
-        tableCount: record.schema.counts.length,
+        tableCount: record.tableCount,
         byteCount: record.pin.length,
       );
     } on _SnapshotFailure catch (error) {
@@ -253,6 +264,22 @@ final class DatabaseSnapshotService {
   }
 
   void _releaseRecords() {
+    final background = _native._backgroundSource;
+    if (background != null) {
+      // Android ambiguous closes are not retryable. Transfer these SAME original
+      // capabilities to the process/connection owner, which refuses raw close.
+      for (final record in _records.values) {
+        try {
+          record.pin.close();
+        } catch (_) {
+          _recordReleaseFailed = true;
+          background.retainUnsettled(record);
+        }
+      }
+      _records.clear();
+      return;
+    }
+    // Preserve accepted Windows close/error semantics.
     for (final record in _records.values) {
       record.pin.close();
     }

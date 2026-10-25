@@ -48,7 +48,10 @@ final class SupportBackupNativeUi implements SupportBackupFileUi {
 
   @override
   bool get isCurrent =>
-      Platform.isWindows && _alive && context.mounted && isOriginalUiCurrent();
+      (Platform.isWindows || Platform.isAndroid) &&
+      _alive &&
+      context.mounted &&
+      isOriginalUiCurrent();
 
   void _observeRoute() {
     final next = _router.routeInformationProvider.value.uri;
@@ -64,6 +67,12 @@ final class SupportBackupNativeUi implements SupportBackupFileUi {
   @override
   Future<String?> chooseLocalFile(SupportAppActionContext original) async {
     if (!isCurrent || !original.current || _pickerBusy) return null;
+    if (Platform.isAndroid) {
+      final root = original.domainRoot;
+      if (root is! SupportBackupAppPrivateDatabaseRoot) return null;
+      final proposal = root.proposeAppPrivateSnapshotDestination(original);
+      return isCurrent && original.current ? proposal : null;
+    }
     _pickerBusy = true;
     final preparation = Completer<String?>();
     void abandon() {
@@ -180,6 +189,12 @@ final class SupportBackupNativeUi implements SupportBackupFileUi {
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: Text(
                           '$disclosure\n\n'
+                          '${Platform.isAndroid ? 'Хранилище: приватная папка Astoria на этом устройстве, '
+                                    'исключённая из системного backup. Файл не отправляется '
+                                    'в галерею, облако или системный диалог. Очистка данных '
+                                    'или удаление Astoria может удалить и эту копию. '
+                                    'Это не переносимый архив и не восстановление без ключей.\n\n' : 'Синхронизация выбранной папки другим ПО не проверяется. '
+                                    'Выбери локальную несинхронизируемую папку.\n\n'}'
                           'Выбранный файл: $privateDestination\n'
                           'Действие: ${request.action}\n'
                           'Исходный запрос: ${request.callId}\n'

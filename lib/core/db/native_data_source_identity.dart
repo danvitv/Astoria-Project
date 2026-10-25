@@ -11,6 +11,27 @@ final class NativeDataSourceIdentity {
   bool belongsTo(AppDatabase database) =>
       identical(_database, database) && isCurrent;
 
+  /// A proposal only: no directory/file, key, body, SQL or OS dialog is touched.
+  /// The opaque destination is private native UI metadata, never tool JSON.
+  String? proposeAppPrivateSnapshotDestination() {
+    final namespace = _native.androidSnapshotNamespace;
+    if (!isCurrent ||
+        namespace == null ||
+        _native._unsettledSnapshots.isNotEmpty)
+      return null;
+    final random = Random.secure();
+    final token = List.generate(
+      32,
+      (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join();
+    _native._privateSnapshotIssuer = Object();
+    return _native._pendingSnapshotDestination = p.posix.join(
+      namespace.workerStageRoot,
+      token,
+      'astoria-backup.db',
+    );
+  }
+
   /// Trusted native owner composition only. Acceptance can bind its retained
   /// proof without replacing/reopening the already-accepted Drift wrapper.
   /// Exact raw identity and once-only binding exclude candidate/path substitution.
@@ -31,6 +52,36 @@ final class NativeDataSourceIdentity {
     required bool Function() isOriginalOwnerCurrent,
   }) {
     if (!isCurrent || !isOriginalOwnerCurrent() || !isCurrent) return null;
+    final namespace = _native.androidSnapshotNamespace;
+    if (namespace != null) {
+      if (destinationPath != _native._pendingSnapshotDestination ||
+          _native._unsettledSnapshots.isNotEmpty)
+        return null;
+      _native._pendingSnapshotDestination = null; // one-use, before native work
+      final issuer = _native._privateSnapshotIssuer;
+      bool current() =>
+          isCurrent &&
+          isOriginalOwnerCurrent() &&
+          identical(issuer, _native._privateSnapshotIssuer) &&
+          _native._unsettledSnapshots.isEmpty &&
+          isCurrent;
+      final repo = DatabaseBackgroundSnapshotSourceRepo(
+        database: _database,
+        namespace: namespace,
+        sourcePath: _native.file!.path,
+        registeredTables: _database.allTables
+            .map((t) => t.actualTableName)
+            .toSet(),
+        isCurrent: current,
+        joinLifetime: _native.borrow,
+        retainUnsettled: (resource) =>
+            _native._unsettledSnapshots.add(resource),
+      );
+      return NativeDatabaseSnapshotOwner.androidPrivate(
+        source: repo.source,
+        destinationPath: destinationPath,
+      );
+    }
     final source = _native.raw;
     final checkSource = _native.checkSnapshotSource;
     if (source != null && checkSource != null) {
@@ -69,6 +120,10 @@ final class _AppDatabaseNativeFile {
   File? file;
   sqlite.Database? raw;
   void Function()? checkSnapshotSource;
+  AndroidSnapshotNamespace? androidSnapshotNamespace;
+  Object? _privateSnapshotIssuer;
+  String? _pendingSnapshotDestination;
+  final _unsettledSnapshots = <Object>[];
   final _borrowed = <Future<void>>{};
   bool opened = false, retired = false;
   bool get current => opened && !retired && file != null;
