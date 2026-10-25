@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/constants/build_channel.dart';
 import 'package:glaze_flutter/core/db/repositories/chat_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/database_restore_repo.dart';
+import 'package:glaze_flutter/core/llm/transport/llm_call_event.dart';
+import 'package:glaze_flutter/core/llm/transport/llm_request_capture.dart';
 import 'package:glaze_flutter/core/services/dev_mode_flag_migration.dart';
 import 'package:glaze_flutter/core/services/preset_seeder.dart';
 import 'package:glaze_flutter/core/startup/database_startup.dart';
@@ -117,14 +119,23 @@ void main() {
         final first = ProviderContainer(overrides: process.providerOverrides);
         final db = first.read(appDbProvider);
         final capture = first.read(llmRequestCaptureRepoProvider);
-        first.dispose();
+        first.read(llmRequestCaptureInstallationProvider);
         final second = ProviderContainer(overrides: process.providerOverrides);
-        expect(identical(second.read(appDbProvider), db), true);
-        expect(
-          identical(second.read(llmRequestCaptureRepoProvider), capture),
-          true,
-        );
-        second.dispose();
+        try {
+          second.read(llmRequestCaptureInstallationProvider);
+          first.dispose(); // Old scope may retire after the new scope installs.
+          expect(identical(second.read(appDbProvider), db), true);
+          expect(
+            identical(second.read(llmRequestCaptureRepoProvider), capture),
+            true,
+          );
+          expect(LlmRequestCapture.sink, same(capture));
+          expect(LlmCallEventCapture.sink, same(capture));
+        } finally {
+          second.dispose();
+        }
+        expect(LlmRequestCapture.sink, isNull);
+        expect(LlmCallEventCapture.sink, isNull);
         _expectBusy(anchor, paths.target);
         await expectLater(
           process.closeForTesting(() async {

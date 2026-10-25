@@ -208,6 +208,7 @@ final class DatabaseSnapshotService {
       return const DatabaseSnapshotResult(DatabaseSnapshotStatus.unavailable);
     }
     final guard = _SnapshotGuard(control, () => !_disposed);
+    _native._identityFailure = null;
     try {
       guard.check();
       final digest = await record.pin.hash(guard);
@@ -222,6 +223,7 @@ final class DatabaseSnapshotService {
         byteCount: record.pin.length,
       );
     } on _SnapshotFailure catch (error) {
+      _native._identityFailure = error.identityFailure;
       return DatabaseSnapshotResult(error.status);
     } catch (_) {
       return DatabaseSnapshotResult(

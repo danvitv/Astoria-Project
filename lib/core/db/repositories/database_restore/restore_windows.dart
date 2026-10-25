@@ -233,8 +233,9 @@ final class _RestoreWindows {
     final attributes = _attributes;
     final error = _error;
     error();
-    if (attributes(name) != 0xffffffff) return true;
+    final value = attributes(name);
     final code = error();
+    if (value != 0xffffffff) return true;
     if (code == 2 || code == 3) return false;
     _refuse(DatabaseRestoreCode.unsupported);
     return false;

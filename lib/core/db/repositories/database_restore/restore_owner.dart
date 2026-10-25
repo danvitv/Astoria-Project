@@ -233,13 +233,15 @@ final class NativeDatabaseRestoreOwner {
         _check();
       }
       final pin = _windows.pin(_candidatePath, immutable: true);
+      // Register custody before fallible native length/information checks, so
+      // preparation cleanup also owns a pin whose metadata call refuses.
+      final candidate = _candidate = _RestoreCandidate(pin);
       if (pin.identity == _targetPin!.identity ||
           pin.length <= 0 ||
           pin.length > _RestoreLimits.maxBytes) {
         pin.close();
         _refuse(DatabaseRestoreCode.unsupported);
       }
-      final candidate = _candidate = _RestoreCandidate(pin);
       // Immutable local main-only selected backup. No sidecar recovery or
       // silent omission of WAL/journal as part of a selected backup.
       for (final suffix in ['-wal', '-shm', '-journal']) {

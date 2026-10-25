@@ -304,7 +304,9 @@ final class _WindowsApi {
     final pointerSize = sizeOf<IntPtr>();
     final lengthOffset = pointerSize == 8 ? 16 : 8;
     final nameOffset = lengthOffset + 4;
-    final bytes = nameOffset + destination.length * 2;
+    // FILE_RENAME_INFO is the Win32 structure: own its trailing WCHAR NUL,
+    // while FileNameLength remains the filename's byte count without the NUL.
+    final bytes = nameOffset + (destination.length + 1) * 2;
     final memory = allocate(bytes);
     try {
       memory

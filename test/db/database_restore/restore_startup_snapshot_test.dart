@@ -174,6 +174,8 @@ void main() {
               control: DatabaseSnapshotControl(isCurrent: () => true),
             )).status,
             DatabaseSnapshotStatus.verified,
+            reason:
+                'Native rehash identity boundary: ${native.identityFailure}',
           );
           if (mode == 'WAL') {
             expect(File('${s.target.path}-shm').existsSync(), false);

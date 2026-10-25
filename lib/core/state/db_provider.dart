@@ -80,6 +80,7 @@ export 'native_provider_runtime.dart' show NativeProviderRuntime;
 
 final _captureRepos = Expando<LlmRequestCaptureRepo>();
 final _nativeProviderRuntimes = Expando<NativeProviderRuntime>();
+Object? _captureInstallationOwner;
 
 /// Constructed only on an explicitly dispatched native job; no shared client.
 /// Synthetic root fixtures MUST override this before constructing the graph.
@@ -108,10 +109,15 @@ final llmRequestCaptureRepoProvider = Provider<LlmRequestCaptureRepo>((ref) {
 /// Installs the database-backed request sink for the lifetime of the app scope.
 final llmRequestCaptureInstallationProvider = Provider<void>((ref) {
   final repo = ref.watch(llmRequestCaptureRepoProvider);
+  // A process-owned repo survives keyed scopes; repo identity is not a lease.
+  final installationOwner = Object();
+  _captureInstallationOwner = installationOwner;
   _captureRepos[repo.db] = repo;
   LlmRequestCapture.sink = repo;
   LlmCallEventCapture.sink = repo;
   ref.onDispose(() {
+    if (!identical(_captureInstallationOwner, installationOwner)) return;
+    _captureInstallationOwner = null;
     if (identical(LlmRequestCapture.sink, repo)) {
       LlmRequestCapture.sink = null;
     }

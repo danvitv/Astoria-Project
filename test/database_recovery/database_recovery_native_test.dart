@@ -142,6 +142,12 @@ void main() {
             true,
           );
           replacement.dispose();
+          // Replacing the recovery root disposes it too. Start/join retirement
+          // in real async BEFORE that first fake-timer widget disposal.
+          await tester.runAsync(() async {
+            controller.retireView();
+            await f.operations.single.cancelAndJoin();
+          });
           for (final key in [
             'first-keyed-normal-scope',
             'restarted-keyed-normal-scope',
@@ -180,6 +186,9 @@ void main() {
           f.expectBusy(); // Widget disposal is NOT process termination.
         } finally {
           if (!picker.pending.isCompleted) picker.pending.complete(null);
+          await tester.runAsync(() async {
+            controller.retireView();
+          });
           await tester.pumpWidget(const SizedBox.shrink());
           await tester.runAsync(
             () => f.close(
