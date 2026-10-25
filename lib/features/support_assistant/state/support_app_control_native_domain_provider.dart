@@ -2,7 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/models/database_maintenance.dart';
 import '../../../core/state/chat_source_mutation_provider.dart';
-import '../../../core/state/credential_vault_provider.dart';
 import '../../../core/state/character_folder_provider.dart';
 import '../../../core/state/preset_folder_provider.dart';
 import '../../../core/state/db_provider.dart';

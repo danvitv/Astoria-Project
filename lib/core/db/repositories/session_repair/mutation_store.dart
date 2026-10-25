@@ -73,7 +73,7 @@ final class _RepairMutationStore {
   void quietLedgerDependencies(_RepairImage image) {
     // Without exact per-proposal invalidation originals the effect is not
     // admitted. We do not reset/cancel every downstream lane as collateral.
-    for (final table in <TableInfo>[
+    for (final table in <TableInfo<Table, dynamic>>[
       db.rewriteJobs,
       db.rewriteOperations,
       db.cardEvolutionClaims,
@@ -375,7 +375,7 @@ final class _RepairMutationStore {
   }
 
   Future<void> updateExact(
-    TableInfo table,
+    TableInfo<Table, dynamic> table,
     Map<String, Object?> before,
     Map<String, Object?> values,
     bool Function() current,
@@ -393,7 +393,7 @@ final class _RepairMutationStore {
   }
 
   Future<void> insertExact(
-    TableInfo table,
+    TableInfo<Table, dynamic> table,
     Map<String, Object?> row,
     bool Function() current,
   ) async {
@@ -415,7 +415,7 @@ final class _RepairMutationStore {
     bool undo = false,
   }) async {
     final ledger = plan.kind == SessionRepairTargetKind.liveLedger;
-    final TableInfo table = ledger
+    final TableInfo<Table, dynamic> table = ledger
         ? db.trackerRows
         : db.cardEvolutionCollectorRuns;
     await raw.narrowSchema(table, current);

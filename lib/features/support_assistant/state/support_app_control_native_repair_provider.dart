@@ -1,11 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/state/credential_vault_provider.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../core/state/character_folder_provider.dart';
 import '../../../core/state/preset_folder_provider.dart';
 import '../../../core/state/character_provider.dart';
-import '../../../core/state/active_studio_preset_provider.dart';
 import '../../chat/chat_session_service.dart';
 import '../../chat/state/chat_native_owner_registry.dart';
 import '../../chat/state/chat_session_write_queue.dart';
@@ -41,7 +39,7 @@ final supportAppNativeRepairPortProvider = Provider<SupportAppNativeRepairPort>(
               db: ref.watch(appDbProvider),
               chats: ref.watch(chatRepoProvider),
               owners: owners,
-              original: () => alive && ref.mounted && native?.isCurrent == true,
+              original: () => alive && ref.mounted && native.isCurrent,
               captureJobInventory: (_) => _captureNativeJobInventory(ref),
             ),
     );

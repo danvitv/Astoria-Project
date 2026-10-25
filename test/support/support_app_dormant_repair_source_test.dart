@@ -33,6 +33,13 @@ void main() {
         await repo.readNativeMaintenanceSource(session, current),
         isNotNull,
       );
+      await db.transaction(() async {
+        await Future<void>.value();
+        expect(
+          await repo.readNativeMaintenanceSource(session, current),
+          isNull,
+        );
+      });
       await (db.update(
         db.chatSessions,
       )..where((row) => row.sessionId.equals(session))).write(

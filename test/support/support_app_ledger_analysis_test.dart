@@ -274,7 +274,9 @@ void main() {
         next: (round) {
           try {
             if (round != 2) throw StateError('Forbidden POST after Stop');
-            final record = (f.lastData()['records'] as List).cast<Map>().single;
+            final record = (f.lastData()['records'] as List)
+                .cast<Map<dynamic, dynamic>>()
+                .single;
             final originalComposer = find.byType(
               SupportComposerBar,
               skipOffstage: false,

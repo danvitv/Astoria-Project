@@ -160,7 +160,7 @@ extension SupportSessionTextContext on SupportTextContextRepo {
               _support,
             ).read(spec, _currentRedactor, checkpoint: checkpoint)
           : _SupportSessionTextReader(_support).read(
-              _requireBoundary(spec._sessionId, spec._boundary!),
+              _requireBoundary(spec._sessionId, spec._boundary),
               _currentRedactor,
               directConversation: spec._directConversation,
               checkpoint: checkpoint,

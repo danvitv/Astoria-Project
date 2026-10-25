@@ -4,7 +4,6 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/state/chat_source_mutation_provider.dart';
-import 'package:glaze_flutter/core/state/db_provider.dart';
 import 'package:glaze_flutter/features/memory/state/memory_active_drafts_provider.dart';
 
 import 'session_memory_fixture.dart';

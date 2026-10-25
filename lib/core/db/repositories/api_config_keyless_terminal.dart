@@ -142,7 +142,7 @@ final class KeylessApiConfigTerminalEffectOwner {
       plan.connectionId,
       () => _admission.isCurrent(plan),
       (current, stamp, operation) => plan._draft != null
-          ? _repo._createKeyless(plan._draft!, current, stamp)
+          ? _repo._createKeyless(plan._draft, current, stamp)
           : _repo._updateKeyless(
               plan._expected!,
               plan._patch!,

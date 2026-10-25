@@ -7,7 +7,10 @@ final class _MaintenanceTargetStore {
   final AppDatabase db;
   static const maxGuardBytes = 65536;
 
-  Future<void> narrowSchema(TableInfo table, bool Function() current) async {
+  Future<void> narrowSchema(
+    TableInfo<Table, dynamic> table,
+    bool Function() current,
+  ) async {
     final name = table.actualTableName;
     // These three source-owned targets have no triggers or SQL FK edges. Refuse
     // an altered schema that could turn a narrow UPDATE/DELETE into collateral
@@ -82,7 +85,7 @@ final class _MaintenanceTargetStore {
   }
 
   Future<_MaintenanceRawGuard> capture(
-    TableInfo table,
+    TableInfo<Table, dynamic> table,
     Map<String, Object?> keys,
     bool Function() current,
   ) async {
@@ -235,7 +238,7 @@ final class _MaintenanceTargetStore {
       {'folder_id': target.folderId},
       current,
     );
-    final TableInfo owner = character
+    final TableInfo<Table, dynamic> owner = character
         ? db.characters
         : target.presetKind == DatabaseMaintenancePresetKind.normal
         ? db.presets

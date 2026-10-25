@@ -31,48 +31,61 @@ final class _LedgerAnalysisReader {
     bool Function() current,
   ) async {
     final db = owner._db;
-    if (!current() ||
-        !owner._support.usesDatabase(db) ||
-        db.resolvedEngine.executor is TransactionExecutor) {
+    if (!current() || !owner._support.usesDatabase(db)) {
       return unavailable('sourceChanged');
     }
     try {
-      // Two distinct snapshots, never a retry-until-success loop. Internal
-      // anchors are bounded scalar IDs/counts, not source bodies or hashes.
-      final first = await _snapshot(target, parent, current);
-      if (!current()) return unavailable('sourceChanged');
-      final second = await _snapshot(target, parent, current);
-      if (!current() ||
-          first.length != second.length ||
-          first.keys.any((key) => first[key] != second[key])) {
-        return unavailable('sourceChanged');
-      }
-      final reason = first['reason'] as String;
-      if (reason != 'none') return unavailable(reason);
-      final result = <String, Object?>{
-        'analysis': 'available',
-        'scope': 'latestSelectedTurn',
-        'reason': 'none',
-        for (final key in const [
-          'capturedInstruction',
-          'worldTimeOperation',
-          'worldTimeParser',
-          'persistedSnapshot',
-          'snapshotState',
-          'numericClockComparison',
-          'captureCount',
-          'eventCount',
-          'debugCount',
-        ])
-          key: first[key],
-        'bodyAccess': 'notGranted',
-        'advisory': true,
-        'builtInContractEditable': false,
-      };
-      return current() ? result : unavailable('sourceChanged');
+      return await outsideDatabaseTransaction(
+        db,
+        () => _readSnapshots(target, parent, current),
+        onRejected: () => const _RepairRefused(),
+      );
+    } on _RepairRefused {
+      return unavailable('sourceChanged');
     } catch (_) {
       return unavailable(current() ? 'unsupportedShape' : 'sourceChanged');
     }
+  }
+
+  Future<Map<String, Object?>> _readSnapshots(
+    String target,
+    String parent,
+    bool Function() current,
+  ) async {
+    if (!current()) return unavailable('sourceChanged');
+    // Two distinct snapshots, never a retry-until-success loop. Internal
+    // anchors are bounded scalar IDs/counts, not source bodies or hashes.
+    final first = await _snapshot(target, parent, current);
+    if (!current()) return unavailable('sourceChanged');
+    final second = await _snapshot(target, parent, current);
+    if (!current() ||
+        first.length != second.length ||
+        first.keys.any((key) => first[key] != second[key])) {
+      return unavailable('sourceChanged');
+    }
+    final reason = first['reason'] as String;
+    if (reason != 'none') return unavailable(reason);
+    final result = <String, Object?>{
+      'analysis': 'available',
+      'scope': 'latestSelectedTurn',
+      'reason': 'none',
+      for (final key in const [
+        'capturedInstruction',
+        'worldTimeOperation',
+        'worldTimeParser',
+        'persistedSnapshot',
+        'snapshotState',
+        'numericClockComparison',
+        'captureCount',
+        'eventCount',
+        'debugCount',
+      ])
+        key: first[key],
+      'bodyAccess': 'notGranted',
+      'advisory': true,
+      'builtInContractEditable': false,
+    };
+    return current() ? result : unavailable('sourceChanged');
   }
 
   Future<Map<String, Object?>> _snapshot(

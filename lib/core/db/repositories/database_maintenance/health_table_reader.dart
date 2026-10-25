@@ -4,7 +4,9 @@ final class _MaintenanceTableReader {
   _MaintenanceTableReader(this.health);
   final _MaintenanceHealthReader health;
 
-  Future<DatabaseMaintenanceTableHealth> read(TableInfo table) async {
+  Future<DatabaseMaintenanceTableHealth> read(
+    TableInfo<Table, dynamic> table,
+  ) async {
     final name = table.actualTableName;
     var schema = DatabaseMaintenanceCheck.unknown;
     try {

@@ -241,7 +241,7 @@ final class SupportNativeRepairDiscovery implements SupportAppActionAdapter {
           if (session != null &&
               identical(session.$1, context) &&
               records is List) {
-            for (final record in records.whereType<Map>()) {
+            for (final record in records.whereType<Map<dynamic, dynamic>>()) {
               final id = record['id'];
               if (id is String) _retain(_targets, id, (context, session.$2));
             }

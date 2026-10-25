@@ -8,6 +8,7 @@ import '../../llm/studio_ledger_prompt.dart';
 import '../../models/chat_message.dart';
 import '../../models/support_models.dart';
 import '../app_db.dart';
+import '../database_transaction_guard.dart';
 import '../models/session_repair.dart';
 import 'ledger_reconciliation_run_repo.dart';
 import 'reconciliation_state_codec.dart';

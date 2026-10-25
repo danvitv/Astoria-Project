@@ -126,7 +126,9 @@ final class DomainLoopFixture {
 
   Map<String, dynamic> lastResult() {
     final messages = screen.core.wire.last['messages'] as List;
-    final tool = messages.cast<Map>().lastWhere((m) => m['role'] == 'tool');
+    final tool = messages.cast<Map<dynamic, dynamic>>().lastWhere(
+      (m) => m['role'] == 'tool',
+    );
     final value = Map<String, dynamic>.from(
       jsonDecode(tool['content'] as String) as Map,
     );

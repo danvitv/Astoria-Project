@@ -134,13 +134,14 @@ final class RepairGatewayFixture {
   Future<String> target(String kind) async {
     final result = await inspect();
     expect(result.content['code'], 'completed');
-    return (data(result)['records'] as List).cast<Map>().firstWhere(
-          (r) => r['kind'] == kind,
-        )['id']
+    return (data(result)['records'] as List)
+            .cast<Map<dynamic, dynamic>>()
+            .firstWhere((r) => r['kind'] == kind)['id']
         as String;
   }
 
-  static Map data(NativeToolResult result) => result.content['data'] as Map;
+  static Map<dynamic, dynamic> data(NativeToolResult result) =>
+      result.content['data'] as Map<dynamic, dynamic>;
   void safe(NativeToolResult result) {
     final json = jsonEncode(result.content);
     for (final forbidden in [

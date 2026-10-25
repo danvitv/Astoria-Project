@@ -161,12 +161,16 @@ void main() {
         next: (round) {
           final data = f.lastData();
           if (round == 2) {
-            final handle = (data['items'] as List).cast<Map>().single['handle'];
+            final handle = (data['items'] as List)
+                .cast<Map<dynamic, dynamic>>()
+                .single['handle'];
             return core.call('astoria_extension_controls_read', {
               'presetHandle': handle,
             }, id: 'call_2');
           }
-          final handle = (data['items'] as List).cast<Map>().single['handle'];
+          final handle = (data['items'] as List)
+              .cast<Map<dynamic, dynamic>>()
+              .single['handle'];
           return core.call('astoria_extension_block_disable', {
             'blockHandle': handle,
           }, id: 'call_3');
@@ -193,7 +197,10 @@ void main() {
       expect(reply.body, contains('изменение сохранено'));
       expect(core.wire, hasLength(3));
       final second = core.wire[1]['messages'] as List;
-      expect(second.cast<Map>().last['tool_call_id'], 'call_1');
+      expect(
+        second.cast<Map<dynamic, dynamic>>().last['tool_call_id'],
+        'call_1',
+      );
       f.noEgress(reply.body);
     },
   );

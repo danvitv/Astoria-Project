@@ -58,7 +58,7 @@ void backupWidgetTest(
         final event = SystemChannels.accessibility.codec.decodeMessage(message);
         if (event case {
           'type': 'tap',
-          'data': final Map data,
+          'data': final Map<dynamic, dynamic> data,
           'nodeId': final int id,
         }) {
           if (data.isEmpty && id >= 0) {

@@ -139,8 +139,8 @@ final class _MaintenanceHealthReader {
     var physicalState = DatabaseMaintenanceCheck.notChecked;
     bool? fkEnabled;
     var fkState = DatabaseMaintenanceCheck.notChecked;
-    try {
-      _maintenanceRequire(db.resolvedEngine.executor is! TransactionExecutor);
+    Future<void> readRegistration() async {
+      _maintenanceRequire(!db.isClosing && current());
       physicalState = await physical();
       final fk = await foreignKeys();
       fkEnabled = fk.$1;
@@ -173,6 +173,23 @@ final class _MaintenanceHealthReader {
         _maintenanceRequire(current());
         tables.add(await reader.read(table));
         _maintenanceRequire(current());
+      }
+    }
+
+    try {
+      _maintenanceRequire(!db.isClosing);
+      if (db.hasCompletedOpening) {
+        await outsideDatabaseTransaction(
+          db,
+          readRegistration,
+          onRejected: () => const _MaintenanceRefused(),
+        );
+      } else {
+        // Never let context inspection open/migrate an unopened or closed DB.
+        // Real ambient transaction callbacks run only after beforeOpen. An
+        // explicitly supplied transactional root is also refused here.
+        _maintenanceRequire(db.executor is! TransactionExecutor);
+        await readRegistration();
       }
     } on _MaintenanceRefused {
       retired = !current();

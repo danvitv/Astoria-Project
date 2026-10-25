@@ -121,7 +121,7 @@ final class _ChatNativeMaintenanceReader {
       // A stored owner is not proof of a dead job, regardless of lease expiry.
       // Fetch at most one scalar from each finite related actor store; do not
       // hydrate prompts, evidence, values, calls or tolerant legacy DTOs.
-      for (final spec in <(TableInfo, String)>[
+      for (final spec in <(TableInfo<Table, dynamic>, String)>[
         (db.cardEvolutionClaims, 'session_id'),
         (db.cardEvolutionProposalRuns, 'session_id'),
         (db.cardEvolutionWriterCalls, 'session_id'),

@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 
 import '../../models/support_models.dart';
 import '../app_db.dart';
+import '../database_transaction_guard.dart';
 import '../models/database_maintenance.dart';
 import 'support_repo.dart';
 

@@ -41,7 +41,7 @@ void main() {
         expect(definition.parameters['additionalProperties'], false);
         final properties = definition.parameters['properties'] as Map;
         expect(properties.length, lessThanOrEqualTo(16));
-        for (final field in properties.values.cast<Map>()) {
+        for (final field in properties.values.cast<Map<dynamic, dynamic>>()) {
           expect(field['type'], isNot(anyOf('object', 'array')));
         }
       }

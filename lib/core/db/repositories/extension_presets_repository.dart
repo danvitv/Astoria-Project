@@ -120,7 +120,9 @@ class ExtensionPresetsRepository extends DatabaseAccessor<AppDatabase>
     final config = jsonDecode(latest._row.configJson) as Map<String, dynamic>;
     final blocks = config['blocks'];
     if (blocks is! List) return ExtensionControlMutation.conflict;
-    final targets = blocks.whereType<Map>().where((b) => b['id'] == blockId);
+    final targets = blocks.whereType<Map<dynamic, dynamic>>().where(
+      (b) => b['id'] == blockId,
+    );
     if (targets.length != 1) return ExtensionControlMutation.conflict;
     final target = targets.single;
     if (target['enabled'] != null && target['enabled'] is! bool) {

@@ -26,7 +26,8 @@ void main() {
     (tester, f) async {
       f.script();
       await f.start(tester);
-      final tools = (f.wire.single['tools'] as List).cast<Map>();
+      final tools = (f.wire.single['tools'] as List)
+          .cast<Map<dynamic, dynamic>>();
       expect(tools.length, 43);
       final definition =
           tools.singleWhere(
@@ -549,7 +550,7 @@ void main() {
       expect(f.dialog.choices, 1);
       expect(f.wire.length, 2);
       final results = (f.wire.last['messages'] as List)
-          .cast<Map>()
+          .cast<Map<dynamic, dynamic>>()
           .where((m) => m['role'] == 'tool')
           .toList();
       expect(results.map((m) => m['tool_call_id']).toList(), [

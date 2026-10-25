@@ -339,7 +339,7 @@ final class _SameModuleControls {
       }
     }
     if (firstVfsFailure != null) {
-      Error.throwWithStackTrace(firstVfsFailure!, firstVfsStack!);
+      Error.throwWithStackTrace(firstVfsFailure, firstVfsStack!);
     }
 
     final handleSlot = windows

@@ -25,7 +25,9 @@ void main() {
       f.script(
         core.call('astoria_database_health', {'operation': 'discover'}),
         next: (_) {
-          final record = (f.lastData()['records'] as List).cast<Map>().single;
+          final record = (f.lastData()['records'] as List)
+              .cast<Map<dynamic, dynamic>>()
+              .single;
           return core.call('astoria_database_repair', {
             'target': record['target'],
           }, id: 'repair_call');
@@ -60,7 +62,9 @@ void main() {
       f.script(
         core.call('astoria_database_health', {'operation': 'receipts'}),
         next: (_) {
-          final record = (f.lastData()['records'] as List).cast<Map>().single;
+          final record = (f.lastData()['records'] as List)
+              .cast<Map<dynamic, dynamic>>()
+              .single;
           return core.call('astoria_database_repair_undo', {
             'receipt': record['receipt'],
           }, id: 'undo_call');
@@ -97,21 +101,25 @@ void main() {
           next: (round) {
             final data = f.lastData();
             if (round == 2) {
-              final record = (data['records'] as List).cast<Map>().single;
+              final record = (data['records'] as List)
+                  .cast<Map<dynamic, dynamic>>()
+                  .single;
               return core.call('astoria_session_integrity', {
                 'operation': 'inspect',
                 'session': record['session'],
               }, id: 'inspect_call');
             }
-            final record = (data['records'] as List).cast<Map>().firstWhere(
-              (r) =>
-                  r['kind'] ==
-                      (collector ? 'collectorAttempt' : 'liveLedger') &&
-                  r['availability'] ==
-                      (collector
-                          ? 'deleteUnusedAttempt'
-                          : 'correctExistingValue'),
-            );
+            final record = (data['records'] as List)
+                .cast<Map<dynamic, dynamic>>()
+                .firstWhere(
+                  (r) =>
+                      r['kind'] ==
+                          (collector ? 'collectorAttempt' : 'liveLedger') &&
+                      r['availability'] ==
+                          (collector
+                              ? 'deleteUnusedAttempt'
+                              : 'correctExistingValue'),
+                );
             return core.call('astoria_session_repair', {
               'operation': collector
                   ? 'deleteUnusedCollector'
@@ -159,7 +167,9 @@ void main() {
         f.script(
           core.call('astoria_session_integrity', {'operation': 'receipts'}),
           next: (_) {
-            final record = (f.lastData()['records'] as List).cast<Map>().single;
+            final record = (f.lastData()['records'] as List)
+                .cast<Map<dynamic, dynamic>>()
+                .single;
             return core.call('astoria_session_repair_undo', {
               'receipt': record['receipt'],
             }, id: 'undo_call');
@@ -218,7 +228,9 @@ void main() {
             }, id: 'discover_call');
           }
           if (round == 3) {
-            final record = (data['records'] as List).cast<Map>().single;
+            final record = (data['records'] as List)
+                .cast<Map<dynamic, dynamic>>()
+                .single;
             return core.call('astoria_session_integrity', {
               'operation': 'recordedHashes',
               'session': record['session'],

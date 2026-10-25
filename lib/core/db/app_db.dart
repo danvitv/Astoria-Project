@@ -137,6 +137,12 @@ class AppDatabase extends _$AppDatabase {
 
   final _AppDatabaseNativeFile? _nativeFile;
   NativeDataSourceIdentity? _nativeIdentity;
+  bool _completedOpening = false;
+
+  /// Factual lifecycle observation, not permission to open or reopen a database.
+  /// Read-only maintenance uses this before any public executor-scope check.
+  bool get hasCompletedOpening => _completedOpening;
+  bool get isClosing => _closing != null;
 
   /// No path/value getter. Null until the original native executor has opened.
   NativeDataSourceIdentity? get nativeDataSourceIdentity {
@@ -165,6 +171,7 @@ class AppDatabase extends _$AppDatabase {
   MigrationStrategy get migration => MigrationStrategy(
     beforeOpen: (_) async {
       _nativeFile?.markOpened();
+      _completedOpening = true;
     },
     onCreate: (Migrator m) async {
       await m.createAll();

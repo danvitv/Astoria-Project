@@ -13,7 +13,7 @@ final class _RepairSlice {
         (rows.map((r) => Map<String, Object?>.unmodifiable(r)).toList()
           ..sort((a, b) => jsonEncode(a).compareTo(jsonEncode(b)))),
       );
-  final TableInfo table;
+  final TableInfo<Table, dynamic> table;
   final String column, id;
   final List<Map<String, Object?>> rows;
   _RepairSlice withRows(List<Map<String, Object?>> value) =>
@@ -29,16 +29,18 @@ final class _RepairImage {
         .map((s) => [s.table.actualTableName, s.column, s.id, s.rows])
         .toList(),
   );
-  List<Map<String, Object?>> rows(TableInfo table) =>
+  List<Map<String, Object?>> rows(TableInfo<Table, dynamic> table) =>
       slices.singleWhere((s) => identical(s.table, table)).rows;
-  _RepairImage replacing(TableInfo table, List<Map<String, Object?>> rows) =>
-      _RepairImage(
-        targetSession,
-        supportSession,
-        List.unmodifiable(
-          slices.map((s) => identical(s.table, table) ? s.withRows(rows) : s),
-        ),
-      );
+  _RepairImage replacing(
+    TableInfo<Table, dynamic> table,
+    List<Map<String, Object?>> rows,
+  ) => _RepairImage(
+    targetSession,
+    supportSession,
+    List.unmodifiable(
+      slices.map((s) => identical(s.table, table) ? s.withRows(rows) : s),
+    ),
+  );
 }
 
 final class _RepairRawStore {
@@ -94,7 +96,7 @@ final class _RepairRawStore {
   }
 
   Future<_RepairSlice> slice(
-    TableInfo table,
+    TableInfo<Table, dynamic> table,
     String column,
     String id,
     bool Function() current,
@@ -192,7 +194,7 @@ final class _RepairRawStore {
       SessionRepairIssue.authorityDenied,
     );
     final char = sessions.rows.single['character_id'] as String;
-    final specs = <(TableInfo, String, String)>[
+    final specs = <(TableInfo<Table, dynamic>, String, String)>[
       (db.characters, 'char_id', char),
       (db.characterRevisionRows, 'character_id', char),
       (db.trackerRows, 'session_id', target),
@@ -286,7 +288,10 @@ final class _RepairRawStore {
     return fresh;
   }
 
-  Future<void> narrowSchema(TableInfo table, bool Function() current) async {
+  Future<void> narrowSchema(
+    TableInfo<Table, dynamic> table,
+    bool Function() current,
+  ) async {
     // Neither owned effect target has native triggers or SQL FK edges. Refuse
     // altered schema that could make a selected-row repair a hidden cascade.
     final result = await checked(

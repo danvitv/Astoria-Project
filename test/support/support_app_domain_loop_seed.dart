@@ -164,7 +164,7 @@ Future<void> seedDomainCollector(DomainLoopFixture f) async {
       effectiveCanonStamp: 'domain-canon',
       effectiveCanonRevision: 0,
       effectiveCanonHash: 'domain-canon-hash',
-      canonicalResult: const {'ops': []},
+      canonicalResult: const {'ops': <Map<String, dynamic>>[]},
       predecessorChainHash: predecessor,
       contractVersion: 1,
       opsApplied: const [],

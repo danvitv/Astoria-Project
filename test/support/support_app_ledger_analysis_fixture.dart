@@ -367,11 +367,13 @@ Future<void> runLedgerAnalysis(
         if (round == 2) {
           final definitions = core.wire.last['tools'] as List;
           expect(definitions.length, lessThanOrEqualTo(64));
-          final integrity = definitions.cast<Map>().singleWhere(
-            (definition) =>
-                (definition['function'] as Map)['name'] ==
-                'astoria_session_integrity',
-          );
+          final integrity = definitions
+              .cast<Map<dynamic, dynamic>>()
+              .singleWhere(
+                (definition) =>
+                    (definition['function'] as Map)['name'] ==
+                    'astoria_session_integrity',
+              );
           final parameters =
               ((integrity['function'] as Map)['parameters'] as Map);
           final fields = parameters['properties'] as Map;
@@ -381,7 +383,8 @@ Future<void> runLedgerAnalysis(
           );
           expect((fields['session'] as Map)['maxLength'], 64);
           expect((fields['offset'] as Map)['maximum'], 63);
-          final records = (f.lastData()['records'] as List).cast<Map>();
+          final records = (f.lastData()['records'] as List)
+              .cast<Map<dynamic, dynamic>>();
           final record = records.singleWhere(
             (r) => r['sessionId'] == DomainLoopFixture.session,
           );
@@ -392,13 +395,16 @@ Future<void> runLedgerAnalysis(
         }
         if (round == 3) {
           checked = true;
-          final messages = (core.wire.last['messages'] as List).cast<Map>();
+          final messages = (core.wire.last['messages'] as List)
+              .cast<Map<dynamic, dynamic>>();
           final tool = messages.lastWhere((m) => m['role'] == 'tool');
           expect(tool['tool_call_id'], 'analysis_call');
           final assistant = messages.lastWhere(
             (m) => m['role'] == 'assistant' && m['tool_calls'] is List,
           );
-          final call = (assistant['tool_calls'] as List).cast<Map>().single;
+          final call = (assistant['tool_calls'] as List)
+              .cast<Map<dynamic, dynamic>>()
+              .single;
           expect(call['id'], 'analysis_call');
           expect(
             (call['function'] as Map)['name'],

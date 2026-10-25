@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'package:drift/drift.dart';
 
 import '../app_db.dart';
+import '../database_transaction_guard.dart';
 import '../../llm/prompt/exact_lorebook_manifest.dart';
 import 'lorebook_use_manifest_repo.dart';
 import 'session_deletion_queries.dart';
@@ -35,13 +36,20 @@ class ChatRepo implements SyncChatStore {
     String sessionId,
     bool Function() isCurrent,
   ) async {
-    if (!isCurrent() || _db.resolvedEngine.executor is TransactionExecutor)
-      return null;
+    if (!isCurrent()) return null;
     try {
       // This owner chooses a read-only metadata snapshot before the repair
       // owner's later outer effect transaction. Never borrow ROOT's transaction.
-      return await _db.transaction(
-        () => _ChatNativeMaintenanceReader(_db).read(sessionId, isCurrent),
+      return await outsideDatabaseTransaction(
+        _db,
+        () {
+          if (!isCurrent()) return Future<ChatNativeMaintenanceSource?>.value();
+          return _db.transaction(
+            () => _ChatNativeMaintenanceReader(_db).read(sessionId, isCurrent),
+          );
+        },
+        onRejected: () =>
+            StateError('Native maintenance transaction unavailable'),
       );
     } catch (_) {
       return null;

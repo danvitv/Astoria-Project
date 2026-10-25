@@ -348,7 +348,7 @@ void main() {
               ExtensionPresetsCompanion.insert(
                 id: 'z-owned-extra-$index',
                 name: secondaryPrivateCanary,
-                configJson: jsonEncode({'blocks': []}),
+                configJson: jsonEncode({'blocks': <Map<String, dynamic>>[]}),
               ),
             );
       }

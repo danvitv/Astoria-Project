@@ -34,7 +34,7 @@ final class _RepairInspectionReader {
         global.addAll(reconciliation);
         final targets = <SessionRepairTarget>[];
         void add(
-          TableInfo table,
+          TableInfo<Table, dynamic> table,
           Map<String, Object?> row,
           SessionRepairTargetKind kind,
           List<SessionRepairIssue> issues,
@@ -297,7 +297,7 @@ final class _RepairInspectionReader {
       _repairRequire(
         union.length == evidence.length &&
             union.containsAll(evidence) &&
-            (decoded as List).length == row['repeat_count'],
+            decoded.length == row['repeat_count'],
         SessionRepairIssue.incompleteEvidence,
       );
     });
@@ -424,7 +424,7 @@ final class _RepairInspectionReader {
       image.rows(db.cardEvolutionObservations).isEmpty,
       SessionRepairIssue.aggregateOriginalUnavailable,
     );
-    for (final table in <TableInfo>[
+    for (final table in <TableInfo<Table, dynamic>>[
       db.cardEvolutionClaims,
       db.cardEvolutionProposalRuns,
       db.cardEvolutionWriterCalls,

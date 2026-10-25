@@ -37,7 +37,6 @@ import 'package:glaze_flutter/features/support_assistant/state/support_app_contr
 import 'package:glaze_flutter/features/support_assistant/state/support_app_control_native_repair_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_model_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_model_dependencies.dart';
-import 'package:glaze_flutter/features/support_assistant/state/support_model_workspace_binding.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_model_catalog_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_native_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_workspace_provider.dart';
@@ -108,7 +107,7 @@ void backupLoopTest(
         final event = SystemChannels.accessibility.codec.decodeMessage(message);
         if (event case {
           'type': 'tap',
-          'data': final Map data,
+          'data': final Map<dynamic, dynamic> data,
           'nodeId': final int id,
         }) {
           if (data.isEmpty && id >= 0)
@@ -601,7 +600,9 @@ final class BackupLoopFixture {
 
   Map<String, dynamic> result() {
     final messages = wire.last['messages'] as List;
-    final tool = messages.cast<Map>().singleWhere((m) => m['role'] == 'tool');
+    final tool = messages.cast<Map<dynamic, dynamic>>().singleWhere(
+      (m) => m['role'] == 'tool',
+    );
     expect(tool['tool_call_id'], 'backup_loop_call');
     return Map<String, dynamic>.from(
       jsonDecode(tool['content'] as String) as Map,
@@ -731,7 +732,7 @@ Future<T> backupLoopReal<T>(
 Future<void> backupLoopUntil(
   WidgetTester tester,
   bool Function() ready, {
-  BackupLoopSignal? signal,
+  BackupLoopSignal<dynamic>? signal,
 }) async {
   for (var frame = 0; frame < 1024; frame++) {
     signal?.throwIfFailed();
@@ -747,7 +748,7 @@ Future<void> backupLoopUntil(
 
 Future<void> backupLoopModal(
   WidgetTester tester,
-  BackupLoopSignal? signal,
+  BackupLoopSignal<dynamic>? signal,
 ) async {
   final accept = find.byKey(
     const ValueKey('support_backup_confirmation_accept'),

@@ -180,7 +180,9 @@ void main() {
         expect(data['registeredTables'], f.base.db.allTables.length);
         expect(data['expectedVersion'], f.base.db.schemaVersion);
         seen.addAll(
-          (data['tables'] as List).cast<Map>().map((r) => r['table'] as String),
+          (data['tables'] as List).cast<Map<dynamic, dynamic>>().map(
+            (r) => r['table'] as String,
+          ),
         );
         offset = data['nextOffset'] as int?;
         f.safe(result);
@@ -205,7 +207,7 @@ void main() {
       final result = await f.inspect();
       expect(result.content['code'], 'completed');
       final records = (RepairGatewayFixture.data(result)['records'] as List)
-          .cast<Map>();
+          .cast<Map<dynamic, dynamic>>();
       expect(
         records.singleWhere((r) => r['kind'] == 'observation')['issues'],
         contains('malformedPayload'),

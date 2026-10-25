@@ -51,7 +51,7 @@ final class _MaintenanceRawGuard {
     Map<String, Object?>? row,
   ) : keys = Map.unmodifiable(keys),
       row = row == null ? null : Map.unmodifiable(row);
-  final TableInfo table;
+  final TableInfo<Table, dynamic> table;
   final Map<String, Object?> keys;
   // Bounded raw bytes used ONLY privately for exact CAS; never journaled or
   // returned. No decoder, tolerant canonicalizer or full-row replacement.

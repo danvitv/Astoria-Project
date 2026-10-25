@@ -17,15 +17,15 @@ final class _MaintenanceRepairStore {
       _maintenanceRequire(current());
       // A caller-owned outer transaction would make our returned custody merely
       // provisional. Only this owner may choose the actual commit boundary.
-      _maintenanceRequire(
-        owner._db.resolvedEngine.executor is! TransactionExecutor,
-      );
-      return await owner._db.transaction(() async {
+      return await outsideDatabaseTransaction(owner._db, () {
         _maintenanceRequire(current());
-        final result = await action();
-        _maintenanceRequire(current());
-        return result;
-      });
+        return owner._db.transaction(() async {
+          _maintenanceRequire(current());
+          final result = await action();
+          _maintenanceRequire(current());
+          return result;
+        });
+      }, onRejected: () => const _MaintenanceRefused());
     } on _MaintenanceRefused {
       return null;
     } catch (_) {

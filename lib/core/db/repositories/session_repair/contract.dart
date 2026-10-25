@@ -160,18 +160,22 @@ Future<T?> _repairTransaction<T>(
 ) async {
   try {
     _repairRequire(current(), SessionRepairIssue.authorityDenied);
-    _repairRequire(
-      db.resolvedEngine.executor is! TransactionExecutor,
-      SessionRepairIssue.authorityDenied,
-    );
     // Return actual owner commit custody. Do not test cancelled UI admission
     // after this await and relabel an already committed effect as no-effect.
-    return await db.transaction(() async {
-      _repairRequire(current());
-      final result = await work();
-      _repairRequire(current());
-      return result;
-    });
+    return await outsideDatabaseTransaction(
+      db,
+      () {
+        _repairRequire(current());
+        return db.transaction(() async {
+          _repairRequire(current());
+          final result = await work();
+          _repairRequire(current());
+          return result;
+        });
+      },
+      onRejected: () =>
+          const _RepairRefused(SessionRepairIssue.authorityDenied),
+    );
   } on _RepairRefused {
     rethrow;
   } catch (_) {
