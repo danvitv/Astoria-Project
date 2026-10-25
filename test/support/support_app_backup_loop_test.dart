@@ -22,12 +22,12 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   backupLoopTest(
-    '42nd actual model tool saves WAL whole DB and returns only correlated status',
+    'actual model snapshot saves WAL whole DB and returns only correlated status',
     (tester, f) async {
       f.script();
       await f.start(tester);
       final tools = (f.wire.single['tools'] as List).cast<Map>();
-      expect(tools.length, 42);
+      expect(tools.length, 43);
       final definition =
           tools.singleWhere(
                 (t) =>

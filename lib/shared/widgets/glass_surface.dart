@@ -85,6 +85,30 @@ class GlassSurface extends ConsumerWidget {
     this.backdropSample = false,
   });
 
+  /// Storage-free rendering for bootstrap/recovery before the provider graph.
+  /// Shares the normal renderer; the reactive surface is never mounted here.
+  static Widget fixed({
+    Key? key,
+    required Widget child,
+    required BorderRadius borderRadius,
+    required ThemePreset preset,
+    bool batterySaver = true,
+    Color? tint,
+    BoxBorder? border,
+    VoidCallback? onTap,
+  }) => _FixedGlassSurface(
+    key: key,
+    preset: preset,
+    batterySaver: batterySaver,
+    surface: GlassSurface(
+      borderRadius: borderRadius,
+      tint: tint,
+      border: border,
+      onTap: onTap,
+      child: child,
+    ),
+  );
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // select() so the (many) glass surfaces on screen only rebuild when the
@@ -242,6 +266,26 @@ class GlassSurface extends ConsumerWidget {
     }
     return surface;
   }
+}
+
+final class _FixedGlassSurface extends StatelessWidget {
+  const _FixedGlassSurface({
+    super.key,
+    required this.surface,
+    required this.preset,
+    required this.batterySaver,
+  });
+  final GlassSurface surface;
+  final ThemePreset preset;
+  final bool batterySaver;
+
+  @override
+  Widget build(BuildContext context) => surface._build(
+    context,
+    preset,
+    batterySaver,
+    GlassBackdropGroup.of(context),
+  );
 }
 
 /// Marks a subtree whose [GlassSurface]s share a single backdrop capture: the

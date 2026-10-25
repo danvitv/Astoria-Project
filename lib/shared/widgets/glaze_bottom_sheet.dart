@@ -6,6 +6,7 @@ import 'desktop_popup.dart';
 import '../shell/desktop/desktop_layout_provider.dart';
 import '../../core/platform/haptics.dart';
 import '../theme/app_colors.dart';
+import '../theme/theme_preset.dart';
 import '../../features/settings/app_settings_provider.dart';
 import 'glass_surface.dart';
 import 'top_edge_blur.dart';
@@ -317,7 +318,7 @@ class GlazeBottomSheet {
 
 // ── Sheet content ─────────────────────────────────────────────────────────────
 
-class GlazeBottomSheetFrame extends ConsumerWidget {
+class GlazeBottomSheetFrame extends StatelessWidget {
   final Widget child;
   final bool showHandle;
   final double maxHeightFactor;
@@ -326,6 +327,7 @@ class GlazeBottomSheetFrame extends ConsumerWidget {
   /// [maxHeightFactor] — used when the sheet must fit a constrained slot (e.g.
   /// the color picker, which must not cover the pinned preview above it).
   final double? maxHeight;
+  final ThemePreset? fixedPreset;
 
   const GlazeBottomSheetFrame({
     super.key,
@@ -333,12 +335,23 @@ class GlazeBottomSheetFrame extends ConsumerWidget {
     this.showHandle = true,
     this.maxHeightFactor = 0.95,
     this.maxHeight,
+    this.fixedPreset,
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final cap =
         maxHeight ?? MediaQuery.of(context).size.height * maxHeightFactor;
+    final content = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (showHandle) _HandleBar(),
+        Flexible(fit: FlexFit.loose, child: child),
+      ],
+    );
+    const radius = BorderRadius.vertical(top: Radius.circular(24));
+    final border = Border(top: BorderSide(color: context.cs.outlineVariant));
     return ConstrainedBox(
       constraints: BoxConstraints(maxHeight: cap),
       // Solid, not glass. The sheet's tint is composited against the surface
@@ -348,18 +361,18 @@ class GlazeBottomSheetFrame extends ConsumerWidget {
       // stop blurring too.
       child: FlatBackdrop(
         color: context.cs.surface,
-        child: GlassSurface(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          border: Border(top: BorderSide(color: context.cs.outlineVariant)),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (showHandle) _HandleBar(),
-              Flexible(fit: FlexFit.loose, child: child),
-            ],
-          ),
-        ),
+        child: fixedPreset != null
+            ? GlassSurface.fixed(
+                preset: fixedPreset!,
+                borderRadius: radius,
+                border: border,
+                child: content,
+              )
+            : GlassSurface(
+                borderRadius: radius,
+                border: border,
+                child: content,
+              ),
       ),
     );
   }

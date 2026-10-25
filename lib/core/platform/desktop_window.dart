@@ -18,11 +18,11 @@ bool get _isDesktopWindow =>
 /// The Electron build opened at a fixed 1024x768 every time and the Flutter
 /// port had no window management at all, so resizing was forgotten on every
 /// launch. Safe to call on mobile: it no-ops there.
-Future<void> initDesktopWindow() async {
+Future<void> initDesktopWindow({bool persistGeometry = true}) async {
   if (!_isDesktopWindow) return;
   await windowManager.ensureInitialized();
 
-  final saved = await _readGeometry();
+  final saved = persistGeometry ? await _readGeometry() : null;
   final options = WindowOptions(
     size: saved?.size ?? _defaultSize,
     minimumSize: _minimumSize,
@@ -36,7 +36,7 @@ Future<void> initDesktopWindow() async {
     await windowManager.show();
     await windowManager.focus();
   });
-  windowManager.addListener(_GeometryPersister());
+  if (persistGeometry) windowManager.addListener(_GeometryPersister());
 }
 
 class _Geometry {

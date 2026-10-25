@@ -15,7 +15,7 @@ import 'support_app_domain_loop_fixture.dart';
 
 void main() {
   domainLoopTest(
-    'actual combined native registry has 42 finite definitions and no generic controls',
+    'actual combined native registry has finite definitions and no generic controls',
     (tester, f) async {
       final definitions = await configurationAction(
         tester,
@@ -23,7 +23,7 @@ void main() {
             .read(supportAppActionRegistryProvider)
             .definitions,
       );
-      expect(definitions, hasLength(42));
+      expect(definitions, hasLength(43));
       final backup = definitions.singleWhere(
         (d) => d.name == 'astoria_database_snapshot',
       );
@@ -33,7 +33,15 @@ void main() {
         definitions.length,
         lessThanOrEqualTo(NativeToolLimits.definitions),
       );
-      final serialized = definitions.map((d) => d.name).join(' ');
+      final preparation = definitions.singleWhere(
+        (d) => d.name == 'astoria_database_restore_prepare',
+      );
+      expect(preparation.parameters['properties'], isEmpty);
+      expect(preparation.parameters['additionalProperties'], isFalse);
+      final serialized = definitions
+          .where((d) => d.name != preparation.name)
+          .map((d) => d.name)
+          .join(' ');
       for (final absent in [
         'sql',
         'eval',

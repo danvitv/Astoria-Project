@@ -87,6 +87,21 @@ final class SupportPayloadCipher {
   final int maxEnvelopeChars;
   final int maxIdentifierBytes;
 
+  /// Recovery preflight even when the selected DB has zero encrypted rows.
+  /// Resolves the SAME key owner read-only and destroys all temporary key data.
+  Future<void> requireExistingInstallationKey() async {
+    final readOnly = _readOnly;
+    if (readOnly != null) {
+      await readOnly.run(() async {
+        await readOnly.delegate.requireExistingInstallationKey();
+        return '';
+      });
+      return;
+    }
+    final key = await _keys.resolve(createIfAbsent: false);
+    key.destroy();
+  }
+
   Future<String> encrypt({
     required String plaintext,
     required String table,

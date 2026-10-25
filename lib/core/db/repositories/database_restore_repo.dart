@@ -18,6 +18,7 @@ import 'chat_repo.dart';
 import 'support_repo.dart';
 
 part 'database_restore/restore_state.dart';
+part 'database_restore/restore_startup_owner.dart';
 part 'database_restore/restore_windows.dart';
 part 'database_restore/restore_sqlite.dart';
 part 'database_restore/restore_schema.dart';

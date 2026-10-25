@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -101,9 +102,14 @@ part 'migrations/upgrade_v137.dart';
 class AppDatabase extends _$AppDatabase {
   factory AppDatabase() => AppDatabase._native(_AppDatabaseNativeFile());
 
-  AppDatabase._native(_AppDatabaseNativeFile native)
+  /// Native startup composition only, after fixed-path process admission. Uses
+  /// the ordinary lazy background executor, never another default-path lookup.
+  factory AppDatabase.fixedNativeFile(File file) =>
+      AppDatabase._native(_AppDatabaseNativeFile(), fixedFile: file);
+
+  AppDatabase._native(_AppDatabaseNativeFile native, {File? fixedFile})
     : _nativeFile = native,
-      super(_openConnection(native));
+      super(_openConnection(native, fixedFile: fixedFile));
 
   AppDatabase.forTesting(super.e) : _nativeFile = null;
 
@@ -113,8 +119,10 @@ class AppDatabase extends _$AppDatabase {
   factory AppDatabase.openedNative(
     sqlite.Database connection, {
     bool closeUnderlyingOnClose = true,
+    void Function()? checkSnapshotSource,
   }) {
     final native = _AppDatabaseNativeFile.fromOpened(connection);
+    native.checkSnapshotSource = checkSnapshotSource;
     return AppDatabase._openedNative(
       NativeDatabase.opened(
         connection,
@@ -138,9 +146,16 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  Future<void> close() {
-    _nativeFile?.retire(); // Invalidate BEFORE the async executor close.
-    return super.close();
+  Future<void> close() => _closing ??= _closeNative();
+  Future<void>? _closing;
+
+  Future<void> _closeNative() {
+    final native = _nativeFile;
+    native?.retire(); // Invalidate BEFORE the async executor close.
+    if (native == null || native._borrowed.isEmpty) return super.close();
+    // Join original borrowed transaction futures, never just their canceled
+    // controls or a synchronous SnapshotService.dispose notification.
+    return native.drain().then((_) => super.close());
   }
 
   @override
@@ -199,14 +214,14 @@ class AppDatabase extends _$AppDatabase {
       _AppDatabaseStudioLegacyMigrations(this).purgeRetiredAgenticMicroMemory();
 }
 
-LazyDatabase _openConnection(_AppDatabaseNativeFile native) {
+LazyDatabase _openConnection(_AppDatabaseNativeFile native, {File? fixedFile}) {
   return LazyDatabase(() async {
-    final dbFolder = await getAppDataDir();
+    final dbFolder = fixedFile?.parent.path ?? await getAppDataDir();
     final dir = Directory(dbFolder);
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
-    final file = File(p.join(dbFolder, 'astoria.db'));
+    final file = fixedFile ?? File(p.join(dbFolder, 'astoria.db'));
     if (native.retired) throw StateError('Native database owner retired.');
     native.file = file; // SAME private File passed to the actual executor.
     return NativeDatabase.createInBackground(file);

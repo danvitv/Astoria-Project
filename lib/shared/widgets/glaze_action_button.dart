@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
+import '../theme/theme_preset.dart';
 import 'glass_surface.dart';
 import 'glaze_spinner.dart';
 
@@ -45,6 +46,9 @@ class GlazeActionButton extends StatelessWidget {
   /// primary action of a tab, which reads as a bar rather than a chip.
   final bool expand;
 
+  /// Explicit bootstrap visuals; avoids theme/settings providers before opening.
+  final ThemePreset? fixedPreset;
+
   const GlazeActionButton({
     super.key,
     required this.icon,
@@ -53,6 +57,7 @@ class GlazeActionButton extends StatelessWidget {
     this.tone = GlazeActionTone.neutral,
     this.busy = false,
     this.expand = false,
+    this.fixedPreset,
   });
 
   @override
@@ -91,17 +96,30 @@ class GlazeActionButton extends StatelessWidget {
         ],
       ),
     );
+    final radius = BorderRadius.circular(14);
+    final tint = tone == GlazeActionTone.primary
+        ? context.cs.primary.withValues(alpha: 0.18)
+        : context.cs.surface;
+    final border = Border.all(color: accent.withValues(alpha: 0.22));
+    final tap = enabled ? onTap : null;
     return Opacity(
       opacity: enabled ? 1 : 0.4,
-      child: GlassSurface(
-        borderRadius: BorderRadius.circular(14),
-        tint: tone == GlazeActionTone.primary
-            ? context.cs.primary.withValues(alpha: 0.18)
-            : context.cs.surface,
-        border: Border.all(color: accent.withValues(alpha: 0.22)),
-        onTap: enabled ? onTap : null,
-        child: content,
-      ),
+      child: fixedPreset != null
+          ? GlassSurface.fixed(
+              preset: fixedPreset!,
+              borderRadius: radius,
+              tint: tint,
+              border: border,
+              onTap: tap,
+              child: content,
+            )
+          : GlassSurface(
+              borderRadius: radius,
+              tint: tint,
+              border: border,
+              onTap: tap,
+              child: content,
+            ),
     );
   }
 }

@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
 import 'app.dart';
@@ -13,31 +12,97 @@ import 'core/platform/desktop_window.dart';
 import 'core/services/astoria_data_migration.dart';
 import 'core/services/dev_mode_flag_migration.dart';
 import 'core/services/preset_seeder.dart';
-import 'core/services/windows_data_migration.dart';
-import 'core/services/windows_preferences_migration.dart';
+import 'core/db/repositories/database_restore_repo.dart';
+import 'core/startup/database_startup.dart';
+import 'core/startup/windows_startup_migrations.dart';
 import 'core/utils/platform_paths.dart';
+import 'features/database_recovery/database_recovery_controller.dart';
+import 'features/database_recovery/database_recovery_screen.dart';
 
 final appRestartKey = GlobalKey();
 
-Future<void> main() async {
+// Deliberately retained until OS termination. No Dart/widget lifecycle closes
+// this guard or pretends that all application writers have drained.
+ProcessDatabaseStartup? _processDatabaseStartup;
+
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  final selection = parseDatabaseStartupArguments(args);
+  ProcessDatabaseStartup process;
+  if (Platform.isWindows) {
+    try {
+      process = ProcessDatabaseStartup.acquireWindows(Platform.environment);
+      _processDatabaseStartup = process;
+    } catch (error) {
+      await _showRecovery(
+        block: error is DatabaseRestoreException
+            ? error.code
+            : DatabaseRestoreCode.unsupported,
+      );
+      return; // Fail closed: no migrations, prefs, key or ordinary providers.
+    }
+  } else {
+    process = ProcessDatabaseStartup.otherPlatforms();
+    _processDatabaseStartup = process;
+  }
+  if (selection == DatabaseStartupSelection.rejected ||
+      (selection == DatabaseStartupSelection.recovery && !Platform.isWindows) ||
+      process.normalOpeningBlocked) {
+    await _showRecovery(
+      process: process,
+      block: process.normalOpeningBlocked
+          ? DatabaseRestoreCode.interruptedRequiresFreshConfirmation
+          : DatabaseRestoreCode.unsupported,
+    );
+    return;
+  }
+  if (selection == DatabaseStartupSelection.recovery) {
+    await _showRecovery(process: process);
+    return;
+  }
+  try {
+    await process.openNormal(() => _bootstrapNormal(process));
+    _publishNormal(process);
+  } catch (_) {
+    if (!Platform.isWindows) rethrow;
+    await _showRecovery(
+      process: process,
+      block: DatabaseRestoreCode.recoveryRequired,
+    );
+  }
+}
+
+Future<void> _showRecovery({
+  ProcessDatabaseStartup? process,
+  DatabaseRestoreCode? block,
+}) async {
+  try {
+    await initDesktopWindow(persistGeometry: false);
+  } catch (_) {
+    // Fixed blocked surface, never fall back to preference-backed startup.
+  }
+  runApp(
+    DatabaseRecoveryApp(
+      targetPath: process?.target?.path,
+      controller: DatabaseRecoveryController(
+        process: process,
+        initialBlock: block,
+        recoveryAvailable:
+            block == null && process?.target?.existsSync() == true,
+        bootstrap: () => _bootstrapNormal(process!),
+        publishNormal: _publishNormal,
+      ),
+    ),
+  );
+}
+
+Future<void> _bootstrapNormal(ProcessDatabaseStartup process) async {
   AppRuntime.markStarted();
   PerfDebug.installFrameLoggerIfEnabled();
   try {
-    await migrateAstoriaWindowsData();
-  } catch (error, stackTrace) {
-    FlutterError.reportError(
-      FlutterErrorDetails(
-        exception: error,
-        stack: stackTrace,
-        library: 'startup',
-        context: ErrorDescription('Windows data migration failed'),
-      ),
-    );
-    rethrow;
-  }
-  try {
-    if (Platform.isAndroid || Platform.isIOS) {
+    if (Platform.isWindows) {
+      await migrateWindowsStartupStorage(process);
+    } else if (Platform.isAndroid || Platform.isIOS) {
       final dataRoot = await getAppDataDir();
       await migrateAstoriaData(
         dataRoot: dataRoot,
@@ -49,25 +114,15 @@ Future<void> main() async {
   } catch (error, stackTrace) {
     FlutterError.reportError(
       FlutterErrorDetails(
-        exception: error,
+        exception: Platform.isWindows
+            ? StateError('Windows startup storage migration failed')
+            : error,
         stack: stackTrace,
         library: 'startup',
         context: ErrorDescription('Astoria data migration failed'),
       ),
     );
     rethrow;
-  }
-  try {
-    await migrateAstoriaWindowsPreferences();
-  } catch (error, stackTrace) {
-    FlutterError.reportError(
-      FlutterErrorDetails(
-        exception: error,
-        stack: stackTrace,
-        library: 'startup',
-        context: ErrorDescription('Windows preferences migration failed'),
-      ),
-    );
   }
   // After the Windows migration: that one rewrites the preferences file on
   // disk, so it has to land before SharedPreferences is first opened here.
@@ -153,18 +208,24 @@ Future<void> main() async {
       ),
     );
   }
+}
+
+void _publishNormal(ProcessDatabaseStartup process) {
+  // Keep process storage through all keyed normal scopes and recovery disposal.
+  _processDatabaseStartup = process;
   runApp(
     EasyLocalization(
       supportedLocales: const [Locale('en'), Locale('ru')],
       path: 'assets/translations',
       fallbackLocale: const Locale('en'),
-      child: const _RestartableApp(),
+      child: _RestartableApp(process: _processDatabaseStartup!),
     ),
   );
 }
 
 class _RestartableApp extends StatefulWidget {
-  const _RestartableApp();
+  const _RestartableApp({required this.process});
+  final ProcessDatabaseStartup process;
 
   @override
   State<_RestartableApp> createState() => _RestartableAppState();
@@ -179,7 +240,10 @@ class _RestartableAppState extends State<_RestartableApp> {
   Widget build(BuildContext context) {
     return KeyedSubtree(
       key: _key,
-      child: ProviderScope(child: GlazeApp(restart: restart)),
+      child: ProcessDatabaseScope(
+        process: widget.process,
+        child: GlazeApp(restart: restart),
+      ),
     );
   }
 }

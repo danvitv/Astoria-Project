@@ -26,13 +26,26 @@ final class SupportModelToolOutcome {
     final lines = <String>[
       if (interrupted) 'Запрос остановлен. Дальнейшие действия не выполнялись.',
       for (final fact in _facts)
-        '${fact.name}: ${fact.content['code']}; '
-            '${switch (fact.content['effect']) {
-              'persisted' => fact.name == 'astoria_database_snapshot' ? 'локальный файл сохранён' : 'изменение сохранено',
-              'navigation' => 'выполнен только переход, данные не изменены',
-              'uncertain' => 'результат изменения не подтверждён; повтор не выполнялся',
-              _ => fact.content['ok'] == true ? 'чтение завершено или изменений нет' : 'успех действия не подтверждён',
-            }}${fact.name == 'astoria_database_snapshot' && fact.content['effect'] == 'persisted' && fact.content['data'] is Map && (fact.content['data'] as Map)['status'] != 'verified' ? '; проверка снимка не подтверждена; повтор не выполнялся' : ''}${fact.content['effect'] == 'persisted' && fact.content['data'] is Map && (fact.content['data'] as Map)['refreshPending'] == true ? '; обновление нативных представлений ожидается' : ''}.',
+        if (fact.name == 'astoria_database_restore_prepare' &&
+            fact.content['code'] == 'unavailable' &&
+            fact.content['effect'] == 'none' &&
+            fact.content['data'] is Map &&
+            (fact.content['data'] as Map)['restore'] == 'noRestore')
+          (fact.content['data'] as Map)['status'] == 'restartRequired'
+              ? 'Восстановление БД не выполнялось и не запланировано. '
+                    'Полностью закрой Astoria и запусти её с --astoria-recovery. '
+                    'Файл и подтверждение выбираются заново на экране запуска. '
+                    'Внешние ключи хранилища из резервной копии не восстанавливаются.'
+              : 'Восстановление БД не выполнялось. '
+                    'Этот режим запуска поддерживается только на Windows.'
+        else
+          '${fact.name}: ${fact.content['code']}; '
+              '${switch (fact.content['effect']) {
+                'persisted' => fact.name == 'astoria_database_snapshot' ? 'локальный файл сохранён' : 'изменение сохранено',
+                'navigation' => 'выполнен только переход, данные не изменены',
+                'uncertain' => 'результат изменения не подтверждён; повтор не выполнялся',
+                _ => fact.content['ok'] == true ? 'чтение завершено или изменений нет' : 'успех действия не подтверждён',
+              }}${fact.name == 'astoria_database_snapshot' && fact.content['effect'] == 'persisted' && fact.content['data'] is Map && (fact.content['data'] as Map)['status'] != 'verified' ? '; проверка снимка не подтверждена; повтор не выполнялся' : ''}${fact.content['effect'] == 'persisted' && fact.content['data'] is Map && (fact.content['data'] as Map)['refreshPending'] == true ? '; обновление нативных представлений ожидается' : ''}.',
     ];
     return lines.join('\n');
   }

@@ -14,6 +14,22 @@ String? _cachedAppDataDir;
 
 String? get cachedAppDataDir => _cachedAppDataDir;
 
+/// Pure spelling resolution for pre-migration Windows admission. The native
+/// owner, not this resolver, proves that APPDATA exists and is canonical NTFS.
+/// No cache, directory creation, plugin call or installation lookup occurs.
+({Directory startupDirectory, File target}) resolveWindowsStartupPaths(
+  Map<String, String> environment,
+) {
+  final appData = environment['APPDATA'];
+  if (appData == null || appData.isEmpty) {
+    throw UnsupportedError('Windows startup anchor unavailable');
+  }
+  return (
+    startupDirectory: Directory(appData),
+    target: File(p.windows.join(appData, astoriaDataFolderName, 'astoria.db')),
+  );
+}
+
 Future<String> getAppDataDir() async {
   if (Platform.isAndroid || Platform.isIOS) {
     final dir = await getApplicationDocumentsDirectory();
@@ -134,8 +150,9 @@ String? resolveGlazeThumbnailPath(String? avatarPath) {
 
 String _desktopDataDir() {
   if (Platform.isWindows) {
-    final appData = Platform.environment['APPDATA']!;
-    return p.join(appData, astoriaDataFolderName);
+    return p.windows.dirname(
+      resolveWindowsStartupPaths(Platform.environment).target.path,
+    );
   } else if (Platform.isLinux) {
     final xdg =
         Platform.environment['XDG_DATA_HOME'] ??

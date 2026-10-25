@@ -61,7 +61,16 @@ final class DatabaseRestoreResult {
 /// The actual accepted Drift wrapper and its SAME raw/native lifetime owner.
 /// Do not also construct AppDatabase() when handing this to future startup.
 final class AcceptedDatabaseRestore {
-  AcceptedDatabaseRestore._(this._owner, this._database);
+  AcceptedDatabaseRestore._(this._owner, this._database) {
+    // Only the accepted target receives borrowed snapshot authority. Candidate
+    // wrappers retain no proof. Bind once to the exact already-open raw; no
+    // engine connection replacement or second openedNative wrapper is needed.
+    _database.nativeDataSourceIdentity!.retainSnapshotSource(
+      source: _owner._target!.database,
+      checkSource: _owner._checkSnapshotSource,
+    );
+    _owner._startup?._accepted = true;
+  }
   final NativeDatabaseRestoreOwner _owner;
   final AppDatabase _database;
   AppDatabase get database {

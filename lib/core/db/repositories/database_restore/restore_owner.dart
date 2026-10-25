@@ -21,6 +21,7 @@ final class NativeDatabaseRestoreOwner {
   final _work = _RestoreWork();
   final _directories = <_RestorePin>[];
   _RestorePin? _kernel;
+  NativeDatabaseStartupOwner? _startup;
   _RestorePin? _targetPin;
   _RestoreCandidate? _candidate;
   _RestoreRaw? _target;
@@ -95,6 +96,55 @@ final class NativeDatabaseRestoreOwner {
     }
   }
 
+  /// Existing-installation recovery borrows the SAME pre-migration process
+  /// guard. Closing/cancelling this owner cannot release/reacquire that guard.
+  static NativeDatabaseRestoreOwner fromStartup({
+    required NativeDatabaseStartupOwner startup,
+    required File candidate,
+    required SupportPayloadCipher payloadCipher,
+    @visibleForTesting void Function(DatabaseRestoreTestBoundary)? testFault,
+  }) {
+    startup._requireRestoreAdmission();
+    final windows = startup._windows;
+    final targetPath = startup._targetPath;
+    if (!windows.exists(targetPath)) _refuse(DatabaseRestoreCode.unavailable);
+    windows.requirePath(candidate.path);
+    if (p.windows.equals(targetPath, candidate.path)) {
+      _refuse(DatabaseRestoreCode.unsupported);
+    }
+    final native = _RestoreSqlite(windows);
+    final owner = NativeDatabaseRestoreOwner._(
+      windows,
+      native,
+      targetPath,
+      candidate.path,
+      payloadCipher,
+      testFault,
+    ).._startup = startup;
+    try {
+      owner._pinAncestors(p.windows.dirname(targetPath));
+      owner._pinAncestors(p.windows.dirname(candidate.path));
+      owner._targetPin = windows.pin(targetPath);
+      startup._requireRestoreAdmission();
+      startup._restore = owner;
+      return owner;
+    } catch (error, stack) {
+      owner._targetPin?.close();
+      for (final pin in owner._directories.reversed) {
+        pin.close();
+      }
+      native.close();
+      Error.throwWithStackTrace(
+        DatabaseRestoreException(
+          error is DatabaseRestoreException
+              ? error.code
+              : DatabaseRestoreCode.unsupported,
+        ),
+        stack,
+      );
+    }
+  }
+
   bool get normalOpeningBlocked =>
       _state == _RestoreState.blocked ||
       _state == _RestoreState.admitted ||
@@ -127,12 +177,17 @@ final class NativeDatabaseRestoreOwner {
   }
 
   void _check({bool settling = false}) {
-    if (_kernel == null ||
-        _kernel!.closed ||
-        _targetPin == null ||
-        _targetPin!.closed)
+    if (_startup != null) {
+      _startup!._check();
+      if (!identical(_startup!._restore, this)) {
+        _refuse(DatabaseRestoreCode.stale);
+      }
+    } else if (_kernel == null || _kernel!.closed) {
       _refuse(DatabaseRestoreCode.stale);
-    _kernel!.check();
+    }
+    if (_targetPin == null || _targetPin!.closed)
+      _refuse(DatabaseRestoreCode.stale);
+    _kernel?.check();
     _targetPin!.check();
     for (final pin in _directories) {
       pin.check();
@@ -160,6 +215,11 @@ final class NativeDatabaseRestoreOwner {
       _refuse(DatabaseRestoreCode.interruptedRequiresFreshConfirmation);
     if (_state != _RestoreState.idle || _retired)
       _refuse(DatabaseRestoreCode.stale);
+    _check();
+    if (_windows.exists(_markerPath)) {
+      _state = _RestoreState.blocked;
+      _refuse(DatabaseRestoreCode.interruptedRequiresFreshConfirmation);
+    }
     _state = _RestoreState.preparing;
     _clock = Stopwatch()..start();
     return _track(_prepareCandidate());
@@ -168,6 +228,10 @@ final class NativeDatabaseRestoreOwner {
   Future<DatabaseRestoreProposal> _prepareCandidate() async {
     try {
       _check();
+      if (_startup != null) {
+        await _work.run(_cipher.requireExistingInstallationKey());
+        _check();
+      }
       final pin = _windows.pin(_candidatePath, immutable: true);
       if (pin.identity == _targetPin!.identity ||
           pin.length <= 0 ||
@@ -302,6 +366,7 @@ final class NativeDatabaseRestoreOwner {
       _state = _closeFailed || wasBlocked
           ? _RestoreState.blocked
           : _RestoreState.closed;
+      _startup?._detach(this);
     } catch (error, stack) {
       _work.remember(error, stack);
       _closeFailed = true;
@@ -316,6 +381,62 @@ final class NativeDatabaseRestoreOwner {
         const DatabaseRestoreException(DatabaseRestoreCode.recoveryRequired),
         stack,
       );
+    }
+  }
+
+  /// Retained Core native proof for the SAME raw during the real Drift read
+  /// fence. Core's strict idle verify remains unchanged: inside a transaction
+  /// this instead requires no write transaction and proves the physical HANDLE
+  /// with the same borrowed stock-win32 public controls/module.
+  void _checkSnapshotSource() {
+    _check(settling: true);
+    if (_retired || _state != _RestoreState.accepted || _target == null) {
+      _refuse(DatabaseRestoreCode.stale);
+    }
+    _native.check();
+    final raw = _target!.database;
+    final handle = raw.handle.cast<nsql.sqlite3>();
+    final transaction = _native._txn(handle, _native.main.cast());
+    if (transaction != 0 && transaction != 1) {
+      _refuse(DatabaseRestoreCode.unsupported);
+    }
+    if (raw.select('PRAGMA main.locking_mode').single.values.single !=
+        'exclusive') {
+      _refuse(DatabaseRestoreCode.unsupported);
+    }
+    if (nsql.sqlite3_get_autocommit(handle) == 1) {
+      _native.verify(_target!, _targetPin!);
+      return;
+    }
+    final vfs = _windows
+        .allocate(sizeOf<Pointer<Char>>())
+        .cast<Pointer<Char>>();
+    final slot = _windows
+        .allocate(sizeOf<Pointer<Void>>())
+        .cast<Pointer<Void>>();
+    try {
+      if (_native._control(handle, _native.main.cast(), 12, vfs.cast()) != 0 ||
+          vfs.value == nullptr)
+        _refuse(DatabaseRestoreCode.unsupported);
+      const expected = [119, 105, 110, 51, 50, 0];
+      for (var i = 0; i < expected.length; i++) {
+        if (vfs.value.cast<Uint8>()[i] != expected[i]) {
+          _refuse(DatabaseRestoreCode.unsupported);
+        }
+      }
+      if (_native._control(handle, _native.main.cast(), 29, slot.cast()) != 0 ||
+          !_windows._valid(slot.value))
+        _refuse(DatabaseRestoreCode.unsupported);
+      final info = _windows.information(slot.value);
+      if ((info[7], info[11], info[12]) != _targetPin!.identity ||
+          info[10] != 1 ||
+          (info[0] & 0x410) != 0) {
+        _refuse(DatabaseRestoreCode.unsupported);
+      }
+    } finally {
+      if (vfs.value != nullptr) nsql.sqlite3_free(vfs.value.cast());
+      _windows.free(vfs.cast());
+      _windows.free(slot.cast());
     }
   }
 }

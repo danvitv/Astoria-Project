@@ -213,8 +213,8 @@ final class _WindowsApi {
     final getLastError = _error;
     getLastError();
     final attributes = getAttributes(pointer);
+    final error = getLastError(); // Before Dart branching can enter the VM.
     if (attributes != 0xffffffff) return true;
-    final error = getLastError();
     if (error == 2 || error == 3) return false;
     throw _identityFailure(
       role,
@@ -527,8 +527,10 @@ final class _WindowsPin {
         _closeRequested = true;
         return;
       }
+      if (api._close(handle) == 0) {
+        throw const _SnapshotFailure(DatabaseSnapshotStatus.unknown);
+      }
       closed = true;
-      api._close(handle);
     }
   }
 }

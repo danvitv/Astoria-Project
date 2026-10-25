@@ -11,12 +11,36 @@ final class NativeDatabaseSnapshotOwner {
     required this._destinationPath,
     required Iterable<String> registeredTableNames,
     required this._isSourceCurrent,
-  }) : _registeredTables = Set.unmodifiable(registeredTableNames);
+  }) : _registeredTables = Set.unmodifiable(registeredTableNames),
+       _borrowedSource = null,
+       _checkBorrowedSource = null,
+       _inReadTransaction = null;
+
+  /// SAME raw source with retained real native proof and the original Drift
+  /// executor's transaction fence. No new SQLite source connection is opened.
+  NativeDatabaseSnapshotOwner.borrowed({
+    required Database source,
+    required String sourcePath,
+    required String destinationPath,
+    required Iterable<String> registeredTableNames,
+    required bool Function() isSourceCurrent,
+    required void Function() checkSource,
+    required Future<void> Function(Future<void> Function()) inReadTransaction,
+  }) : _sourcePath = sourcePath,
+       _destinationPath = destinationPath,
+       _registeredTables = Set.unmodifiable(registeredTableNames),
+       _isSourceCurrent = isSourceCurrent,
+       _borrowedSource = source,
+       _checkBorrowedSource = checkSource,
+       _inReadTransaction = inReadTransaction;
 
   final String _sourcePath;
   final String _destinationPath;
   final Set<String> _registeredTables;
   final bool Function() _isSourceCurrent;
+  final Database? _borrowedSource;
+  final void Function()? _checkBorrowedSource;
+  final Future<void> Function(Future<void> Function())? _inReadTransaction;
   DatabaseSnapshotIdentityFailure? _identityFailure;
 
   /// A failed native proof gate only. Never exposes path/error/file metadata,
@@ -25,7 +49,8 @@ final class NativeDatabaseSnapshotOwner {
 }
 
 final class _SnapshotFiles {
-  _SnapshotFiles(this.api, this.sourcePath, this.destinationPath);
+  _SnapshotFiles(this.api, this.sourcePath, this.destinationPath, this.owner);
+  final NativeDatabaseSnapshotOwner owner;
   final _WindowsApi api;
   final String sourcePath;
   final String destinationPath;
@@ -65,6 +90,7 @@ final class _SnapshotFiles {
       api,
       owner._sourcePath,
       owner._destinationPath,
+      owner,
     );
     try {
       for (final folder in {
@@ -77,23 +103,27 @@ final class _SnapshotFiles {
         files.sourcePath,
         role: DatabaseSnapshotIdentityRole.source,
       );
-      for (final suffix in ['-wal', '-shm', '-journal']) {
-        final path = '${files.sourcePath}$suffix';
-        if (api.exists(
-          path,
-          role: DatabaseSnapshotIdentityRole.sourceSidecar,
-        )) {
-          files.sourceSidecars[path] = api.open(
+      if (owner._borrowedSource != null) {
+        owner._checkBorrowedSource!();
+      } else {
+        for (final suffix in ['-wal', '-shm', '-journal']) {
+          final path = '${files.sourcePath}$suffix';
+          if (api.exists(
             path,
             role: DatabaseSnapshotIdentityRole.sourceSidecar,
-          );
+          )) {
+            files.sourceSidecars[path] = api.open(
+              path,
+              role: DatabaseSnapshotIdentityRole.sourceSidecar,
+            );
+          }
         }
-      }
-      if (files.sourceSidecars.containsKey('${files.sourcePath}-journal') ||
-          (files.sourceSidecars.containsKey('${files.sourcePath}-wal') &&
-              !files.sourceSidecars.containsKey('${files.sourcePath}-shm'))) {
-        // Never recover a hot journal or create live WAL shared-memory files.
-        throw const _SnapshotFailure(DatabaseSnapshotStatus.unknown);
+        if (files.sourceSidecars.containsKey('${files.sourcePath}-journal') ||
+            (files.sourceSidecars.containsKey('${files.sourcePath}-wal') &&
+                !files.sourceSidecars.containsKey('${files.sourcePath}-shm'))) {
+          // Never recover a hot journal or create live WAL shared-memory files.
+          throw const _SnapshotFailure(DatabaseSnapshotStatus.unknown);
+        }
       }
       files._checkDestination();
       final random = Random.secure();
@@ -151,6 +181,14 @@ final class _SnapshotFiles {
   }
 
   void checkSourceConnection(Database db) {
+    if (owner._borrowedSource != null) {
+      if (!identical(db, owner._borrowedSource)) {
+        throw const _SnapshotFailure(DatabaseSnapshotStatus.stale);
+      }
+      source.checkPath();
+      owner._checkBorrowedSource!();
+      return;
+    }
     final entries = db.select('PRAGMA database_list');
     final main = entries.where((row) => row['name'] == 'main').toList();
     if (main.length != 1 ||
@@ -166,6 +204,13 @@ final class _SnapshotFiles {
   }
 
   void _checkSourceSidecars() {
+    if (owner._borrowedSource != null) {
+      // EXCLUSIVE Core WAL may legitimately have no SHM. Only the retained
+      // raw/HANDLE/lease proof replaces separate-reader sidecar custody here;
+      // the ordinary reader route still requires exactly its pinned sidecars.
+      owner._checkBorrowedSource!();
+      return;
+    }
     for (final suffix in ['-wal', '-shm', '-journal']) {
       final path = '$sourcePath$suffix';
       final pin = sourceSidecars[path];
@@ -231,20 +276,10 @@ final class _SnapshotFiles {
     published = true;
     stageOwned = false;
     stage = null;
-    final identity = pin.identity;
-    pin.close();
-    // SQLite on Windows doesn't share DELETE access. Retain a read-only pin
-    // after rename so a later native restore owner can open SQLite read-only.
-    final retained = api.open(
-      destinationPath,
-      immutable: true,
-      role: DatabaseSnapshotIdentityRole.retainedSnapshot,
-    );
-    if (retained.identity != identity) {
-      retained.close();
-      throw const _SnapshotFailure(DatabaseSnapshotStatus.stale);
-    }
-    return retained;
+    // Retain the SAME sealed handle through rename and rehash. Closing it to
+    // reopen a read-only pin would leave an OS-visible custody gap. Ordinary
+    // SQLite readers may open the published file only after service.close().
+    return pin;
   }
 
   void close() {
