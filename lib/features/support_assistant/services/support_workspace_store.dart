@@ -319,9 +319,28 @@ class SupportWorkspaceStore {
   }) async {
     final message = await repo.getMessageById(id);
     if (isCurrent?.call() == false) return;
-    if (message?.sessionId != sessionId) return;
-    await repo.deleteMessage(id);
+    if (message == null || message.sessionId != sessionId) return;
+    await repo.deleteCurrentMessage(
+      sessionId: sessionId,
+      messageId: id,
+      createdAt: message.createdAt,
+      role: message.role,
+      runId: message.runId,
+      isCurrent: isCurrent ?? () => true,
+    );
   }
+
+  Future<bool> deleteSelectedMessage(
+    SupportMessageItem message, {
+    required bool Function() isCurrent,
+  }) => repo.deleteCurrentMessage(
+    sessionId: message.sessionId,
+    messageId: message.id,
+    createdAt: message.createdAt.millisecondsSinceEpoch,
+    role: message.role.name,
+    runId: message.runId,
+    isCurrent: isCurrent,
+  );
 
   SupportMessageItem _message(db.SupportMessage m) => SupportMessageItem(
     id: m.id,

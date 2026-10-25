@@ -163,6 +163,32 @@ class SupportRepo {
   Stream<List<SupportMessage>> watchMessagesForSession(String sessionId) =>
       _messages.watch(sessionId);
   Future<void> deleteMessage(String messageId) => _messages.delete(messageId);
+
+  /// Selected native row only. Metadata and live ownership are checked in the
+  /// same transaction as deletion; no encrypted body or derived state is read.
+  Future<bool> deleteCurrentMessage({
+    required String sessionId,
+    required String messageId,
+    required int createdAt,
+    required String role,
+    required String? runId,
+    required bool Function() isCurrent,
+  }) => _messages.db.transaction(() async {
+    if (!isCurrent()) return false;
+    final row = await _messages.row(messageId);
+    if (!isCurrent() ||
+        row == null ||
+        row.sessionId != sessionId ||
+        row.createdAt != createdAt ||
+        row.role != role ||
+        row.runId != runId) {
+      return false;
+    }
+    await _messages.delete(messageId);
+    // A switch during the SQL await must roll back, not report a stale success.
+    if (!isCurrent()) throw StateError('Support message deletion retired.');
+    return true;
+  });
   Future<SupportContextBlock> putContextBlock(SupportContextBlock block) =>
       _context.put(block);
 

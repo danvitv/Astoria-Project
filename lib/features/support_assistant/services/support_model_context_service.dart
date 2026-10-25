@@ -391,7 +391,7 @@ List<SupportModelPreviewText> _modelPreviewMessages(
   String currentInput,
   SecretRedactor redactor,
 ) {
-  final messages = <SupportModelPreviewText>[
+  final messages = _coalesceSupportUsers(<SupportModelPreviewText>[
     const SupportModelPreviewText(
       role: 'system',
       text: _supportModelInstruction,
@@ -405,7 +405,7 @@ List<SupportModelPreviewText> _modelPreviewMessages(
               : message.text,
         ),
     SupportModelPreviewText(role: 'user', text: currentInput),
-  ];
+  ]);
   var chars = 0, bytes = 0;
   for (final message in messages) {
     chars += message.text.length;
@@ -420,6 +420,26 @@ List<SupportModelPreviewText> _modelPreviewMessages(
     _refuse(SupportModelRefusal.tooLarge);
   }
   return messages;
+}
+
+/// Wire projection only. Durable rows and their source IDs remain individual.
+List<SupportModelPreviewText> _coalesceSupportUsers(
+  Iterable<SupportModelPreviewText> input,
+) {
+  final messages = <SupportModelPreviewText>[];
+  for (final message in input) {
+    if (message.role == 'user' &&
+        messages.isNotEmpty &&
+        messages.last.role == 'user') {
+      messages[messages.length - 1] = SupportModelPreviewText(
+        role: 'user',
+        text: '${messages.last.text}\n\n${message.text}',
+      );
+    } else {
+      messages.add(message);
+    }
+  }
+  return List.unmodifiable(messages);
 }
 
 /// Actual-wire admission only; no preparation writes or HTTP waits in H ROOT.

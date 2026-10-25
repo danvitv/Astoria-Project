@@ -10,6 +10,7 @@ enum SupportModelRefusal {
   noModel,
   recipientRequired,
   unavailable,
+  toolsUnavailable,
   unsupported,
   unsafe,
   tooLarge,
@@ -46,6 +47,8 @@ enum SupportModelRefusal {
     settlementFailed =>
       'Сообщение сохранено, но результат ответа сохранить не удалось.',
     unavailable => 'Данные выбранной сессии или подключения недоступны.',
+    toolsUnavailable =>
+      'Не удалось подключить инструменты Astoria. Запрос не отправлен, настройки не изменены.',
   };
 }
 

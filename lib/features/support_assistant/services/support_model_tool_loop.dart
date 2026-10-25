@@ -41,9 +41,12 @@ extension _ModelTools on _ModelRun {
   bool get hasNativeTools {
     if (isCompact ||
         !binding.configuration.directConversation ||
-        binding.configuration.nativeSource?.savedConnectionAuth == null ||
         service._toolTransport == null) {
       return false;
+    }
+    if (binding.configuration.nativeSource?.savedConnectionAuth == null &&
+        binding.configuration.sourceStamp == null) {
+      return false; // A legacy fixture is not a native saved-source owner.
     }
     if (!toolsResolved) {
       operation.check();
@@ -67,9 +70,13 @@ extension _ModelTools on _ModelRun {
         }
       } catch (_) {
         originalBackup?.dispose();
-        originalActions = null; // No wire yet: truthful text-only instruction.
+        originalActions = null;
+        _refuse(SupportModelRefusal.toolsUnavailable);
       }
       operation.check();
+    }
+    if (originalActions != null && originalActions!.definitions.isEmpty) {
+      _refuse(SupportModelRefusal.toolsUnavailable);
     }
     return originalActions?.definitions.isNotEmpty == true;
   }
@@ -82,7 +89,11 @@ extension _ModelTools on _ModelRun {
     final transport = service._toolTransport!;
     final registry = originalActions!;
     final configuration = binding.configuration;
-    final auth = configuration.nativeSource!.savedConnectionAuth!;
+    final model = configuration.settings.modelId;
+    if (model == null || model.isEmpty) {
+      _refuse(SupportModelRefusal.noModel);
+    }
+    final auth = configuration.nativeSource?.savedConnectionAuth;
     final facts = SupportModelToolOutcome();
     final payloads = SupportModelToolPayloads();
     NativeToolSession? session;
@@ -93,51 +104,78 @@ extension _ModelTools on _ModelRun {
     );
     try {
       operation.check();
-      if (auth.purpose != NativeProviderPurpose.astoria ||
-          configuration.api.model != configuration.settings.modelId) {
+      if (auth != null &&
+          (auth.purpose != NativeProviderPurpose.astoria ||
+              configuration.api.model != configuration.settings.modelId)) {
         _refuse(SupportModelRefusal.unsupported);
       }
       // Pure native policy chooses the exact approved sibling operation. No URL
       // replacement/normalizer, roleplay key, hydration or alternate issuer.
-      final routes = transport.routes.routesFor(
-        connection: auth.connection,
-        purpose: auth.purpose,
+      final Uri recipient;
+      if (auth != null) {
+        final routes = transport.routes.routesFor(
+          connection: auth.connection,
+          purpose: auth.purpose,
+        );
+        final route = configuration.api.protocol == 'gemini'
+            ? routes.singleWhere(
+                (r) => r.endpoint.path.endsWith(':generateContent'),
+              )
+            : routes.single;
+        recipient = route.endpoint;
+      } else {
+        // Original Send's saved endpoint, never a newly approved native route.
+        recipient = Uri.parse(configuration.recipient.recipient.nativeRoute);
+      }
+      final config = configuration.api.copyWith(
+        model: model,
+        embeddingEnabled: auth == null
+            ? false
+            : configuration.api.embeddingEnabled,
+        embeddingApiKey: auth == null ? '' : configuration.api.embeddingApiKey,
+        extraRequestParameters: auth == null
+            ? const []
+            : configuration.api.extraRequestParameters,
+        // Tool rounds are finite JSON, not the ordinary text/SSE operation.
+        // A legacy Gemini streaming URL is still denied, never substituted.
+        stream: auth == null ? false : configuration.api.stream,
+        maxTokens: configuration.settings.maxTokens,
+        temperature: configuration.settings.temperature,
+        requestReasoning:
+            configuration.settings.reasoningEffort !=
+            SupportReasoningEffort.off,
+        reasoningEffort:
+            configuration.settings.reasoningEffort == SupportReasoningEffort.off
+            ? configuration.api.reasoningEffort
+            : configuration.settings.reasoningEffort.name,
+        omitReasoning:
+            configuration.api.omitReasoning ||
+            configuration.settings.reasoningEffort ==
+                SupportReasoningEffort.off,
+        showNativeReasoning: false,
       );
-      final route = configuration.api.protocol == 'gemini'
-          ? routes.singleWhere(
-              (r) => r.endpoint.path.endsWith(':generateContent'),
+      final messages = [
+        for (final m in preview!.messages)
+          NativeToolMessage(
+            role: NativeToolRole.values.byName(m.role),
+            text: m.text,
+          ),
+      ];
+      final request = auth != null
+          ? NativeToolRequest(
+              config: config,
+              savedConnectionAuth: auth,
+              approvedRecipient: recipient,
+              tools: registry.definitions,
+              messages: messages,
             )
-          : routes.single;
-      final recipient = route.endpoint;
-      final request = NativeToolRequest(
-        config: configuration.api.copyWith(
-          maxTokens: configuration.settings.maxTokens,
-          temperature: configuration.settings.temperature,
-          requestReasoning:
-              configuration.settings.reasoningEffort !=
-              SupportReasoningEffort.off,
-          reasoningEffort:
-              configuration.settings.reasoningEffort ==
-                  SupportReasoningEffort.off
-              ? configuration.api.reasoningEffort
-              : configuration.settings.reasoningEffort.name,
-          omitReasoning:
-              configuration.api.omitReasoning ||
-              configuration.settings.reasoningEffort ==
-                  SupportReasoningEffort.off,
-          showNativeReasoning: false,
-        ),
-        savedConnectionAuth: auth,
-        approvedRecipient: recipient,
-        tools: registry.definitions,
-        messages: [
-          for (final m in preview!.messages)
-            NativeToolMessage(
-              role: NativeToolRole.values.byName(m.role),
-              text: m.text,
-            ),
-        ],
-      );
+          : NativeToolRequest.legacySaved(
+              config: config,
+              sourceStamp: configuration.sourceStamp!,
+              approvedRecipient: recipient,
+              tools: registry.definitions,
+              messages: messages,
+            );
       operation.check();
       session = transport.open(
         request: request,

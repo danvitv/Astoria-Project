@@ -28,9 +28,9 @@ final class NativeToolDispatchCapsule {
   NativeToolDispatchCapsule._(_ToolWireJob job)
     : _job = job,
       handoff = NativeToolHandoff._(
-        job.binding.route.endpoint,
+        job.route.endpoint,
         job.session._request.config.protocol,
-        job.binding.connection.model,
+        job.binding?.connection.model ?? job.session._request.config.model,
         job.session._round + 1,
         utf8.encode(job.json).length,
       );
@@ -40,7 +40,7 @@ final class NativeToolDispatchCapsule {
   bool get isCurrent =>
       !_consumed &&
       (_job?.session._current() ?? false) &&
-      (_job?.binding.isCurrent ?? false) &&
+      (_job?.isCurrent ?? false) &&
       !_consumed;
   void dispatch() {
     _ntRequire(isCurrent, NativeToolReason.notCurrent);

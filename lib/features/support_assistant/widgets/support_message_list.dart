@@ -21,6 +21,7 @@ class SupportMessageList extends ConsumerWidget {
   final ValueChanged<String> onRollback;
   final ValueChanged<String>? onSetupAction;
   final ValueChanged<SupportGuidanceTarget>? onGuidance;
+  final ValueChanged<SupportMessageItem>? onMessageMenu;
   final double topPadding;
   final double bottomPadding;
   final SupportModelRunView run;
@@ -36,6 +37,7 @@ class SupportMessageList extends ConsumerWidget {
     required this.onRollback,
     this.onSetupAction,
     this.onGuidance,
+    this.onMessageMenu,
     this.topPadding = 16,
     this.bottomPadding = 16,
     this.run = const SupportModelRunView(),
@@ -77,6 +79,7 @@ class SupportMessageList extends ConsumerWidget {
         return Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: _SupportMessageBubble(
+            key: ValueKey('support_message_${message.sessionId}_${message.id}'),
             message: message,
             display: display,
             run: run,
@@ -85,6 +88,7 @@ class SupportMessageList extends ConsumerWidget {
             onRollback: onRollback,
             onSetupAction: onSetupAction,
             onGuidance: onGuidance,
+            onMessageMenu: onMessageMenu,
           ),
         );
       },
@@ -200,9 +204,11 @@ class _SupportMessageBubble extends StatelessWidget {
   final ValueChanged<String> onRollback;
   final ValueChanged<String>? onSetupAction;
   final ValueChanged<SupportGuidanceTarget>? onGuidance;
+  final ValueChanged<SupportMessageItem>? onMessageMenu;
   final SupportModelRunView run;
 
   const _SupportMessageBubble({
+    super.key,
     required this.message,
     required this.display,
     required this.onQuickAction,
@@ -210,6 +216,7 @@ class _SupportMessageBubble extends StatelessWidget {
     required this.onRollback,
     this.onSetupAction,
     this.onGuidance,
+    this.onMessageMenu,
     required this.run,
   });
 
@@ -265,6 +272,22 @@ class _SupportMessageBubble extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (onMessageMenu != null &&
+                        (message.role == SupportMessageRole.user ||
+                            message.role == SupportMessageRole.assistant)) ...[
+                      const SizedBox(width: 8),
+                      IconButton(
+                        key: ValueKey('support_message_menu_${message.id}'),
+                        tooltip: 'Действия с сообщением',
+                        visualDensity: VisualDensity.compact,
+                        icon: Icon(
+                          Icons.more_horiz_rounded,
+                          size: 18,
+                          color: context.cs.onSurfaceVariant,
+                        ),
+                        onPressed: () => onMessageMenu!(message),
+                      ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 6),

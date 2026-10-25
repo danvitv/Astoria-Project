@@ -9,6 +9,7 @@ final class _ModelConfiguration {
     this.policy,
     this.recipient,
     this.nativeSource,
+    this.sourceStamp,
     this.directConversation,
   );
   final SupportAssistantSettings settings;
@@ -17,6 +18,7 @@ final class _ModelConfiguration {
   final SupportPermissionPreferences policy;
   final SupportResolvedRecipient recipient;
   final NativePreparedSavedConnection? nativeSource;
+  final NativeConnectionStamp? sourceStamp;
   final bool directConversation;
 
   static Future<_ModelConfiguration> read(
@@ -33,9 +35,11 @@ final class _ModelConfiguration {
     // original prepared source; it never mints a replacement authorization.
     final sources = s._nativeSources;
     final retained = original?.nativeSource;
-    final stamp = sources != null && original == null
-        ? sources.captureOriginalStamp()
-        : null;
+    final stamp =
+        original?.sourceStamp ??
+        (sources != null && original == null
+            ? sources.captureOriginalStamp()
+            : null);
     bool sourceCurrent() =>
         operation.current() &&
         (stamp == null ||
@@ -170,6 +174,7 @@ final class _ModelConfiguration {
       policy,
       recipient,
       prepared,
+      stamp,
       directConversation,
     );
   }
@@ -178,6 +183,7 @@ final class _ModelConfiguration {
       api == other.api &&
       key == other.key &&
       identical(nativeSource, other.nativeSource) &&
+      identical(sourceStamp, other.sourceStamp) &&
       directConversation == other.directConversation &&
       _sameSettings(settings, other.settings) &&
       _samePolicy(policy, other.policy) &&

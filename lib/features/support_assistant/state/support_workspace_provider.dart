@@ -451,13 +451,65 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     intent: intent,
   );
 
-  Future<bool> deleteMessage(String messageId) {
-    final id = state.activeSessionId;
-    _writes.invalidateMessage(id, messageId);
-    return _editSession(
-      (store, current) =>
-          store.deleteMessage(id, messageId, isCurrent: current),
-    );
+  /// Capture the selected row before opening a menu/confirmation. Status/body
+  /// may settle meanwhile; identity and original selection must still match.
+  SupportMessageDeletionIntent? captureMessageDeletion(
+    SupportMessageItem message, {
+    bool Function()? isOriginalUiCurrent,
+  }) {
+    if (state.isLoading || message.sessionId != state.activeSessionId) {
+      return null;
+    }
+    final owner = _owner, selection = _selection;
+    bool current() =>
+        _current(owner) &&
+        selection == _selection &&
+        state.activeSessionId == message.sessionId &&
+        state.activeMessages.any(
+          (row) =>
+              row.id == message.id &&
+              row.sessionId == message.sessionId &&
+              row.createdAt == message.createdAt &&
+              row.role == message.role &&
+              row.runId == message.runId,
+        ) &&
+        (isOriginalUiCurrent?.call() ?? true) &&
+        _current(owner) &&
+        selection == _selection;
+    final intent = SupportMessageDeletionIntent._(this, message, current);
+    return intent.isCurrent ? intent : null;
+  }
+
+  Future<bool> deleteMessage(
+    String messageId, {
+    SupportMessageDeletionIntent? intent,
+  }) {
+    final row = state.activeMessages
+        .where((message) => message.id == messageId)
+        .firstOrNull;
+    final selected =
+        intent ?? (row == null ? null : captureMessageDeletion(row));
+    if (selected == null ||
+        !identical(selected._notifier, this) ||
+        selected.message.id != messageId ||
+        !selected.isCurrent) {
+      return Future.value(false);
+    }
+    final owner = _owner, writes = _writes;
+    // Retire all retained original services BEFORE the durable write can queue.
+    writes.invalidateMessage(selected.message.sessionId, messageId);
+    var deleted = false;
+    return _enqueue(owner, () async {
+      if (!selected.isCurrent) return;
+      deleted = await writes.enqueue(
+        () => owner.store.deleteSelectedMessage(
+          selected.message,
+          isCurrent: () => selected.isCurrent,
+        ),
+      );
+      if (!deleted || !_current(owner)) return;
+      await _reload(owner);
+    }, ownsError: () => selected.isCurrent).then((_) => deleted);
   }
 
   void _publishDurable(
@@ -482,6 +534,15 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
   // No executor/exporter exists in this phase.
   Future<bool> applyMutationPlan(String planId) async => false;
   Future<bool> rollbackMutation(String journalId) async => false;
+}
+
+/// Native UI selection, not a model permission or a stored deletion command.
+final class SupportMessageDeletionIntent {
+  SupportMessageDeletionIntent._(this._notifier, this.message, this._current);
+  final SupportWorkspaceNotifier _notifier;
+  final SupportMessageItem message;
+  final bool Function() _current;
+  bool get isCurrent => _current();
 }
 
 final supportWorkspaceProvider =

@@ -2,9 +2,24 @@ part of 'native_tool_transport.dart';
 
 /// One private credential-bound POST. No Dio client/default adapter is created.
 final class _ToolWireJob {
-  _ToolWireJob(this.session, this.binding, this.body, this.json, this._secret);
+  _ToolWireJob(
+    this.session,
+    NativeProviderDispatchBinding binding,
+    this.body,
+    this.json,
+    this._secret,
+  ) : binding = binding,
+      route = binding.route;
+  _ToolWireJob.legacySaved(
+    this.session,
+    this.route,
+    this.body,
+    this.json,
+    this._secret,
+  ) : binding = null;
   final NativeToolSession session;
-  final NativeProviderDispatchBinding binding;
+  final NativeProviderDispatchBinding? binding;
+  final CredentialRoute route;
   final Map<String, Object?> body;
   final String json;
   String _secret;
@@ -13,17 +28,34 @@ final class _ToolWireJob {
   bool _received = false;
   RequestOptions? _options;
 
+  bool get isCurrent =>
+      !_retired && (binding?.isCurrent ?? session._legacyWireCurrent());
+
   void _check(RequestOptions options) {
     session._check();
-    _ntRequire(!_retired && binding.isCurrent, NativeToolReason.notCurrent);
-    binding.requireFinalRequest(
-      uri: options.uri,
-      method: options.method,
-      protocol: binding.route.protocol,
-      purpose: NativeProviderPurpose.astoria,
-      model: session._request.config.model,
-      stream: false,
-    );
+    _ntRequire(isCurrent, NativeToolReason.notCurrent);
+    final native = binding;
+    if (native != null) {
+      native.requireFinalRequest(
+        uri: options.uri,
+        method: options.method,
+        protocol: route.protocol,
+        purpose: NativeProviderPurpose.astoria,
+        model: session._request.config.model,
+        stream: false,
+      );
+    } else {
+      final source = session._request._legacySaved!;
+      _ntRequire(
+        identical(route, source.route) &&
+            options.uri.toString() == session._request.config.endpoint &&
+            options.method == 'POST' &&
+            (route.protocol == CredentialProtocol.gemini ||
+                (body['model'] == session._request.config.model &&
+                    body['stream'] == false)),
+        NativeToolReason.denied,
+      );
+    }
     _ntRequire(
       options.uri == session._request.approvedRecipient &&
           !options.followRedirects &&
@@ -42,15 +74,15 @@ final class _ToolWireJob {
       NativeToolReason.denied,
     );
     session._check();
-    _ntRequire(binding.isCurrent, NativeToolReason.notCurrent);
+    _ntRequire(isCurrent, NativeToolReason.notCurrent);
   }
 
   Map<String, Object?> _headers() => {
     'Content-Type': 'application/json',
-    if (binding.route.protocol == CredentialProtocol.anthropic) ...{
+    if (route.protocol == CredentialProtocol.anthropic) ...{
       'x-api-key': _secret,
       'anthropic-version': '2023-06-01',
-    } else if (binding.route.protocol == CredentialProtocol.gemini) ...{
+    } else if (route.protocol == CredentialProtocol.gemini) ...{
       'x-goog-api-key': _secret,
     } else ...{
       'Authorization': 'Bearer $_secret',
@@ -60,7 +92,7 @@ final class _ToolWireJob {
   void dispatch() {
     _ntRequire(pending == null, NativeToolReason.denied);
     final options = RequestOptions(
-      path: binding.route.endpoint.toString(),
+      path: route.endpoint.toString(),
       method: 'POST',
       data: body,
       headers: _headers(),

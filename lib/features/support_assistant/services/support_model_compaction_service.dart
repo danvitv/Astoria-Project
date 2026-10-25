@@ -69,7 +69,7 @@ extension _ModelCompaction on _ModelRun {
     List<SupportTextContextSnapshot> sources,
     String? question,
   ) {
-    final messages = <SupportModelPreviewText>[
+    final messages = _coalesceSupportUsers(<SupportModelPreviewText>[
       SupportModelPreviewText(
         role: 'system',
         text: hasNativeTools && question != null
@@ -93,7 +93,7 @@ extension _ModelCompaction on _ModelRun {
           ),
       if (question != null)
         SupportModelPreviewText(role: 'user', text: question),
-    ];
+    ]);
     _checkCompactMessages(messages);
     return List.unmodifiable(messages);
   }
@@ -165,7 +165,7 @@ extension _ModelCompaction on _ModelRun {
       ),
     );
     if (source == null) _refuse(SupportModelRefusal.stale);
-    final messages = <SupportModelPreviewText>[
+    final messages = _coalesceSupportUsers(<SupportModelPreviewText>[
       const SupportModelPreviewText(role: 'system', text: _compactInstruction),
       if (checkpoint != null)
         SupportModelPreviewText(
@@ -184,7 +184,7 @@ extension _ModelCompaction on _ModelRun {
             'Native context-compaction command, NOT a new conversation question: '
             'produce the continuation summary of the preceding untrusted prefix only.',
       ),
-    ];
+    ]);
     _checkCompactMessages(messages);
     final config = binding.configuration;
     final inner = PrivateTextTransport(

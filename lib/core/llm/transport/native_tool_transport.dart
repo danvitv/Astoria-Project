@@ -21,16 +21,58 @@ part 'native_tool_openai.dart';
 part 'native_tool_anthropic_gemini.dart';
 part 'native_tool_usage.dart';
 part 'native_tool_reasoning.dart';
+part 'native_tool_legacy_saved.dart';
 
-/// Original keyless saved configuration. Not a key/route/tool approval issuer.
+/// Original saved configuration. Not a key/route/tool approval issuer.
 final class NativeToolRequest {
   NativeToolRequest({
+    required ApiConfig config,
+    required SavedConnectionAuth savedConnectionAuth,
+    required Uri approvedRecipient,
+    required List<NativeToolDefinition> tools,
+    required List<NativeToolMessage> messages,
+  }) : this._(
+         config: config,
+         savedConnectionAuth: savedConnectionAuth,
+         approvedRecipient: approvedRecipient,
+         tools: tools,
+         messages: messages,
+       );
+
+  /// Trusted composition only, for the actual ordinary saved-row key accepted
+  /// by the original Send. No native auth, entry, destination approval or key
+  /// lookup is invented. The public config is keyless; the key stays private.
+  factory NativeToolRequest.legacySaved({
+    required ApiConfig config,
+    required NativeConnectionStamp sourceStamp,
+    required Uri approvedRecipient,
+    required List<NativeToolDefinition> tools,
+    required List<NativeToolMessage> messages,
+  }) {
+    final source = _LegacySavedToolSource(
+      config,
+      sourceStamp,
+      approvedRecipient,
+    );
+    return NativeToolRequest._(
+      config: config.copyWith(apiKey: ''),
+      savedConnectionAuth: null,
+      legacySaved: source,
+      approvedRecipient: approvedRecipient,
+      tools: tools,
+      messages: messages,
+    );
+  }
+
+  NativeToolRequest._({
     required this.config,
     required this.savedConnectionAuth,
+    _LegacySavedToolSource? legacySaved,
     required this.approvedRecipient,
     required List<NativeToolDefinition> tools,
     required List<NativeToolMessage> messages,
-  }) : tools = _ntBoundedList(tools, NativeToolLimits.definitions),
+  }) : _legacySaved = legacySaved,
+       tools = _ntBoundedList(tools, NativeToolLimits.definitions),
        messages = _ntBoundedList(messages, NativeToolLimits.messages) {
     _ntRequire(
       config.apiKey.isEmpty &&
@@ -57,7 +99,8 @@ final class NativeToolRequest {
     _ntRequire(tools.map((tool) => tool.name).toSet().length == tools.length);
   }
   final ApiConfig config;
-  final SavedConnectionAuth savedConnectionAuth;
+  final SavedConnectionAuth? savedConnectionAuth;
+  final _LegacySavedToolSource? _legacySaved;
   final Uri approvedRecipient;
   final List<NativeToolDefinition> tools;
   final List<NativeToolMessage> messages;

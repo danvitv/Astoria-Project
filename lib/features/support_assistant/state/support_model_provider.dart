@@ -40,8 +40,9 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
   final workspace = ref.watch(supportModelWorkspaceBindingProvider);
   final custody = ref.watch(supportModelDatabaseCustodyProvider);
   final adapterFactory = ref.watch(supportModelPrivateAdapterFactoryProvider);
-  // Native tools cannot fall back to a saved row key. Legacy text-only fixture
-  // compositions need not construct any additional application capability graph.
+  // Native slots never fall back to a row key. Explicit legacy saved sources
+  // use their own absence-checked route; fixtures without a native owner do not
+  // construct an additional application capability graph.
   var alive = true;
   bool current() =>
       alive &&

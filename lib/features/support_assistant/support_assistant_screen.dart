@@ -8,6 +8,7 @@ import '../../shared/theme/app_colors.dart';
 import '../../shared/widgets/glaze_scaffold.dart';
 import '../../shared/widgets/glaze_error_block.dart';
 import '../../shared/widgets/glaze_toast.dart';
+import '../../shared/widgets/glaze_bottom_sheet.dart';
 import '../../shared/widgets/sheet_view.dart';
 import '../settings/app_settings_provider.dart';
 import 'state/support_workspace_provider.dart';
@@ -75,6 +76,90 @@ class _SupportAssistantScreenState
   bool _guidancePersistent = false, _guidanceBlocking = true;
   bool _showSendSnapshot = false;
   bool _sheetOpen = false;
+  Object _messageMenuLifetime = Object();
+
+  @override
+  void deactivate() {
+    _messageMenuLifetime = Object();
+    super.deactivate();
+  }
+
+  Future<void> _openMessageMenu(SupportMessageItem message) async {
+    if (_sheetOpen || !mounted) return;
+    final lifetime = _messageMenuLifetime;
+    final notifier = ref.read(supportWorkspaceProvider.notifier);
+    final intent = notifier.captureMessageDeletion(
+      message,
+      isOriginalUiCurrent: () =>
+          mounted && identical(lifetime, _messageMenuLifetime),
+    );
+    if (intent == null) return;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    _sheetOpen = true;
+    try {
+      var deleteRequested = false;
+      await GlazeBottomSheet.show<void>(
+        context,
+        title: message.role == SupportMessageRole.user
+            ? 'Твоё сообщение'
+            : 'Сообщение Астории',
+        items: [
+          BottomSheetItem(
+            label: 'Удалить сообщение',
+            icon: Icons.delete_outline_rounded,
+            isDestructive: true,
+            onTap: () {
+              deleteRequested = intent.isCurrent;
+              navigator.pop();
+            },
+          ),
+        ],
+      );
+      if (!mounted || !deleteRequested || !intent.isCurrent) return;
+      var confirmed = false;
+      await GlazeBottomSheet.show<void>(
+        context,
+        title: 'Удалить это сообщение?',
+        bigInfo: const BottomSheetBigInfo(
+          icon: Icons.delete_outline_rounded,
+          description:
+              'Удалится только выбранное сообщение из чата Астории. '
+              'Остальные сообщения останутся. Связанный активный ответ будет остановлен. '
+              'Это не отменяет уже выполненные действия и не удаляет данные ролевых чатов. '
+              'Если сообщение входит в старую сводку или связано с другим ответом, '
+              'для продолжения может потребоваться новый чат.',
+        ),
+        items: [
+          BottomSheetItem(
+            label: 'Удалить',
+            icon: Icons.delete_outline_rounded,
+            isDestructive: true,
+            onTap: () {
+              confirmed = intent.isCurrent;
+              navigator.pop();
+            },
+          ),
+          BottomSheetItem(
+            label: 'Отмена',
+            icon: Icons.close_rounded,
+            onTap: () => navigator.pop(),
+          ),
+        ],
+      );
+      if (!mounted || !confirmed || !intent.isCurrent) return;
+      final deleted = await notifier.deleteMessage(message.id, intent: intent);
+      // Successful deletion intentionally retires the selected-row predicate.
+      if (!mounted || !identical(lifetime, _messageMenuLifetime)) return;
+      if (!deleted && intent.isCurrent) {
+        GlazeToast.show(
+          context,
+          'Не удалось удалить сообщение. Обнови историю.',
+        );
+      }
+    } finally {
+      _sheetOpen = false;
+    }
+  }
 
   @override
   void initState() {
@@ -436,6 +521,7 @@ class _SupportAssistantScreenState
               onRollback: notifier.rollbackMutation,
               onSetupAction: _handleSetupCardAction,
               onGuidance: _openGuidance,
+              onMessageMenu: _openMessageMenu,
             ),
           ),
           SupportComposerBar(

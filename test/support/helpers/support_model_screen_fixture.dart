@@ -234,6 +234,9 @@ final class ModelScreenFixture {
         secretRedactionCoordinatorProvider.overrideWithValue(redaction),
         supportSessionStoreProvider.overrideWithValue(store),
         supportModelPrivateAdapterFactoryProvider.overrideWithValue(newAdapter),
+        // This is the explicit text/SSE fixture, not the native-tool graph.
+        // Tool-loop fixtures separately exercise the actual native owner.
+        nativeProviderRuntimeProvider.overrideWithValue(null),
         nativeProviderAdapterFactoryProvider.overrideWithValue(
           () => isolation.block('undeclared native provider wire adapter'),
         ),
