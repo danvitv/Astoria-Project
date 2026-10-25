@@ -27,6 +27,8 @@ class _PreparedUserMessageAppend {
 }
 
 class ChatRepo implements SyncChatStore {
+  static const maxControlMetadataOffset = 0x7fffffff;
+
   final AppDatabase _db;
   ChatRepo(this._db);
   bool usesDatabase(AppDatabase database) => identical(_db, database);
@@ -141,7 +143,10 @@ class ChatRepo implements SyncChatStore {
     int limit = 16,
     required bool Function() isCurrent,
   }) {
-    if (offset < 0 || offset > 63 || limit < 1 || limit > 16) {
+    if (offset < 0 ||
+        offset > maxControlMetadataOffset ||
+        limit < 1 ||
+        limit > 16) {
       throw ArgumentError('Invalid control metadata page');
     }
     void requireCurrent() {
@@ -158,6 +163,14 @@ class ChatRepo implements SyncChatStore {
           )
           .getSingle();
       requireCurrent();
+      final total = count.read<int>('n');
+      // A valid continuation past the end needs no potentially large OFFSET scan.
+      if (offset >= total) {
+        return (
+          rows: <({String sessionId, int sessionIndex, int messageCount})>[],
+          count: total,
+        );
+      }
       final rows = await _db
           .customSelect(
             r'''SELECT session_id, session_index,
@@ -182,7 +195,7 @@ class ChatRepo implements SyncChatStore {
               messageCount: row.read<int>('message_count'),
             ),
         ],
-        count: count.read<int>('n'),
+        count: total,
       );
     });
   }

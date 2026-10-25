@@ -32,10 +32,14 @@ final class SupportNativeRepairDiscovery implements SupportAppActionAdapter {
         SupportAppActionDefinition(
           name: definition.name,
           description:
-              '${definition.description} operation=discover returns native opaque eligible scalar targets.',
+              '${definition.description} operation=discover returns native opaque eligible scalar targets; follow nextOffset for the next bounded page. Inspection retains its own offset limit.',
           risk: definition.risk,
           fields: {
             ...definition.fields,
+            'offset': const SupportAppActionField.integer(
+              0,
+              ChatRepo.maxControlMetadataOffset,
+            ),
             'operation': SupportAppActionField.choice([
               'inspect',
               'discover',
@@ -47,10 +51,14 @@ final class SupportNativeRepairDiscovery implements SupportAppActionAdapter {
         SupportAppActionDefinition(
           name: definition.name,
           description:
-              '${definition.description} Use operation=discover first for original-bound session handles.',
+              '${definition.description} Use operation=discover first for original-bound session handles; follow nextOffset for the next bounded page. Inspection offsets remain 0–63.',
           risk: definition.risk,
           fields: {
             ...definition.fields,
+            'offset': const SupportAppActionField.integer(
+              0,
+              ChatRepo.maxControlMetadataOffset,
+            ),
             'operation': SupportAppActionField.choice([
               'discover',
               'receipts',
@@ -95,6 +103,22 @@ final class SupportNativeRepairDiscovery implements SupportAppActionAdapter {
     SupportAppActionContext context,
   ) async {
     if (!context.current) return null;
+    final suppliedOffset = arguments['offset'];
+    final discovery = arguments['operation'] == 'discover';
+    final offsetLimit = discovery
+        ? ChatRepo.maxControlMetadataOffset
+        : action == 'astoria_database_health' &&
+              arguments['operation'] != 'receipts'
+        ? 1024
+        : 63;
+    if (suppliedOffset != null &&
+        (suppliedOffset is! int ||
+            suppliedOffset < 0 ||
+            suppliedOffset > offsetLimit)) {
+      throw const SupportAppActionRefused(
+        SupportAppActionCode.invalidArguments,
+      );
+    }
     if (arguments['operation'] == 'receipts' &&
         (action == 'astoria_database_health' ||
             action == 'astoria_session_integrity')) {

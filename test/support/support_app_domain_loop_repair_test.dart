@@ -1,11 +1,177 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:glaze_flutter/core/models/chat_message.dart';
+import 'package:glaze_flutter/core/db/repositories/chat_repo.dart';
 import 'package:glaze_flutter/core/state/character_folder_provider.dart';
 import 'package:glaze_flutter/core/state/db_provider.dart';
 import 'package:glaze_flutter/features/chat/chat_provider.dart';
 
-import 'support_app_domain_loop_fixture.dart';
+import 'support_app_dormant_repair_fixture.dart';
 
 void main() {
+  dormantRepairTest(
+    'MODEL native discovery continuation reaches older session and repairs its Collector',
+    (tester, f) async {
+      final core = f.screen.core, c = core.container, db = core.native.db;
+      await configurationAction(tester, () async {
+        final chats = c.read(chatRepoProvider);
+        for (var i = 1; i <= 79; i++) {
+          await chats.put(
+            ChatSession(
+              id: 'pagination-newer-$i',
+              characterId: DomainLoopFixture.character,
+              sessionIndex: i,
+              updatedAt: i,
+              messages: [
+                ChatMessage(
+                  id: 'pagination-message-$i',
+                  role: 'user',
+                  content: DomainLoopFixture.private,
+                ),
+              ],
+            ),
+          );
+        }
+        await seedDomainCollector(f);
+      });
+      final offsets = <int>[0];
+      final seen = <String>{};
+      f.script(
+        core.call('astoria_session_integrity', {'operation': 'discover'}),
+        next: (round) {
+          final data = f.lastData();
+          final records = (data['records'] as List)
+              .cast<Map<dynamic, dynamic>>();
+          if (round <= 6) {
+            expect(data['bodyAccess'], 'notGranted');
+            expect(data['count'], 80);
+            expect(records, hasLength(16));
+            for (final record in records) {
+              expect(seen.add(record['sessionId'] as String), true);
+            }
+            final continuation = data['nextOffset'];
+            if (continuation != null) {
+              offsets.add(continuation as int);
+              return core.call('astoria_session_integrity', {
+                'operation': 'discover',
+                'offset': continuation,
+              }, id: 'discover_$continuation');
+            }
+            expect(offsets, [0, 16, 32, 48, 64]);
+            expect(seen, hasLength(80));
+            expect(round, 6);
+            final target = records.singleWhere(
+              (r) => r['sessionId'] == DomainLoopFixture.session,
+            );
+            return core.call('astoria_session_integrity', {
+              'operation': 'inspect',
+              'session': target['session'],
+            }, id: 'older_inspect');
+          }
+          final target = records.singleWhere(
+            (r) =>
+                r['kind'] == 'collectorAttempt' &&
+                r['availability'] == 'deleteUnusedAttempt',
+          );
+          return core.call('astoria_session_repair', {
+            'operation': 'deleteUnusedCollector',
+            'target': target['id'],
+          }, id: 'older_repair');
+        },
+      );
+      await f.start(tester);
+      expectStillDormant(f);
+      await f.apply(tester);
+      final reply = await f.finish(tester);
+      expect(reply.body, contains('изменение сохранено'));
+      expect(core.wire, hasLength(7));
+      expect(
+        await configurationAction(
+          tester,
+          () => db.select(db.cardEvolutionCollectorRuns).get(),
+        ),
+        isEmpty,
+      );
+      final journal = await configurationAction(
+        tester,
+        () => db.select(db.supportMutationJournal).get(),
+      );
+      expect(journal.single.status, 'applied');
+      expect(journal.single.beforeCiphertext, isNotEmpty);
+      expect(
+        journal.single.beforeCiphertext,
+        isNot(contains(DomainLoopFixture.private)),
+      );
+      expectStillDormant(f);
+      f.noEgress(reply.body);
+    },
+  );
+
+  domainLoopTest(
+    'MODEL discovery offsets preserve inspection limits and terminate past the end',
+    (tester, f) async {
+      final core = f.screen.core;
+      String? session;
+      f.script(
+        core.call('astoria_session_integrity', {'operation': 'discover'}),
+        next: (round) {
+          final result = f.lastResult();
+          final data = result['data'] as Map<dynamic, dynamic>;
+          if (round == 2) {
+            session =
+                ((data['records'] as List).single
+                        as Map<dynamic, dynamic>)['session']
+                    as String;
+          } else if (round <= 5 || round == 7) {
+            expect(result['code'], 'invalidArguments');
+            expect(result['effect'], 'none');
+          } else {
+            expect(result['code'], 'completed');
+            expect(data['records'], isEmpty);
+            expect(data['count'], 1);
+            expect(data['nextOffset'], isNull);
+          }
+          return switch (round) {
+            2 => core.call('astoria_session_integrity', {
+              'operation': 'inspect',
+              'session': session,
+              'offset': 64,
+            }, id: 'inspect_limit'),
+            3 => core.call('astoria_session_integrity', {
+              'operation': 'receipts',
+              'offset': 64,
+            }, id: 'receipt_limit'),
+            4 => core.call('astoria_database_health', {
+              'offset': 1025,
+            }, id: 'health_limit'),
+            5 => core.call('astoria_session_integrity', {
+              'operation': 'discover',
+              'offset': ChatRepo.maxControlMetadataOffset,
+            }, id: 'past_end'),
+            6 => core.call('astoria_session_integrity', {
+              'operation': 'discover',
+              'offset': ChatRepo.maxControlMetadataOffset + 1,
+            }, id: 'invalid_discovery'),
+            _ => core.answer('Only bounded metadata was inspected.'),
+          };
+        },
+      );
+      await f.start(tester, confirmation: false);
+      final reply = await f.finish(tester);
+      expect(core.wire, hasLength(7));
+      expect(f.results.every((r) => r['effect'] == 'none'), true);
+      expect(
+        await configurationAction(
+          tester,
+          () => core.native.db
+              .select(core.native.db.supportMutationJournal)
+              .get(),
+        ),
+        isEmpty,
+      );
+      f.noEgress(reply.body);
+    },
+  );
+
   domainLoopTest(
     'MODEL safe native discovery repairs dangling DB membership and fresh native Undo',
     (tester, f) async {
