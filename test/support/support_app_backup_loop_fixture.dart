@@ -255,6 +255,10 @@ final class BackupLoopFixture {
       characterFolderRepoProvider,
       presetFolderRepoProvider,
       extensionPresetsRepoProvider,
+      // The real secondary registry retains this original notifier. Its loader
+      // reads the repository over our injected DB, not preferences or JS/runtime
+      // startup. Match DomainLoopFixture's exact owner registration; no override.
+      extensionPresetsProvider,
       memoryBookRepoProvider,
       memoryCatalogRepoProvider,
       memoryActiveDraftsProvider,
@@ -386,6 +390,13 @@ final class BackupLoopFixture {
       ],
     );
     graph = true;
+    // Prove the newly registered owner's backing source and the current prefs
+    // are THIS fixture's stores. Leave notifier loading to the actual registry.
+    expect(
+      container.read(extensionPresetsRepoProvider).attachedDatabase,
+      same(native.db),
+    );
+    expect(await container.read(sharedPreferencesProvider.future), same(prefs));
     await container.read(appSettingsProvider.future);
     container.read(themeProvider);
     await theme.flushPersistence();

@@ -15,7 +15,8 @@ void backupWidgetTest(
   String name,
   Future<void> Function(WidgetTester, BackupNativeFixture) body, {
   bool noHost = false,
-  bool observePhases = false,
+  // Shared wait observation, not a claim that every native case has an app bug.
+  bool observePhases = true,
 }) {
   testWidgets(name, (tester) async {
     final messenger = tester.binding.defaultBinaryMessenger;
@@ -323,6 +324,9 @@ void main() {
   backupWidgetTest(
     'unknown path SQL key network and restore arguments have no native effect',
     (tester, f) async {
+      final probe = f.phaseProbe!;
+      expect(f.original.sourceAccess, isNull);
+      var invoked = 0;
       for (final field in [
         'path',
         'sourcePath',
@@ -334,32 +338,60 @@ void main() {
         'restore',
         'operation',
       ]) {
-        final result = await backupReal(
-          tester,
-          () => f.call({field: 'untrusted'}),
-        );
-        expect(result.content['code'], 'invalidArguments');
-        expect(result.content['effect'], 'none');
+        late Future<NativeToolResult> original;
+        // Observe the ACTUAL registry future in its real-I/O zone. The finite
+        // probe hands control back for frames; it never replaces completion.
+        await probe.real(tester, BackupNativePhase.invoke, () {
+          original = f.call({field: 'untrusted'});
+          return original;
+        });
+        final result = await probe.join(tester, original);
+        invoked++;
+        expect(result.callId, 'backup-call');
+        expect(result.name, SupportBackupNativeFileHost.action);
+        expect(result.content, {
+          'ok': false,
+          'code': 'invalidArguments',
+          'effect': 'none',
+          'data': {'status': 'unavailable'},
+        });
+        expect(f.actionCount, invoked);
+        expect(f.settledActionCount, invoked);
+        expect(f.actionsSettled, isTrue);
+        expect(f.dialog.choices, 0);
+        expect(f.root.admissions, 0);
+        expect(probe.started(BackupNativePhase.picker), isFalse);
+        expect(probe.started(BackupNativePhase.modal), isFalse);
+        expect(probe.started(BackupNativePhase.rootEffect), isFalse);
+        expect(f.original.sourceAccess, isNull);
       }
-      expect(f.dialog.choices, 0);
-      expect(f.root.admissions, 0);
-      await backupReal(tester, f.expectSourceUnchanged);
+      expect(invoked, 9);
       expect(
-        await backupReal(tester, () => File(f.destinationPath).exists()),
+        find.byKey(const ValueKey('support_backup_confirmation_accept')),
+        findsNothing,
+      );
+      await probe.real(tester, BackupNativePhase.join, f.expectSourceUnchanged);
+      expect(
+        await probe.real(
+          tester,
+          BackupNativePhase.join,
+          () => File(f.destinationPath).exists(),
+        ),
         isFalse,
       );
     },
+    observePhases: true,
   );
 
   backupWidgetTest(
     'missing native file host is unavailable without opening another DB',
     (tester, f) async {
-      final result = await backupReal(tester, f.call);
+      final result = await f.real(tester, BackupNativePhase.invoke, f.call);
       expect(result.content['code'], 'unavailable');
       expect(result.content['effect'], 'none');
       expect(f.dialog.choices, 0);
       expect(f.root.admissions, 0);
-      await backupReal(tester, f.expectSourceUnchanged);
+      await f.real(tester, BackupNativePhase.join, f.expectSourceUnchanged);
     },
     noHost: true,
   );
@@ -372,10 +404,16 @@ void main() {
         tester,
         () => f.dialog.choices == 1,
         action: f.actionFor(started.future),
+        probe: f.phaseProbe,
+        phase: BackupNativePhase.picker,
       );
       await backupReal(tester, () => f.dialog.choose(null));
       expect(
-        (await backupJoin(tester, started.future)).content['code'],
+        (await backupJoin(
+          tester,
+          started.future,
+          probe: f.phaseProbe,
+        )).content['code'],
         'cancelled',
       );
       final second = await backupReal(tester, () => (future: f.call()));
@@ -383,19 +421,33 @@ void main() {
         tester,
         () => f.dialog.choices == 2,
         action: f.actionFor(second.future),
+        probe: f.phaseProbe,
+        phase: BackupNativePhase.picker,
       );
       await backupReal(tester, () => f.dialog.choose(f.destinationPath));
-      await backupModal(tester, action: f.actionFor(second.future));
-      await backupDecision(tester, 'cancel');
-      final denied = await backupJoin(tester, second.future);
+      await backupModal(
+        tester,
+        action: f.actionFor(second.future),
+        probe: f.phaseProbe,
+      );
+      await backupDecision(tester, 'cancel', probe: f.phaseProbe);
+      final denied = await backupJoin(
+        tester,
+        second.future,
+        probe: f.phaseProbe,
+      );
       expect(denied.content['code'], 'denied');
       expect(denied.content['effect'], 'none');
       expect(f.root.admissions, 0);
       expect(
-        await backupReal(tester, () => File(f.destinationPath).exists()),
+        await f.real(
+          tester,
+          BackupNativePhase.join,
+          () => File(f.destinationPath).exists(),
+        ),
         isFalse,
       );
-      await backupReal(tester, f.expectSourceUnchanged);
+      await f.real(tester, BackupNativePhase.join, f.expectSourceUnchanged);
     },
   );
 
@@ -407,10 +459,16 @@ void main() {
         tester,
         () => f.dialog.choices == 1,
         action: f.actionFor(started.future),
+        probe: f.phaseProbe,
+        phase: BackupNativePhase.picker,
       );
       f.token.cancel();
       await backupReal(tester, () => f.dialog.choose(f.destinationPath));
-      final result = await backupJoin(tester, started.future);
+      final result = await backupJoin(
+        tester,
+        started.future,
+        probe: f.phaseProbe,
+      );
       expect(result.content['code'], 'cancelled');
       expect(result.content['effect'], 'none');
       expect(
@@ -418,16 +476,21 @@ void main() {
         findsNothing,
       );
       expect(
-        await backupReal(tester, () => File(f.destinationPath).exists()),
+        await f.real(
+          tester,
+          BackupNativePhase.join,
+          () => File(f.destinationPath).exists(),
+        ),
         isFalse,
       );
-      await backupReal(tester, f.expectSourceUnchanged);
+      await f.real(tester, BackupNativePhase.join, f.expectSourceUnchanged);
     },
   );
 
   backupWidgetTest(
     'A to B to A native UI replacement never revives original consent',
     (tester, f) async {
+      final probe = f.phaseProbe!;
       final pending = await beginSave(tester, f);
       final page = ModalRoute.of(f.screenContext)!;
       final sheet = ModalRoute.of(
@@ -435,24 +498,38 @@ void main() {
           find.byKey(const ValueKey('support_backup_confirmation_accept')),
         ),
       )!;
+      final pageTransitionDuration = page.transitionDuration;
+      final sheetReverseTransitionDuration = sheet.reverseTransitionDuration;
       f.router.go('/replacement');
-      await tester.pump();
-      await tester.pump(
-        page.transitionDuration + sheet.reverseTransitionDuration,
+      await probe.frame(tester, BackupNativePhase.modal, tester.pump);
+      await probe.frame(
+        tester,
+        BackupNativePhase.modal,
+        () => tester.pump(
+          pageTransitionDuration + sheetReverseTransitionDuration,
+        ),
       );
       f.router.go('/backup');
-      await tester.pump();
-      await tester.pump(page.transitionDuration);
-      final result = await backupJoin(tester, pending.future);
+      await probe.frame(tester, BackupNativePhase.modal, tester.pump);
+      await probe.frame(
+        tester,
+        BackupNativePhase.modal,
+        () => tester.pump(pageTransitionDuration),
+      );
+      final result = await backupJoin(tester, pending.future, probe: probe);
       expect(result.content['effect'], 'none');
       expect(result.content['code'], isNot('completed'));
       expect(f.ui.isCurrent, isFalse);
       expect(f.root.admissions, 0);
       expect(
-        await backupReal(tester, () => File(f.destinationPath).exists()),
+        await f.real(
+          tester,
+          BackupNativePhase.join,
+          () => File(f.destinationPath).exists(),
+        ),
         isFalse,
       );
-      await backupReal(tester, f.expectSourceUnchanged);
+      await f.real(tester, BackupNativePhase.join, f.expectSourceUnchanged);
     },
   );
 
@@ -460,56 +537,85 @@ void main() {
     'preexisting exact native destination is preserved and never replaced',
     (tester, f) async {
       final originalBytes = List<int>.generate(4096, (i) => i % 251);
-      await backupReal(
+      await f.real(
         tester,
+        BackupNativePhase.join,
         () => File(f.destinationPath).writeAsBytes(originalBytes),
       );
       final pending = await beginSave(tester, f);
-      await backupDecision(tester, 'accept');
-      final result = await backupJoin(tester, pending.future);
+      await backupDecision(tester, 'accept', probe: f.phaseProbe);
+      final result = await backupJoin(
+        tester,
+        pending.future,
+        probe: f.phaseProbe,
+      );
       expect(result.content['code'], 'unavailable');
       expect(result.content['effect'], 'none');
       expect(
-        await backupReal(tester, () => File(f.destinationPath).readAsBytes()),
+        await f.real(
+          tester,
+          BackupNativePhase.join,
+          () => File(f.destinationPath).readAsBytes(),
+        ),
         originalBytes,
       );
-      await backupReal(tester, f.expectSourceUnchanged);
+      await f.real(tester, BackupNativePhase.join, f.expectSourceUnchanged);
     },
   );
 
   backupWidgetTest(
     'foreign opened native DB cannot borrow the original ROOT source authority',
     (tester, f) async {
-      final foreign = await backupReal(tester, () async {
-        final writer = sqlite.sqlite3.open(
-          p.join(f.directory.path, 'foreign.db'),
-        );
-        final db = AppDatabase.openedNative(
-          writer,
-          closeUnderlyingOnClose: false,
-        );
-        await db.customSelect('SELECT 1').get();
-        return (writer: writer, db: db);
-      });
+      final foreign = await f.real(
+        tester,
+        BackupNativePhase.initialize,
+        () async {
+          final writer = sqlite.sqlite3.open(
+            p.join(f.directory.path, 'foreign.db'),
+          );
+          final releaseOwner = f.retainAuxiliaryOwner();
+          final db = AppDatabase.openedNative(
+            writer,
+            closeUnderlyingOnClose: false,
+          );
+          await db.customSelect('SELECT 1').get();
+          return (writer: writer, db: db, releaseOwner: releaseOwner);
+        },
+      );
+      var databaseClosed = false;
       final failure = BackupFixtureFailure();
       await failure.run(() async {
         f.providerDb = foreign.db;
         f.container.invalidate(appDbProvider);
         f.rebuildRegistry();
         expect(foreign.db.nativeDataSourceIdentity!.belongsTo(f.db), isFalse);
-        final result = await backupReal(tester, f.call);
+        final result = await f.real(tester, BackupNativePhase.invoke, f.call);
         expect(result.content['code'], 'unavailable');
         expect(result.content['effect'], 'none');
         expect(f.dialog.choices, 0);
         expect(f.root.admissions, 0);
         expect(
-          await backupReal(tester, () => File(f.destinationPath).exists()),
+          await f.real(
+            tester,
+            BackupNativePhase.join,
+            () => File(f.destinationPath).exists(),
+          ),
           isFalse,
         );
-        await backupReal(tester, f.expectSourceUnchanged);
+        await f.real(tester, BackupNativePhase.join, f.expectSourceUnchanged);
       });
-      await failure.run(() => backupReal(tester, foreign.db.close));
-      await failure.run(() => backupReal(tester, foreign.writer.close));
+      await failure.run(() async {
+        f.requireSettledWorkBeforeClose();
+        await f.real(tester, BackupNativePhase.cleanup, foreign.db.close);
+        databaseClosed = true;
+      });
+      await failure.run(() {
+        f.requireSettledWorkBeforeClose();
+        return backupReal(tester, () {
+          foreign.writer.close();
+          if (databaseClosed) foreign.releaseOwner();
+        });
+      });
       failure.throwIfAny();
     },
   );
@@ -519,19 +625,24 @@ void main() {
     f,
   ) async {
     final memory = AppDatabase.forTesting(NativeDatabase.memory());
+    final releaseOwner = f.retainAuxiliaryOwner();
     final failure = BackupFixtureFailure();
     await failure.run(() async {
       f.providerDb = memory;
       f.container.invalidate(appDbProvider);
       f.rebuildRegistry();
       expect(memory.nativeDataSourceIdentity, isNull);
-      final result = await backupReal(tester, f.call);
+      final result = await f.real(tester, BackupNativePhase.invoke, f.call);
       expect(result.content['code'], 'unavailable');
       expect(result.content['effect'], 'none');
       expect(f.dialog.choices, 0);
-      await backupReal(tester, f.expectSourceUnchanged);
+      await f.real(tester, BackupNativePhase.join, f.expectSourceUnchanged);
     });
-    await failure.run(() => backupReal(tester, memory.close));
+    await failure.run(() async {
+      f.requireSettledWorkBeforeClose();
+      await f.real(tester, BackupNativePhase.cleanup, memory.close);
+      releaseOwner();
+    });
     failure.throwIfAny();
   });
 
@@ -545,30 +656,45 @@ void main() {
         await gate.future;
       };
       final pending = await beginSave(tester, f);
-      await backupDecision(tester, 'accept');
+      await backupDecision(tester, 'accept', probe: f.phaseProbe);
       await backupPumpUntil(
         tester,
         () => entered,
         action: f.actionFor(pending.future),
+        probe: f.phaseProbe,
+        phase: BackupNativePhase.rootEffect,
       );
       final memory = AppDatabase.forTesting(NativeDatabase.memory());
+      final releaseOwner = f.retainAuxiliaryOwner();
       final failure = BackupFixtureFailure();
       await failure.run(() async {
         f.providerDb = memory;
         f.container.invalidate(appDbProvider);
         gate.complete();
-        final result = await backupJoin(tester, pending.future);
+        final result = await backupJoin(
+          tester,
+          pending.future,
+          probe: f.phaseProbe,
+        );
         expect(result.content['effect'], 'none');
         expect(result.content['code'], isNot('completed'));
         expect(
-          await backupReal(tester, () => File(f.destinationPath).exists()),
+          await f.real(
+            tester,
+            BackupNativePhase.join,
+            () => File(f.destinationPath).exists(),
+          ),
           isFalse,
         );
-        await backupReal(tester, f.expectSourceUnchanged);
+        await f.real(tester, BackupNativePhase.join, f.expectSourceUnchanged);
       });
       await failure.run(f.stopOriginalActions);
       await failure.run(() => f.drainOriginalActions(tester));
-      await failure.run(() => backupReal(tester, memory.close));
+      await failure.run(() async {
+        f.requireSettledWorkBeforeClose();
+        await f.real(tester, BackupNativePhase.cleanup, memory.close);
+        releaseOwner();
+      });
       failure.throwIfAny();
     },
   );
@@ -577,20 +703,24 @@ void main() {
     'stale original run and closed actual source cannot open a native picker',
     (tester, f) async {
       f.ownerCurrent = false;
-      final stale = await backupReal(tester, f.call);
+      final stale = await f.real(tester, BackupNativePhase.invoke, f.call);
       expect(stale.content['code'], 'stale');
       expect(stale.content['effect'], 'none');
       expect(f.dialog.choices, 0);
       final identity = f.db.nativeDataSourceIdentity!;
-      await backupReal(tester, f.closeDatabase);
+      await f.real(tester, BackupNativePhase.join, f.closeDatabase);
       expect(identity.isCurrent, isFalse);
       expect(identity.belongsTo(f.db), isFalse);
       expect(f.db.nativeDataSourceIdentity, isNull);
       expect(
-        await backupReal(tester, () => File(f.destinationPath).exists()),
+        await f.real(
+          tester,
+          BackupNativePhase.join,
+          () => File(f.destinationPath).exists(),
+        ),
         isFalse,
       );
-      await backupReal(tester, f.expectSourceUnchanged);
+      await f.real(tester, BackupNativePhase.join, f.expectSourceUnchanged);
     },
   );
 
@@ -606,23 +736,33 @@ void main() {
       final pending = await beginSave(tester, f);
       final failure = BackupFixtureFailure();
       await failure.run(() async {
-        await backupDecision(tester, 'accept');
+        await backupDecision(tester, 'accept', probe: f.phaseProbe);
         await backupPumpUntil(
           tester,
           () => entered,
           action: f.actionFor(pending.future),
+          probe: f.phaseProbe,
+          phase: BackupNativePhase.rootEffect,
         );
         f.token.cancel();
         gate.complete();
-        final result = await backupJoin(tester, pending.future);
+        final result = await backupJoin(
+          tester,
+          pending.future,
+          probe: f.phaseProbe,
+        );
         expect(result.content['code'], 'cancelled');
         expect(result.content['effect'], 'none');
         expect(f.root.admissions, 0);
         expect(
-          await backupReal(tester, () => File(f.destinationPath).exists()),
+          await f.real(
+            tester,
+            BackupNativePhase.join,
+            () => File(f.destinationPath).exists(),
+          ),
           isFalse,
         );
-        await backupReal(tester, f.expectSourceUnchanged);
+        await f.real(tester, BackupNativePhase.join, f.expectSourceUnchanged);
       });
       await failure.run(f.stopOriginalActions);
       await failure.run(() => f.drainOriginalActions(tester));
@@ -634,17 +774,23 @@ void main() {
     'published native file remains factual after Stop and provider disposal',
     (tester, f) async {
       final pending = await beginSave(tester, f);
-      await backupDecision(tester, 'accept');
+      await backupDecision(tester, 'accept', probe: f.phaseProbe);
       await backupPumpUntil(
         tester,
         () => File(f.destinationPath).existsSync(),
         action: f.actionFor(pending.future),
+        probe: f.phaseProbe,
+        phase: BackupNativePhase.join,
       );
       f.token.cancel();
-      final result = await backupJoin(tester, pending.future);
+      final result = await backupJoin(
+        tester,
+        pending.future,
+        probe: f.phaseProbe,
+      );
       expect(result.content['effect'], 'persisted');
       expect(result.content['code'], anyOf('completed', 'cancelled'));
-      await backupReal(tester, () async {
+      await f.real(tester, BackupNativePhase.join, () async {
         final published = await File(f.destinationPath).readAsBytes();
         f.container.invalidate(supportAppControlBackupAdaptersProvider);
         f.host.dispose();

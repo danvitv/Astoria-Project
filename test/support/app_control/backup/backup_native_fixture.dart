@@ -70,8 +70,12 @@ final class BackupNativeFixture {
   Future<void>? _databaseClose;
   final _actions = <BackupOriginalAction>[];
   final _rootGates = <Completer<void>>[];
+  int _auxiliaryOwners = 0;
   BackupNativePhaseProbe? phaseProbe;
+  int get actionCount => _actions.length;
+  int get settledActionCount => _actions.where((action) => action.done).length;
   bool get actionsSettled => _actions.every((action) => action.done);
+  bool get auxiliaryOwnersReleased => _auxiliaryOwners == 0;
   List<int> sourceBefore = [], walBefore = [];
 
   Future<void> initialize() async {
@@ -318,7 +322,7 @@ final class BackupNativeFixture {
 
   String get phaseCounters =>
       'picker=${dialog.choices} admissions=${rootReady ? root.admissions : 0} '
-      'actions=${_actions.length} settled=${_actions.where((a) => a.done).length}';
+      'actions=$actionCount settled=$settledActionCount';
 
   Completer<void> holdRootGate() {
     final gate = Completer<void>();
@@ -347,12 +351,27 @@ final class BackupNativeFixture {
   }
 
   Future<void> drainOriginalActions(WidgetTester tester) async {
-    await backupPumpUntil(
-      tester,
-      () => _actions.every((action) => action.done),
-    );
+    final probe = phaseProbe;
+    if (probe == null) {
+      await backupPumpUntil(tester, () => actionsSettled);
+    } else {
+      await probe.wait(
+        tester,
+        BackupNativePhase.cleanup,
+        () => actionsSettled,
+        checkSignals: false,
+      );
+    }
     for (final action in _actions) {
-      await action.settled;
+      if (probe == null) {
+        await action.settled;
+      } else {
+        await probe.real(
+          tester,
+          BackupNativePhase.cleanup,
+          () => action.settled,
+        );
+      }
     }
     for (final action in _actions) {
       action.throwIfFailed();
@@ -360,6 +379,27 @@ final class BackupNativeFixture {
   }
 
   Future<void> closeDatabase() => _databaseClose ??= db.close();
+
+  VoidCallback retainAuxiliaryOwner() {
+    // Register only after actual construction/open; release only after the
+    // original owner close(s) succeed. A timed-out callback cannot erase it.
+    _auxiliaryOwners++;
+    var released = false;
+    return () {
+      if (released) return;
+      released = true;
+      _auxiliaryOwners--;
+    };
+  }
+
+  void requireSettledWorkBeforeClose({bool includeAuxiliaryOwners = false}) {
+    if (!actionsSettled ||
+        phaseProbe?.hasPendingRealWork == true ||
+        includeAuxiliaryOwners && _auxiliaryOwners != 0) {
+      throw phaseProbe?.boundedFailure(BackupNativePhase.cleanup) ??
+          TestFailure('Original backup cleanup has unsettled work.');
+    }
+  }
 
   Future<void> close({bool doNotWaitForActions = false}) async {
     if (_closed) return;
@@ -540,7 +580,12 @@ Future<void> backupPumpUntil(
   WidgetTester tester,
   bool Function() ready, {
   BackupOriginalAction? action,
+  BackupNativePhaseProbe? probe,
+  BackupNativePhase phase = BackupNativePhase.join,
 }) async {
+  if (probe != null) {
+    return probe.wait(tester, phase, ready, action: action);
+  }
   for (var i = 0; i < 512; i++) {
     action?.throwIfFailed();
     if (ready()) return;
@@ -563,6 +608,7 @@ Future<void> backupPumpUntil(
 Future<void> backupModal(
   WidgetTester tester, {
   BackupOriginalAction? action,
+  BackupNativePhaseProbe? probe,
 }) async {
   final button = find.byKey(
     const ValueKey('support_backup_confirmation_accept'),
@@ -571,25 +617,52 @@ Future<void> backupModal(
     tester,
     () => button.evaluate().isNotEmpty,
     action: action,
+    probe: probe,
+    phase: BackupNativePhase.modal,
   );
   final route = ModalRoute.of(tester.element(button))!;
-  await tester.pump();
-  await tester.pump(route.transitionDuration);
+  if (probe == null) {
+    await tester.pump();
+    await tester.pump(route.transitionDuration);
+  } else {
+    await probe.frame(tester, BackupNativePhase.modal, tester.pump);
+    await probe.frame(
+      tester,
+      BackupNativePhase.modal,
+      () => tester.pump(route.transitionDuration),
+    );
+  }
   expect(button.hitTestable(), findsOneWidget);
 }
 
-Future<void> backupDecision(WidgetTester tester, String decision) async {
+Future<void> backupDecision(
+  WidgetTester tester,
+  String decision, {
+  BackupNativePhaseProbe? probe,
+}) async {
   final button = find.byKey(ValueKey('support_backup_confirmation_$decision'));
   final route = ModalRoute.of(tester.element(button))!;
-  await backupReal(tester, () => tester.tap(button));
-  await tester.pump();
-  await tester.pump(route.reverseTransitionDuration);
+  if (probe == null) {
+    await backupReal(tester, () => tester.tap(button));
+    await tester.pump();
+    await tester.pump(route.reverseTransitionDuration);
+  } else {
+    await probe.real(tester, BackupNativePhase.modal, () => tester.tap(button));
+    await probe.frame(tester, BackupNativePhase.modal, tester.pump);
+    await probe.frame(
+      tester,
+      BackupNativePhase.modal,
+      () => tester.pump(route.reverseTransitionDuration),
+    );
+  }
 }
 
 Future<NativeToolResult> backupJoin(
   WidgetTester tester,
-  Future<NativeToolResult> pending,
-) async {
+  Future<NativeToolResult> pending, {
+  BackupNativePhaseProbe? probe,
+}) async {
+  if (probe != null) return probe.join(tester, pending);
   final action = BackupOriginalAction(pending);
   await backupPumpUntil(tester, () => action.done, action: action);
   await action.settled;
@@ -651,6 +724,7 @@ final class BackupFixtureFailure {
 enum BackupNativePhase {
   initialize,
   mount,
+  invoke,
   picker,
   modal,
   rootEffect,
@@ -689,7 +763,7 @@ typedef _BackupPhaseObservation<T> = ({
   void Function() check,
 });
 
-/// First-case diagnostic only. Originals keep their identity and original error
+/// Opt-in diagnostic only. Originals keep their identity and original error
 /// stacks; runAsync returns a record, never awaits work that needs widget frames.
 /// Fixed labels/counters are the only diagnostic output. ROOT-effect observes
 /// the exposed original admission, NOT an invented internal snapshot checkpoint.
@@ -698,6 +772,10 @@ final class BackupNativePhaseProbe {
   final BackupNativeFixture fixture;
   final _signals =
       <BackupNativePhase, ({bool Function() done, void Function() check})>{};
+  // All real-work observations, including later calls in the same phase. A
+  // pending file/auxiliary-DB future must prevent deletion beneath its owner.
+  final _realWork = <bool Function()>[];
+  bool get hasPendingRealWork => _realWork.any((done) => !done());
 
   void _emit(BackupNativePhase phase, String state) {
     final label = phase == BackupNativePhase.rootEffect
@@ -752,6 +830,8 @@ final class BackupNativePhaseProbe {
     );
   }
 
+  bool started(BackupNativePhase phase) => _signals.containsKey(phase);
+
   bool settled(BackupNativePhase phase) => _signals[phase]?.done() == true;
 
   TestFailure boundedFailure(BackupNativePhase phase) {
@@ -773,6 +853,7 @@ final class BackupNativePhaseProbe {
       _BackupPhaseObservation<T>? observation;
       try {
         observation = _start(phase, createOriginal);
+        _realWork.add(observation.done);
       } catch (error, stack) {
         synchronousError = error;
         synchronousStack = stack;
@@ -884,7 +965,10 @@ final class BackupNativePhaseProbe {
       () => wait(
         tester,
         BackupNativePhase.cleanup,
-        () => fixture.actionsSettled,
+        () =>
+            fixture.actionsSettled &&
+            !hasPendingRealWork &&
+            fixture.auxiliaryOwnersReleased,
         checkSignals: false,
       ),
     );
@@ -910,6 +994,7 @@ final class BackupNativePhaseProbe {
       if (!settled(BackupNativePhase.initialize) || !fixture.actionsSettled) {
         throw boundedFailure(BackupNativePhase.cleanup);
       }
+      fixture.requireSettledWorkBeforeClose(includeAuxiliaryOwners: true);
       await real(
         tester,
         BackupNativePhase.cleanup,
