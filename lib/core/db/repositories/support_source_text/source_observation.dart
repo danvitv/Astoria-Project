@@ -20,9 +20,13 @@ final class SupportSourceCatalogPage {
   SupportSourceCatalogPage._(
     List<SupportSourceCatalogEntry> entries,
     this.nextOffset,
+    this.activeStudioSourceId,
   ) : entries = List.unmodifiable(entries);
   final List<SupportSourceCatalogEntry> entries;
   final int? nextOffset;
+
+  /// Bounded native metadata, selected at this listing only. Never a grant.
+  final String? activeStudioSourceId;
   @override
   String toString() => 'SupportSourceCatalogPage';
 }

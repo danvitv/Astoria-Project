@@ -28,7 +28,10 @@ void main() {
       await f.start(tester);
       final tools = (f.wire.single['tools'] as List)
           .cast<Map<dynamic, dynamic>>();
-      expect(tools.length, 43);
+      expect(
+        tools.length,
+        45,
+      ); // Original actions plus two consent-bound sources.
       final definition =
           tools.singleWhere(
                 (t) =>

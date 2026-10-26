@@ -57,6 +57,7 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
     SupportSourceDomain domain,
     int offset,
     bool Function() current,
+    String? activeStudioPresetId,
   ) async {
     try {
       void guard() {
@@ -65,6 +66,25 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
 
       guard();
       if (offset < 0 || offset > 4096) _deny();
+      String? active;
+      if (domain == SupportSourceDomain.studioPreset &&
+          activeStudioPresetId != null) {
+        if (!_identity(activeStudioPresetId)) _deny();
+        // Mirrors the turn resolver's missing-ID fallback using ONLY existence
+        // metadata. No preset hydration or definition projection before consent.
+        final selection = await _db
+            .customSelect(
+              '''SELECT CASE WHEN EXISTS(SELECT 1 FROM studio_preset_rows WHERE preset_id = ?)
+            THEN ? ELSE 'default' END AS active_source_id''',
+              variables: [
+                Variable.withString(activeStudioPresetId),
+                Variable.withString(activeStudioPresetId),
+              ],
+            )
+            .getSingle();
+        guard();
+        active = selection.read<String>('active_source_id');
+      }
       final base = domain == SupportSourceDomain.game
           ? _gameMetadata
           : _studioMetadata;
@@ -76,8 +96,11 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
           : 'preset_id';
       final rows = await _db
           .customSelect(
-            '$base ORDER BY $activity DESC, $identity ASC LIMIT 17 OFFSET ?',
-            variables: [Variable.withInt(offset)],
+            '$base ORDER BY ${active == null ? '' : 'CASE WHEN preset_id = ? THEN 0 ELSE 1 END, '}$activity DESC, $identity ASC LIMIT 17 OFFSET ?',
+            variables: [
+              if (active != null) Variable.withString(active),
+              Variable.withInt(offset),
+            ],
           )
           .get();
       guard();
@@ -98,6 +121,7 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
                 offset + SupportSourceTextRepo.pageSize <= 4096
             ? offset + SupportSourceTextRepo.pageSize
             : null,
+        active,
       );
     } catch (_) {
       _deny();

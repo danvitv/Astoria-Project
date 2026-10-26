@@ -34,6 +34,10 @@ class GlazeActionButton extends StatelessWidget {
   final IconData icon;
   final String label;
 
+  /// Use null when the complete label communicates a consent boundary.
+  /// Ordinary compact actions retain their single-line presentation.
+  final int? maxLabelLines;
+
   /// Null disables the button.
   final VoidCallback? onTap;
 
@@ -54,6 +58,7 @@ class GlazeActionButton extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
+    this.maxLabelLines = 1,
     this.tone = GlazeActionTone.neutral,
     this.busy = false,
     this.expand = false,
@@ -84,8 +89,11 @@ class GlazeActionButton extends StatelessWidget {
           Flexible(
             child: Text(
               label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+              maxLines: maxLabelLines,
+              overflow: maxLabelLines == null
+                  ? TextOverflow.visible
+                  : TextOverflow.ellipsis,
+              softWrap: true,
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,

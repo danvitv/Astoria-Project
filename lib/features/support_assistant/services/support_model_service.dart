@@ -105,6 +105,7 @@ final class SupportModelService {
     NativeToolTransport? toolTransport,
     SupportAppActionRegistry? appActions,
     SupportSourceTextRepo? sourceRepo,
+    Future<String> Function()? activeStudioPresetId,
     SupportAppActionRegistry Function()? appActionsFactory,
     SupportAppActionRegistry Function(SupportDatabaseBackupAdapter)?
     appActionsWithBackupFactory,
@@ -131,6 +132,7 @@ final class SupportModelService {
        _toolTransport = toolTransport,
        _appActions = appActions,
        _sourceRepo = sourceRepo,
+       _activeStudioPresetId = activeStudioPresetId,
        _appActionsFactory = appActionsFactory,
        _appActionsWithBackupFactory = appActionsWithBackupFactory,
        _newId = newId ?? generateId,
@@ -168,6 +170,7 @@ final class SupportModelService {
   final NativeToolTransport? _toolTransport;
   final SupportAppActionRegistry? _appActions;
   final SupportSourceTextRepo? _sourceRepo;
+  final Future<String> Function()? _activeStudioPresetId;
   final SupportAppActionRegistry Function()? _appActionsFactory;
   final SupportAppActionRegistry Function(SupportDatabaseBackupAdapter)?
   _appActionsWithBackupFactory;

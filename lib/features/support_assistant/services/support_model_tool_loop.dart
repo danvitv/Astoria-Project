@@ -37,7 +37,11 @@ const _supportToolInstruction =
     'State uncertainty. Use all supplied current context, not only the last question.';
 
 const _supportSourceInstruction =
-    'astoria_sources_list lists only bounded native source metadata in latest-activity order. '
+    'astoria_sources_list lists only bounded native source metadata. Game sessions are '
+    'ordered by latest activity, not the character selected-session index. Studio '
+    'activeAtListing identifies the selected preset at discovery, with the same missing-ID '
+    'default fallback as generation; do not infer selection from update time. If selection '
+    'metadata is absent, do not claim a preset is active. It is not historical prompt proof. '
     'Use its opaque handle with astoria_source_read to request an exact trailing active game page '
     'or CURRENT SAVED Studio definition. Each read needs a fresh native gesture approving both '
     'local reading and disclosure to THIS selected model. Refusal grants nothing. Tool source '
@@ -74,7 +78,10 @@ extension _ModelTools on _ModelRun {
       toolsResolved = true;
       try {
         final source = service._sourceRepo;
-        final sourceReady = source != null && source.usesDatabase(service._db);
+        final sourceReady =
+            source != null &&
+            source.usesDatabase(service._db) &&
+            service._db.nativeDataSourceIdentity != null;
         if (isReattempt) {
           // No base graph/factory, backup, navigation or configuration authority.
           if (!sourceReady || binding.toolUi?.confirmation == null)

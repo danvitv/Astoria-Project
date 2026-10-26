@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/state/connection_revision_provider.dart';
 import '../../../core/state/credential_vault_provider.dart';
 import '../../../core/state/db_provider.dart';
+import '../../../core/state/active_studio_preset_provider.dart';
+import '../../../core/db/repositories/support_source_text_repo.dart';
 import '../../../core/db/repositories/support_text_context_repo.dart';
 import '../../../core/llm/transport/native_provider_transport.dart';
 import '../../../core/llm/transport/native_tool_transport.dart';
@@ -60,8 +62,28 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
     adapterFactory: adapterFactory,
     isOwnerCurrent: current,
     writes: custody,
-    // Exact source-consent integration is not yet an accepted end-to-end path.
-    // Keep it disconnected; retry/copy/edit must not wait for that delivery.
+    // The same original DB owner backs both source consent and model ROOT.
+    // Native confirmation is still required for every body read; this is not
+    // a permission grant or a fallback for non-native injected owners.
+    sourceRepo: native == null
+        ? null
+        : SupportSourceTextRepo(
+            db: db,
+            cipher: cipher,
+            currentRedactor: () => redaction.redactor,
+          ),
+    activeStudioPresetId: native == null
+        ? null
+        : () async {
+            if (!current() || !ref.mounted) {
+              throw StateError('Original model owner retired.');
+            }
+            final id = await ref.read(activeStudioPresetProvider.future);
+            if (!current() || !ref.mounted) {
+              throw StateError('Original model owner retired.');
+            }
+            return id;
+          },
     // Resolve ONCE only after this original native saved source was prepared.
     // Legacy text-only fixtures never evaluate the application action graph.
     appActionsWithBackupFactory: native == null

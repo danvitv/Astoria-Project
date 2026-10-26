@@ -56,8 +56,9 @@ final class SupportSourceTextRepo {
   Future<SupportSourceCatalogPage> catalog({
     required SupportSourceDomain domain,
     int offset = 0,
+    String? activeStudioPresetId,
     required bool Function() isCurrent,
-  }) => _catalog(domain, offset, isCurrent);
+  }) => _catalog(domain, offset, isCurrent, activeStudioPresetId);
 
   /// Exact trailing active page, in native ascending order. Offset counts back
   /// from the newest ACTIVE messages, not from hidden variants or attachments.

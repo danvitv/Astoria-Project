@@ -26,7 +26,9 @@ final class _ModelSourceToolRun
     SupportAppActionDefinition(
       name: listAction,
       description:
-          'List only source metadata, newest activity first. No body or permission. '
+          'List only source metadata: games newest activity first; Studio selected '
+          'preset first, then newest activity. activeAtListing is selection metadata '
+          'at discovery, not a historical prompt or permission. '
           'Use the returned opaque handle for an exact native source-read request.',
       risk: SupportAppActionRisk.metadata,
       fields: {
@@ -93,9 +95,19 @@ final class _ModelSourceToolRun
           );
           final SupportSourceCatalogPage page;
           try {
+            final activeReader = run.service._activeStudioPresetId;
+            final active =
+                domain == SupportSourceDomain.studioPreset &&
+                    activeReader != null
+                ? await activeReader()
+                : null;
+            check(context);
+            if (!admitted())
+              throw const SupportAppActionRefused(SupportAppActionCode.stale);
             page = await repo.catalog(
               domain: domain,
               offset: arguments['offset'] as int,
+              activeStudioPresetId: active,
               isCurrent: () => original(context) && admitted(),
             );
           } on SupportSourceReadException {
@@ -127,6 +139,9 @@ final class _ModelSourceToolRun
               'label': safeLabel(entry.label),
               'kind': domain.name,
               'updatedAt': entry.updatedAt,
+              if (domain == SupportSourceDomain.studioPreset &&
+                  page.activeStudioSourceId != null)
+                'activeAtListing': entry.sourceId == page.activeStudioSourceId,
               if (entry.sessionIndex != null)
                 'sessionIndex': entry.sessionIndex,
             });

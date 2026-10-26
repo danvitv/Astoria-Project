@@ -112,48 +112,49 @@ final class SupportModelToolNativeUi
               if (!open) {
                 WidgetsBinding.instance.addPostFrameCallback((_) => dismiss());
               }
-              final footer = Row(
-                children: [
-                  Expanded(
-                    child: GlazeActionButton(
-                      key: const ValueKey('support_tool_confirmation_cancel'),
-                      label: 'Отмена',
-                      icon: Icons.close_rounded,
-                      onTap: () {
-                        if (!open || decided) return;
-                        decided = true;
-                        close();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: request.action == 'astoria_source_read' ? 2 : 1,
-                    child: GlazeActionButton(
-                      key: const ValueKey('support_tool_confirmation_accept'),
-                      label: request.action == 'astoria_source_read'
-                          ? 'Прочитать и передать модели'
-                          : 'Применить',
-                      icon: Icons.check_rounded,
-                      onTap: () {
-                        if (!open ||
-                            decided ||
-                            !original() ||
-                            !request.current) {
-                          return;
-                        }
-                        decided = true;
-                        // ONLY the actual final gesture creates this exact once lease.
-                        accepted = SupportAppConfirmationLease(
-                          request: request,
-                          isOriginalUiCurrent: original,
-                        );
-                        close();
-                      },
-                    ),
-                  ),
-                ],
+              final sourceRead = request.action == 'astoria_source_read';
+              final cancel = GlazeActionButton(
+                key: const ValueKey('support_tool_confirmation_cancel'),
+                label: 'Отмена',
+                icon: Icons.close_rounded,
+                onTap: () {
+                  if (!open || decided) return;
+                  decided = true;
+                  close();
+                },
               );
+              final accept = GlazeActionButton(
+                key: const ValueKey('support_tool_confirmation_accept'),
+                maxLabelLines: sourceRead ? null : 1,
+                label: sourceRead ? 'Прочитать и передать модели' : 'Применить',
+                icon: Icons.check_rounded,
+                onTap: () {
+                  if (!open || decided || !original() || !request.current) {
+                    return;
+                  }
+                  decided = true;
+                  // ONLY the actual final gesture creates this exact once lease.
+                  accepted = SupportAppConfirmationLease(
+                    request: request,
+                    isOriginalUiCurrent: original,
+                  );
+                  close();
+                },
+              );
+              // Keep the disclosure verb visible on phone-sized screens instead
+              // of ellipsizing it beside Cancel.
+              final footer = sourceRead && constraints.maxWidth < 600
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [accept, const SizedBox(height: 12), cancel],
+                    )
+                  : Row(
+                      children: [
+                        Expanded(child: cancel),
+                        const SizedBox(width: 12),
+                        Expanded(flex: sourceRead ? 2 : 1, child: accept),
+                      ],
+                    );
               // The declarative short-form sheet scrolls its entire child. This
               // exact preview can be long, so constrain the kit frame instead and
               // keep the original gesture controls outside the preview scroll.
