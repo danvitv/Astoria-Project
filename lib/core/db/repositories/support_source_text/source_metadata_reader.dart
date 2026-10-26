@@ -157,6 +157,7 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
   Future<SupportSourceObservation> _observe(
     SupportSourceCatalogEntry entry,
     int offset,
+    int studioPage,
     bool Function() current,
   ) async {
     try {
@@ -168,6 +169,9 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
       if (!identical(entry._owner, this) ||
           offset < 0 ||
           offset > 2000 ||
+          studioPage < 0 ||
+          studioPage > 255 ||
+          (entry.domain == SupportSourceDomain.game && studioPage != 0) ||
           (entry.domain == SupportSourceDomain.studioPreset && offset != 0))
         _deny();
       final result = await _db.transaction(() async {
@@ -201,8 +205,19 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
           count = 1;
           chars = extent.$1;
           bytes = extent.$2;
+          if (bytes <= SupportSourceTextRepo.studioUnpagedStoredBytes) {
+            if (studioPage != 0) _deny(SupportSourceReadFailure.notFound);
+          } else {
+            // The exact sanitized part count cannot be known before consent.
+            // Keep this bounded marker distinct even from a matching preset ID.
+            final marker = 'studio-page:$studioPage';
+            ids.add(marker == entry.sourceId ? '$marker:part' : marker);
+          }
         }
-        if (bytes > SupportSourceTextRepo.maxToolResultBytes || chars > 65536)
+        final localLimit = entry.domain == SupportSourceDomain.game
+            ? SupportSourceTextRepo.maxToolResultBytes
+            : SupportSourceTextRepo.maxStudioStoredBytes;
+        if (bytes > localLimit || chars > localLimit)
           _deny(SupportSourceReadFailure.tooLarge);
         final after = await _stamp(guard);
         if (before != after) _deny(SupportSourceReadFailure.changed);
@@ -217,6 +232,7 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
           chars,
           bytes,
           discovery,
+          studioPage,
         );
       });
       guard();

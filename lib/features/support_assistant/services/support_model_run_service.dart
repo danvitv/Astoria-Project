@@ -68,6 +68,7 @@ final class _ModelRun {
   bool toolsResolved = false;
   _ModelSourceToolRun? originalSourceTools;
   int toolSequence = 0;
+  int? toolSourcePart;
   String? toolAction, toolSourceLabel, toolFailureDetail;
   String get sessionId => binding.sessionId;
   late final _ModelReadOperation operation;

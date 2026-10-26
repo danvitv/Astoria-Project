@@ -33,7 +33,8 @@ extension _SourceStudioReader on SupportSourceTextRepo {
     if (row == null) _deny(SupportSourceReadFailure.notFound);
     if (row.read<int>('valid') != 1)
       _deny(SupportSourceReadFailure.unsupportedFormat);
-    if (row.read<int>('bytes') > 65536)
+    if (row.read<int>('bytes') > SupportSourceTextRepo.maxStudioStoredBytes ||
+        row.read<int>('chars') > SupportSourceTextRepo.maxStudioStoredBytes)
       _deny(SupportSourceReadFailure.tooLarge);
     return (row.read<int>('chars'), row.read<int>('bytes'));
   }
@@ -51,7 +52,7 @@ extension _SourceStudioReader on SupportSourceTextRepo {
           '''SELECT blocks_json, agents_json, agent_enabled_json,
       runtime_settings_json, max_final_history_messages, execution_mode,
       expensive_api_config_id, cheap_api_config_id, cleaner_api_config_id, ledger_api_config_id
-      FROM studio_preset_rows WHERE preset_id = ? AND $_definitionSize <= 65536 LIMIT 1''',
+      FROM studio_preset_rows WHERE preset_id = ? AND $_definitionSize <= ${SupportSourceTextRepo.maxStudioStoredBytes} LIMIT 1''',
           variables: [Variable.withString(observation.sourceId)],
         )
         .getSingleOrNull();
@@ -62,7 +63,10 @@ extension _SourceStudioReader on SupportSourceTextRepo {
     for (final key in _definitionColumns) {
       if (raw[key] is! String)
         _deny(SupportSourceReadFailure.unsupportedFormat);
-      decoded[key] = SupportSourceJson.decode(raw[key] as String);
+      decoded[key] = SupportSourceJson.decode(
+        raw[key] as String,
+        maxBytes: SupportSourceTextRepo.maxStudioStoredBytes,
+      );
     }
     _StudioSourceShape(this)._validate(decoded);
     for (final key in [
@@ -89,40 +93,138 @@ extension _SourceStudioReader on SupportSourceTextRepo {
     };
     // Sanitize every actual authored string, not serialized JSON syntax. No
     // defaults, macro expansion, runtime assembly, model lookup or code runner.
+    // Whole strings are sanitized BEFORE splitting, including boundary secrets.
+    final redactor = _currentRedactor().withKnownSecrets(
+      const [],
+      maxInputLength: SupportSourceTextRepo.maxStudioStoredBytes,
+      maxOutputLength: SupportSourceTextRepo.maxStudioStoredBytes,
+    );
+    var safeBytes = 0;
+    void bound(int bytes) {
+      safeBytes += bytes;
+      if (safeBytes > SupportSourceTextRepo.maxStudioDefinitionBytes)
+        _deny(SupportSourceReadFailure.tooLarge);
+    }
+
     Object? safe(Object? value) {
       if (value is String) {
-        final result = _currentRedactor()
-            .withKnownSecrets(
-              const [],
-              maxInputLength: 65536,
-              maxOutputLength: 65536,
-            )
-            .redactText(value);
+        final result = redactor.redactText(value);
         if (result.contains(SecretRedactor.limited))
           _deny(SupportSourceReadFailure.tooLarge);
+        bound(_studioJsonStringBytes(result));
         return result;
       }
-      if (value is List) return [for (final item in value) safe(item)];
-      if (value is Map<String, Object?>)
+      if (value is List) {
+        bound(2 + (value.isEmpty ? 0 : value.length - 1));
+        return [for (final item in value) safe(item)];
+      }
+      if (value is Map<String, Object?>) {
+        bound(2 + (value.isEmpty ? 0 : value.length * 2 - 1));
+        for (final key in value.keys) {
+          bound(_studioJsonStringBytes(key));
+        }
         return {
           for (final entry in value.entries) entry.key: safe(entry.value),
         };
+      }
+      bound(jsonEncode(value).length);
       return value;
     }
 
+    final safeDefinition = safe(definition);
+    final result = <String, Object?>{
+      'domain': 'studioPreset',
+      'sourceId': observation.sourceId,
+      'state': 'CURRENT SAVED',
+      'scope':
+          'Saved definition/instruction configuration only. Not a historical assembled prompt; '
+          'no assertion that this preset generated any previous game response.',
+    };
+    if (!observation.studioIsPaged) {
+      if (observation.studioPage != 0) _deny(SupportSourceReadFailure.notFound);
+      result['definition'] = safeDefinition;
+      return _snapshot(observation, [observation._header, raw], result);
+    }
+    final definitionJson = jsonEncode(safeDefinition);
+    if (utf8.encode(definitionJson).length >
+        SupportSourceTextRepo.maxStudioDefinitionBytes)
+      _deny(SupportSourceReadFailure.tooLarge);
+    final parts = _studioParts(definitionJson);
+    if (observation.studioPage >= parts.length)
+      _deny(SupportSourceReadFailure.notFound);
+    final part = parts[observation.studioPage];
+    result.addAll({
+      'definitionChunk': definitionJson.substring(part.$1, part.$2),
+      'studioPage': observation.studioPage,
+      'totalStudioPages': parts.length,
+      'nextStudioPage': observation.studioPage + 1 < parts.length
+          ? observation.studioPage + 1
+          : null,
+      'completeDefinition': false,
+      'encoding':
+          'Concatenate definitionChunk in studioPage order, then parse JSON; one part is not the full definition',
+    });
+    guard();
     return _snapshot(
       observation,
-      [observation._header, raw],
-      {
-        'domain': 'studioPreset',
-        'sourceId': observation.sourceId,
-        'state': 'CURRENT SAVED',
-        'scope':
-            'Saved definition/instruction configuration only. Not a historical assembled prompt; '
-            'no assertion that this preset generated any previous game response.',
-        'definition': safe(definition),
-      },
+      // The FULL original raw source binds every part, not just its substring.
+      [observation._header, raw, observation.studioPage, part.$1, part.$2],
+      result,
     );
+  }
+
+  /// Bound the complete safe serialization before allocating it. The budget
+  /// includes syntax/keys and escaped authored strings, not merely plain text.
+  int _studioJsonStringBytes(String value) {
+    var bytes = 2;
+    for (final rune in value.runes) {
+      bytes += rune == 0x22 || rune == 0x5c
+          ? 2
+          : rune < 0x20
+          ? const [8, 9, 10, 12, 13].contains(rune)
+                ? 2
+                : 6
+          : rune <= 0x7f
+          ? 1
+          : rune <= 0x7ff
+          ? 2
+          : rune <= 0xffff
+          ? 3
+          : 4;
+    }
+    return bytes;
+  }
+
+  /// Linear scan; ranges retain no additional copies of the complete JSON.
+  /// JSON syntax contains no ASCII controls. Quotes and backslashes each cost
+  /// four bytes after nesting definitionChunk in sourceText and native content.
+  List<(int, int)> _studioParts(String json) {
+    final parts = <(int, int)>[];
+    var start = 0, offset = 0, bytes = 0;
+    while (offset < json.length) {
+      final unit = json.codeUnitAt(offset);
+      final units = unit >= 0xd800 && unit <= 0xdbff ? 2 : 1;
+      final cost = units == 2
+          ? 4
+          : unit == 0x22 || unit == 0x5c
+          ? 4
+          : unit <= 0x7f
+          ? 1
+          : unit <= 0x7ff
+          ? 2
+          : 3;
+      if (offset - start + units >
+              SupportSourceTextRepo.maxStudioPartCharacters ||
+          bytes + cost > SupportSourceTextRepo.maxStudioPartDoubleJsonBytes) {
+        parts.add((start, offset));
+        start = offset;
+        bytes = 0;
+      }
+      offset += units;
+      bytes += cost;
+    }
+    parts.add((start, offset));
+    return parts;
   }
 }
 

@@ -42,11 +42,15 @@ final class _ModelSourceToolRun
       description:
           'Request one exact native confirmation for local read AND disclosure '
           'to this model: at most 16 trailing ACTIVE game messages, or CURRENT SAVED '
-          'Studio definition. No hidden variants, attachments or historical prompt.',
+          'Studio definition. Large Studio presets return one definitionChunk, not the '
+          'whole preset; follow nextStudioPage with a fresh confirmation for each part. '
+          'studioPage starts at 0 and must be 0 for games. '
+          'No hidden variants, attachments or historical prompt.',
       risk: SupportAppActionRisk.bodyRead,
       fields: const {
         'opaqueHandle': SupportAppActionField.text(128),
         'activeMessageOffset': SupportAppActionField.integer(0, 2000),
+        'studioPage': SupportAppActionField.integer(0, 255),
       },
       requiredFields: const {'opaqueHandle', 'activeMessageOffset'},
     ),
@@ -184,6 +188,7 @@ final class _ModelSourceToolRun
       observation = await repo.observe(
         entry: entry,
         activeMessageOffset: arguments['activeMessageOffset'] as int,
+        studioPage: arguments['studioPage'] as int? ?? 0,
         isCurrent: () => original(context),
       );
     } on SupportSourceReadException catch (error) {
@@ -191,6 +196,17 @@ final class _ModelSourceToolRun
       throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
     }
     check(context);
+    if (observation.studioIsPaged) {
+      run.toolSourcePart = observation.studioPage + 1;
+      run.toolActivity(
+        SupportModelToolStage.preparing,
+        sourceLabel: 'Studio-пресет: ${safeLabel(observation.label)}',
+        detail:
+            'Часть ${observation.studioPage + 1}; полный пресет проверяется '
+            'локально, модели передаётся только эта часть',
+      );
+      check(context);
+    }
     final recipient = run.binding.configuration.recipient;
     return SupportAppPreparedAction(
       target: handle,
@@ -199,7 +215,22 @@ final class _ModelSourceToolRun
       preview: {
         'sourceLabel': safeLabel(observation.label),
         'kind': observation.domain.name,
-        'extent': observation.extentDescription,
+        // Generic preview strings keep their original 256-character limit.
+        // Full local-validation and part limits are rendered from bounded fields.
+        'extent': observation.domain == SupportSourceDomain.game
+            ? observation.extentDescription
+            : observation.studioIsPaged
+            ? 'CURRENT SAVED Studio: ONLY Part ${observation.studioPage + 1}; '
+                  'studioPage ${observation.studioPage}. Deterministic Unicode scalar boundaries; '
+                  'total parts known after local validation. One part is not the full preset.'
+            : 'CURRENT SAVED Studio: complete saved definition (studioPage 0).',
+        if (observation.domain == SupportSourceDomain.studioPreset) ...{
+          'studioIsPaged': observation.studioIsPaged,
+          'studioPage': observation.studioPage,
+          'partCharacters': SupportSourceTextRepo.maxStudioPartCharacters,
+          'partEscapedBytes':
+              SupportSourceTextRepo.maxStudioPartDoubleJsonBytes,
+        },
         'selectedCount': observation.orderedSourceIds.length,
         'activeMessageOffset': observation.activeMessageOffset,
         'orderedSourceIds': observation.orderedSourceIds,
@@ -284,7 +315,9 @@ final class _ModelSourceToolRun
     );
     run.toolActivity(
       SupportModelToolStage.executing,
-      detail: 'Чтение одобренного текста для этого запроса',
+      detail: observation.studioIsPaged
+          ? 'Чтение одобренной части ${observation.studioPage + 1} Studio-пресета'
+          : 'Чтение одобренного текста для этого запроса',
     );
     check(context);
     // This future is joined, never abandoned on cancellation. Body SQL/crypto and
@@ -330,7 +363,12 @@ final class _ModelSourceToolRun
         snapshot.domain.name,
       ),
       sourceId: snapshot.sourceId,
-      orderedSourceIds: snapshot.orderedSourceIds,
+      // Provenance v4 identifies a Studio source with exactly its preset ID.
+      // Each part has its own private digest (full raw source + chosen extent),
+      // never a persisted read grant or a claim that one part was the whole preset.
+      orderedSourceIds: snapshot.domain == SupportSourceDomain.studioPreset
+          ? [snapshot.sourceId]
+          : snapshot.orderedSourceIds,
       snapshotDigest: snapshot.snapshotDigestForEncryptedProvenance,
     );
     final prior = old.toolDisclosures ?? const <SupportModelToolDisclosure>[];

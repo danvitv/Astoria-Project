@@ -45,6 +45,7 @@ final class SupportSourceObservation {
     this.textCharacters,
     this.textBytes,
     this._discovery,
+    this.studioPage,
   ) : orderedSourceIds = List.unmodifiable(ids);
   final SupportSourceTextRepo _owner;
   final SupportSourceDomain domain;
@@ -53,14 +54,27 @@ final class SupportSourceObservation {
   final List<Map<String, Object?>>? _discovery;
   final List<String> orderedSourceIds;
   final int activeMessageOffset, totalActiveMessages, textCharacters, textBytes;
+  final int studioPage;
+  bool get studioIsPaged =>
+      domain == SupportSourceDomain.studioPreset &&
+      textBytes > SupportSourceTextRepo.studioUnpagedStoredBytes;
   String get sourceId => _header['source_id'] as String;
   String get label => _header['label'] as String;
   int get updatedAt => _header['updated_at'] as int;
   String get extentDescription => domain == SupportSourceDomain.game
       ? 'Exact trailing active message page; ${orderedSourceIds.length} messages; '
             'offset $activeMessageOffset of $totalActiveMessages; $textBytes UTF-8 bytes.'
+      : studioIsPaged
+      ? 'CURRENT SAVED Studio preset definition and instruction configuration; '
+            'FULL preset ($textBytes stored UTF-8 bytes) read locally after consent for strict validation and redaction. '
+            'ONLY Part ${studioPage + 1} (studioPage $studioPage) disclosed, split deterministically on Unicode scalar boundaries; '
+            'at most ${SupportSourceTextRepo.maxStudioPartCharacters} UTF-16 units and '
+            '${SupportSourceTextRepo.maxStudioPartDoubleJsonBytes} double-JSON escaped UTF-8 content bytes. '
+            'Total parts determined only after consent. Each part needs independent consent; '
+            'one part is not the full definition or a whole-preset disclosure grant. Not a historical assembled prompt.'
       : 'CURRENT SAVED Studio preset definition and instruction configuration; '
-            '$textBytes stored UTF-8 bytes. Not a historical assembled prompt.';
+            'FULL preset ($textBytes stored UTF-8 bytes) read locally after consent for strict validation and redaction, '
+            'then the complete saved definition disclosed (studioPage 0 only). Not a historical assembled prompt.';
   @override
   String toString() => 'SupportSourceObservation';
 }

@@ -9,6 +9,7 @@ extension _ModelToolActivity on _ModelRun {
         ? call.name
         : 'unknown';
     toolSourceLabel = null;
+    toolSourcePart = null;
     toolFailureDetail = null;
     toolActivity(SupportModelToolStage.preparing);
   }
@@ -76,7 +77,9 @@ extension _ModelToolActivity on _ModelRun {
             'astoria_sources_list' =>
               'Каталог источников получен; текст ещё не читался',
             'astoria_source_read' =>
-              'Одобренный текст прочитан для этого запроса',
+              toolSourcePart == null
+                  ? 'Одобренный текст прочитан для этого запроса'
+                  : 'Одобренная часть $toolSourcePart прочитана; это не весь пресет',
             _ =>
               result.content['effect'] == 'persisted'
                   ? 'Изменение сохранено'
@@ -129,7 +132,9 @@ final class _ModelToolConfirmation implements SupportAppConfirmationPort {
     run.toolActivity(
       SupportModelToolStage.confirmation,
       detail: request.action == 'astoria_source_read'
-          ? 'Ожидание твоего согласия на чтение и передачу выбранной модели'
+          ? run.toolSourcePart == null
+                ? 'Ожидание твоего согласия на чтение и передачу выбранной модели'
+                : 'Ожидание твоего согласия на часть ${run.toolSourcePart} и её передачу выбранной модели'
           : 'Ожидание твоего подтверждения действия',
     );
     return native.confirm(request);

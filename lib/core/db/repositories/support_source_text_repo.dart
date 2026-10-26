@@ -61,6 +61,12 @@ final class SupportSourceTextRepo {
 
   static const pageSize = 16;
   static const maxToolResultBytes = 65536;
+  // Studio-only LOCAL validation budgets, never native wire/metadata budgets.
+  static const maxStudioStoredBytes = 2 * 1024 * 1024;
+  static const studioUnpagedStoredBytes = 12000;
+  static const maxStudioDefinitionBytes = 4 * 1024 * 1024;
+  static const maxStudioPartCharacters = 32768;
+  static const maxStudioPartDoubleJsonBytes = 40000;
   final AppDatabase _db;
   final SecretRedactor Function() _currentRedactor;
   final SupportTextContextRepo _text;
@@ -76,11 +82,14 @@ final class SupportSourceTextRepo {
 
   /// Exact trailing active page, in native ascending order. Offset counts back
   /// from the newest ACTIVE messages, not from hidden variants or attachments.
+  /// Studio uses studioPage instead: metadata only until consent, then full
+  /// local source validation/redaction and disclosure of exactly that part.
   Future<SupportSourceObservation> observe({
     required SupportSourceCatalogEntry entry,
     int activeMessageOffset = 0,
+    int studioPage = 0,
     required bool Function() isCurrent,
-  }) => _observe(entry, activeMessageOffset, isCurrent);
+  }) => _observe(entry, activeMessageOffset, studioPage, isCurrent);
 
   Future<SupportSourceSnapshot> read({
     required SupportSourceObservation observation,
@@ -110,7 +119,8 @@ final class SupportSourceTextRepo {
     }
   }
 
-  /// Re-reads only the originally approved extent in a real transaction. No
+  /// Re-reads the originally approved extent in a real transaction (including
+  /// full local validation of Studio's source for the same disclosed part). No
   /// fallback, silent clipping, private digest in JSON, or alternative source.
   /// Unrelated support provenance writes do not invalidate unchanged source text.
   Future<bool> revalidate({

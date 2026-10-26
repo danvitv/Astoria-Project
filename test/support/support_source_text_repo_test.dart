@@ -7,8 +7,10 @@ import 'package:glaze_flutter/core/credentials/secret_redactor.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/chat_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/studio_preset_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/support_source_text/support_source_json.dart';
 import 'package:glaze_flutter/core/db/repositories/support_source_text_repo.dart';
 import 'package:glaze_flutter/core/llm/studio/studio_context.dart';
+import 'package:glaze_flutter/core/llm/transport/native_tool_types.dart';
 import 'package:glaze_flutter/core/models/card_rewriter_settings.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/cleaner_settings.dart';
@@ -41,6 +43,7 @@ final class _AwaitActualStamp extends QueryInterceptor {
   final release = Completer<void>();
   int stampReads = 0;
   bool attemptedBodyProjection = false;
+  bool attemptedStudioDefinitionProjection = false;
   List<Map<String, Object?>> stampRows = [];
 
   @override
@@ -51,6 +54,9 @@ final class _AwaitActualStamp extends QueryInterceptor {
   ) async {
     if (RegExp(r'\bAS\s+body\b', caseSensitive: false).hasMatch(statement)) {
       attemptedBodyProjection = true;
+    }
+    if (statement.contains('SELECT blocks_json, agents_json')) {
+      attemptedStudioDefinitionProjection = true;
     }
     final rows = await super.runSelect(executor, statement, args);
     if (statement.contains('total_changes()')) {
@@ -95,12 +101,75 @@ void main() {
     return repo.observe(entry: entry, isCurrent: () => true);
   }
 
-  Future<SupportSourceObservation> studio() async {
+  Future<SupportSourceObservation> studio({int studioPage = 0}) async {
     final page = await repo.catalog(
       domain: SupportSourceDomain.studioPreset,
       isCurrent: () => true,
     );
-    return repo.observe(entry: page.entries.single, isCurrent: () => true);
+    return repo.observe(
+      entry: page.entries.single,
+      studioPage: studioPage,
+      isCurrent: () => true,
+    );
+  }
+
+  String repeat(String value, int count) => List.filled(count, value).join();
+
+  Future<void> savedStudio(String blocks, {String runtime = '{}'}) async {
+    await f.db
+        .into(f.db.studioPresetRows)
+        .insert(
+          StudioPresetRowsCompanion.insert(
+            presetId: 'synthetic-paged-studio',
+            name: 'Synthetic paged Studio',
+            blocksJson: Value(blocks),
+            runtimeSettingsJson: Value(runtime),
+          ),
+        );
+  }
+
+  String instruction(String content) => jsonEncode([
+    {'id': 'a', 'type': 'instruction', 'content': content},
+  ]);
+
+  void expectNativePart(String sourceText, Map<dynamic, dynamic> result) {
+    // The SAME actual result shape and constructor used by the native adapter;
+    // sourceText is a string containing JSON, not a flattened metadata object.
+    final native = NativeToolResult(
+      callId: repeat('c', 128),
+      name: 'astoria_source_read',
+      content: {
+        'ok': true,
+        'code': 'completed',
+        'effect': 'none',
+        'data': {'sourceText': sourceText},
+      },
+    );
+    final encodedJson = jsonEncode(native.content);
+    expect(utf8.encode(encodedJson).length, lessThanOrEqualTo(65536));
+    // Also account for identity fields around the actual content conservatively.
+    expect(
+      utf8
+          .encode(
+            jsonEncode({
+              'callId': native.callId,
+              'name': native.name,
+              'content': native.content,
+            }),
+          )
+          .length,
+      lessThanOrEqualTo(65536),
+    );
+    final chunk = result['definitionChunk'] as String;
+    expect(chunk.length, lessThanOrEqualTo(32768));
+    expect(
+      utf8.encode(jsonEncode(jsonEncode(chunk))).length - 6,
+      lessThanOrEqualTo(40000),
+    );
+    expect(utf8.decode(utf8.encode(chunk)), chunk);
+    expect(result.containsKey('definition'), isFalse);
+    expect(result['completeDefinition'], isFalse);
+    expect(result['encoding'], contains('one part is not the full definition'));
   }
 
   Future<StudioPresetRepo> saveCanonicalStudio() async {
@@ -701,7 +770,7 @@ void main() {
     () async {
       // Exercise every actual seed record shape, with synthetic authored text.
       // Production onCreate uses the same jsonEncode of raw seed maps. The
-      // fixture is deliberately small, not a clipped read of a large preset.
+      // Preserve every record even when metadata size selects paged disclosure.
       final blocks = [
         for (final block in defaultStudioPresetSeedBlocks())
           {
@@ -726,12 +795,39 @@ void main() {
         observation: observation,
         authority: authority,
       );
-      final wire = await repo.toolResult(
+      var wire = await repo.toolResult(
         snapshot: snapshot,
         authority: authority,
       );
       final result = jsonDecode(wire) as Map;
-      expect((result['definition'] as Map)['blocks'], blocks);
+      Map<dynamic, dynamic> definition;
+      if (result.containsKey('definition')) {
+        definition = result['definition'] as Map<dynamic, dynamic>;
+      } else {
+        final chunks = <String>[result['definitionChunk'] as String];
+        var next = result['nextStudioPage'] as int?;
+        while (next != null) {
+          final nextObservation = await studio(studioPage: next);
+          final nextAuthority = _Authority(nextObservation);
+          final nextSnapshot = await repo.read(
+            observation: nextObservation,
+            authority: nextAuthority,
+          );
+          final nextWire = await repo.toolResult(
+            snapshot: nextSnapshot,
+            authority: nextAuthority,
+          );
+          final nextResult = jsonDecode(nextWire) as Map<String, dynamic>;
+          expect(nextResult['studioPage'], next);
+          expect(nextResult['completeDefinition'], isFalse);
+          chunks.add(nextResult['definitionChunk'] as String);
+          wire += nextWire;
+          next = nextResult['nextStudioPage'] as int?;
+        }
+        expect(chunks, hasLength(result['totalStudioPages'] as int));
+        definition = jsonDecode(chunks.join()) as Map<String, dynamic>;
+      }
+      expect(definition['blocks'], blocks);
       expect(wire, contains('{{description}}'));
       expect(wire, isNot(contains(SupportTextContextFixture.card)));
       expect(f.primitive.decryptAads, isEmpty);
@@ -794,6 +890,415 @@ void main() {
       expect((result['definition'] as Map)['blocks'], blocks);
       expect(result['scope'], contains('Not a historical assembled prompt'));
       expect(result, isNot(contains('gameSessionId')));
+    },
+  );
+
+  sourceTest(
+    'single huge Studio instruction reconstructs across scalar-safe bounded native parts',
+    () async {
+      const prefix = '{"blocks":[{"id":"a","type":"instruction","content":"';
+      final content =
+          '${repeat('x', 32767 - prefix.length)}😀'
+          '${repeat('😀界', 14000)}${repeat('"\\\n', 12000)}END_OF_HUGE_INSTRUCTION';
+      final blocks = instruction(content);
+      expect(utf8.encode(blocks).length, greaterThan(65536));
+      await savedStudio(blocks);
+      f.observe();
+      final observation = await studio();
+      expect(observation.studioPage, 0);
+      expect(observation.studioIsPaged, isTrue);
+      expect(observation.extentDescription, contains('FULL preset'));
+      expect(observation.extentDescription, contains('ONLY Part 1'));
+      expect(observation.extentDescription, contains('after consent'));
+      expect(observation.extentDescription, contains('independent consent'));
+      expect(observation.orderedSourceIds, [
+        'synthetic-paged-studio',
+        'studio-page:0',
+      ]);
+      expect(jsonEncode(f.spy.values), isNot(contains('blocks_json')));
+      expect(
+        jsonEncode(f.spy.values),
+        isNot(contains('END_OF_HUGE_INSTRUCTION')),
+      );
+      expect(f.primitive.decryptAads, isEmpty);
+      expect(f.storage.operations, isEmpty);
+
+      final chunks = <String>[];
+      final digests = <String>{}, provenanceIds = <String>{};
+      var next = 0;
+      int? total;
+      do {
+        final original = next == 0
+            ? observation
+            : await studio(studioPage: next);
+        final authority = _Authority(original);
+        final snapshot = await repo.read(
+          observation: original,
+          authority: authority,
+        );
+        final wire = await repo.toolResult(
+          snapshot: snapshot,
+          authority: authority,
+        );
+        final result = jsonDecode(wire) as Map;
+        expectNativePart(wire, result);
+        expect(result['state'], 'CURRENT SAVED');
+        expect(result['studioPage'], next);
+        total ??= result['totalStudioPages'] as int;
+        expect(result['totalStudioPages'], total);
+        expect(result['nextStudioPage'], next + 1 < total ? next + 1 : null);
+        expect(
+          wire,
+          isNot(contains(snapshot.snapshotDigestForEncryptedProvenance)),
+        );
+        expect(snapshot.toString(), 'SupportSourceSnapshot');
+        expect(
+          digests.add(snapshot.snapshotDigestForEncryptedProvenance),
+          isTrue,
+        );
+        expect(provenanceIds.add(snapshot.orderedSourceIds.last), isTrue);
+        chunks.add(result['definitionChunk'] as String);
+        next++;
+      } while (next < total);
+      expect(chunks.first.length, 32767);
+      expect(chunks[1], startsWith('😀'));
+      final reconstructed = jsonDecode(chunks.join()) as Map;
+      expect(reconstructed['blocks'], jsonDecode(blocks));
+      expect((reconstructed['blocks'] as List), hasLength(1));
+      expect(f.primitive.decryptAads, isEmpty);
+      expect(f.storage.operations, isEmpty);
+      expect(f.spy.writes, 0);
+    },
+  );
+
+  sourceTest(
+    'Studio redacts a known secret spanning the unsanitized part boundary before splitting',
+    () async {
+      const prefix = '{"blocks":[{"id":"a","type":"instruction","content":"';
+      const secret = 'SYNTHETIC_BOUNDARY_SECRET_82af';
+      f.redactor = SecretRedactor(knownSecrets: [secret]);
+      final content =
+          '${repeat('a', 32768 - prefix.length - secret.length ~/ 2)}'
+          '$secret${repeat('b', 70000)}';
+      await savedStudio(instruction(content));
+      final parts = <String>[];
+      int? total;
+      for (var page = 0; total == null || page < total; page++) {
+        final observation = await studio(studioPage: page);
+        final authority = _Authority(observation);
+        final snapshot = await repo.read(
+          observation: observation,
+          authority: authority,
+        );
+        final wire = await repo.toolResult(
+          snapshot: snapshot,
+          authority: authority,
+        );
+        final result = jsonDecode(wire) as Map;
+        expectNativePart(wire, result);
+        total = result['totalStudioPages'] as int;
+        expect(wire, isNot(contains(secret)));
+        expect(wire, isNot(contains('SYNTHETIC_BOUNDARY_')));
+        expect(wire, isNot(contains('SECRET_82af')));
+        parts.add(result['definitionChunk'] as String);
+      }
+      final definition = jsonDecode(parts.join()) as Map;
+      expect(
+        ((definition['blocks'] as List).single as Map)['content'],
+        content.replaceAll(secret, SecretRedactor.removed),
+      );
+    },
+  );
+
+  sourceTest(
+    'paged Studio denies wrong and cancelled authority without raw projection',
+    () async {
+      await savedStudio(instruction(repeat('x', 90000)));
+      final first = await studio(), second = await studio(studioPage: 1);
+      f.observe();
+      await expectLater(
+        repo.read(observation: first, authority: _Authority(second)),
+        throwsA(sourceFailure(SupportSourceReadFailure.unavailable)),
+      );
+      await expectLater(
+        repo.read(
+          observation: first,
+          authority: _Authority(first)..current = false,
+        ),
+        throwsA(sourceFailure(SupportSourceReadFailure.unavailable)),
+      );
+      expect(f.spy.values, isEmpty);
+      expect(f.primitive.decryptAads, isEmpty);
+      expect(f.storage.operations, isEmpty);
+    },
+  );
+
+  sourceTest(
+    'mutation outside disclosed Studio part revokes whole-raw snapshot even with identical sanitized output',
+    () async {
+      const a = 'SYNTHETIC_TAIL_SECRET_aa01', b = 'SYNTHETIC_TAIL_SECRET_bb02';
+      f.redactor = SecretRedactor(knownSecrets: [a, b]);
+      await savedStudio(instruction('${repeat('x', 90000)}$a'));
+      final observation = await studio(), authority = _Authority(observation);
+      final snapshot = await repo.read(
+        observation: observation,
+        authority: authority,
+      );
+      final before = await repo.toolResult(
+        snapshot: snapshot,
+        authority: authority,
+      );
+      final otherPage = await studio(studioPage: 1);
+      final otherAuthority = _Authority(otherPage);
+      final otherSnapshot = await repo.read(
+        observation: otherPage,
+        authority: otherAuthority,
+      );
+      await f.db
+          .update(f.db.studioPresetRows)
+          .write(
+            StudioPresetRowsCompanion(
+              blocksJson: Value(instruction('${repeat('x', 90000)}$b')),
+            ),
+          );
+      final fresh = await studio(), freshAuthority = _Authority(fresh);
+      final freshSnapshot = await repo.read(
+        observation: fresh,
+        authority: freshAuthority,
+      );
+      expect(
+        await repo.toolResult(
+          snapshot: freshSnapshot,
+          authority: freshAuthority,
+        ),
+        before,
+      );
+      expect(
+        freshSnapshot.snapshotDigestForEncryptedProvenance,
+        isNot(snapshot.snapshotDigestForEncryptedProvenance),
+      );
+      expect(
+        await repo.revalidate(snapshot: snapshot, authority: authority),
+        isFalse,
+      );
+      expect(
+        await repo.revalidate(
+          snapshot: otherSnapshot,
+          authority: otherAuthority,
+        ),
+        isFalse,
+      );
+      await expectLater(
+        repo.toolResult(snapshot: snapshot, authority: authority),
+        throwsA(sourceFailure(SupportSourceReadFailure.changed)),
+      );
+      expect(before, isNot(contains(a)));
+      expect(before, isNot(contains(b)));
+      f.observe();
+      await expectLater(
+        repo.read(observation: observation, authority: authority),
+        throwsA(sourceFailure(SupportSourceReadFailure.changed)),
+      );
+      expect(jsonEncode(f.spy.values), isNot(contains('blocks_json')));
+    },
+  );
+
+  sourceTest(
+    'Studio pages are exact extents, never message offsets or partial definitions as whole',
+    () async {
+      final blocks = [
+        {
+          'id': 'a',
+          'name': 'Synthetic raw seed',
+          'kind': 'custom_text',
+          'content': '${repeat('x', 13000)}{{description}}',
+          'enabled': false,
+        },
+      ];
+      const runtime = '{"agentEnabledBeforeDependencyOff":{"continuity":true}}';
+      await savedStudio(jsonEncode(blocks), runtime: runtime);
+      final page = await repo.catalog(
+        domain: SupportSourceDomain.studioPreset,
+        isCurrent: () => true,
+      );
+      f.observe();
+      for (final args in [(0, -1), (0, 256), (1, 0)]) {
+        await expectLater(
+          repo.observe(
+            entry: page.entries.single,
+            activeMessageOffset: args.$1,
+            studioPage: args.$2,
+            isCurrent: () => true,
+          ),
+          throwsA(sourceFailure(SupportSourceReadFailure.unavailable)),
+        );
+      }
+      expect(f.spy.values, isEmpty);
+      final outOfRange = await studio(studioPage: 255);
+      expect(outOfRange.extentDescription, contains('ONLY Part 256'));
+      expect(jsonEncode(f.spy.values), isNot(contains('blocks_json')));
+      await expectLater(
+        repo.read(observation: outOfRange, authority: _Authority(outOfRange)),
+        throwsA(sourceFailure(SupportSourceReadFailure.notFound)),
+      );
+      final original = await studio(), authority = _Authority(original);
+      final snapshot = await repo.read(
+        observation: original,
+        authority: authority,
+      );
+      final wire = await repo.toolResult(
+        snapshot: snapshot,
+        authority: authority,
+      );
+      final result = jsonDecode(wire) as Map;
+      expectNativePart(wire, result);
+      expect(result['totalStudioPages'], 1);
+      expect(result['nextStudioPage'], isNull);
+      expect(result['completeDefinition'], isFalse);
+      final definition = jsonDecode(result['definitionChunk'] as String) as Map;
+      expect(definition['blocks'], blocks);
+      expect(definition['runtime'], jsonDecode(runtime));
+      expect(wire, contains('{{description}}'));
+      expect(wire, isNot(contains(SupportTextContextFixture.card)));
+      final games = await repo.catalog(
+        domain: SupportSourceDomain.game,
+        isCurrent: () => true,
+      );
+      f.observe();
+      await expectLater(
+        repo.observe(
+          entry: games.entries.first,
+          studioPage: 1,
+          isCurrent: () => true,
+        ),
+        throwsA(sourceFailure(SupportSourceReadFailure.unavailable)),
+      );
+      expect(f.spy.values, isEmpty);
+    },
+  );
+
+  sourceTest(
+    'small Studio keeps complete definition and permits only page zero',
+    () async {
+      await savedStudio(instruction('SMALL_SYNTHETIC_INSTRUCTION'));
+      final observation = await studio();
+      expect(observation.studioIsPaged, isFalse);
+      expect(observation.orderedSourceIds, ['synthetic-paged-studio']);
+      expect(
+        observation.extentDescription,
+        contains('complete saved definition disclosed'),
+      );
+      await expectLater(
+        studio(studioPage: 1),
+        throwsA(sourceFailure(SupportSourceReadFailure.notFound)),
+      );
+      final authority = _Authority(observation);
+      final snapshot = await repo.read(
+        observation: observation,
+        authority: authority,
+      );
+      final result =
+          jsonDecode(
+                await repo.toolResult(snapshot: snapshot, authority: authority),
+              )
+              as Map;
+      expect(result.containsKey('definitionChunk'), isFalse);
+      expect(result['definition'], isA<Map<dynamic, dynamic>>());
+    },
+  );
+
+  for (final tail in [
+    '{"id":"bad","type":"instruction","content":"x","locked":true}',
+    '{"id":"bad","type":"instruction","content":"x","unknownFutureField":"x"}',
+    '{"id":"bad","type":"instruction","content":"x","content":"y"}',
+    '{"id":"bad","type":"instruction","content":"\\ud800"}',
+    'not-json',
+  ]) {
+    sourceTest(
+      'Studio paged whole validation refuses unsupported tail: $tail',
+      () async {
+        final valid = instruction(repeat('x', 90000));
+        await savedStudio('${valid.substring(0, valid.length - 1)},$tail]');
+        final observation = await studio();
+        expect(observation.studioIsPaged, isTrue);
+        await expectLater(
+          repo.read(
+            observation: observation,
+            authority: _Authority(observation),
+          ),
+          throwsA(
+            sourceFailure(
+              tail.contains('"locked":true')
+                  ? SupportSourceReadFailure.locked
+                  : SupportSourceReadFailure.unsupportedFormat,
+            ),
+          ),
+        );
+        expect(observation.toString(), 'SupportSourceObservation');
+        expect(
+          const SupportSourceReadException().toString(),
+          'Support source unavailable.',
+        );
+      },
+    );
+  }
+
+  sourceTest(
+    'Studio paged validation includes runtime outside the disclosed part',
+    () async {
+      await savedStudio(
+        instruction(repeat('x', 90000)),
+        runtime: '{"future":true}',
+      );
+      final observation = await studio();
+      await expectLater(
+        repo.read(observation: observation, authority: _Authority(observation)),
+        throwsA(sourceFailure(SupportSourceReadFailure.unsupportedFormat)),
+      );
+    },
+  );
+
+  sourceTest(
+    'Studio complete safe JSON has a local hard cap without partial disclosure',
+    () async {
+      f.redactor = SecretRedactor(knownSecrets: ['~']);
+      await savedStudio(
+        jsonEncode([
+          for (final id in ['a', 'b', 'c'])
+            {'id': id, 'type': 'instruction', 'content': repeat('~', 150000)},
+        ]),
+      );
+      final observation = await studio();
+      expect(observation.textBytes, lessThan(2 * 1024 * 1024));
+      await expectLater(
+        repo.read(observation: observation, authority: _Authority(observation)),
+        throwsA(sourceFailure(SupportSourceReadFailure.tooLarge)),
+      );
+    },
+  );
+
+  sourceTest(
+    'Studio-only JSON byte override leaves strict parser budgets unchanged',
+    () async {
+      final large = jsonEncode(repeat('x', 70000));
+      expect(() => SupportSourceJson.decode(large), throwsFormatException);
+      expect(
+        SupportSourceJson.decode(large, maxBytes: 2 * 1024 * 1024),
+        repeat('x', 70000),
+      );
+      for (final bad in [
+        '{"a":1,"a":2}',
+        '[${List.filled(513, '0').join(',')}]',
+        '${repeat('[', 26)}0${repeat(']', 26)}',
+        jsonEncode(List.generate(17, (_) => List.filled(512, 0))),
+        '"\\ud800"',
+        '1e999',
+      ]) {
+        expect(
+          () => SupportSourceJson.decode(bad, maxBytes: 2 * 1024 * 1024),
+          throwsFormatException,
+        );
+      }
     },
   );
 
@@ -887,7 +1392,7 @@ void main() {
   }
 
   sourceTest(
-    'oversize Studio refuses before definition projection; game malformed/locked refuses',
+    'Studio local hard cap refuses before definition projection; game malformed/locked refuses',
     () async {
       await f.db
           .into(f.db.studioPresetRows)
@@ -900,7 +1405,7 @@ void main() {
                   {
                     'id': 'a',
                     'type': 'instruction',
-                    'content': List.filled(65536, 'x').join(),
+                    'content': repeat('x', 2 * 1024 * 1024),
                   },
                 ]),
               ),
@@ -961,6 +1466,55 @@ void main() {
         );
       }
       expect(f.spy.values.any((row) => row.containsKey('body')), isFalse);
+      expect(f.primitive.decryptAads, isEmpty);
+      expect(f.storage.operations, isEmpty);
+      expect(f.spy.writes, 0);
+    },
+  );
+
+  sourceTest(
+    'late Studio cancellation during real native await denies before full definition projection',
+    () async {
+      await savedStudio(instruction(repeat('x', 90000)));
+      final observation = await studio(), authority = _Authority(observation);
+      final snapshot = await repo.read(
+        observation: observation,
+        authority: authority,
+      );
+      final positive = await repo.toolResult(
+        snapshot: snapshot,
+        authority: authority,
+      );
+      expectNativePart(positive, jsonDecode(positive) as Map);
+      f.observe();
+      final sql = _AwaitActualStamp();
+      final pending = f.db.runWithInterceptor(
+        () => repo.read(observation: observation, authority: authority),
+        interceptor: sql,
+      );
+      final denied = expectLater(
+        pending,
+        throwsA(sourceFailure(SupportSourceReadFailure.unavailable)),
+      );
+      try {
+        await Future.any<void>([
+          sql.reached.future,
+          denied.then<void>(
+            (_) => throw TestFailure(
+              'Studio refused before actual native stamp SELECT',
+            ),
+          ),
+        ]).timeout(const Duration(seconds: 5));
+        expect(sql.stampRows.single['changes'], isA<int>());
+        expect(sql.stampRows.single['version'], isA<int>());
+        authority.current = false;
+      } finally {
+        sql.release.complete();
+        await denied;
+      }
+      expect(sql.stampReads, 1);
+      expect(sql.attemptedStudioDefinitionProjection, isFalse);
+      expect(jsonEncode(f.spy.values), isNot(contains('blocks_json')));
       expect(f.primitive.decryptAads, isEmpty);
       expect(f.storage.operations, isEmpty);
       expect(f.spy.writes, 0);

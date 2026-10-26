@@ -1,10 +1,11 @@
 import 'dart:convert';
 
-/// Small bounded strict JSON boundary. No tolerant defaults, duplicate-key
+/// Bounded strict JSON boundary. No tolerant defaults, duplicate-key
 /// overwrite, arbitrary serialization, or executable values.
 abstract final class SupportSourceJson {
-  static Object? decode(String raw) {
-    if (utf8.encode(raw).length > 65536) throw const FormatException();
+  static Object? decode(String raw, {int maxBytes = 65536}) {
+    if (maxBytes < 1 || utf8.encode(raw).length > maxBytes)
+      throw const FormatException();
     final parser = _SourceJsonParser(raw);
     final value = parser.value(0);
     parser.space();

@@ -263,9 +263,20 @@ final class SupportModelToolNativeUi
 
 String _sourceReadPreview(SupportAppConfirmationRequest request) {
   final p = request.preview;
+  final studio = p['kind'] == 'studioPreset';
+  final studioExtent = !studio
+      ? ''
+      : 'После согласия весь сохранённый пресет (${p['storedTextBytes']} байт UTF-8) '
+            'будет прочитан локально для строгой проверки формата и удаления секретов.\n'
+            '${p['studioIsPaged'] == true ? 'Модели передаётся только часть ${(p['studioPage'] as int) + 1}: '
+                      'до ${p['partCharacters']} единиц UTF-16 и ${p['partEscapedBytes']} '
+                      'байт UTF-8 после двойного JSON-экранирования. Общее число частей '
+                      'станет известно после проверки. Это не весь пресет; '
+                      'каждая следующая часть требует отдельного согласия.\n' : 'Модели передаётся сохранённое определение целиком.\n'}';
   return 'Источник: ${p['sourceLabel']}\n'
       'Тип: ${p['kind'] == 'game' ? 'Игра — активная история' : 'Studio — CURRENT SAVED'}\n'
       'Точный объём: ${p['extent']}\n'
+      '$studioExtent'
       'Выбрано: ${p['selectedCount']}; отступ от последних активных сообщений: ${p['activeMessageOffset']}\n'
       'Точные выбранные записи: ${jsonEncode(p['orderedSourceIds'])}\n'
       'Не включается: ${p['exclusions']}\n\n'

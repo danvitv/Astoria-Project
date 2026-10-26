@@ -86,11 +86,16 @@ final class SourceLoop {
 
   Map<String, Object?> list(String domain, String id) =>
       call('astoria_sources_list', {'domain': domain, 'offset': 0}, id: id);
-  Map<String, Object?> read(String handle, String id, {int offset = 0}) => call(
-    'astoria_source_read',
-    {'opaqueHandle': handle, 'activeMessageOffset': offset},
-    id: id,
-  );
+  Map<String, Object?> read(
+    String handle,
+    String id, {
+    int offset = 0,
+    int? studioPage,
+  }) => call('astoria_source_read', {
+    'opaqueHandle': handle,
+    'activeMessageOffset': offset,
+    if (studioPage != null) 'studioPage': studioPage,
+  }, id: id);
 
   /// BackupLoopWire checks the declared finite reply budget BEFORE onFetch.
   /// Fill only these slots; an extra POST fails rather than inventing an answer.

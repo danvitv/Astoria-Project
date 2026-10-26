@@ -47,6 +47,32 @@ Future<List<SupportModelConversationMessage>> _visible(
     SupportModelConversationMessage(id: row.id, role: row.role, text: row.body),
 ];
 
+Future<String> _largeStudio(WidgetTester tester, BackupLoopFixture f) async {
+  await seedModelSources(tester, f);
+  final content =
+      'PAGED_HEAD_$sourceStudioBody'
+      '${List.filled(2400, 'Привет 🐈‍⬛ \\ " ').join()}_PAGED_TAIL';
+  await backupLoopReal(tester, () async {
+    await (f.native.db.update(
+      f.native.db.studioPresetRows,
+    )..where((t) => t.presetId.equals(sourceStudio))).write(
+      StudioPresetRowsCompanion(
+        blocksJson: Value(
+          jsonEncode([
+            {
+              'id': 'large-instruction',
+              'type': 'instruction',
+              'content': content,
+            },
+          ]),
+        ),
+      ),
+    );
+  });
+  expect(utf8.encode(jsonEncode(content)).length, greaterThan(65536));
+  return content;
+}
+
 /// Stop after the real OUTER source-provenance commit, before Drift returns the
 /// transaction result. The native executor, SQL and committed result are intact.
 final class _StopAfterSourceCommit extends QueryInterceptor {
@@ -94,6 +120,204 @@ final class _StopAfterSourceCommit extends QueryInterceptor {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  backupLoopTest(
+    'MODEL large Studio parts require fresh consent and reconstruct the complete saved instruction',
+    (tester, f) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pump();
+      final content = await _largeStudio(tester, f);
+      final loop = SourceLoop(f);
+      late String handle;
+      final chunks = <String>[];
+      var total = 0;
+      loop.script(
+        loop.list('game', 'paged_game_catalog'),
+        rounds: 8,
+        next: (round) async {
+          if (round == 2) {
+            loop.noBody();
+            return loop.read(
+              loop.handle('Отель Петербург', sessionIndex: 1),
+              'paged_game_read',
+            );
+          }
+          if (round == 3) {
+            final game =
+                jsonDecode(loop.lastData()['sourceText'] as String)
+                    as Map<String, dynamic>;
+            expect(game['messages'], hasLength(16));
+            expect(jsonEncode(game), contains(sourceGameBody));
+            return loop.list('studioPreset', 'paged_catalog');
+          }
+          if (round == 4) {
+            expect(jsonEncode(f.wire), isNot(contains(sourceStudioBody)));
+            handle = loop.activeStudioHandle();
+            return loop.read(handle, 'paged_0', studioPage: 0);
+          }
+          final sourceText = loop.lastData()['sourceText'] as String;
+          final part = jsonDecode(sourceText) as Map<String, dynamic>;
+          expect(part['state'], 'CURRENT SAVED');
+          expect(part['completeDefinition'], isFalse);
+          expect(part.containsKey('definition'), isFalse);
+          expect(part['studioPage'], chunks.length);
+          total = part['totalStudioPages'] as int;
+          chunks.add(part['definitionChunk'] as String);
+          final rows = await f.native.repo.getMessagesForSession(
+            f.native.session,
+          );
+          final recipe = await modelSourceRecipe(f, rows.last.id);
+          expect(recipe.toolDisclosures, hasLength(chunks.length + 1));
+          for (final disclosure in recipe.toolDisclosures!) {
+            expect(
+              jsonEncode(f.wire),
+              isNot(contains(disclosure.snapshotDigest)),
+            );
+          }
+          final toolMessages = (f.wire.last['messages'] as List)
+              .cast<Map<dynamic, dynamic>>()
+              .where((m) => m['role'] == 'tool');
+          for (final tool in toolMessages) {
+            expect(
+              utf8.encode(tool['content'] as String).length,
+              lessThanOrEqualTo(65536),
+            );
+          }
+          final next = part['nextStudioPage'] as int?;
+          if (next != null)
+            return loop.read(handle, 'paged_$next', studioPage: next);
+          expect(chunks, hasLength(total));
+          final complete = jsonDecode(chunks.join()) as Map<String, dynamic>;
+          expect((complete['blocks'] as List).single['content'], content);
+          return SourceLoop.answer(
+            'Полный сохранённый пресет прочитан по частям; это не исторический собранный промпт.',
+          );
+        },
+      );
+      await loop.start(tester);
+      loop.noBody();
+      await loop.apply(tester);
+      await loop.modal(tester);
+      expect(jsonEncode(f.wire), isNot(contains(sourceStudioBody)));
+      var gestures = 0;
+      do {
+        expect(find.text('Прочитать и передать модели'), findsOneWidget);
+        expect(
+          f.bridge.view.toolActivities.last.detail,
+          contains('часть ${gestures + 1}'),
+        );
+        expect(jsonEncode(f.wire), isNot(contains('_PAGED_TAIL')));
+        await loop.apply(tester);
+        gestures++;
+        await backupLoopUntil(tester, () {
+          loop.checkScript();
+          return f.settlement!.done ||
+              (f.bridge.view.toolActivities.length == gestures + 4 &&
+                  f.bridge.view.toolActivities.last.stage ==
+                      SupportModelToolStage.confirmation);
+        }, signal: f.settlement);
+        if (!f.settlement!.done) await loop.modal(tester);
+      } while (!f.settlement!.done);
+      final reply = await loop.finish(tester);
+      expect(reply.status, 'complete');
+      expect(total, greaterThan(1));
+      expect(gestures, total);
+      expect(jsonEncode(f.wire), contains('_PAGED_TAIL'));
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(f, reply.id),
+      );
+      expect(recipe.toolDisclosures, hasLength(total + 1));
+      final reads = f.bridge.view.toolActivities.where(
+        (a) => a.action == 'astoria_source_read',
+      );
+      expect(reads, hasLength(total + 1));
+      expect(
+        reads.skip(1).every((a) => a.detail!.contains('не весь пресет')),
+        isTrue,
+      );
+      _noExcluded(f);
+    },
+  );
+
+  for (final decision in ['refuse next part', 'change outside first part']) {
+    backupLoopTest(
+      'MODEL large Studio $decision never transmits the remaining parts',
+      (tester, f) async {
+        final content = await _largeStudio(tester, f);
+        final loop = SourceLoop(f);
+        late String handle;
+        loop.script(
+          loop.list('studioPreset', 'partial_catalog'),
+          rounds: 4,
+          next: (round) {
+            if (round == 2) {
+              handle = loop.activeStudioHandle();
+              return loop.read(handle, 'partial_0', studioPage: 0);
+            }
+            if (round == 3) {
+              final part =
+                  jsonDecode(loop.lastData()['sourceText'] as String)
+                      as Map<String, dynamic>;
+              expect(part['completeDefinition'], isFalse);
+              return loop.read(
+                handle,
+                'partial_next',
+                studioPage: part['nextStudioPage'] as int,
+              );
+            }
+            return SourceLoop.answer(
+              'Последующая часть не прочитана; полной оценки нет.',
+            );
+          },
+        );
+        await loop.start(tester);
+        loop.noBody();
+        await loop.apply(tester);
+        await loop.modal(tester);
+        expect(f.wire, hasLength(3));
+        expect(jsonEncode(f.wire), isNot(contains('_PAGED_TAIL')));
+        if (decision == 'refuse next part') {
+          await loop.cancel(tester);
+        } else {
+          await backupLoopReal(tester, () async {
+            await (f.native.db.update(
+              f.native.db.studioPresetRows,
+            )..where((t) => t.presetId.equals(sourceStudio))).write(
+              StudioPresetRowsCompanion(
+                blocksJson: Value(
+                  jsonEncode([
+                    {
+                      'id': 'large-instruction',
+                      'type': 'instruction',
+                      'content': '${content}_CHANGED_OUTSIDE_FIRST_PART',
+                    },
+                  ]),
+                ),
+              ),
+            );
+          });
+          await loop.apply(tester);
+        }
+        final reply = await loop.finish(tester);
+        expect(reply.status, isNot('complete'));
+        expect(jsonEncode(f.wire), isNot(contains('_PAGED_TAIL')));
+        expect(
+          jsonEncode(f.wire),
+          isNot(contains('CHANGED_OUTSIDE_FIRST_PART')),
+        );
+        final recipe = await backupLoopReal(
+          tester,
+          () => modelSourceRecipe(f, reply.id),
+        );
+        expect(recipe.toolDisclosures, hasLength(1));
+        _noExcluded(f);
+      },
+    );
+  }
 
   // Reuse the already-isolated FILE-owner graph for generic native confirmation;
   // the old configuration-only fixture cannot bootstrap the current domain graph.
