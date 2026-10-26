@@ -1,0 +1,30 @@
+{
+  "version": "3.53.1",
+  "versionNumber": 3053001,
+  "sourceId": "2026-05-05 10:34:17 c88b22011a54b4f6fbd149e9f8e4de77658ce58143a1af0e3785e4e6475127e9",
+  "acquiredOn": "2026-10-27",
+  "archiveUrl": "https://www.sqlite.org/2026/sqlite-amalgamation-3530100.zip",
+  "releaseUrl": "https://www.sqlite.org/releaselog/3_53_1.html",
+  "licenseUrl": "https://www.sqlite.org/copyright.html",
+  "license": "Public domain; upstream source is unmodified",
+  "upstreamPublishedSqlite3CSha3_256": "414432ae5719f6cdc485f3927e12c7ad107e2b8c6b434e5df2eadb5312bfabb5",
+  "upstreamArchiveDigest": null,
+  "files": {
+    "sqlite-amalgamation-3530100.zip": {
+      "sha256": "36ad6e7f38540a3b21a2ac36340833f0a9e426bc1c752751c3ba669466827eae",
+      "sha3_256": "3c07136e4f6b5dd0c395be86455014039597bc65b6851f7111e88f71b6e06114"
+    },
+    "sqlite3.c": {
+      "sha256": "9ac97192c93a6d9671d2ea667ba14e3c8fe3719a171afc5827c9d86d0278fc14",
+      "sha3_256": "414432ae5719f6cdc485f3927e12c7ad107e2b8c6b434e5df2eadb5312bfabb5"
+    },
+    "sqlite3.h": {
+      "sha256": "16d6e2f265fb13ece42329da39a865d4c540045b444d16b4bf9f7e1a7e39408f",
+      "sha3_256": "9a3f987ee5507921801343d54d67f256a4602972afc60be6566b540a8d93cfc9"
+    },
+    "sqlite3ext.h": {
+      "sha256": "ac9645e5c9ff0cf176efdd6e75cb5e98f46295d38e02db5c4d208826a39ab4be",
+      "sha3_256": "1b7a0ee438bb5c2896d0609c537e917d8057b3340f6ad004d2de44f03e3d3cca"
+    }
+  }
+}

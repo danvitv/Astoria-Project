@@ -83,3 +83,38 @@ flutter:
       fonts:
         - asset: assets/fonts/InterVariable.ttf
 
+
+# BEGIN ASTORIA PINNED SQLITE SOURCE HOOK
+hooks:
+  user_defines:
+    sqlite3:
+      source: source
+      path: third_party/sqlite3_3530100/sqlite3.c
+      defines:
+        default_options: false
+        defines:
+          SQLITE_ENABLE_DBSTAT_VTAB: null
+          SQLITE_ENABLE_FTS5: null
+          SQLITE_ENABLE_RTREE: null
+          SQLITE_ENABLE_MATH_FUNCTIONS: null
+          SQLITE_DQS: '0'
+          SQLITE_DEFAULT_MEMSTATUS: '0'
+          SQLITE_TEMP_STORE: '2'
+          SQLITE_MAX_EXPR_DEPTH: '0'
+          SQLITE_STRICT_SUBTYPE: '1'
+          SQLITE_OMIT_AUTHORIZATION: null
+          SQLITE_OMIT_DECLTYPE: null
+          SQLITE_OMIT_DEPRECATED: null
+          SQLITE_OMIT_SHARED_CACHE: null
+          SQLITE_OMIT_TCL_VARIABLE: null
+          SQLITE_OMIT_TRACE: null
+          SQLITE_USE_ALLOCA: null
+          SQLITE_ENABLE_SESSION: null
+          SQLITE_ENABLE_PREUPDATE_HOOK: null
+          SQLITE_UNTESTABLE: null
+          SQLITE_HAVE_ISNAN: null
+          SQLITE_HAVE_LOCALTIME_R: null
+          SQLITE_HAVE_LOCALTIME_S: null
+          SQLITE_HAVE_MALLOC_USABLE_SIZE: null
+          SQLITE_HAVE_STRCHRNUL: null
+# END ASTORIA PINNED SQLITE SOURCE HOOK
