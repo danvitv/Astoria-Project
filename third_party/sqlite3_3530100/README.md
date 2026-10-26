@@ -29,9 +29,10 @@ native assets) to select the target before main-owned checks/builds:
 
 The script verifies pinned source/header SHA256 and source/version identity,
 then changes **only** its marked pubspec hook section. It performs no native
-build/probe/download. The paused dev checkpoint checks in the Android configuration
-for APK builds; select Windows explicitly before main's FILE evidence.
-Target selection is explicit, not an automatic platform-aware hook.
+build/probe/download. The checked-in configuration is Windows, including the
+required DLL exports. Select Android explicitly before an APK build, then restore
+Windows immediately afterwards; leaving Android defines active breaks Windows
+SQLite loading. Target selection is explicit, not an automatic platform-aware hook.
 Do not build Android with the Windows configuration. Select Windows again before
 Windows evidence. Dependencies, lockfile and upstream source stay unchanged.
 

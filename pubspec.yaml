@@ -117,4 +117,5 @@ hooks:
           SQLITE_HAVE_LOCALTIME_S: null
           SQLITE_HAVE_MALLOC_USABLE_SIZE: null
           SQLITE_HAVE_STRCHRNUL: null
+          SQLITE_API: '__declspec(dllexport)'
 # END ASTORIA PINNED SQLITE SOURCE HOOK
