@@ -1,4 +1,3 @@
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/credentials/api_connection_metadata.dart';
@@ -98,11 +97,6 @@ class SupportSettingsPanel extends ConsumerWidget {
     if (!workspace.settingsAvailable) {
       return const SupportSettingsUnavailableView();
     }
-    if (workspace.activeSessionId.isEmpty) {
-      return SupportSettingsStartSession(
-        enabled: !workspace.isLoading && !workspace.isBusy,
-      );
-    }
 
     final activeConnection = connections
         .where((c) => c.connectionId == settings.apiConfigId)
@@ -160,8 +154,10 @@ class SupportSettingsPanel extends ConsumerWidget {
             ),
           if (focus.hasModelSettings)
             MenuGroup(
-              header: 'Профиль Астории (текст по явному подтверждению)',
-              description: 'support_privacy_chooser_not_consent'.tr(),
+              header: 'Общий профиль Астории',
+              description:
+                  'API, модель и параметры применяются ко всем чатам Астории. '
+                  'Выбор профиля не даёт разрешения на чтение или передачу других данных.',
               items: [
                 if (focus.includes(SupportSettingsFocus.connection))
                   SupportConnectionSelector(
@@ -256,7 +252,12 @@ class SupportSettingsPanel extends ConsumerWidget {
               ],
             ),
           if (focus.includes(SupportSettingsFocus.privacy))
-            SupportPrivacyGroup(focusedPermission: focusedPermission),
+            if (workspace.activeSessionId.isEmpty)
+              SupportSettingsStartSession(
+                enabled: !workspace.isLoading && !workspace.isBusy,
+              )
+            else
+              SupportPrivacyGroup(focusedPermission: focusedPermission),
           if (focus == SupportSettingsFocus.all)
             MenuGroup(
               header: 'Быстрая диагностика и действия',

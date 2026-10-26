@@ -9,7 +9,83 @@ final class SupportPermissionCodec {
   const SupportPermissionCodec();
   static const marker = 'workspace-permissions-v1';
   static const maxChars = 65536;
+  static const globalId = 'workspace-permissions-global-v1';
   String idFor(String sessionId) => '$marker:$sessionId';
+
+  /// Fixed parentless inactive profile. Its nested legacy policy stays strict:
+  /// unknown/unscoped grants are not relaxed to support global configuration.
+  SupportPermissionPreferences decodeGlobal(
+    String currentSessionId,
+    SupportContextBlock block,
+  ) {
+    if (block.isLocked) {
+      throw SupportPermissionsUnavailable(SupportPermissionAvailability.locked);
+    }
+    try {
+      if (block.id != globalId ||
+          block.sessionId.isNotEmpty ||
+          block.summary != globalId ||
+          block.isActive ||
+          block.startMessageId.isNotEmpty ||
+          block.endMessageId.isNotEmpty) {
+        throw const FormatException();
+      }
+      _bound(block.protectedFactsJson);
+      final m = _map(jsonDecode(block.protectedFactsJson), {
+        'version',
+        'owner',
+        'policy',
+      });
+      if (m['version'] != 1 || m['version'] is! int)
+        throw const FormatException();
+      final owner = m['owner'] as String;
+      requireSupportPermissionId(owner);
+      final source = decode(
+        owner,
+        SupportContextBlock(
+          id: idFor(owner),
+          sessionId: owner,
+          startMessageId: '',
+          endMessageId: '',
+          summary: marker,
+          protectedFactsJson: m['policy'] as String,
+          createdAt: block.createdAt,
+        ),
+      );
+      return SupportPermissionPreferences.fromGlobalProfile(
+        source,
+        currentSessionId,
+      );
+    } catch (_) {
+      throw SupportPermissionsUnavailable(
+        SupportPermissionAvailability.corrupt,
+      );
+    }
+  }
+
+  SupportContextBlock encodeGlobal(SupportPermissionPreferences p, int now) {
+    final source = p.globalSource ?? p;
+    final strict = encode(source, now);
+    // Revalidate even trusted callers: projections cannot serialize unscoped
+    // grants or detach original source ownership from their canonical profile.
+    decode(source.supportSessionId, strict);
+    final json = jsonEncode({
+      'version': 1,
+      'owner': source.supportSessionId,
+      'policy': strict.protectedFactsJson,
+    });
+    _bound(json);
+    return SupportContextBlock(
+      id: globalId,
+      sessionId: '',
+      startMessageId: '',
+      endMessageId: '',
+      summary: globalId,
+      protectedFactsJson: json,
+      isActive: false,
+      createdAt: now,
+    );
+  }
 
   SupportPermissionPreferences decode(
     String sessionId,

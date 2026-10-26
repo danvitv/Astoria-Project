@@ -17,26 +17,38 @@ final class _ModelUiSubmission {
           visibleConversation: send._emitter._visibleConversation,
         );
       }
-      final emission = await service.emitInput(
-        controller: send._emitter._controller,
-        uiLifetime: send._emitter._uiLifetime,
-        draftRevision: send._draftRevision,
-        text: send._text,
-        isEmitterCurrent: () => send._publicationCurrent && !send._stopped,
-        isDraftCurrent: send._isDraftCurrent,
-        directConversation: true,
-        visibleConversation: send._emitter._visibleConversation,
-        toolUi: send._emitter._toolUi,
-      );
-      if (emission.intent == null) {
-        return SupportModelRunResult(
-          accepted: false,
-          saved: false,
-          reason: emission.reason,
+      final SupportModelSubmission submission;
+      final regeneration = send._regeneration;
+      if (regeneration != null) {
+        submission = service.beginRegeneration(
+          controller: send._emitter._controller,
+          uiLifetime: send._emitter._uiLifetime,
+          isEmitterCurrent: () => send._publicationCurrent && !send._stopped,
+          selectedReply: regeneration,
+          visibleConversation: send._emitter._visibleConversation,
         );
+      } else {
+        final emission = await service.emitInput(
+          controller: send._emitter._controller,
+          uiLifetime: send._emitter._uiLifetime,
+          draftRevision: send._draftRevision,
+          text: send._text,
+          isEmitterCurrent: () => send._publicationCurrent && !send._stopped,
+          isDraftCurrent: send._isDraftCurrent,
+          directConversation: true,
+          visibleConversation: send._emitter._visibleConversation,
+          toolUi: send._emitter._toolUi,
+        );
+        if (emission.intent == null) {
+          return SupportModelRunResult(
+            accepted: false,
+            saved: false,
+            reason: emission.reason,
+          );
+        }
+        // ORIGINAL service. A provider rebuild never rebinds this text.
+        submission = service.beginSend(emission.intent!);
       }
-      // ORIGINAL service. A provider rebuild after await never rebinds this text.
-      final submission = service.beginSend(emission.intent!);
       unawaited(
         submission.accepted.then((accepted) {
           send._accepted = accepted;

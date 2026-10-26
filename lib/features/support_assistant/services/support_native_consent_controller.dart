@@ -123,8 +123,11 @@ final class SupportNativeConsentController {
         return SupportNativeRightView(
           right,
           contextAvailable &&
-              p?.allows(right) == true &&
-              (!_recipientDependent(right) || runtime.recipientConfirmed),
+              (p?.isGlobal == true
+                  ? p!.isConfigured(right)
+                  : p?.allows(right) == true &&
+                        (!_recipientDependent(right) ||
+                            runtime.recipientConfirmed)),
           available,
           available
               ? null

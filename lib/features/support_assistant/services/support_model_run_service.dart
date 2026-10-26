@@ -9,6 +9,8 @@ final class _ModelRun {
     this.replyId,
     this.runId, {
     this.isCompact = false,
+    this.regeneration,
+    this.regenerationUser,
   }) {
     for (final id in [userId, replyId, runId, sessionId]) {
       requireSupportPermissionId(id);
@@ -50,6 +52,10 @@ final class _ModelRun {
   final _ModelBinding binding;
   final String text, userId, replyId, runId;
   final bool isCompact;
+  final SupportReplyRegenerationObservation? regeneration;
+  final SupportMessage? regenerationUser;
+  bool get isRegeneration => regeneration != null;
+  String get inputRunId => regenerationUser?.runId ?? runId;
   SupportCompactionCheckpoint? checkpoint;
   bool compactInstalled = false;
   PrivateTextOutcome? compactOutcome;
@@ -141,30 +147,35 @@ final class _ModelRun {
     }
     try {
       operation.check();
-      final user = await service._writes.enqueue(
-        () => service._writer.appendCurrentUser(
-          message: SupportMessage(
-            id: userId,
-            sessionId: sessionId,
-            role: 'user',
-            body: text,
-            runId: runId,
-            createdAt: service._now(),
-          ),
-          isCurrent: current,
-        ),
-      );
+      final user =
+          regenerationUser ??
+          await service._writes.enqueue(
+            () => service._writer.appendCurrentUser(
+              message: SupportMessage(
+                id: userId,
+                sessionId: sessionId,
+                role: 'user',
+                body: text,
+                runId: runId,
+                createdAt: service._now(),
+              ),
+              isCurrent: current,
+            ),
+          );
       if (user == null) _refuse(SupportModelRefusal.appendFailed);
       durableUser = user;
-      accepted = true;
-      acceptance.complete(
-        true,
-      ); // No post-commit cancellation can turn this false.
-      publish(user);
+      if (!isRegeneration) {
+        accepted = true;
+        acceptance.complete(true); // Durable append, not transport success.
+        publish(user);
+      }
       operation.check();
-      var initial = await loadManagedContext();
+      var initial = isRegeneration
+          ? await loadContext()
+          : await loadManagedContext();
       operation.check();
-      if (binding.configuration.directConversation &&
+      if (!isRegeneration &&
+          binding.configuration.directConversation &&
           binding.configuration.settings.dcpCompressionEnabled &&
           _contextPressure(initial)) {
         await compactContext(initial);
@@ -175,23 +186,39 @@ final class _ModelRun {
       final provenance = SupportModelProvenanceCodec.encodeForEncryptedStorage(
         initial.recipe,
       );
+      if (isRegeneration) _requireSameRegenerationSources(initial.recipe);
       expected = await service._writes.enqueue(
-        () => service._writer.reserveOrderedReply(
-          message: SupportMessage(
-            id: replyId,
-            sessionId: sessionId,
-            role: 'assistant',
-            body: '',
-            runId: runId,
-            status: 'preparing',
-            createdAt: service._now(),
-          ),
-          originatingUser: user,
-          provenanceJson: provenance,
-          isCurrent: current,
-        ),
+        () => isRegeneration
+            ? service._writer.reserveRegeneratedReply(
+                expected: regeneration!,
+                originatingUser: user,
+                attemptRunId: runId,
+                provenanceJson: provenance,
+                isCurrent: current,
+              )
+            : service._writer.reserveOrderedReply(
+                message: SupportMessage(
+                  id: replyId,
+                  sessionId: sessionId,
+                  role: 'assistant',
+                  body: '',
+                  runId: runId,
+                  status: 'preparing',
+                  createdAt: service._now(),
+                ),
+                originatingUser: user,
+                provenanceJson: provenance,
+                isCurrent: current,
+              ),
       );
       if (expected == null) _refuse(SupportModelRefusal.reservationFailed);
+      if (isRegeneration) {
+        accepted = true;
+        acceptance.complete(
+          true,
+        ); // Only the atomic in-place claim is acceptance.
+        publish(expected!.message);
+      }
       operation.check();
       final pending = await service._writes.enqueue(
         () => service._writer.settleReply(

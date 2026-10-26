@@ -31,16 +31,54 @@ class SupportWorkspaceStore {
   static const _settings = SupportWorkspaceSettingsCodec();
   int get _now => DateTime.now().toUtc().millisecondsSinceEpoch;
 
-  Future<SupportWorkspaceSnapshot> load() async {
+  Future<SupportWorkspaceSnapshot> load({
+    bool globalSettings = false,
+    String? preferredSessionId,
+    bool Function()? isCurrent,
+  }) async {
     final sessions = await repo.getAllSessions();
+    if (isCurrent?.call() == false) throw StateError('Workspace retired.');
     final messages = <String, List<SupportMessageItem>>{};
     final settings = <String, SupportAssistantSettings>{};
     final availability = <String, SupportSettingsAvailability>{};
+    SupportAssistantSettings? profile;
+    var profileAvailability = SupportSettingsAvailability.available;
+    if (globalSettings) {
+      try {
+        final candidates = [
+          if (sessions.any((s) => s.id == preferredSessionId))
+            preferredSessionId!,
+          for (final s in sessions)
+            if (s.id != preferredSessionId) s.id,
+        ];
+        final block = await repo.initializeAssistantSettings(
+          legacySessionIds: candidates,
+          create: (legacy) =>
+              _settings.migrateGlobal(legacy, _now, _redactor()),
+          isCurrent: isCurrent ?? () => true,
+        );
+        if (isCurrent?.call() == false || block == null) {
+          throw StateError('Workspace retired.');
+        }
+        profile = _settings.decode(block);
+      } on SupportSettingsUnavailable catch (error) {
+        profileAvailability = error.availability;
+      } on SupportCipherException {
+        profileAvailability = SupportSettingsAvailability.locked;
+      } catch (_) {
+        profileAvailability = SupportSettingsAvailability.unavailable;
+      }
+      if (profile != null) settings[''] = profile;
+      availability[''] = profileAvailability;
+    }
     for (final session in sessions) {
       messages[session.id] = List.unmodifiable(
         (await repo.getMessagesForSession(session.id)).map(_message),
       );
-      if (session.isLocked) {
+      if (globalSettings) {
+        if (profile != null) settings[session.id] = profile;
+        availability[session.id] = profileAvailability;
+      } else if (session.isLocked) {
         availability[session.id] = SupportSettingsAvailability.locked;
       } else {
         try {
@@ -118,17 +156,25 @@ class SupportWorkspaceStore {
     );
   }
 
-  Future<SupportAssistantSettings> settingsFor(String id) async =>
-      _settings.decode(await repo.getContextBlockById(_settings.idFor(id)));
+  Future<SupportAssistantSettings> settingsFor(String id) async {
+    final global = await repo.getContextBlockById(_settings.globalId);
+    return _settings.decode(
+      global ?? await repo.getContextBlockById(_settings.idFor(id)),
+    );
+  }
 
   /// Exact durable native recipient reader, never workspace history/cache.
   Future<SupportAssistantSettings?> readableSettingsFor(String id) async {
     try {
       final parent = await repo.getSessionById(id);
       if (parent == null || parent.isLocked) return null;
-      final block = await repo.getContextBlockById(_settings.idFor(id));
+      final global = await repo.getContextBlockById(_settings.globalId);
+      final block =
+          global ?? await repo.getContextBlockById(_settings.idFor(id));
       if (block != null &&
-          (block.id != _settings.idFor(id) || block.sessionId != id)) {
+          (global != null
+              ? block.id != _settings.globalId || block.sessionId.isNotEmpty
+              : block.id != _settings.idFor(id) || block.sessionId != id)) {
         return null;
       }
       final settings = _settings.decode(block);
@@ -150,6 +196,38 @@ class SupportWorkspaceStore {
       return _settings.encode(id, next, _now, _redactor());
     }, isCurrent: isCurrent);
   }
+
+  Future<void> changeGlobalSettings(
+    SupportAssistantSettings Function(SupportAssistantSettings) change, {
+    required bool Function() isCurrent,
+  }) => repo.mutateAssistantSettings(
+    mutate: (latest) {
+      final next = change(_settings.decode(latest));
+      return isCurrent()
+          ? _settings.encodeGlobal(next, _now, _redactor())
+          : null;
+    },
+    isCurrent: isCurrent,
+  );
+
+  Future<void> recoverGlobalSettings({required bool Function() isCurrent}) =>
+      repo.mutateAssistantSettings(
+        mutate: (latest) {
+          try {
+            _settings.decode(latest);
+            throw StateError('Settings do not need recovery');
+          } on SupportSettingsUnavailable catch (error) {
+            if (error.availability != SupportSettingsAvailability.corrupt)
+              rethrow;
+          }
+          return _settings.encodeGlobal(
+            const SupportAssistantSettings(),
+            _now,
+            _redactor(),
+          );
+        },
+        isCurrent: isCurrent,
+      );
 
   /// Only readable malformed preferences can be reset; locked bytes stay intact.
   Future<void> recoverSettings(

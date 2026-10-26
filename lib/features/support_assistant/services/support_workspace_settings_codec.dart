@@ -1,6 +1,7 @@
 import 'dart:convert';
 import '../../../core/credentials/secret_redactor.dart';
 import '../../../core/models/support_models.dart';
+import '../../../core/db/repositories/support_repo.dart';
 import '../models/support_workspace_models.dart';
 
 class SupportSettingsUnavailable extends StateError {
@@ -12,6 +13,33 @@ class SupportSettingsUnavailable extends StateError {
 class SupportWorkspaceSettingsCodec {
   const SupportWorkspaceSettingsCodec();
   String idFor(String sessionId) => 'workspace-settings-v1:$sessionId';
+  String get globalId => SupportRepo.assistantSettingsId;
+  SupportContextBlock encodeGlobal(
+    SupportAssistantSettings settings,
+    int now,
+    SecretRedactor redactor,
+  ) => encode(
+    '',
+    settings,
+    now,
+    redactor,
+  ).copyWith(id: globalId, isActive: false);
+
+  /// Copy readable legacy bytes without repairing malformed payloads or
+  /// importing session permissions. Locked envelopes are refused by the repo.
+  SupportContextBlock migrateGlobal(
+    SupportContextBlock? legacy,
+    int now,
+    SecretRedactor redactor,
+  ) => legacy == null
+      ? encodeGlobal(const SupportAssistantSettings(), now, redactor)
+      : legacy.copyWith(
+          id: globalId,
+          sessionId: '',
+          startMessageId: '',
+          endMessageId: '',
+          isActive: false,
+        );
   SupportContextBlock encode(
     String id,
     SupportAssistantSettings s,

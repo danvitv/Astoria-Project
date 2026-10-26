@@ -95,7 +95,11 @@ class _ReviewSheetState extends State<SupportPrivacyReviewSheet> {
           children: [
             MenuGroup(
               header: 'support_privacy_review_scope'.tr(),
-              description: 'support_privacy_session_only'.tr(),
+              description:
+                  widget.controller.runtime.snapshot.preferences?.isGlobal ==
+                      true
+                  ? 'Общий профиль Астории. Выбранные сообщения не переносятся в другой чат; весь текущий чат доступен только при явном выборе этой области. Каждое действие по-прежнему требует своего подтверждения.'
+                  : 'support_privacy_session_only'.tr(),
               items: [
                 _Notice(
                   'support_privacy_saved_counts'.tr(

@@ -38,6 +38,46 @@ final class SupportModelRunView {
   bool isActiveRun(String? id, String session) =>
       busy && runId != null && id == runId && session == sessionId;
 
+  /// Only the current exact settled attempt can explain its durable row. Old
+  /// restored rows get a generic fallback, never a guessed provider diagnosis.
+  String settledDiagnostic(String? id, String session) =>
+      !busy &&
+          saved &&
+          accepted &&
+          phase == SupportModelPhase.settled &&
+          id != null &&
+          id == runId &&
+          session == sessionId &&
+          (status == PrivateTextStatus.error ||
+              status == PrivateTextStatus.partial)
+      ? _failureExplanation
+      : '';
+
+  String get _failureExplanation => switch (transportReason) {
+    PrivateTextReason.httpStatus =>
+      'Сервис модели отклонил запрос. Проверь выбранное подключение и модель.',
+    PrivateTextReason.transport || PrivateTextReason.admittedFailed =>
+      'Не удалось завершить соединение с сервисом модели. Проверь подключение.',
+    PrivateTextReason.deadline =>
+      'Время ожидания ответа модели истекло. Можно попробовать ещё раз.',
+    PrivateTextReason.malformed ||
+    PrivateTextReason.unexpectedEof ||
+    PrivateTextReason.providerError =>
+      'Сервис модели вернул ошибку или неполный ответ. Можно попробовать ещё раз.',
+    PrivateTextReason.denied || PrivateTextReason.notCurrent =>
+      'Отправка не разрешена или её контекст изменился. Проверь текущие настройки.',
+    PrivateTextReason.invalidRequest || PrivateTextReason.unsupported =>
+      'Выбранное подключение не поддержало этот запрос. Проверь модель и настройки.',
+    PrivateTextReason.providerLimit ||
+    PrivateTextReason.outputLimit ||
+    PrivateTextReason.wireLimit ||
+    PrivateTextReason.sanitationLimit =>
+      'Ответ остановлен безопасным ограничением. Полный текст не получен.',
+    PrivateTextReason.cancelled => 'Отправка остановлена.',
+    PrivateTextReason.none =>
+      'Модель не вернула полный ответ. Точная причина недоступна.',
+  };
+
   String get label {
     if (reason != SupportModelRefusal.none) return reason.label;
     return switch (phase) {
@@ -57,8 +97,7 @@ final class SupportModelRunView {
                   'Сохранён неполный ответ; запрос завершился с ошибкой.',
                 PrivateTextStatus.limited =>
                   'Ответ ограничен; сохранён доступный безопасный текст.',
-                PrivateTextStatus.error =>
-                  'Запрос завершился без полного ответа.',
+                PrivateTextStatus.error => _failureExplanation,
                 null => '',
               },
       null => '',

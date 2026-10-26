@@ -40,6 +40,7 @@ const _supportToolInstruction =
 extension _ModelTools on _ModelRun {
   bool get hasNativeTools {
     if (isCompact ||
+        isRegeneration ||
         !binding.configuration.directConversation ||
         service._toolTransport == null) {
       return false;

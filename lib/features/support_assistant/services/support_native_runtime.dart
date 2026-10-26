@@ -220,6 +220,25 @@ final class SupportNativeRuntime {
     checkConfiguration();
     final id = sessionId, owner = writeOwner, serial = ++_reload;
     if (!alive || id.isEmpty) return false;
+    if (permissions.initializeGlobalOnRefresh) {
+      try {
+        await permissions.initializeGlobalFromNative(
+          id,
+          isCurrent: () {
+            checkConfiguration();
+            return _ownsBinding(id, owner) && serial == _reload;
+          },
+        );
+      } on SupportPermissionsUnavailable catch (error) {
+        if (!_ownsBinding(id, owner) || serial != _reload) return false;
+        snapshot = SupportPermissionSnapshot(error.availability);
+        invalidateLease();
+        recipientConfirmed = false;
+        notify();
+        return true;
+      }
+      if (!_ownsBinding(id, owner) || serial != _reload) return false;
+    }
     final next = await permissions.readForNative(id);
     checkConfiguration();
     // Permission observation can remove/switch the selected game source while

@@ -162,6 +162,8 @@ extension SupportNativeSelectionIntents on SupportNativeConsentController {
             ) ??
             const [],
       ),
+      supportHistorySelected:
+          page.source == SupportConsentSelectionSource.support,
     );
   }
 
@@ -169,6 +171,7 @@ extension SupportNativeSelectionIntents on SupportNativeConsentController {
     SupportNativeReview review,
     SupportPermissionScope scope, {
     bool Function()? sourceIsCurrent,
+    bool supportHistorySelected = false,
   }) {
     bool current() => _current(review) && (sourceIsCurrent?.call() ?? true);
     if (!current()) return Future.value(false);
@@ -179,7 +182,10 @@ extension SupportNativeSelectionIntents on SupportNativeConsentController {
         review,
         () => runtime.permissions.changeReviewedFromNative(
           review._policy!,
-          change: (p) => p.withNativeScope(scope),
+          change: (p) => p.withNativeScope(
+            scope,
+            supportHistorySelected: supportHistorySelected,
+          ),
           isCurrent: current,
         ),
       );

@@ -13,12 +13,15 @@ part 'support/support_native_input_store.dart';
 part 'support/support_guarded_reply_store.dart';
 part 'support/support_native_local_reply_store.dart';
 part 'support/support_context_store.dart';
+part 'support/support_assistant_settings_store.dart';
+part 'support/support_global_permission_store.dart';
 part 'support/support_journal_store.dart';
 part 'support/support_mutation_journal_contract.dart';
 part 'support/support_guarded_mutation_store.dart';
 part 'support/support_mutation_history_reader.dart';
 part 'support/support_mutation_history_types.dart';
 part 'support/support_compaction_store.dart';
+part 'support/support_reply_regeneration_store.dart';
 
 /// Exact committed snapshots, retained only by the native run owner.
 typedef SupportReplyReservation = ({
@@ -122,6 +125,35 @@ class SupportRepo {
     originatingUser: originatingUser,
   );
 
+  /// Opt-in last-answer observation/re-reservation. Neither restores native
+  /// authority nor relaxes the create-only ordinary reservation contract.
+  Future<SupportReplyRegenerationObservation?> readReplyForRegeneration({
+    required SupportMessage expectedReply,
+    required bool Function() isCurrent,
+  }) => _messages.replies.readForRegeneration(expectedReply, isCurrent);
+  Future<SupportMessage?> readReplyOrigin({
+    required String sessionId,
+    required String messageId,
+    required bool Function() isCurrent,
+  }) => _messages.replies.readOrigin(sessionId, messageId, isCurrent);
+  Future<SupportReplyReservation?> reserveRegeneratedReply({
+    required SupportReplyRegenerationObservation expected,
+    required SupportMessage originatingUser,
+    required String attemptRunId,
+    required String provenanceJson,
+    required bool Function() isCurrent,
+  }) => _messages.replies.regenerate(
+    expected,
+    originatingUser,
+    attemptRunId,
+    provenanceJson,
+    isCurrent,
+  );
+  Future<bool> validateRegenerationPosition({
+    required SupportMessage reply,
+    required bool Function() isCurrent,
+  }) => _messages.replies.validateRegenerationPosition(reply, isCurrent);
+
   /// Only body/status may change; exact prior snapshots are compared inside the
   /// transaction. The guard can represent original-session settlement ownership
   /// independently of UI/transport ownership (and must remain synchronous).
@@ -202,6 +234,50 @@ class SupportRepo {
   }) => _context.mutate(blockId, sessionId, mutate, isCurrent);
   Future<SupportContextBlock?> getContextBlockById(String id) =>
       _context.get(id);
+
+  /// One encrypted app-wide profile, outside all conversation ranges/cascades.
+  static const assistantSettingsId = 'workspace-settings-global-v1';
+  Future<SupportContextBlock?> initializeAssistantSettings({
+    required List<String> legacySessionIds,
+    required SupportContextBlock Function(SupportContextBlock? legacy) create,
+    required bool Function() isCurrent,
+  }) => _context.assistantSettings.initialize(
+    legacySessionIds,
+    create,
+    isCurrent,
+  );
+  Future<SupportContextBlock?> mutateAssistantSettings({
+    required SupportContextBlock? Function(SupportContextBlock? latest) mutate,
+    bool Function()? isCurrent,
+  }) => _context.assistantSettings.mutate(mutate, isCurrent ?? () => true);
+
+  /// Fixed global permission profile, never a conversation or arbitrary body port.
+  static const assistantPermissionsId = 'workspace-permissions-global-v1';
+  Future<SupportContextBlock?> initializeAssistantPermissions({
+    required String currentSessionId,
+    required List<String> legacySessionIds,
+    required SupportContextBlock Function(SupportContextBlock? legacy) create,
+    required bool Function() isCurrent,
+  }) => _SupportGlobalPermissionStore(
+    _context,
+  ).initialize(currentSessionId, legacySessionIds, create, isCurrent);
+  Future<SupportContextBlock?> mutateAssistantPermissions({
+    required String currentSessionId,
+    required SupportContextBlock? Function(SupportContextBlock latest) mutate,
+    required bool Function() isCurrent,
+  }) => _SupportGlobalPermissionStore(
+    _context,
+  ).mutate(currentSessionId, mutate, isCurrent);
+
+  /// Compatibility edits may not race a global initialization and report a
+  /// successful change to an obsolete per-chat policy.
+  Future<SupportContextBlock?> mutateLegacyAssistantPermissions({
+    required String currentSessionId,
+    required SupportContextBlock? Function(SupportContextBlock? latest) mutate,
+    required bool Function() isCurrent,
+  }) => _SupportGlobalPermissionStore(
+    _context,
+  ).mutateLegacy(currentSessionId, mutate, isCurrent);
   Future<List<SupportContextBlock>> getContextBlocksForSession(
     String sessionId, {
     bool activeOnly = false,

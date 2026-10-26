@@ -59,6 +59,7 @@ part 'support_model_run_service.dart';
 part 'support_model_compaction_service.dart';
 part 'support_model_compacted_recipe.dart';
 part 'support_model_tool_loop.dart';
+part 'support_model_reply_regeneration.dart';
 
 /// Native-only write scheduling seam; NEVER expose this service/scheduler to
 /// tools. HTTP and user-controlled preview are never enqueued here.
@@ -173,6 +174,7 @@ final class SupportModelService {
   late final void Function() _unlistenRuntime, _unlistenRegistry;
   final _emissions = <_ModelReadOperation>{};
   _ModelRun? _active;
+  bool _regenerationPending = false;
   ProviderTokenUsage? _lastUsage;
   String? _usageSession;
   int? _usageRevision;

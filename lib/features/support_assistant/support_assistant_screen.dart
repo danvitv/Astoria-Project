@@ -522,6 +522,13 @@ class _SupportAssistantScreenState
               onSetupAction: _handleSetupCardAction,
               onGuidance: _openGuidance,
               onMessageMenu: _openMessageMenu,
+              onRegenerate:
+                  emitter == null ||
+                      workspace.isBusy ||
+                      workspace.isLoading ||
+                      activeSend != null
+                  ? null
+                  : (message) => _modelUi.regenerate(emitter, message),
             ),
           ),
           SupportComposerBar(

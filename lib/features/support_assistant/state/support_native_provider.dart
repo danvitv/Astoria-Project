@@ -16,7 +16,10 @@ import 'support_workspace_dependencies.dart';
 import 'support_model_dependencies.dart';
 
 final supportPermissionStoreProvider = Provider(
-  (ref) => SupportPermissionStore(ref.watch(supportRepoProvider)),
+  (ref) => SupportPermissionStore(
+    ref.watch(supportRepoProvider),
+    initializeGlobalOnRefresh: true,
+  ),
 );
 final supportConsentSelectionRepoProvider = Provider(
   (ref) => SupportConsentSelectionRepo(

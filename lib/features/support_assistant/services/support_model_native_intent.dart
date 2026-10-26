@@ -88,7 +88,7 @@ extension SupportModelNativeInput on SupportModelService {
   }) async {
     _ModelReadOperation? operation;
     try {
-      if (_active != null) {
+      if (_active != null || _regenerationPending) {
         _refuse(SupportModelRefusal.busy);
       }
       if (text.length > 8192) _refuse(SupportModelRefusal.tooLarge);
@@ -189,7 +189,7 @@ extension SupportModelNativeInput on SupportModelService {
   }) async {
     _ModelReadOperation? emission;
     try {
-      if (_active != null || _emissions.isNotEmpty) {
+      if (_active != null || _emissions.isNotEmpty || _regenerationPending) {
         _refuse(SupportModelRefusal.busy);
       }
       final runtime = _runtime,
@@ -263,7 +263,9 @@ extension SupportModelNativeInput on SupportModelService {
 
   SupportModelSubmission beginSend(SupportModelInputIntent intent) {
     try {
-      if (_active != null) _refuse(SupportModelRefusal.busy);
+      if (_active != null || _regenerationPending) {
+        _refuse(SupportModelRefusal.busy);
+      }
       if (!identical(intent._issuer, this) ||
           intent._used ||
           !intent._binding.current(draft: true)) {

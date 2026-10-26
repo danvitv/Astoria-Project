@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/support_model_tool_ui_ports.dart';
+import '../models/support_workspace_models.dart';
 import '../state/support_model_provider.dart';
 import 'support_composer_bar.dart';
 import 'support_model_tool_native_ui.dart';
@@ -187,6 +188,48 @@ final class SupportModelScreenController extends ChangeNotifier {
     if (!_alive || _send != null || !identical(emitter, _emitter)) return;
     refusal = SupportModelRefusal.none;
     final send = _send = emitter.compact();
+    _changed();
+    unawaited(
+      send.finished.then((result) {
+        if (!_owns(emitter, send)) return;
+        if (emitter.isCurrent) refusal = result.reason;
+        _send = null;
+        _changed();
+      }),
+    );
+  }
+
+  void regenerate(SupportModelUiEmitter emitter, SupportMessageItem reply) {
+    if (!_alive ||
+        _send != null ||
+        !identical(emitter, _emitter) ||
+        !emitter.isCurrent ||
+        reply.isLocked ||
+        reply.runId == null ||
+        reply.role != SupportMessageRole.assistant ||
+        reply.cards.isNotEmpty ||
+        !const {
+          'complete',
+          'limited',
+          'stopped',
+          'error',
+        }.contains(reply.status) ||
+        reply.sessionId != _session ||
+        _conversation.isEmpty ||
+        _conversation.last.id != reply.id)
+      return;
+    refusal = SupportModelRefusal.none;
+    final send = _send = emitter.regenerate(
+      SupportModelMessage(
+        id: reply.id,
+        sessionId: reply.sessionId,
+        runId: reply.runId!,
+        role: 'assistant',
+        status: reply.status,
+        createdAt: reply.createdAt.millisecondsSinceEpoch,
+        text: _conversation.last.text,
+      ),
+    );
     _changed();
     unawaited(
       send.finished.then((result) {

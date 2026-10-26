@@ -149,7 +149,11 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     final publicationStamp = _writes.publicationStamp;
     final SupportWorkspaceSnapshot snapshot;
     try {
-      snapshot = await owner.store.load();
+      snapshot = await owner.store.load(
+        globalSettings: true,
+        preferredSessionId: state.activeSessionId,
+        isCurrent: () => _current(owner),
+      );
     } catch (_) {
       if (_current(owner)) {
         state = state.copyWith(
@@ -185,14 +189,12 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
       sessions: snapshot.sessions,
       messagesBySession: snapshot.messages,
       activeSessionId: active,
-      settings: snapshot.settings[active] ?? const SupportAssistantSettings(),
+      settings: snapshot.settings[''] ?? const SupportAssistantSettings(),
       settingsBySession: snapshot.settings,
       settingsAvailabilityBySession: snapshot.settingsAvailability,
       settingsAvailability:
-          snapshot.settingsAvailability[active] ??
-          (active.isEmpty
-              ? SupportSettingsAvailability.available
-              : SupportSettingsAvailability.unavailable),
+          snapshot.settingsAvailability[''] ??
+          SupportSettingsAvailability.unavailable,
       isLoading: false,
     );
   }
@@ -227,15 +229,7 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     if (!state.sessions.any((s) => s.id == sessionId)) return;
     _native!.selectSession(sessionId, force: true);
     _selection++;
-    state = state.copyWith(
-      activeSessionId: sessionId,
-      settings:
-          state.settingsBySession[sessionId] ??
-          const SupportAssistantSettings(),
-      settingsAvailability:
-          state.settingsAvailabilityBySession[sessionId] ??
-          SupportSettingsAvailability.unavailable,
-    );
+    state = state.copyWith(activeSessionId: sessionId);
     unawaited(refresh());
   }
 
@@ -295,10 +289,7 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     bool Function()? isOriginalUiCurrent,
   }) {
     final native = _native;
-    if (native == null ||
-        state.activeSessionId.isEmpty ||
-        state.isLoading ||
-        !state.settingsAvailable) {
+    if (native == null || state.isLoading || !state.settingsAvailable) {
       return null;
     }
     final owner = _owner, selection = _selection;
@@ -325,15 +316,14 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     SupportAssistantSettings Function(SupportAssistantSettings) change, {
     SupportWorkspaceSettingsIntent? intent,
   }) {
-    final id = state.activeSessionId;
-    if (id.isEmpty ||
-        state.isLoading ||
+    if (state.isLoading ||
         !state.settingsAvailable ||
         (intent != null && !_ownsSettingsIntent(intent))) {
       return Future.value(false);
     }
     return _editPreferences(
-      (store, current) => store.changeSettings(id, change, isCurrent: current),
+      (store, current) =>
+          store.changeGlobalSettings(change, isCurrent: current),
       isOriginalUiCurrent: intent == null
           ? null
           : () => _ownsSettingsIntent(intent),
@@ -393,8 +383,7 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
       return Future.value(false);
     }
     return _editPreferences(
-      (store, current) =>
-          store.recoverSettings(sessionId, confirmed: true, isCurrent: current),
+      (store, current) => store.recoverGlobalSettings(isCurrent: current),
     );
   }
 

@@ -41,35 +41,39 @@ class _StartSessionState extends ConsumerState<SupportSettingsStartSession> {
   }
 
   @override
-  Widget build(BuildContext context) => ListView(
+  Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.all(16),
-    children: [
-      const Text(
-        'Начни сессию Астории',
-        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-      ),
-      const SizedBox(height: 12),
-      const Text(
-        'Режим, настройки и разрешения относятся к конкретной сессии. '
-        'Создай её или выбери существующую в истории. '
-        'В новой сессии все разрешения выключены; запрос к модели не отправляется.',
-      ),
-      const SizedBox(height: 16),
-      GlazeActionButton(
-        key: const ValueKey('support_settings_start_session'),
-        icon: Icons.add_comment_outlined,
-        label: 'Начать сессию',
-        tone: GlazeActionTone.primary,
-        expand: true,
-        busy: _busy,
-        onTap: widget.enabled && !_busy ? _start : null,
-      ),
-      if (_failed) ...[
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Начни сессию Астории',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+        ),
         const SizedBox(height: 12),
         const Text(
-          'Не удалось создать сессию. Проверь доступ к защищённому хранилищу.',
+          'Профиль и разрешения общие для Астории, история — отдельная для каждого чата. '
+          'Создай чат или выбери существующий, чтобы работать с историей и выбранными источниками. '
+          'Создание чата само по себе не отправляет запрос модели и не даёт новых разрешений.',
         ),
+        const SizedBox(height: 16),
+        GlazeActionButton(
+          key: const ValueKey('support_settings_start_session'),
+          icon: Icons.add_comment_outlined,
+          label: 'Начать сессию',
+          tone: GlazeActionTone.primary,
+          expand: true,
+          busy: _busy,
+          onTap: widget.enabled && !_busy ? _start : null,
+        ),
+        if (_failed) ...[
+          const SizedBox(height: 12),
+          const Text(
+            'Не удалось создать сессию. Проверь доступ к защищённому хранилищу.',
+          ),
+        ],
       ],
-    ],
+    ),
   );
 }

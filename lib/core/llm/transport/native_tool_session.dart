@@ -142,7 +142,7 @@ final class NativeToolSession {
       }
       _ntRequire(
         c.maxTokens > 0 &&
-            c.maxTokens <= NativeToolLimits.maxOutputTokens &&
+            c.maxTokens <= NativeToolLimits.maxRequestedOutputTokens &&
             c.contextSize > 0 &&
             c.contextSize <= NativeToolLimits.contextCharacters &&
             c.temperature.isFinite &&
@@ -268,7 +268,9 @@ final class NativeToolSession {
             _check();
             _ntRequire(
               decoded.usage?.outputTokens == null ||
-                  decoded.usage!.outputTokens! <= c.maxTokens,
+                  (decoded.usage!.outputTokens! <= c.maxTokens &&
+                      decoded.usage!.outputTokens! <=
+                          NativeToolLimits.maxOutputTokens),
               NativeToolReason.limit,
             );
             _ntRequire(

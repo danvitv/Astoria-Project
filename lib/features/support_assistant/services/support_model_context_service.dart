@@ -117,7 +117,7 @@ extension _ModelContext on _ModelRun {
           boundary = await history.captureSupportSessionBoundary(
             sessionId: sessionId,
             userMessageId: userId,
-            runId: runId,
+            runId: inputRunId,
           );
           operation.check();
         }
@@ -133,7 +133,7 @@ extension _ModelContext on _ModelRun {
         final boundary = await history.captureSupportSessionBoundary(
           sessionId: sessionId,
           userMessageId: userId,
-          runId: runId,
+          runId: inputRunId,
         );
         operation.check();
         snapshots.add(
@@ -163,7 +163,7 @@ extension _ModelContext on _ModelRun {
                 final boundary = await history.captureSupportSessionBoundary(
                   sessionId: sessionId,
                   userMessageId: userId,
-                  runId: runId,
+                  runId: inputRunId,
                 );
                 operation.check();
                 final snapshot = await history.loadSupportSessionHistory(
@@ -331,7 +331,7 @@ extension _ModelContext on _ModelRun {
     if (currentInput.messages.length != 1 ||
         currentInput.messages.single.role != 'user' ||
         currentInput.messages.single.text != text ||
-        currentInput.provenance.single.runId != runId) {
+        currentInput.provenance.single.runId != inputRunId) {
       _refuse(SupportModelRefusal.stale);
     }
     final messages = contextMessages(
@@ -497,6 +497,16 @@ extension _ModelAdmission on _ModelRun {
             checkpoint,
           );
           if (user != durableUser) return false;
+          if (isRegeneration &&
+              !await operation.checked(
+                () => operation.reader.validateRegenerationPosition(
+                  reply: expected!.message,
+                  isCurrent: current,
+                ),
+                checkpoint,
+              )) {
+            return false;
+          }
           final reply = await operation.checked(
             () => operation.reader.getMessageById(replyId),
             checkpoint,

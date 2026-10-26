@@ -38,7 +38,7 @@ export 'support_model_provider_fixture_isolation.dart';
 /// workspace/native/model and API credential observation. No old model/native
 /// fixture, default App/DB/env/catalog/key/bootstrap/capture/network evaluation.
 final class ModelProviderFixture {
-  ModelProviderFixture() {
+  ModelProviderFixture({bool nativeToolRuntime = true}) {
     db = _DeclaredModelProviderDatabase(
       NativeDatabase.memory().interceptWith(sql),
     );
@@ -54,6 +54,8 @@ final class ModelProviderFixture {
     container = ProviderContainer(
       observers: [isolation],
       overrides: [
+        if (!nativeToolRuntime)
+          nativeProviderRuntimeProvider.overrideWithValue(null),
         _databaseChoice.overrideWith(() => _DatabaseChoice(db)),
         appDbProvider.overrideWith((ref) => ref.watch(_databaseChoice)),
         credentialStorageProvider.overrideWithValue(storage),

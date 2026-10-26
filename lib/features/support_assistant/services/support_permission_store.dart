@@ -15,12 +15,75 @@ final class SupportPermissionStore {
     this.repo, {
     String Function()? newIdentity,
     int Function()? now,
+    this.initializeGlobalOnRefresh = false,
   }) : _newIdentity = newIdentity ?? _randomIdentity,
        _now = now ?? (() => DateTime.now().toUtc().millisecondsSinceEpoch);
   final SupportRepo repo;
   final String Function() _newIdentity;
   final int Function() _now;
+
+  /// Production composition opts in; deliberate legacy fixtures stay per-chat.
+  final bool initializeGlobalOnRefresh;
+  bool _globalRequired = false;
+  bool get globalRequired => initializeGlobalOnRefresh || _globalRequired;
   static const codec = SupportPermissionCodec();
+
+  /// Normal native workspace admission only. Existing rows are left unchanged.
+  /// Current/chosen policy wins; otherwise newest existing legacy policy wins.
+  Future<SupportPermissionPreferences?> initializeGlobalFromNative(
+    String sessionId, {
+    required bool Function() isCurrent,
+  }) async {
+    _globalRequired = true;
+    try {
+      final parent = await repo.getSessionById(sessionId);
+      if (!isCurrent()) return null;
+      if (parent == null) throw StateError('Support session missing.');
+      if (parent.isLocked) {
+        throw SupportPermissionsUnavailable(
+          SupportPermissionAvailability.locked,
+        );
+      }
+      final existing = await repo.getContextBlockById(
+        SupportPermissionCodec.globalId,
+      );
+      if (!isCurrent()) return null;
+      if (existing != null) return codec.decodeGlobal(sessionId, existing);
+      final sessions = await repo.getAllSessions();
+      if (!isCurrent()) return null;
+      sessions.sort((a, b) {
+        final updated = b.updatedAt.compareTo(a.updatedAt);
+        if (updated != 0) return updated;
+        final created = b.createdAt.compareTo(a.createdAt);
+        return created != 0 ? created : a.id.compareTo(b.id);
+      });
+      final block = await repo.initializeAssistantPermissions(
+        currentSessionId: sessionId,
+        legacySessionIds: [
+          sessionId,
+          for (final s in sessions)
+            if (s.id != sessionId) s.id,
+        ],
+        create: (legacy) => codec.encodeGlobal(
+          legacy == null
+              ? _freshDeny(sessionId)
+              : codec.decode(legacy.sessionId, legacy),
+          _now(),
+        ),
+        isCurrent: isCurrent,
+      );
+      if (!isCurrent() || block == null) return null;
+      return codec.decodeGlobal(sessionId, block);
+    } on SupportPermissionsUnavailable {
+      rethrow;
+    } on SupportCipherException {
+      throw SupportPermissionsUnavailable(SupportPermissionAvailability.locked);
+    } catch (_) {
+      throw SupportPermissionsUnavailable(
+        SupportPermissionAvailability.unavailable,
+      );
+    }
+  }
 
   Future<SupportPermissionSnapshot> readForNative(String sessionId) async {
     try {
@@ -35,10 +98,35 @@ final class SupportPermissionStore {
           SupportPermissionAvailability.locked,
         );
       }
-      final p = codec.decode(
-        sessionId,
-        await repo.getContextBlockById(codec.idFor(sessionId)),
+      final global = await repo.getContextBlockById(
+        SupportPermissionCodec.globalId,
       );
+      if (global == null && globalRequired) {
+        throw SupportPermissionsUnavailable(
+          SupportPermissionAvailability.unavailable,
+        );
+      }
+      final p = global != null
+          ? codec.decodeGlobal(sessionId, global)
+          : codec.decode(
+              sessionId,
+              await repo.getContextBlockById(codec.idFor(sessionId)),
+            );
+      if (global != null) {
+        // The parentless row outlives chats. It must not make a deleted/locked
+        // current conversation look readable after an awaited global decrypt.
+        final latestParent = await repo.getSessionById(sessionId);
+        if (latestParent == null) {
+          return const SupportPermissionSnapshot(
+            SupportPermissionAvailability.unavailable,
+          );
+        }
+        if (latestParent.isLocked) {
+          return const SupportPermissionSnapshot(
+            SupportPermissionAvailability.locked,
+          );
+        }
+      }
       return SupportPermissionSnapshot(
         SupportPermissionAvailability.available,
         p,
@@ -67,7 +155,11 @@ final class SupportPermissionStore {
     String sessionId,
     SupportPermissionScope? scope, {
     required bool Function() isCurrent,
-  }) => _update(sessionId, (p) => p.withNativeScope(scope), isCurrent);
+  }) => _update(
+    sessionId,
+    (p) => p.withNativeScope(scope, supportHistorySelected: true),
+    isCurrent,
+  );
 
   Future<SupportPermissionPreferences?> selectRecipientFromNative(
     String sessionId,
@@ -87,16 +179,18 @@ final class SupportPermissionStore {
     final reviewedMissing =
         reviewed.policyIdentity == 'missing' && reviewed.revision == 0;
     if ((latest == null) != reviewedMissing) return null;
-    final current = codec.decode(reviewed.supportSessionId, latest);
+    final current = _decode(reviewed.supportSessionId, latest);
     if (current.policyIdentity != reviewed.policyIdentity ||
         !_sameScope(current.scope, reviewed.scope) ||
-        !_sameRecipient(current.recipient, reviewed.recipient)) {
+        !_sameRecipient(current.recipient, reviewed.recipient) ||
+        current.globalSource?.supportSessionId !=
+            reviewed.globalSource?.supportSessionId) {
       return null;
     }
     final base = latest == null
         ? _freshDeny(reviewed.supportSessionId)
         : current;
-    return codec.encode(change(base), latest?.createdAt ?? _now());
+    return _encode(change(base), latest, latest?.createdAt ?? _now());
   }, isCurrent);
 
   static bool _sameScope(
@@ -119,12 +213,16 @@ final class SupportPermissionStore {
     return _mutate(sessionId, (latest) {
       if (latest == null) throw StateError('Permissions do not need recovery.');
       try {
-        codec.decode(sessionId, latest);
+        _decode(sessionId, latest);
         throw StateError('Permissions do not need recovery.');
       } on SupportPermissionsUnavailable catch (e) {
         if (e.availability != SupportPermissionAvailability.corrupt) rethrow;
       }
-      return codec.encode(_freshDeny(sessionId, revision: 1), latest.createdAt);
+      return _encode(
+        _freshDeny(sessionId, revision: 1),
+        latest,
+        latest.createdAt,
+      );
     }, isCurrent);
   }
 
@@ -135,8 +233,8 @@ final class SupportPermissionStore {
   ) => _mutate(sessionId, (latest) {
     final p = latest == null
         ? _freshDeny(sessionId)
-        : codec.decode(sessionId, latest);
-    return codec.encode(update(p), latest?.createdAt ?? _now());
+        : _decode(sessionId, latest);
+    return _encode(update(p), latest, latest?.createdAt ?? _now());
   }, isCurrent);
 
   Future<SupportPermissionPreferences?> _mutate(
@@ -145,14 +243,31 @@ final class SupportPermissionStore {
     bool Function() isCurrent,
   ) async {
     try {
-      final durable = await repo.mutateContextBlock(
-        blockId: codec.idFor(sessionId),
-        sessionId: sessionId,
-        mutate: change,
-        isCurrent: isCurrent,
+      // Discover only the fixed profile. Every global write then re-reads the
+      // latest row in its transaction, across independent store instances. The
+      // legacy branch also rejects a global row appearing before its commit.
+      final global = await repo.getContextBlockById(
+        SupportPermissionCodec.globalId,
       );
+      if (!isCurrent()) return null;
+      if (global == null && globalRequired) {
+        throw SupportPermissionsUnavailable(
+          SupportPermissionAvailability.unavailable,
+        );
+      }
+      final durable = global != null
+          ? await repo.mutateAssistantPermissions(
+              currentSessionId: sessionId,
+              mutate: change,
+              isCurrent: isCurrent,
+            )
+          : await repo.mutateLegacyAssistantPermissions(
+              currentSessionId: sessionId,
+              mutate: change,
+              isCurrent: isCurrent,
+            );
       if (!isCurrent() || durable == null) return null;
-      return codec.decode(sessionId, durable);
+      return _decode(sessionId, durable);
     } on SupportPermissionsUnavailable {
       rethrow;
     } on SupportCipherException {
@@ -163,6 +278,20 @@ final class SupportPermissionStore {
       );
     }
   }
+
+  SupportPermissionPreferences _decode(
+    String sessionId,
+    SupportContextBlock? block,
+  ) => block?.id == SupportPermissionCodec.globalId
+      ? codec.decodeGlobal(sessionId, block!)
+      : codec.decode(sessionId, block);
+  SupportContextBlock _encode(
+    SupportPermissionPreferences p,
+    SupportContextBlock? latest,
+    int now,
+  ) => latest?.id == SupportPermissionCodec.globalId
+      ? codec.encodeGlobal(p, now)
+      : codec.encode(p, now);
 
   SupportPermissionPreferences _freshDeny(String id, {int revision = 0}) =>
       SupportPermissionPreferences(

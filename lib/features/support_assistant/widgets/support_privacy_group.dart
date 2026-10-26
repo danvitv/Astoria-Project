@@ -398,7 +398,9 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
       children: [
         MenuGroup(
           header: 'support_privacy_scope_title'.tr(),
-          description: 'support_privacy_intro'.tr(),
+          description: controller.runtime.snapshot.preferences?.isGlobal == true
+              ? 'Разрешения общие для всех чатов с Асторией и сохраняются после перезапуска или удаления чатов. Включённый переключатель — настройка, а не разрешение на действие без выбранной области.'
+              : 'support_privacy_intro'.tr(),
           items: [
             if (!available) _Notice(_availabilityKey(view.availability).tr()),
             _Notice(
@@ -418,7 +420,11 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
                       ],
                     ),
             ),
-            _Notice('support_privacy_session_scope_notice'.tr()),
+            _Notice(
+              controller.runtime.snapshot.preferences?.isGlobal == true
+                  ? 'Выбранные сообщения и личные данные остаются привязаны к исходному чату. Явный выбор всей истории Астории означает историю текущего чата; игровой чат сохраняет точный выбранный ID. При вызове инструмента модель получает ограниченную сводку или проекцию результата чтения. Передача полного выбранного содержимого — отдельное право.'
+                  : 'support_privacy_session_scope_notice'.tr(),
+            ),
             _Action(
               'support_privacy_game_scope',
               'support_privacy_game_picker',
@@ -567,7 +573,9 @@ class _PrivacyGroupState extends ConsumerState<SupportPrivacyGroup> {
   ) => _Toggle(
     key: ValueKey('support_privacy_${right.right.name}'),
     label: 'support_privacy_right_${right.right.name}'.tr(),
-    description: !right.available && !right.enabled && help != null
+    description: !right.available && right.enabled
+        ? 'Настройка сохранена. Сейчас нет действующей области или подтверждённого получателя; доступ не разрешён.'
+        : !right.available && !right.enabled && help != null
         ? help.description
         : (!right.available && !right.enabled
                   ? 'support_privacy_right_unavailable'

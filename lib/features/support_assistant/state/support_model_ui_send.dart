@@ -54,6 +54,12 @@ final class SupportModelUiEmitter {
     return send;
   }
 
+  SupportModelUiSend regenerate(SupportModelMessage reply) {
+    final send = _bridge._send(this, '', 0, () => true, regeneration: reply);
+    if (identical(_bridge._active, send)) _lastSend = send;
+    return send;
+  }
+
   void retire() {
     if (_retired) return;
     _retired = true;
@@ -76,6 +82,7 @@ final class SupportModelUiSend {
     this._isDraftCurrent,
     this._runtimeCurrent, {
     this._compact = false,
+    this._regeneration,
   });
   final SupportModelUiBridge _bridge;
   final SupportModelUiEmitter _emitter;
@@ -85,6 +92,7 @@ final class SupportModelUiSend {
   final bool Function() _isDraftCurrent;
   final bool Function() _runtimeCurrent;
   final bool _compact;
+  final SupportModelMessage? _regeneration;
   final _acceptance = Completer<bool>();
   final _preparation = Completer<SupportModelUiPreparation>();
   final _completion = Completer<SupportModelRunResult>();

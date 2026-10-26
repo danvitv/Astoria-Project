@@ -42,6 +42,9 @@ abstract final class NativeToolLimits {
   static const textCharacters = 65536;
   static const contextCharacters = 262144;
   static const maxOutputTokens = 16384;
+  // A provider request parameter is not the budget for decoding its response.
+  // Match the saved profile's positive integer range without relaxing reply caps.
+  static const maxRequestedOutputTokens = 0x7fffffff;
   static const messages = 514;
   static const definitions = 64;
   static const callsPerTurn = 8;

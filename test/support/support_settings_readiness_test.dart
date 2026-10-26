@@ -54,7 +54,7 @@ void main() {
   setUpAll(initializeNativeWidgetLocalization);
   for (final empty in [true, false]) {
     testWidgets(
-      '${empty ? 'empty history starts explicitly' : 'existing session hydrates'}: modes, permissions and profile work',
+      '${empty ? 'empty history exposes global profile before starting chat' : 'existing session hydrates'}: modes, permissions and profile work',
       (tester) async {
         tester.view.physicalSize = const Size(550, 1100);
         tester.view.devicePixelRatio = 1;
@@ -101,7 +101,12 @@ void main() {
                 );
                 if (empty) {
                   expect(state().sessions, isEmpty);
-                  expect(find.byType(GlazeTabBar), findsNothing);
+                  expect(find.byType(GlazeTabBar), findsOneWidget);
+                  expect(
+                    find.byKey(const ValueKey('support_connection_selector')),
+                    findsOneWidget,
+                  );
+                  expect(find.text('Общий профиль Астории'), findsOneWidget);
                   await _tap(
                     tester,
                     find.byKey(
@@ -125,6 +130,15 @@ void main() {
                 final strip = find.byKey(
                   const ValueKey('support_settings_mode'),
                 );
+                if (empty) {
+                  await tester.scrollUntilVisible(
+                    strip,
+                    -300,
+                    scrollable: find.byType(Scrollable).first,
+                    maxScrolls: 10,
+                  );
+                  await tester.pump();
+                }
                 expect(
                   tester.widget<GlazeTabBar>(strip).style,
                   GlazeTabBarStyle.underline,

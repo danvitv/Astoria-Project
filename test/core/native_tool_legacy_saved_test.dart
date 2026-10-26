@@ -124,6 +124,45 @@ List<NativeToolResult> _applied({
 ];
 
 void main() {
+  test(
+    'saved profile requests 20000 tokens without relaxing response limits',
+    () async {
+      final f = _LegacyTools('openai');
+      final h = f.h;
+      h.native.core.row = h.native.core.row.copyWith(maxTokens: 20000);
+      h.reply(h.response(tool: false));
+      final session = f.session();
+      try {
+        final result = await session.start();
+        expect(result.status, NativeToolStatus.complete);
+        expect(h.native.wires.single.body['max_tokens'], 20000);
+        expect(result.actualUsage?.outputTokens, 5);
+        f.expectNoVaultMutation();
+      } finally {
+        session.close();
+      }
+      final capped = _LegacyTools('openai');
+      capped.h.native.core.row = capped.h.native.core.row.copyWith(
+        maxTokens: 20000,
+      );
+      capped.h.reply(
+        capped.h.response(
+          tool: false,
+          outputTokens: NativeToolLimits.maxOutputTokens + 1,
+        ),
+      );
+      final cappedSession = capped.session();
+      try {
+        final result = await cappedSession.start();
+        expect(result.reason, NativeToolReason.limit);
+        expect(result.text, isEmpty);
+        capped.expectNoVaultMutation();
+      } finally {
+        cappedSession.close();
+      }
+    },
+  );
+
   for (final protocol in nativeTransportProtocols) {
     test(
       '$protocol legacy saved-row tools use correlated JSON rounds and actual usage',

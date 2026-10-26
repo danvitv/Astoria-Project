@@ -38,6 +38,7 @@ class ControlledWorkspaceStore extends SupportWorkspaceStore {
   final gates = <String, WorkspaceGate>{};
   final failures = <String>{};
   final calls = <String>[];
+  String? _globalSourceId;
   int nextId = 0;
   void addSession(String id) {
     sessions[id] = SupportSessionSummary(
@@ -57,7 +58,18 @@ class ControlledWorkspaceStore extends SupportWorkspaceStore {
   }
 
   @override
-  Future<SupportWorkspaceSnapshot> load() async {
+  Future<SupportWorkspaceSnapshot> load({
+    bool globalSettings = false,
+    String? preferredSessionId,
+    bool Function()? isCurrent,
+  }) async {
+    // Preserve this fixture's controlled availability/gates while exposing the
+    // shared-profile key. This is not real migration or persistence evidence.
+    _globalSourceId = sessions.containsKey(preferredSessionId)
+        ? preferredSessionId
+        : sessions.keys.firstOrNull;
+    final globalAvailability =
+        availability[_globalSourceId] ?? SupportSettingsAvailability.available;
     final snapshot = SupportWorkspaceSnapshot(
       List.unmodifiable(sessions.values),
       Map.unmodifiable(
@@ -67,11 +79,17 @@ class ControlledWorkspaceStore extends SupportWorkspaceStore {
         ),
       ),
       {
+        if (globalSettings &&
+            globalAvailability == SupportSettingsAvailability.available)
+          '': const SupportAssistantSettings(),
         for (final id in sessions.keys)
           if (availability[id] == SupportSettingsAvailability.available)
             id: const SupportAssistantSettings(),
       },
-      Map.unmodifiable(availability),
+      Map.unmodifiable({
+        ...availability,
+        if (globalSettings) '': globalAvailability,
+      }),
     );
     await stage('load');
     return snapshot;
@@ -219,6 +237,20 @@ class ControlledWorkspaceStore extends SupportWorkspaceStore {
     if (isCurrent?.call() == false) return;
     calls.add('change-commit');
   }
+
+  @override
+  Future<void> changeGlobalSettings(
+    SupportAssistantSettings Function(SupportAssistantSettings) change, {
+    required bool Function() isCurrent,
+  }) => changeSettings(_globalSourceId ?? '', change, isCurrent: isCurrent);
+
+  @override
+  Future<void> recoverGlobalSettings({required bool Function() isCurrent}) =>
+      recoverSettings(
+        _globalSourceId ?? '',
+        confirmed: true,
+        isCurrent: isCurrent,
+      );
 
   @override
   Future<void> recoverSettings(

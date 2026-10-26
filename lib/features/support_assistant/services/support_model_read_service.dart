@@ -122,6 +122,18 @@ final class _ModelReadOperation {
     if (parent == null || parent.isLocked) {
       _refuse(SupportModelRefusal.unavailable);
     }
+    // ORIGINAL ROOT reader, not a UI cache: every checkpoint reads the same
+    // durable fixed global policy as native consent after production opt-in.
+    final global = await checked(
+      () => reader.getContextBlockById(SupportPermissionCodec.globalId),
+      checkpoint,
+    );
+    if (global != null) {
+      return const SupportPermissionCodec().decodeGlobal(id, global);
+    }
+    if (service._runtime.permissions.globalRequired) {
+      _refuse(SupportModelRefusal.unavailable);
+    }
     final block = await checked(
       () =>
           reader.getContextBlockById(const SupportPermissionCodec().idFor(id)),
@@ -139,13 +151,24 @@ final class _ModelReadOperation {
       _refuse(SupportModelRefusal.unavailable);
     }
     const codec = SupportWorkspaceSettingsCodec();
-    final block = await checked(
-      () => reader.getContextBlockById(codec.idFor(id)),
+    final global = await checked(
+      () => reader.getContextBlockById(codec.globalId),
       checkpoint,
     );
+    final block =
+        global ??
+        await checked(
+          () => reader.getContextBlockById(codec.idFor(id)),
+          checkpoint,
+        );
     if (block != null &&
-        (block.id != codec.idFor(id) ||
-            block.sessionId != id ||
+        ((global != null
+                ? block.id != codec.globalId ||
+                      block.sessionId.isNotEmpty ||
+                      block.isActive ||
+                      block.startMessageId.isNotEmpty ||
+                      block.endMessageId.isNotEmpty
+                : block.id != codec.idFor(id) || block.sessionId != id) ||
             block.protectedFactsJson.length > 65536)) {
       _refuse(SupportModelRefusal.unavailable);
     }

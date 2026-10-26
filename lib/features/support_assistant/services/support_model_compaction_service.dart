@@ -72,7 +72,9 @@ extension _ModelCompaction on _ModelRun {
     final messages = _coalesceSupportUsers(<SupportModelPreviewText>[
       SupportModelPreviewText(
         role: 'system',
-        text: hasNativeTools && question != null
+        text: isRegeneration
+            ? _supportRegenerationInstruction
+            : hasNativeTools && question != null
             ? toolInstruction
             : _supportModelInstruction,
       ),

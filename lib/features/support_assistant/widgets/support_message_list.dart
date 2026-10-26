@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/state/credential_vault_provider.dart';
 import '../../../shared/theme/app_colors.dart';
+import '../../../shared/widgets/glaze_action_button.dart';
 import '../models/support_workspace_models.dart';
 import '../services/support_message_display_projection.dart';
 import '../state/support_model_run_view.dart';
@@ -22,6 +23,7 @@ class SupportMessageList extends ConsumerWidget {
   final ValueChanged<String>? onSetupAction;
   final ValueChanged<SupportGuidanceTarget>? onGuidance;
   final ValueChanged<SupportMessageItem>? onMessageMenu;
+  final ValueChanged<SupportMessageItem>? onRegenerate;
   final double topPadding;
   final double bottomPadding;
   final SupportModelRunView run;
@@ -38,6 +40,7 @@ class SupportMessageList extends ConsumerWidget {
     this.onSetupAction,
     this.onGuidance,
     this.onMessageMenu,
+    this.onRegenerate,
     this.topPadding = 16,
     this.bottomPadding = 16,
     this.run = const SupportModelRunView(),
@@ -89,6 +92,22 @@ class SupportMessageList extends ConsumerWidget {
             onSetupAction: onSetupAction,
             onGuidance: onGuidance,
             onMessageMenu: onMessageMenu,
+            onRegenerate:
+                index - headerCount == messages.length - 1 &&
+                    !message.isLocked &&
+                    message.runId != null &&
+                    message.role == SupportMessageRole.assistant &&
+                    message.cards.isEmpty &&
+                    const {
+                      'complete',
+                      'limited',
+                      'stopped',
+                      'error',
+                    }.contains(message.status) &&
+                    hasConfiguredModel &&
+                    !run.busy
+                ? onRegenerate
+                : null,
           ),
         );
       },
@@ -205,6 +224,7 @@ class _SupportMessageBubble extends StatelessWidget {
   final ValueChanged<String>? onSetupAction;
   final ValueChanged<SupportGuidanceTarget>? onGuidance;
   final ValueChanged<SupportMessageItem>? onMessageMenu;
+  final ValueChanged<SupportMessageItem>? onRegenerate;
   final SupportModelRunView run;
 
   const _SupportMessageBubble({
@@ -217,6 +237,7 @@ class _SupportMessageBubble extends StatelessWidget {
     this.onSetupAction,
     this.onGuidance,
     this.onMessageMenu,
+    this.onRegenerate,
     required this.run,
   });
 
@@ -304,13 +325,22 @@ class _SupportMessageBubble extends StatelessWidget {
                     ),
                   ),
                 SupportPlainMarkdown(
-                  text: display.project(message.body),
+                  text: _bodyText,
                   style: TextStyle(
                     fontSize: 14,
                     height: 1.4,
                     color: context.cs.onSurface,
                   ),
                 ),
+                if (onRegenerate != null) ...[
+                  const SizedBox(height: 10),
+                  GlazeActionButton(
+                    key: ValueKey('support_regenerate_${message.id}'),
+                    label: 'Перегенерировать ответ',
+                    icon: Icons.refresh_rounded,
+                    onTap: () => onRegenerate!(message),
+                  ),
+                ],
                 if (message.cards.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   for (final card in message.cards)
@@ -332,5 +362,21 @@ class _SupportMessageBubble extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String get _bodyText {
+    final safe = display.project(message.body);
+    if (message.isLocked ||
+        message.role != SupportMessageRole.assistant ||
+        message.status != 'error' ||
+        safe.trim().isNotEmpty) {
+      return safe;
+    }
+    final reason = run.settledDiagnostic(message.runId, message.sessionId);
+    return reason.isNotEmpty
+        ? reason
+        : 'Модель не вернула текст ответа. Причина для сохранённого сообщения '
+              'недоступна. Можно перегенерировать последний ответ; действия приложения '
+              'при этом не повторяются.';
   }
 }

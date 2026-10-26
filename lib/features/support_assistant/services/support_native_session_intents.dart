@@ -158,6 +158,8 @@ extension SupportNativeSessionIntents on SupportNativeConsentController {
           choice.sessionId,
           choice._sourceCheckpoint,
         ),
+        supportHistorySelected:
+            choice.source == SupportConsentSelectionSource.support,
       );
     });
   }
