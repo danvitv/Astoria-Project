@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -15,6 +16,8 @@ import 'state/support_workspace_provider.dart';
 import 'state/support_model_provider.dart';
 import 'widgets/support_composer_bar.dart';
 import 'widgets/support_message_list.dart';
+import 'widgets/support_message_text.dart';
+import 'widgets/support_user_message_editor.dart';
 import 'widgets/support_sessions_panel.dart';
 import 'widgets/support_settings_panel.dart';
 import 'widgets/support_model_screen_controller.dart';
@@ -30,6 +33,7 @@ import 'models/support_permission_scope.dart';
 import 'state/support_native_provider.dart';
 
 part 'support_screen_guidance.dart';
+part 'support_screen_message_actions.dart';
 
 /// Center workspace screen for Astoria Assistant (`/support`).
 ///
@@ -82,83 +86,6 @@ class _SupportAssistantScreenState
   void deactivate() {
     _messageMenuLifetime = Object();
     super.deactivate();
-  }
-
-  Future<void> _openMessageMenu(SupportMessageItem message) async {
-    if (_sheetOpen || !mounted) return;
-    final lifetime = _messageMenuLifetime;
-    final notifier = ref.read(supportWorkspaceProvider.notifier);
-    final intent = notifier.captureMessageDeletion(
-      message,
-      isOriginalUiCurrent: () =>
-          mounted && identical(lifetime, _messageMenuLifetime),
-    );
-    if (intent == null) return;
-    final navigator = Navigator.of(context, rootNavigator: true);
-    _sheetOpen = true;
-    try {
-      var deleteRequested = false;
-      await GlazeBottomSheet.show<void>(
-        context,
-        title: message.role == SupportMessageRole.user
-            ? 'Твоё сообщение'
-            : 'Сообщение Астории',
-        items: [
-          BottomSheetItem(
-            label: 'Удалить сообщение',
-            icon: Icons.delete_outline_rounded,
-            isDestructive: true,
-            onTap: () {
-              deleteRequested = intent.isCurrent;
-              navigator.pop();
-            },
-          ),
-        ],
-      );
-      if (!mounted || !deleteRequested || !intent.isCurrent) return;
-      var confirmed = false;
-      await GlazeBottomSheet.show<void>(
-        context,
-        title: 'Удалить это сообщение?',
-        bigInfo: const BottomSheetBigInfo(
-          icon: Icons.delete_outline_rounded,
-          description:
-              'Удалится только выбранное сообщение из чата Астории. '
-              'Остальные сообщения останутся. Связанный активный ответ будет остановлен. '
-              'Это не отменяет уже выполненные действия и не удаляет данные ролевых чатов. '
-              'Если сообщение входит в старую сводку или связано с другим ответом, '
-              'для продолжения может потребоваться новый чат.',
-        ),
-        items: [
-          BottomSheetItem(
-            label: 'Удалить',
-            icon: Icons.delete_outline_rounded,
-            isDestructive: true,
-            onTap: () {
-              confirmed = intent.isCurrent;
-              navigator.pop();
-            },
-          ),
-          BottomSheetItem(
-            label: 'Отмена',
-            icon: Icons.close_rounded,
-            onTap: () => navigator.pop(),
-          ),
-        ],
-      );
-      if (!mounted || !confirmed || !intent.isCurrent) return;
-      final deleted = await notifier.deleteMessage(message.id, intent: intent);
-      // Successful deletion intentionally retires the selected-row predicate.
-      if (!mounted || !identical(lifetime, _messageMenuLifetime)) return;
-      if (!deleted && intent.isCurrent) {
-        GlazeToast.show(
-          context,
-          'Не удалось удалить сообщение. Обнови историю.',
-        );
-      }
-    } finally {
-      _sheetOpen = false;
-    }
   }
 
   @override
@@ -529,6 +456,13 @@ class _SupportAssistantScreenState
                       activeSend != null
                   ? null
                   : (message) => _modelUi.regenerate(emitter, message),
+              onRetry:
+                  emitter == null ||
+                      workspace.isBusy ||
+                      workspace.isLoading ||
+                      activeSend != null
+                  ? null
+                  : (message) => _modelUi.retry(emitter, message),
             ),
           ),
           SupportComposerBar(

@@ -501,6 +501,39 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
     }, ownsError: () => selected.isCurrent).then((_) => deleted);
   }
 
+  Future<bool> editUserMessage(
+    SupportMessageItem message,
+    String body, {
+    required SupportMessageDeletionIntent intent,
+  }) {
+    if (!identical(intent._notifier, this) ||
+        !identical(intent.message, message) ||
+        !intent.isCurrent ||
+        message.role != SupportMessageRole.user ||
+        message.isLocked ||
+        body.trim().isEmpty ||
+        body.length > 8192 ||
+        body == message.body)
+      return Future.value(false);
+    final owner = _owner, writes = _writes;
+    // The original response cannot finish against a question changed beneath it.
+    writes.invalidateMessage(message.sessionId, message.id);
+    var saved = false;
+    return _enqueue(owner, () async {
+      if (!intent.isCurrent) return;
+      final changed = await writes.enqueue(
+        () => owner.store.editSelectedUserMessage(
+          message,
+          body,
+          isCurrent: () => intent.isCurrent,
+        ),
+      );
+      saved = changed != null;
+      if (!saved || !_current(owner)) return;
+      await _reload(owner);
+    }, ownsError: () => intent.isCurrent).then((_) => saved);
+  }
+
   void _publishDurable(
     SupportWorkspaceLifecycle owner,
     SupportMessageItem message,

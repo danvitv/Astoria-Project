@@ -17,8 +17,10 @@ final class SupportAppActionContext {
     this.confirmation,
     this.navigation,
     this.sourceAccess,
+    this.sourceToolAccess,
     this.terminalRoot,
     this.domainRoot,
+    this.readOnlySources = false,
   });
 
   final String runId, sessionId;
@@ -28,8 +30,12 @@ final class SupportAppActionContext {
   final SupportAppConfirmationPort? confirmation;
   final SupportAppNavigationPort? navigation;
   final SupportAppSourceAccessPort? sourceAccess;
+
+  /// Finite MODEL source-tools only; never warms generic app/domain grants.
+  final SupportAppSourceAccessPort? sourceToolAccess;
   final SupportAppTerminalRootPort? terminalRoot;
   final SupportAppDomainRootPort? domainRoot;
+  final bool readOnlySources;
   SupportAppDomainCustody? _domainCustody;
   SupportAppDomainSourceLease? _domainSource;
   SupportAppConfirmationLease? _confirmation;
@@ -71,6 +77,23 @@ final class SupportAppActionContext {
         lease.current &&
         lease.request.current &&
         current;
+  }
+
+  /// Read-only custody for the exact body-read gesture. No setter, renewed
+  /// observation or generic approval: only the original source action qualifies.
+  SupportAppConfirmationLease? sourceReadConfirmation(Object observation) {
+    final lease = _confirmation;
+    if (lease == null ||
+        lease.request.action != 'astoria_source_read' ||
+        !identical(lease.request.context, this) ||
+        !identical(lease.request.observation, observation) ||
+        !current ||
+        !lease.current ||
+        !lease.request.current ||
+        !current) {
+      return null;
+    }
+    return lease;
   }
 
   Future<void> admitConnectionTerminal(

@@ -241,6 +241,46 @@ final class SupportModelScreenController extends ChangeNotifier {
     );
   }
 
+  /// Existing input only: does not read, clear or submit the composer draft.
+  void retry(SupportModelUiEmitter emitter, SupportMessageItem user) {
+    if (!_alive ||
+        _send != null ||
+        !identical(emitter, _emitter) ||
+        !emitter.isCurrent ||
+        user.isLocked ||
+        user.runId == null ||
+        user.role != SupportMessageRole.user ||
+        user.status != 'complete' ||
+        user.cards.isNotEmpty ||
+        user.sessionId != _session ||
+        _conversation.isEmpty ||
+        _conversation.last.id != user.id ||
+        _conversation.last.role != 'user') {
+      return;
+    }
+    refusal = SupportModelRefusal.none;
+    final send = _send = emitter.retry(
+      SupportModelMessage(
+        id: user.id,
+        sessionId: user.sessionId,
+        runId: user.runId!,
+        role: 'user',
+        status: user.status,
+        createdAt: user.createdAt.millisecondsSinceEpoch,
+        text: _conversation.last.text,
+      ),
+    );
+    _changed();
+    unawaited(
+      send.finished.then((result) {
+        if (!_owns(emitter, send)) return;
+        if (emitter.isCurrent) refusal = result.reason;
+        _send = null;
+        _changed();
+      }),
+    );
+  }
+
   void _changed() {
     if (!_alive || _queued) return;
     _queued = true;

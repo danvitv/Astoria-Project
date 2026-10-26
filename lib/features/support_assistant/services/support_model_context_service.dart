@@ -379,6 +379,11 @@ void _checkRecipeIdentifiers(
       reply.messageId,
       reply.runId,
     ],
+    for (final item
+        in recipe.toolDisclosures ?? const <SupportModelToolDisclosure>[]) ...[
+      item.sourceId,
+      ...item.orderedSourceIds,
+    ],
   ]) {
     if (_safeText(redactor, id, 128) != id) {
       _refuse(SupportModelRefusal.lineageUnavailable);
@@ -497,7 +502,7 @@ extension _ModelAdmission on _ModelRun {
             checkpoint,
           );
           if (user != durableUser) return false;
-          if (isRegeneration &&
+          if (isReattempt &&
               !await operation.checked(
                 () => operation.reader.validateRegenerationPosition(
                   reply: expected!.message,
@@ -515,6 +520,8 @@ extension _ModelAdmission on _ModelRun {
             () => operation.reader.getContextBlockById(expected!.provenance.id),
             checkpoint,
           );
+          if (!await sourceToolsRevalidate(checkpoint)) return false;
+          checkpoint();
           return reply == expected!.message &&
               provenance == expected!.provenance;
         } finally {

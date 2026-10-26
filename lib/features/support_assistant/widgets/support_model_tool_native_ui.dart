@@ -128,9 +128,12 @@ final class SupportModelToolNativeUi
                   ),
                   const SizedBox(width: 12),
                   Expanded(
+                    flex: request.action == 'astoria_source_read' ? 2 : 1,
                     child: GlazeActionButton(
                       key: const ValueKey('support_tool_confirmation_accept'),
-                      label: 'Применить',
+                      label: request.action == 'astoria_source_read'
+                          ? 'Прочитать и передать модели'
+                          : 'Применить',
                       icon: Icons.check_rounded,
                       onTap: () {
                         if (!open ||
@@ -164,7 +167,9 @@ final class SupportModelToolNativeUi
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                         child: Text(
-                          request.action.startsWith('astoria_connection_')
+                          request.action == 'astoria_source_read'
+                              ? 'Чтение источника для выбранной модели'
+                              : request.action.startsWith('astoria_connection_')
                               ? 'Изменение подключения'
                               : 'Изменение данных Astoria',
                           style: Theme.of(ctx).textTheme.titleMedium,
@@ -177,10 +182,12 @@ final class SupportModelToolNativeUi
                           ),
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: Text(
-                            'Действие: ${request.action}\nЦель: ${request.target}\n'
-                            'Аргументы: ${jsonEncode(request.arguments)}\n'
-                            'Последствия: ${jsonEncode(request.preview)}\n'
-                            '${request.action.startsWith('astoria_connection_') ? 'Ключ не вводится, активное подключение не выбирается, сеть не проверяется.' : 'Применяется только показанная операция и её последствия. Доступ к существующему приватному содержимому не выдаётся.'}',
+                            request.action == 'astoria_source_read'
+                                ? _sourceReadPreview(request)
+                                : 'Действие: ${request.action}\nЦель: ${request.target}\n'
+                                      'Аргументы: ${jsonEncode(request.arguments)}\n'
+                                      'Последствия: ${jsonEncode(request.preview)}\n'
+                                      '${request.action.startsWith('astoria_connection_') ? 'Ключ не вводится, активное подключение не выбирается, сеть не проверяется.' : 'Применяется только показанная операция и её последствия. Доступ к существующему приватному содержимому не выдаётся.'}',
                           ),
                         ),
                       ),
@@ -251,4 +258,24 @@ final class SupportModelToolNativeUi
     }
     _pending.clear();
   }
+}
+
+String _sourceReadPreview(SupportAppConfirmationRequest request) {
+  final p = request.preview;
+  return 'Источник: ${p['sourceLabel']}\n'
+      'Тип: ${p['kind'] == 'game' ? 'Игра — активная история' : 'Studio — CURRENT SAVED'}\n'
+      'Точный объём: ${p['extent']}\n'
+      'Выбрано: ${p['selectedCount']}; отступ от последних активных сообщений: ${p['activeMessageOffset']}\n'
+      'Точные выбранные записи: ${jsonEncode(p['orderedSourceIds'])}\n'
+      'Не включается: ${p['exclusions']}\n\n'
+      'Получатель: ${p['connection']}\nМодель: ${p['model']}\n'
+      'Протокол: ${p['protocol']}\nМаршрут: ${p['routing']}\n'
+      'Адрес получателя: ${p['origin']}\nОперация: ${p['operation']}\n\n'
+      'Кнопка разрешает одновременно локальное чтение только показанного объёма '
+      'и передачу полученного текста этой выбранной модели для исходного запроса. '
+      'Настройки и глобальные разрешения не меняются. Другие источники и будущие '
+      'запросы не разрешаются; повтор требует нового подтверждения. '
+      'Изменённый или неподдерживаемый источник будет отклонён без подстановки. '
+      'Studio показывает текущие сохранённые определения, не исторический собранный промпт '
+      'и не доказательство того, каким пресетом создан старый ответ.';
 }

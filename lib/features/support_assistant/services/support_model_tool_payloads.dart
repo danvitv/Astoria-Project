@@ -8,6 +8,8 @@ import '../../../core/llm/transport/native_tool_types.dart';
 final class SupportModelToolPayloads {
   final _copies = <(String, String, String), String>{};
   static const _reads = {
+    'astoria_sources_list',
+    'astoria_source_read',
     'astoria_preferences_read',
     'astoria_themes_list',
     'astoria_connections_list',
@@ -28,7 +30,8 @@ final class SupportModelToolPayloads {
   static bool isRead(String action) => _reads.contains(action);
 
   NativeToolResult project(NativeToolCall call, NativeToolResult result) {
-    if (!isRead(call.name) ||
+    if (call.name == 'astoria_source_read' ||
+        !isRead(call.name) ||
         result.content['ok'] != true ||
         result.content['effect'] != 'none') {
       return result;

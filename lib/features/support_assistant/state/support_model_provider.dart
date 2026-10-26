@@ -60,6 +60,8 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
     adapterFactory: adapterFactory,
     isOwnerCurrent: current,
     writes: custody,
+    // Exact source-consent integration is not yet an accepted end-to-end path.
+    // Keep it disconnected; retry/copy/edit must not wait for that delivery.
     // Resolve ONCE only after this original native saved source was prepared.
     // Legacy text-only fixtures never evaluate the application action graph.
     appActionsWithBackupFactory: native == null

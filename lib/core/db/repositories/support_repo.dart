@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import '../../models/support_models.dart';
 import '../../support/support_payload_cipher.dart';
 import '../app_db.dart';
+import 'support_source_text/support_source_json.dart';
 
 part 'support/support_row_mapper.dart';
 part 'support/support_session_store.dart';
@@ -22,6 +23,9 @@ part 'support/support_mutation_history_reader.dart';
 part 'support/support_mutation_history_types.dart';
 part 'support/support_compaction_store.dart';
 part 'support/support_reply_regeneration_store.dart';
+part 'support/support_user_edit_store.dart';
+part 'support/support_unanswered_user_store.dart';
+part 'support/support_reply_source_store.dart';
 
 /// Exact committed snapshots, retained only by the native run owner.
 typedef SupportReplyReservation = ({
@@ -101,6 +105,35 @@ class SupportRepo {
     required bool Function() isCurrent,
   }) => _messages.nativeInput.append(message, isCurrent);
 
+  /// Exact original-row observation; no DTO can reconstruct encrypted custody.
+  Future<SupportUserEditingObservation?> readUserForEditing({
+    required SupportMessage expectedUser,
+    required bool Function() isCurrent,
+  }) => _messages.replies.readUserForEditing(expectedUser, isCurrent);
+  Future<SupportMessage?> editUserMessage({
+    required SupportUserEditingObservation expected,
+    required String body,
+    required bool Function() isCurrent,
+  }) => _messages.replies.editUserMessage(expected, body, isCurrent);
+
+  /// Last COMPLETE native input only. Observation is not disclosure permission.
+  Future<SupportUnansweredUserObservation?> readUnansweredUser({
+    required SupportMessage expectedUser,
+    required bool Function() isCurrent,
+  }) => _messages.replies.readUnansweredUser(expectedUser, isCurrent);
+  Future<SupportReplyReservation?> reserveUnansweredReply({
+    required SupportUnansweredUserObservation expected,
+    required SupportMessage message,
+    required String provenanceJson,
+    required bool Function() isCurrent,
+  }) => _messages.replies.reserve(
+    message,
+    provenanceJson,
+    isCurrent,
+    originatingUser: expected.message,
+    unanswered: expected,
+  );
+
   /// Create-only preparing reply and dedicated inactive encrypted provenance.
   /// Null means refused/missing; cipher/storage failures throw without commits.
   /// Text/provenance must already be sanitized by the trusted caller.
@@ -163,6 +196,24 @@ class SupportRepo {
     String? body,
     required bool Function() isCurrent,
   }) => _messages.replies.settle(expected, status, body, isCurrent);
+
+  /// Exact pending-row observation for appending encrypted source metadata only.
+  Future<SupportReplySourceObservation?> readReplyForSourceExtension({
+    required SupportReplyReservation expected,
+    required SupportMessage originatingUser,
+    required bool Function() isCurrent,
+  }) => _messages.replies.readReplyForSourceExtension(
+    expected,
+    originatingUser,
+    isCurrent,
+  );
+
+  Future<SupportReplyReservation?> extendReplySources({
+    required SupportReplySourceObservation expected,
+    required String provenanceJson,
+    required bool Function() isCurrent,
+  }) =>
+      _messages.replies.extendReplySources(expected, provenanceJson, isCurrent);
 
   /// Fixed native LOCAL response only. Reuses the exact-user reservation and
   /// settlement port, adding its cards in the SAME outer transaction. A refusal

@@ -23,6 +23,7 @@ extension SupportModelNativeRegeneration on SupportModelService {
     required bool Function() isEmitterCurrent,
     required SupportModelMessage selectedReply,
     required List<SupportModelConversationMessage> visibleConversation,
+    SupportModelToolUiPorts? toolUi,
   }) {
     if (_active != null || _regenerationPending || _emissions.isNotEmpty) {
       return _rejectedSubmission(SupportModelRefusal.busy);
@@ -48,6 +49,7 @@ extension SupportModelNativeRegeneration on SupportModelService {
         isEmitterCurrent,
         selectedReply,
         List.unmodifiable(visibleConversation),
+        toolUi,
         accepted,
         prepared,
         finished,
@@ -66,6 +68,7 @@ extension SupportModelNativeRegeneration on SupportModelService {
     bool Function() isEmitterCurrent,
     SupportModelMessage selected,
     List<SupportModelConversationMessage> visible,
+    SupportModelToolUiPorts? toolUi,
     Completer<bool> accepted,
     Completer<SupportModelPreparation> prepared,
     Completer<SupportModelRunResult> finished,
@@ -179,6 +182,7 @@ extension SupportModelNativeRegeneration on SupportModelService {
         isEmitterCurrent,
         () => true,
         visible.take(input).toList(),
+        toolUi: toolUi,
       );
       if (!binding.current()) _refuse(SupportModelRefusal.stale);
       final run = _ModelRun(
@@ -242,6 +246,7 @@ extension _RegenerationSources on _ModelRun {
       directReplies: old.directReplies,
       currentConversationMessageIds: old.currentConversationMessageIds,
       compactedThroughMessageId: old.compactedThroughMessageId,
+      toolDisclosures: old.toolDisclosures,
     );
     if (SupportModelProvenanceCodec.encodeForEncryptedStorage(reattempt) !=
         SupportModelProvenanceCodec.encodeForEncryptedStorage(proposed)) {

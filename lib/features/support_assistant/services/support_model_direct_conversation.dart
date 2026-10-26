@@ -177,6 +177,17 @@ extension _DirectConversationRecipe on _ModelRun {
           ),
       ],
       currentConversationMessageIds: own.messageIds,
+      toolDisclosures:
+          SupportModelProvenanceCodec.retainToolDisclosuresForCachedInputs([
+            ...recipes.values,
+            if (isRegeneration)
+              SupportModelProvenanceCodec.decodeFromEncryptedStorage(
+                    regeneration!.provenance.protectedFactsJson,
+                  ).recipe ??
+                  (throw const SupportModelProvenanceException(
+                    SupportModelProvenanceFailure.unavailableRecipe,
+                  )),
+          ]),
     );
   }
 }

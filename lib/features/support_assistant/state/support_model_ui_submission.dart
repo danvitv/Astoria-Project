@@ -19,13 +19,24 @@ final class _ModelUiSubmission {
       }
       final SupportModelSubmission submission;
       final regeneration = send._regeneration;
-      if (regeneration != null) {
+      final retry = send._retry;
+      if (retry != null) {
+        submission = service.beginRetry(
+          controller: send._emitter._controller,
+          uiLifetime: send._emitter._uiLifetime,
+          isEmitterCurrent: () => send._publicationCurrent && !send._stopped,
+          selectedUser: retry,
+          visibleConversation: send._emitter._visibleConversation,
+          toolUi: send._emitter._toolUi,
+        );
+      } else if (regeneration != null) {
         submission = service.beginRegeneration(
           controller: send._emitter._controller,
           uiLifetime: send._emitter._uiLifetime,
           isEmitterCurrent: () => send._publicationCurrent && !send._stopped,
           selectedReply: regeneration,
           visibleConversation: send._emitter._visibleConversation,
+          toolUi: send._emitter._toolUi,
         );
       } else {
         final emission = await service.emitInput(

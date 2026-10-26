@@ -16,6 +16,7 @@ part 'support_text_context/session_history_boundary.dart';
 part 'support_text_context/roleplay_session_text_reader.dart';
 part 'support_text_context/support_session_text_reader.dart';
 part 'support_text_context/support_compacted_text_reader.dart';
+part 'support_source_text/guarded_roleplay_read.dart';
 
 /// Trusted native-only structural/identity check, NOT origin rights or egress
 /// approval. Must be pure, synchronous and bounded: no reads/writes/publication,

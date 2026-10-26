@@ -4,6 +4,7 @@ import '../models/support_model_provenance.dart';
 
 part 'support_model_provenance_json_scanner.dart';
 part 'support_model_provenance_graph_verifier.dart';
+part 'support_model_provenance_tool_retention.dart';
 
 /// Pure codec for dedicated encrypted provenance, not a general serializer.
 ///
@@ -14,6 +15,13 @@ part 'support_model_provenance_graph_verifier.dart';
 abstract final class SupportModelProvenanceCodec {
   static const marker = 'support.model_provenance';
   static const version = 1;
+
+  /// Retains historical disclosures on already selected own-chat cached inputs.
+  /// No body resolver, source reread, prompt range, current rights or approval.
+  /// Null preserves old v1/v2/v3 encoding when no selected recipe was v4.
+  static List<SupportModelToolDisclosure>? retainToolDisclosuresForCachedInputs(
+    List<SupportModelProvenance> selectedRecipes,
+  ) => _ProvenanceToolRetention.retain(selectedRecipes);
 
   /// Returns plaintext solely for the owning encrypted-storage write boundary.
   /// Does not encrypt. Never pass this record to model prompts or reports.
@@ -34,8 +42,14 @@ abstract final class SupportModelProvenanceCodec {
       final value = jsonDecode(encoded);
       final direct =
           value is Map<String, dynamic> &&
-          (value['version'] == 2 || value['version'] == 3);
-      final compacted = value is Map<String, dynamic> && value['version'] == 3;
+          (value['version'] == 2 ||
+              value['version'] == 3 ||
+              value['version'] == 4);
+      final toolAware = value is Map<String, dynamic> && value['version'] == 4;
+      final compacted =
+          value is Map<String, dynamic> &&
+          (value['version'] == 3 ||
+              (toolAware && value.containsKey('compactedThroughMessageId')));
       final root = _object(value, {
         'marker',
         'version',
@@ -47,12 +61,14 @@ abstract final class SupportModelProvenanceCodec {
         'directReplies',
         if (direct) 'currentConversationMessageIds',
         if (compacted) 'compactedThroughMessageId',
+        if (toolAware) 'toolDisclosures',
       });
       if (root['marker'] != marker ||
           root['version'] is! int ||
           (root['version'] != version &&
               root['version'] != 2 &&
-              root['version'] != 3)) {
+              root['version'] != 3 &&
+              root['version'] != 4)) {
         _reject(SupportModelProvenanceFailure.unsupportedFormat);
       }
       final ranges = _array(root['originalRanges']);
@@ -75,6 +91,12 @@ abstract final class SupportModelProvenanceCodec {
             : null,
         compactedThroughMessageId: compacted
             ? _string(root['compactedThroughMessageId'])
+            : null,
+        toolDisclosures: toolAware
+            ? [
+                for (final value in _array(root['toolDisclosures']))
+                  _disclosure(value),
+              ]
             : null,
       );
       return SupportModelProvenanceDecodeResult.valid(recipe);
@@ -194,6 +216,25 @@ SupportModelReplyReference _reference(Object? value) {
   );
 }
 
+SupportModelToolDisclosure _disclosure(Object? value) {
+  final item = _object(value, const {
+    'domain',
+    'sourceId',
+    'orderedSourceIds',
+    'snapshotDigest',
+  });
+  return SupportModelToolDisclosure(
+    domain: switch (item['domain']) {
+      'game' => SupportModelToolDisclosureDomain.game,
+      'studioPreset' => SupportModelToolDisclosureDomain.studioPreset,
+      _ => _reject(SupportModelProvenanceFailure.invalidSource),
+    },
+    sourceId: _string(item['sourceId']),
+    orderedSourceIds: _conversationIds(item['orderedSourceIds']),
+    snapshotDigest: _string(item['snapshotDigest']),
+  );
+}
+
 /// Appends only fixed syntax and bounded primitive strings. Refuses before the
 /// output buffer exceeds the raw cap, even for highly escaped identifier text.
 /// jsonEncode is called only on actual Strings, never on caller-owned objects.
@@ -205,7 +246,9 @@ final class _ProvenanceStorageWriter {
     _append('{"marker":');
     _text(SupportModelProvenanceCodec.marker);
     _append(
-      recipe.compactedThroughMessageId != null
+      recipe.toolDisclosures != null
+          ? ',"version":4,"supportSessionId":'
+          : recipe.compactedThroughMessageId != null
           ? ',"version":3,"supportSessionId":'
           : recipe.currentConversationMessageIds == null
           ? ',"version":1,"supportSessionId":'
@@ -258,6 +301,27 @@ final class _ProvenanceStorageWriter {
     if (recipe.compactedThroughMessageId != null) {
       _append(',"compactedThroughMessageId":');
       _text(recipe.compactedThroughMessageId!);
+    }
+    final disclosures = recipe.toolDisclosures;
+    if (disclosures != null) {
+      _append(',"toolDisclosures":[');
+      for (var i = 0; i < disclosures.length; i++) {
+        if (i != 0) _append(',');
+        final item = disclosures[i];
+        _append('{"domain":');
+        _text(item.domain.name);
+        _append(',"sourceId":');
+        _text(item.sourceId);
+        _append(',"orderedSourceIds":[');
+        for (var j = 0; j < item.orderedSourceIds.length; j++) {
+          if (j != 0) _append(',');
+          _text(item.orderedSourceIds[j]);
+        }
+        _append('],"snapshotDigest":');
+        _text(item.snapshotDigest);
+        _append('}');
+      }
+      _append(']');
     }
     _append('}');
     return buffer.toString();

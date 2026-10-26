@@ -9,6 +9,7 @@ import '../services/support_message_display_projection.dart';
 import '../state/support_model_run_view.dart';
 import 'support_card_view.dart';
 import 'support_plain_markdown.dart';
+import 'support_message_text.dart';
 
 /// Native, current-policy passive chat feed for Astoria Assistant.
 ///
@@ -24,6 +25,7 @@ class SupportMessageList extends ConsumerWidget {
   final ValueChanged<SupportGuidanceTarget>? onGuidance;
   final ValueChanged<SupportMessageItem>? onMessageMenu;
   final ValueChanged<SupportMessageItem>? onRegenerate;
+  final ValueChanged<SupportMessageItem>? onRetry;
   final double topPadding;
   final double bottomPadding;
   final SupportModelRunView run;
@@ -41,6 +43,7 @@ class SupportMessageList extends ConsumerWidget {
     this.onGuidance,
     this.onMessageMenu,
     this.onRegenerate,
+    this.onRetry,
     this.topPadding = 16,
     this.bottomPadding = 16,
     this.run = const SupportModelRunView(),
@@ -107,6 +110,17 @@ class SupportMessageList extends ConsumerWidget {
                     hasConfiguredModel &&
                     !run.busy
                 ? onRegenerate
+                : null,
+            onRetry:
+                index - headerCount == messages.length - 1 &&
+                    !message.isLocked &&
+                    message.runId != null &&
+                    message.role == SupportMessageRole.user &&
+                    message.status == 'complete' &&
+                    message.cards.isEmpty &&
+                    hasConfiguredModel &&
+                    !run.busy
+                ? onRetry
                 : null,
           ),
         );
@@ -225,6 +239,7 @@ class _SupportMessageBubble extends StatelessWidget {
   final ValueChanged<SupportGuidanceTarget>? onGuidance;
   final ValueChanged<SupportMessageItem>? onMessageMenu;
   final ValueChanged<SupportMessageItem>? onRegenerate;
+  final ValueChanged<SupportMessageItem>? onRetry;
   final SupportModelRunView run;
 
   const _SupportMessageBubble({
@@ -238,6 +253,7 @@ class _SupportMessageBubble extends StatelessWidget {
     this.onGuidance,
     this.onMessageMenu,
     this.onRegenerate,
+    this.onRetry,
     required this.run,
   });
 
@@ -341,6 +357,15 @@ class _SupportMessageBubble extends StatelessWidget {
                     onTap: () => onRegenerate!(message),
                   ),
                 ],
+                if (onRetry != null) ...[
+                  const SizedBox(height: 10),
+                  GlazeActionButton(
+                    key: ValueKey('support_retry_${message.id}'),
+                    label: 'Отправить повторно',
+                    icon: Icons.refresh_rounded,
+                    onTap: () => onRetry!(message),
+                  ),
+                ],
                 if (message.cards.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   for (final card in message.cards)
@@ -364,19 +389,5 @@ class _SupportMessageBubble extends StatelessWidget {
     );
   }
 
-  String get _bodyText {
-    final safe = display.project(message.body);
-    if (message.isLocked ||
-        message.role != SupportMessageRole.assistant ||
-        message.status != 'error' ||
-        safe.trim().isNotEmpty) {
-      return safe;
-    }
-    final reason = run.settledDiagnostic(message.runId, message.sessionId);
-    return reason.isNotEmpty
-        ? reason
-        : 'Модель не вернула текст ответа. Причина для сохранённого сообщения '
-              'недоступна. Можно перегенерировать последний ответ; действия приложения '
-              'при этом не повторяются.';
-  }
+  String get _bodyText => supportDisplayedMessageText(message, display, run);
 }

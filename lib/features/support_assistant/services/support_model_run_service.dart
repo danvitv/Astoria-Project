@@ -11,6 +11,7 @@ final class _ModelRun {
     this.isCompact = false,
     this.regeneration,
     this.regenerationUser,
+    this.unanswered,
   }) {
     for (final id in [userId, replyId, runId, sessionId]) {
       requireSupportPermissionId(id);
@@ -54,7 +55,10 @@ final class _ModelRun {
   final bool isCompact;
   final SupportReplyRegenerationObservation? regeneration;
   final SupportMessage? regenerationUser;
+  final SupportUnansweredUserObservation? unanswered;
   bool get isRegeneration => regeneration != null;
+  bool get isRetry => unanswered != null;
+  bool get isReattempt => isRegeneration || isRetry;
   String get inputRunId => regenerationUser?.runId ?? runId;
   SupportCompactionCheckpoint? checkpoint;
   bool compactInstalled = false;
@@ -62,6 +66,7 @@ final class _ModelRun {
   SupportAppActionRegistry? originalActions;
   SupportDatabaseBackupAdapter? originalBackup;
   bool toolsResolved = false;
+  _ModelSourceToolRun? originalSourceTools;
   String get sessionId => binding.sessionId;
   late final _ModelReadOperation operation;
   SupportTextContextRepo get history => operation.history;
@@ -164,17 +169,17 @@ final class _ModelRun {
           );
       if (user == null) _refuse(SupportModelRefusal.appendFailed);
       durableUser = user;
-      if (!isRegeneration) {
+      if (!isReattempt) {
         accepted = true;
         acceptance.complete(true); // Durable append, not transport success.
         publish(user);
       }
       operation.check();
-      var initial = isRegeneration
+      var initial = isReattempt
           ? await loadContext()
           : await loadManagedContext();
       operation.check();
-      if (!isRegeneration &&
+      if (!isReattempt &&
           binding.configuration.directConversation &&
           binding.configuration.settings.dcpCompressionEnabled &&
           _contextPressure(initial)) {
@@ -196,6 +201,21 @@ final class _ModelRun {
                 provenanceJson: provenance,
                 isCurrent: current,
               )
+            : isRetry
+            ? service._writer.reserveUnansweredReply(
+                expected: unanswered!,
+                message: SupportMessage(
+                  id: replyId,
+                  sessionId: sessionId,
+                  role: 'assistant',
+                  body: '',
+                  runId: runId,
+                  status: 'preparing',
+                  createdAt: service._now(),
+                ),
+                provenanceJson: provenance,
+                isCurrent: current,
+              )
             : service._writer.reserveOrderedReply(
                 message: SupportMessage(
                   id: replyId,
@@ -212,11 +232,11 @@ final class _ModelRun {
               ),
       );
       if (expected == null) _refuse(SupportModelRefusal.reservationFailed);
-      if (isRegeneration) {
+      if (isReattempt) {
         accepted = true;
         acceptance.complete(
           true,
-        ); // Only the atomic in-place claim is acceptance.
+        ); // Only the atomic assistant claim is reattempt acceptance.
         publish(expected!.message);
       }
       operation.check();
@@ -356,6 +376,7 @@ extension _ModelSettlement on _ModelRun {
     operation.close();
     // generateTools has joined any admitted file effect before settlement.
     originalBackup?.dispose();
+    originalSourceTools?.close();
     phase(SupportModelPhase.settling);
     SupportModelMessage? message;
     var saved = compactInstalled && isCompact;

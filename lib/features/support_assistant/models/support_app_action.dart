@@ -1,5 +1,6 @@
 import 'support_app_action_context.dart';
 import 'support_app_action_definition.dart';
+import '../../../core/llm/transport/native_tool_types.dart';
 
 export 'support_app_action_context.dart';
 export 'support_app_action_definition.dart';
@@ -74,4 +75,13 @@ abstract interface class SupportAppMetadataPolicy {
 /// strings. Metadata-only implementations remain valid and fail closed for bodies.
 abstract interface class SupportAppBodyMetadataPolicy {
   String? exactBodyText(String value, {required int maxLength});
+}
+
+/// Exact approved body outcome only. The original model source run implements
+/// this port; generic adapters and metadata policy cannot widen result strings.
+abstract interface class SupportAppSourceBodyResultPort {
+  bool acceptsSourceBodyOutcome(
+    NativeToolCall call,
+    SupportAppActionOutcome outcome,
+  );
 }

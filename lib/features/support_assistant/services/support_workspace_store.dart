@@ -420,6 +420,43 @@ class SupportWorkspaceStore {
     isCurrent: isCurrent,
   );
 
+  Future<SupportMessageItem?> editSelectedUserMessage(
+    SupportMessageItem message,
+    String body, {
+    required bool Function() isCurrent,
+  }) async {
+    final redactor = _redactor();
+    bool current() => isCurrent() && identical(redactor, _redactor());
+    if (!current() ||
+        message.isLocked ||
+        message.role != SupportMessageRole.user ||
+        message.status != 'complete' ||
+        message.cards.isNotEmpty ||
+        body.trim().isEmpty ||
+        body.length > 8192 ||
+        redactor.redactText(message.body) != message.body)
+      return null;
+    final observation = await repo.readUserForEditing(
+      expectedUser: db.SupportMessage(
+        id: message.id,
+        sessionId: message.sessionId,
+        role: 'user',
+        body: message.body,
+        runId: message.runId,
+        status: message.status,
+        createdAt: message.createdAt.millisecondsSinceEpoch,
+      ),
+      isCurrent: current,
+    );
+    if (observation == null || !current()) return null;
+    final saved = await repo.editUserMessage(
+      expected: observation,
+      body: redactor.redactText(body),
+      isCurrent: current,
+    );
+    return saved == null ? null : _message(saved);
+  }
+
   SupportMessageItem _message(db.SupportMessage m) => SupportMessageItem(
     id: m.id,
     sessionId: m.sessionId,

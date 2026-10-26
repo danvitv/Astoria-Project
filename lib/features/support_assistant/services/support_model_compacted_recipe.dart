@@ -206,6 +206,18 @@ extension _CompactedConversationRecipe on _ModelRun {
       ],
       currentConversationMessageIds: own.messageIds,
       compactedThroughMessageId: cp.endMessageId,
+      toolDisclosures:
+          SupportModelProvenanceCodec.retainToolDisclosuresForCachedInputs([
+            stored,
+            ...recipes.values,
+            if (isRegeneration)
+              SupportModelProvenanceCodec.decodeFromEncryptedStorage(
+                    regeneration!.provenance.protectedFactsJson,
+                  ).recipe ??
+                  (throw const SupportModelProvenanceException(
+                    SupportModelProvenanceFailure.unavailableRecipe,
+                  )),
+          ]),
     );
   }
 }

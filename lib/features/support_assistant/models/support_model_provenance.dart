@@ -13,9 +13,63 @@ abstract final class SupportModelProvenanceLimits {
   static const maxIdsPerSource = 512;
   static const maxSourceIdOccurrences = 4096;
   static const maxSelectedSupportMessages = 4096;
+  static const maxToolDisclosures = 16;
+  static const maxToolDisclosureIds = 16;
 }
 
 enum SupportModelSourceDomain { support, game }
+
+enum SupportModelToolDisclosureDomain { game, studioPreset }
+
+/// Historical approved tool INPUT metadata, not current source state or rights.
+/// The digest is private encrypted-storage data; never include it in a prompt.
+final class SupportModelToolDisclosure {
+  SupportModelToolDisclosure({
+    required this.domain,
+    required String sourceId,
+    required List<String> orderedSourceIds,
+    required String snapshotDigest,
+  }) : sourceId = _identifier(sourceId),
+       orderedSourceIds = _disclosureIds(orderedSourceIds),
+       snapshotDigest = _snapshotDigest(snapshotDigest) {
+    if (orderedSourceIds.length >
+            SupportModelProvenanceLimits.maxToolDisclosureIds ||
+        (domain == SupportModelToolDisclosureDomain.studioPreset &&
+            (orderedSourceIds.length != 1 ||
+                orderedSourceIds.single != sourceId))) {
+      _fail(SupportModelProvenanceFailure.invalidSource);
+    }
+  }
+  final SupportModelToolDisclosureDomain domain;
+  final String sourceId;
+  final List<String> orderedSourceIds;
+  final String snapshotDigest;
+  @override
+  String toString() => 'SupportModelToolDisclosure';
+}
+
+String _snapshotDigest(String value) {
+  if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(value)) {
+    _fail(SupportModelProvenanceFailure.invalidSource);
+  }
+  return value;
+}
+
+List<String> _disclosureIds(List<String> values) {
+  if (values.length > SupportModelProvenanceLimits.maxToolDisclosureIds) {
+    _fail(SupportModelProvenanceFailure.limitExceeded);
+  }
+  return _messageIds(values);
+}
+
+List<SupportModelToolDisclosure> _toolDisclosures(
+  List<SupportModelToolDisclosure> values,
+) {
+  if (values.length > SupportModelProvenanceLimits.maxToolDisclosures) {
+    _fail(SupportModelProvenanceFailure.limitExceeded);
+  }
+  return List<SupportModelToolDisclosure>.unmodifiable(values);
+}
 
 enum SupportModelSelectedRole { user, assistant, system, unknown }
 
@@ -79,7 +133,7 @@ final class SupportModelReplyReference {
   String toString() => 'SupportModelReplyReference';
 }
 
-/// Immutable v1 recipe for one support reply.
+/// Immutable v1-v4 recipe for one support reply.
 ///
 /// [currentUserMessageId] is the originating row's identity. Once this reply is
 /// used later, that row is a required HISTORICAL dependency. It never records
@@ -95,10 +149,14 @@ final class SupportModelProvenance {
     required List<SupportModelReplyReference> directReplies,
     List<String>? currentConversationMessageIds,
     String? compactedThroughMessageId,
+    List<SupportModelToolDisclosure>? toolDisclosures,
   }) : supportSessionId = _identifier(supportSessionId),
        replyMessageId = _identifier(replyMessageId),
        runId = _identifier(runId),
        currentUserMessageId = _identifier(currentUserMessageId),
+       toolDisclosures = toolDisclosures == null
+           ? null
+           : _toolDisclosures(toolDisclosures),
        originalRanges = _boundedCopy(originalRanges),
        directReplies = _boundedCopy(directReplies),
        compactedThroughMessageId = compactedThroughMessageId == null
@@ -115,6 +173,23 @@ final class SupportModelProvenance {
     if (compactedThroughMessageId != null &&
         currentConversationMessageIds == null) {
       _fail(SupportModelProvenanceFailure.invalidSource);
+    }
+    if (toolDisclosures != null) {
+      if (currentConversationMessageIds == null) {
+        _fail(SupportModelProvenanceFailure.invalidSource);
+      }
+      if (toolDisclosures.length >
+          SupportModelProvenanceLimits.maxToolDisclosures) {
+        _fail(SupportModelProvenanceFailure.limitExceeded);
+      }
+      final disclosures = <String>{};
+      for (final item in toolDisclosures) {
+        final identity =
+            '${item.domain.name}|${item.sourceId}|${item.snapshotDigest}';
+        if (!disclosures.add(identity)) {
+          _fail(SupportModelProvenanceFailure.invalidSource);
+        }
+      }
     }
     if (this.currentConversationMessageIds?.any(
           (id) => id == replyMessageId || id == currentUserMessageId,
@@ -159,6 +234,10 @@ final class SupportModelProvenance {
 
   /// v3 native checkpoint boundary. Not a grant, origin, or model instruction.
   final String? compactedThroughMessageId;
+
+  /// Non-null selects the explicit v4 shape (including an empty list).
+  /// Retained on cached answers; NOT originalRanges or foreign-body dependencies.
+  final List<SupportModelToolDisclosure>? toolDisclosures;
 
   @override
   String toString() => 'SupportModelProvenance';

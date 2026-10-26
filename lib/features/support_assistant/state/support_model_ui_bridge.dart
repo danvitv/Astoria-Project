@@ -146,6 +146,7 @@ final class SupportModelUiBridge {
     bool Function() isDraftCurrent, {
     bool compact = false,
     SupportModelMessage? regeneration,
+    SupportModelMessage? retry,
   }) {
     final capture = emitter._workspaceCapture;
     final ready = _workspace
@@ -160,6 +161,7 @@ final class SupportModelUiBridge {
       emitter._runtimeCurrent,
       compact: compact,
       regeneration: regeneration,
+      retry: retry,
     );
     if (!_current || !emitter._current || capture == null || !capture.current) {
       send._completeRefusal(SupportModelRefusal.stale);

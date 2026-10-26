@@ -55,6 +55,12 @@ abstract final class SupportModelNativeProvenanceValidator {
           reference.messageId,
           reference.runId,
         ],
+        for (final disclosure
+            in recipe.toolDisclosures ??
+                const <SupportModelToolDisclosure>[]) ...[
+          disclosure.sourceId,
+          ...disclosure.orderedSourceIds,
+        ],
       ]) {
         if (id.contains(SecretRedactor.removed) ||
             id.contains(SecretRedactor.limited) ||

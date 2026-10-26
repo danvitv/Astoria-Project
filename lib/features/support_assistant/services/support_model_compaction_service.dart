@@ -72,7 +72,7 @@ extension _ModelCompaction on _ModelRun {
     final messages = _coalesceSupportUsers(<SupportModelPreviewText>[
       SupportModelPreviewText(
         role: 'system',
-        text: isRegeneration
+        text: isReattempt && !hasNativeTools
             ? _supportRegenerationInstruction
             : hasNativeTools && question != null
             ? toolInstruction
@@ -252,6 +252,7 @@ extension _ModelCompaction on _ModelRun {
             .toList(),
         directReplies: const [],
         currentConversationMessageIds: const [],
+        toolDisclosures: plan.recipe.toolDisclosures,
       ),
     );
     final installed = await service._writes.enqueue(

@@ -183,12 +183,21 @@ final class _SupportGuardedReplyStore {
     String provenanceJson,
     bool Function() current, {
     SupportMessage? originatingUser,
+    SupportUnansweredUserObservation? unanswered,
   }) => _transaction(current, () async {
     _require(
       _reply(message) && message.status == 'preparing' && message.body.isEmpty,
     );
     _require(_text(provenanceJson) && provenanceJson.trim().isNotEmpty);
     final native = messages.nativeInput;
+    if (unanswered != null) {
+      _require(
+        originatingUser == unanswered.message &&
+            message.sessionId == unanswered.message.sessionId,
+      );
+      await _sameUnansweredUser(unanswered, current);
+      await _freshRetryRun(message.sessionId, message.runId!, current);
+    }
     SupportMessageRow? originRow;
     final floor = message.createdAt;
     final parent = originatingUser == null
@@ -205,7 +214,9 @@ final class _SupportGuardedReplyStore {
             native.time(parent.updatedAt) &&
             originatingUser.id != message.id &&
             originatingUser.sessionId == message.sessionId &&
-            originatingUser.runId == message.runId,
+            (unanswered == null
+                ? originatingUser.runId == message.runId
+                : originatingUser.runId != message.runId),
       );
       originRow = await native.matchUser(originatingUser, current);
       _requireCurrent(current);
@@ -280,6 +291,10 @@ final class _SupportGuardedReplyStore {
       );
       _requireCurrent(current);
     }
+    if (unanswered != null) {
+      await _sameUnansweredUser(unanswered, current);
+      await _freshRetryRun(message.sessionId, message.runId!, current);
+    }
     await _checked(db.into(db.supportMessages).insert(encrypted), current);
     await _checked(
       db
@@ -327,6 +342,13 @@ final class _SupportGuardedReplyStore {
             originRow,
       );
       _requireCurrent(current);
+    }
+    if (unanswered != null) {
+      await _sameUnansweredUser(
+        unanswered,
+        current,
+        excludingReply: message.id,
+      );
     }
     return (message: durable, provenance: provenance);
   });

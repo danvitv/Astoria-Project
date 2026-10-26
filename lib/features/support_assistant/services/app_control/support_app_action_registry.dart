@@ -53,6 +53,30 @@ final class SupportAppActionRegistry {
     return bound;
   }
 
+  /// Append only the two original-run private source definitions, preserving
+  /// the exact normal action owner and serialization gate.
+  SupportAppActionRegistry withNativeSources(SupportAppActionAdapter sources) {
+    final definitions = sources.definitions;
+    if (definitions.length != 2 ||
+        definitions[0].name != 'astoria_sources_list' ||
+        definitions[0].risk != SupportAppActionRisk.metadata ||
+        definitions[1].name != 'astoria_source_read' ||
+        definitions[1].risk != SupportAppActionRisk.bodyRead ||
+        definitions.any((d) => _actions.containsKey(d.name))) {
+      throw StateError('Not the finite native source definitions.');
+    }
+    final bound = SupportAppActionRegistry._bound(
+      metadata,
+      isOriginalOwnerCurrent,
+      _gate,
+    );
+    bound._actions.addAll(_actions);
+    for (final definition in definitions) {
+      bound._actions[definition.name] = (sources, definition);
+    }
+    return bound;
+  }
+
   List<NativeToolDefinition> get definitions =>
       List.unmodifiable(_actions.values.map((a) => a.$2.native));
 
@@ -60,6 +84,10 @@ final class SupportAppActionRegistry {
     NativeToolCall call,
     SupportAppActionContext context,
   ) async {
+    NativeToolResult result(
+      NativeToolCall call,
+      SupportAppActionOutcome outcome,
+    ) => _result(call, outcome, context);
     var ownerRetired = false;
     bool current() {
       if (ownerRetired || !context.current) return false;
@@ -95,23 +123,35 @@ final class SupportAppActionRegistry {
       if (!identitySafe) {
         throw const NativeToolException(NativeToolReason.denied);
       }
-      if (!current()) return _result(call, interrupted());
+      if (!current()) return result(call, interrupted());
+      // Reattempt safety is an execution-time allowlist, BEFORE preparation.
+      // DCP's isRead classification is not an authority boundary.
+      if (context.readOnlySources &&
+          !const {
+            'astoria_sources_list',
+            'astoria_source_read',
+          }.contains(call.name)) {
+        return result(
+          call,
+          SupportAppActionOutcome(SupportAppActionCode.denied),
+        );
+      }
       final registered = _actions[call.name];
       if (registered == null) {
-        return _result(
+        return result(
           call,
           SupportAppActionOutcome(SupportAppActionCode.unknownAction),
         );
       }
       final (adapter, definition) = registered;
       if (!definition.accepts(call.arguments)) {
-        return _result(
+        return result(
           call,
           SupportAppActionOutcome(SupportAppActionCode.invalidArguments),
         );
       }
       if (!_safeArguments(call.arguments, definition) || !current()) {
-        return _result(
+        return result(
           call,
           current()
               ? SupportAppActionOutcome(SupportAppActionCode.unsafeMetadata)
@@ -119,34 +159,51 @@ final class SupportAppActionRegistry {
         );
       }
       final risk = definition.risk;
+      final sourceAction = const {
+        'astoria_sources_list',
+        'astoria_source_read',
+      }.contains(call.name);
+      final sourceAccess = sourceAction
+          ? context.sourceToolAccess
+          : context.sourceAccess;
+      if ((context.readOnlySources &&
+              !const {
+                SupportAppActionRisk.metadata,
+                SupportAppActionRisk.bodyRead,
+              }.contains(risk)) ||
+          (sourceAction && sourceAccess == null)) {
+        return result(
+          call,
+          SupportAppActionOutcome(SupportAppActionCode.unavailable),
+        );
+      }
       if (risk == SupportAppActionRisk.reversiblePreference &&
           !context.allowReversibleChanges) {
-        return _result(
+        return result(
           call,
           SupportAppActionOutcome(SupportAppActionCode.denied),
         );
       }
-      if (risk == SupportAppActionRisk.bodyRead &&
-              context.sourceAccess == null ||
+      if (risk == SupportAppActionRisk.bodyRead && sourceAccess == null ||
           risk == SupportAppActionRisk.navigation &&
               context.navigation == null ||
           _needsConfirmation(risk) && context.confirmation == null) {
-        return _result(
+        return result(
           call,
           SupportAppActionOutcome(SupportAppActionCode.unavailable),
         );
       }
       final arguments = Map<String, Object?>.unmodifiable(call.arguments);
       final prepared = await adapter.prepare(call.name, arguments, context);
-      if (!current()) return _result(call, interrupted());
+      if (!current()) return result(call, interrupted());
       if (prepared == null) {
-        return _result(
+        return result(
           call,
           SupportAppActionOutcome(SupportAppActionCode.unavailable),
         );
       }
       if (!prepared.observationIsCurrent() || !current()) {
-        return _result(
+        return result(
           call,
           current()
               ? SupportAppActionOutcome(SupportAppActionCode.conflict)
@@ -156,7 +213,7 @@ final class SupportAppActionRegistry {
       SupportAppConfirmationLease? lease;
       if (_needsConfirmation(risk)) {
         if (!_safeJson(prepared.preview) || !current()) {
-          return _result(
+          return result(
             call,
             SupportAppActionOutcome(SupportAppActionCode.unsafeMetadata),
           );
@@ -172,9 +229,9 @@ final class SupportAppActionRegistry {
           preview: prepared.preview,
         );
         lease = await context.confirmation!.confirm(request);
-        if (!current()) return _result(call, interrupted());
+        if (!current()) return result(call, interrupted());
         if (lease == null || !lease.accept(request) || !current()) {
-          return _result(
+          return result(
             call,
             SupportAppActionOutcome(SupportAppActionCode.denied),
           );
@@ -183,7 +240,7 @@ final class SupportAppActionRegistry {
       bool admitted() =>
           current() && (lease == null || lease.current) && current();
       if (!prepared.observationIsCurrent() || !admitted()) {
-        return _result(
+        return result(
           call,
           admitted()
               ? SupportAppActionOutcome(SupportAppActionCode.conflict)
@@ -193,7 +250,7 @@ final class SupportAppActionRegistry {
       // Prepare/native confirmation callbacks may register further secrets.
       // Recheck executable arguments, never mask them or expand output access.
       if (!_safeArguments(arguments, definition) || !admitted()) {
-        return _result(
+        return result(
           call,
           admitted()
               ? SupportAppActionOutcome(SupportAppActionCode.unsafeMetadata)
@@ -206,7 +263,7 @@ final class SupportAppActionRegistry {
       // A known durable effect is not erased by Stop; no data/continuation is
       // published to a replacement run. Unknown completion is never retried.
       if (!current())
-        return _result(
+        return result(
           call,
           interrupted(
             effect,
@@ -214,8 +271,8 @@ final class SupportAppActionRegistry {
                 outcome.data['refreshPending'] == true,
           ),
         );
-      if (!_safeJson(outcome.data) || !current()) {
-        return _result(
+      if (!_safeOutcome(call, outcome, context) || !current()) {
+        return result(
           call,
           SupportAppActionOutcome(
             SupportAppActionCode.unsafeMetadata,
@@ -223,14 +280,14 @@ final class SupportAppActionRegistry {
           ),
         );
       }
-      return _result(call, outcome);
+      return result(call, outcome);
     } on SupportAppActionRefused catch (refusal) {
-      return _result(call, SupportAppActionOutcome(refusal.code));
+      return result(call, SupportAppActionOutcome(refusal.code));
     } catch (_) {
       if (!identitySafe) {
         throw const NativeToolException(NativeToolReason.denied);
       }
-      return _result(
+      return result(
         call,
         SupportAppActionOutcome(
           current()
@@ -297,21 +354,21 @@ final class SupportAppActionRegistry {
   bool _needsConfirmation(SupportAppActionRisk risk) => switch (risk) {
     SupportAppActionRisk.metadata ||
     SupportAppActionRisk.reversiblePreference ||
-    SupportAppActionRisk.navigation ||
-    SupportAppActionRisk.bodyRead => false,
+    SupportAppActionRisk.navigation => false,
     _ => true,
   };
 
   NativeToolResult _result(
     NativeToolCall call,
     SupportAppActionOutcome outcome,
+    SupportAppActionContext context,
   ) {
     // Native metadata reads can register new secrets after initial admission.
     if (metadata.exactText(call.id, maxLength: 128) != call.id ||
         metadata.exactText(call.name, maxLength: 64) != call.name) {
       throw const NativeToolException(NativeToolReason.denied);
     }
-    if (!_safeJson(outcome.data)) {
+    if (!_safeOutcome(call, outcome, context)) {
       outcome = SupportAppActionOutcome(
         SupportAppActionCode.unsafeMetadata,
         effect: outcome.effect,
@@ -353,6 +410,29 @@ final class SupportAppActionRegistry {
         'data': outcome.data,
       },
     );
+  }
+
+  bool _safeOutcome(
+    NativeToolCall call,
+    SupportAppActionOutcome outcome,
+    SupportAppActionContext context,
+  ) {
+    final port = context.sourceToolAccess;
+    if (call.name == 'astoria_source_read') {
+      if (port is SupportAppSourceBodyResultPort &&
+          identical(_actions[call.name]?.$1, port) &&
+          (port as SupportAppSourceBodyResultPort).acceptsSourceBodyOutcome(
+            call,
+            outcome,
+          ))
+        return true;
+      // Even a short body must not fall through the metadata string allowance
+      // after its original native approval/observation has retired.
+      return outcome.data.isEmpty &&
+          outcome.code != SupportAppActionCode.completed &&
+          outcome.code != SupportAppActionCode.noChange;
+    }
+    return _safeJson(outcome.data);
   }
 }
 

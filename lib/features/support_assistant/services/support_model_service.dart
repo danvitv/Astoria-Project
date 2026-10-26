@@ -14,6 +14,7 @@ import '../../../core/db/app_db.dart';
 import '../../../core/db/repositories/api_config_repo.dart';
 import '../../../core/db/repositories/support_repo.dart';
 import '../../../core/db/repositories/support_text_context_repo.dart';
+import '../../../core/db/repositories/support_source_text_repo.dart';
 import '../../../core/llm/transport/chat_transport_request.dart';
 import '../../../core/llm/native_saved_connection_source.dart';
 import '../../../core/llm/transport/native_provider_transport.dart';
@@ -28,6 +29,7 @@ import '../models/support_model_provenance.dart';
 import '../models/support_model_view.dart';
 import '../models/support_model_tool_ui_ports.dart';
 import '../models/support_app_action_context.dart';
+import '../models/support_app_action.dart';
 import '../models/support_permission_preferences.dart';
 import '../models/support_permission_provenance.dart';
 import '../models/support_permission_scope.dart';
@@ -60,6 +62,8 @@ part 'support_model_compaction_service.dart';
 part 'support_model_compacted_recipe.dart';
 part 'support_model_tool_loop.dart';
 part 'support_model_reply_regeneration.dart';
+part 'support_model_unanswered_retry.dart';
+part 'support_model_source_tool_run.dart';
 
 /// Native-only write scheduling seam; NEVER expose this service/scheduler to
 /// tools. HTTP and user-controlled preview are never enqueued here.
@@ -100,6 +104,7 @@ final class SupportModelService {
     SupportTextAdmissionContract? admissionContract,
     NativeToolTransport? toolTransport,
     SupportAppActionRegistry? appActions,
+    SupportSourceTextRepo? sourceRepo,
     SupportAppActionRegistry Function()? appActionsFactory,
     SupportAppActionRegistry Function(SupportDatabaseBackupAdapter)?
     appActionsWithBackupFactory,
@@ -125,6 +130,7 @@ final class SupportModelService {
        _admissionContract = admissionContract,
        _toolTransport = toolTransport,
        _appActions = appActions,
+       _sourceRepo = sourceRepo,
        _appActionsFactory = appActionsFactory,
        _appActionsWithBackupFactory = appActionsWithBackupFactory,
        _newId = newId ?? generateId,
@@ -161,6 +167,7 @@ final class SupportModelService {
   final SupportTextAdmissionContract? _admissionContract;
   final NativeToolTransport? _toolTransport;
   final SupportAppActionRegistry? _appActions;
+  final SupportSourceTextRepo? _sourceRepo;
   final SupportAppActionRegistry Function()? _appActionsFactory;
   final SupportAppActionRegistry Function(SupportDatabaseBackupAdapter)?
   _appActionsWithBackupFactory;
