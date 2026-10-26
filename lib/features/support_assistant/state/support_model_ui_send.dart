@@ -108,6 +108,7 @@ final class SupportModelUiSend {
   SupportModelApproval? _approval;
   SupportModelMessage? _reply;
   String? _runId;
+  List<SupportModelToolActivity> _toolActivities = const [];
   bool _accepted = false, _stopped = false, _dispatched = false;
 
   Future<bool> get accepted => _acceptance.future;

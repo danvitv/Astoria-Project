@@ -5,7 +5,15 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/credentials/secret_redactor.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
+import 'package:glaze_flutter/core/db/repositories/chat_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/studio_preset_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/support_source_text_repo.dart';
+import 'package:glaze_flutter/core/llm/studio/studio_context.dart';
+import 'package:glaze_flutter/core/models/card_rewriter_settings.dart';
+import 'package:glaze_flutter/core/models/chat_message.dart';
+import 'package:glaze_flutter/core/models/cleaner_settings.dart';
+import 'package:glaze_flutter/core/models/ledger_settings.dart';
+import 'package:glaze_flutter/core/models/studio_config.dart';
 
 import 'helpers/support_source_text_native_fixture.dart';
 import 'helpers/support_text_context_fixture.dart';
@@ -17,6 +25,13 @@ final class _Authority implements SupportSourceReadAuthority {
   bool current = true;
   @override
   bool get isCurrent => current;
+}
+
+final class _UnformattableSourceFailure {
+  const _UnformattableSourceFailure();
+  @override
+  String toString() =>
+      throw StateError('Synthetic error must not be formatted');
 }
 
 /// Hold the original SELECT result after the native executor has completed,
@@ -79,6 +94,89 @@ void main() {
     );
     return repo.observe(entry: entry, isCurrent: () => true);
   }
+
+  Future<SupportSourceObservation> studio() async {
+    final page = await repo.catalog(
+      domain: SupportSourceDomain.studioPreset,
+      isCurrent: () => true,
+    );
+    return repo.observe(entry: page.entries.single, isCurrent: () => true);
+  }
+
+  Future<StudioPresetRepo> saveCanonicalStudio() async {
+    final writer = StudioPresetRepo(f.db);
+    await writer.upsert(
+      const StudioPreset(
+        id: 'synthetic-canonical-studio',
+        name: 'Synthetic canonical Studio',
+        blocks: [
+          StudioPresetBlock(
+            id: 'synthetic-instruction',
+            title: 'Synthetic instruction',
+            content: 'SYNTHETIC_CANONICAL_INSTRUCTION',
+            section: '',
+            injectionPoint: 'final',
+            insertionMode: 'depth',
+            depth: 2,
+            appendToLastMessage: true,
+          ),
+          StudioPresetBlock(
+            id: 'synthetic-context',
+            type: StudioBlockType.context,
+            contextSlot: StudioContextSlot.characterCard,
+            section: '',
+          ),
+          StudioPresetBlock(
+            id: 'synthetic-history',
+            type: StudioBlockType.history,
+            section: '',
+          ),
+          StudioPresetBlock(
+            id: 'synthetic-briefs',
+            type: StudioBlockType.priorBriefs,
+            section: '',
+          ),
+        ],
+        agents: [
+          StudioAgent(id: 'final', controllerId: 'final', specId: 'final'),
+          StudioAgent(
+            id: 'continuity',
+            controllerId: 'continuity',
+            specId: 'continuity',
+            order: 1,
+          ),
+        ],
+        agentEnabled: {'final': true, 'continuity': true},
+        agentBlockRestoreState: {
+          'continuity': ['synthetic-instruction'],
+        },
+        controllerAlternativeBlockIds: {
+          'continuity': ['synthetic-instruction'],
+        },
+        expensiveApiConfigId: 'synthetic-expensive-api',
+        cheapApiConfigId: 'synthetic-cheap-api',
+        cleanerApiConfigId: 'synthetic-cleaner-api',
+        ledgerApiConfigId: 'synthetic-ledger-api',
+        runtime: StudioRuntimeSettings(
+          cleaner: CleanerSettings(
+            postCleanerStyleInstructions: 'SYNTHETIC_CLEANER_INSTRUCTION',
+          ),
+          ledger: LedgerSettings(),
+          cardRewriter: CardRewriterSettings(),
+          broadcastBlocks: ['synthetic-instruction'],
+        ),
+        updatedAt: 7,
+      ),
+    );
+    return writer;
+  }
+
+  Matcher sourceFailure(SupportSourceReadFailure failure) =>
+      isA<SupportSourceReadException>().having(
+        (error) => error.failure,
+        'safe refusal category',
+        failure,
+      );
 
   sourceTest(
     'catalog and exact observation never return body, decrypt, or hydrate',
@@ -232,6 +330,104 @@ void main() {
   );
 
   sourceTest(
+    'actual ChatRepo serializer admits plain, swipe and cleaned active text only',
+    () async {
+      await ChatRepo(f.db).put(
+        const ChatSession(
+          id: SupportTextContextFixture.roleplayId,
+          characterId: 'synthetic-character',
+          sessionIndex: 0,
+          messages: [
+            ChatMessage(
+              id: 'serialized-user',
+              role: 'user',
+              content: 'SYNTHETIC_SERIALIZED_USER',
+              imagePath: SupportTextContextFixture.attachment,
+            ),
+            ChatMessage(
+              id: 'serialized-plain',
+              role: 'assistant',
+              content: 'SYNTHETIC_SERIALIZED_PLAIN',
+            ),
+            ChatMessage(
+              id: 'serialized-swipe',
+              role: 'assistant',
+              content: 'SYNTHETIC_SERIALIZED_SWIPE',
+              swipeId: 1,
+              swipes: [
+                SupportTextContextFixture.unselected,
+                'SYNTHETIC_SERIALIZED_SWIPE',
+              ],
+            ),
+            ChatMessage(
+              id: 'serialized-cleaned',
+              role: 'assistant',
+              content: 'SYNTHETIC_SERIALIZED_CLEANED',
+              swipes: [SupportTextContextFixture.unselected],
+              reasoning: SupportTextContextFixture.reasoning,
+              agentSwipeId: 1,
+              agentSwipes: [
+                AgentSwipe(content: SupportTextContextFixture.unselected),
+                AgentSwipe(
+                  content: 'SYNTHETIC_SERIALIZED_CLEANED',
+                  kind: 'cleaned',
+                  reasoning: SupportTextContextFixture.reasoning,
+                ),
+              ],
+              swipesMeta: [
+                {'rawPrompt': SupportTextContextFixture.card},
+              ],
+            ),
+          ],
+          updatedAt: 7,
+        ),
+      );
+      f.observe();
+      final observation = await game();
+      expect(observation.orderedSourceIds, [
+        'serialized-user',
+        'serialized-plain',
+        'serialized-swipe',
+        'serialized-cleaned',
+      ]);
+      expect(
+        jsonEncode(f.spy.values),
+        isNot(contains('SYNTHETIC_SERIALIZED_')),
+      );
+      final authority = _Authority(observation);
+      final snapshot = await repo.read(
+        observation: observation,
+        authority: authority,
+      );
+      final wire = await repo.toolResult(
+        snapshot: snapshot,
+        authority: authority,
+      );
+      final result = jsonDecode(wire) as Map;
+      expect(
+        (result['messages'] as List).map((m) => (m as Map)['text']).toList(),
+        [
+          'SYNTHETIC_SERIALIZED_USER',
+          'SYNTHETIC_SERIALIZED_PLAIN',
+          'SYNTHETIC_SERIALIZED_SWIPE',
+          'SYNTHETIC_SERIALIZED_CLEANED',
+        ],
+      );
+      for (final canary in [
+        SupportTextContextFixture.unselected,
+        SupportTextContextFixture.reasoning,
+        SupportTextContextFixture.attachment,
+        SupportTextContextFixture.card,
+      ]) {
+        expect(wire, isNot(contains(canary)));
+      }
+      expect(f.primitive.decryptAads, isEmpty);
+      expect(f.storage.operations, isEmpty);
+      expect(f.spy.writes, 0);
+    },
+  );
+
+  sourceTest(
     'changed raw active text refuses even if redaction hides the change',
     () async {
       const otherSecret = 'SYNTHETIC_HISTORY_SECRET_9c21';
@@ -265,7 +461,7 @@ void main() {
       );
       await expectLater(
         repo.toolResult(snapshot: snapshot, authority: exact),
-        throwsA(isA<SupportSourceReadException>()),
+        throwsA(sourceFailure(SupportSourceReadFailure.changed)),
       );
     },
   );
@@ -312,7 +508,7 @@ void main() {
       ]);
       await expectLater(
         repo.read(observation: observation, authority: _Authority(observation)),
-        throwsA(isA<SupportSourceReadException>()),
+        throwsA(sourceFailure(SupportSourceReadFailure.changed)),
       );
     },
   );
@@ -406,8 +602,141 @@ void main() {
       expect(observation.textBytes, 60000);
       await expectLater(
         repo.read(observation: observation, authority: _Authority(observation)),
-        throwsA(isA<SupportSourceReadException>()),
+        throwsA(sourceFailure(SupportSourceReadFailure.tooLarge)),
       );
+    },
+  );
+
+  sourceTest(
+    'actual StudioPresetRepo serializer roundtrips every configured saved lane exactly',
+    () async {
+      await saveCanonicalStudio();
+      final saved = await f.db.select(f.db.studioPresetRows).getSingle();
+      f.observe();
+      final observation = await studio();
+      for (final text in [
+        'SYNTHETIC_CANONICAL_INSTRUCTION',
+        'SYNTHETIC_CLEANER_INSTRUCTION',
+      ]) {
+        expect(jsonEncode(f.spy.values), isNot(contains(text)));
+      }
+      final authority = _Authority(observation);
+      final snapshot = await repo.read(
+        observation: observation,
+        authority: authority,
+      );
+      final result =
+          jsonDecode(
+                await repo.toolResult(snapshot: snapshot, authority: authority),
+              )
+              as Map;
+      expect(result['definition'], {
+        'blocks': jsonDecode(saved.blocksJson),
+        'agents': jsonDecode(saved.agentsJson),
+        'agentEnabled': jsonDecode(saved.agentEnabledJson),
+        'runtime': jsonDecode(saved.runtimeSettingsJson),
+        'maxFinalHistoryMessages': saved.maxFinalHistoryMessages,
+        'executionMode': saved.executionMode,
+        'expensiveApiConfigId': saved.expensiveApiConfigId,
+        'cheapApiConfigId': saved.cheapApiConfigId,
+        'cleanerApiConfigId': saved.cleanerApiConfigId,
+        'ledgerApiConfigId': saved.ledgerApiConfigId,
+      });
+      expect(f.db.nativeDataSourceIdentity?.belongsTo(f.db), isTrue);
+      expect(f.primitive.decryptAads, isEmpty);
+      expect(f.storage.operations, isEmpty);
+      expect(f.spy.writes, 0);
+    },
+  );
+
+  sourceTest(
+    'actual native Studio toggle restoration map remains exact saved configuration',
+    () async {
+      final writer = await saveCanonicalStudio();
+      final expected = (await writer.controlObserve(
+        'synthetic-canonical-studio',
+      ))!;
+      expect(
+        await writer.controlAgentToggle(
+          expected: expected,
+          toggled: expected.copyWith(
+            agentEnabled: {'final': true, 'continuity': false},
+            agentEnabledBeforeDependencyOff: {'continuity': true},
+          ),
+          timestamp: 8,
+          current: () => true,
+        ),
+        isTrue,
+      );
+      final saved = await f.db.select(f.db.studioPresetRows).getSingle();
+      final savedRuntime = jsonDecode(saved.runtimeSettingsJson) as Map;
+      expect(savedRuntime['agentEnabledBeforeDependencyOff'], {
+        'continuity': true,
+      });
+      f.observe();
+      final observation = await studio();
+      final authority = _Authority(observation);
+      final snapshot = await repo.read(
+        observation: observation,
+        authority: authority,
+      );
+      final result =
+          jsonDecode(
+                await repo.toolResult(snapshot: snapshot, authority: authority),
+              )
+              as Map;
+      expect((result['definition'] as Map)['runtime'], savedRuntime);
+      expect((result['definition'] as Map)['agentEnabled'], {
+        'final': true,
+        'continuity': false,
+      });
+      expect(f.primitive.decryptAads, isEmpty);
+      expect(f.storage.operations, isEmpty);
+      expect(f.spy.writes, 0);
+    },
+  );
+
+  sourceTest(
+    'actual raw Studio seed dialect is preserved without canonicalization or macro execution',
+    () async {
+      // Exercise every actual seed record shape, with synthetic authored text.
+      // Production onCreate uses the same jsonEncode of raw seed maps. The
+      // fixture is deliberately small, not a clipped read of a large preset.
+      final blocks = [
+        for (final block in defaultStudioPresetSeedBlocks())
+          {
+            ...block,
+            'content': 'SYNTHETIC_SEED_${block['id']} {{description}}',
+          },
+      ];
+      await f.db
+          .into(f.db.studioPresetRows)
+          .insert(
+            StudioPresetRowsCompanion.insert(
+              presetId: 'synthetic-raw-seed',
+              name: 'Synthetic raw seed',
+              blocksJson: Value(jsonEncode(blocks)),
+            ),
+          );
+      f.observe();
+      final observation = await studio();
+      expect(jsonEncode(f.spy.values), isNot(contains('SYNTHETIC_SEED_')));
+      final authority = _Authority(observation);
+      final snapshot = await repo.read(
+        observation: observation,
+        authority: authority,
+      );
+      final wire = await repo.toolResult(
+        snapshot: snapshot,
+        authority: authority,
+      );
+      final result = jsonDecode(wire) as Map;
+      expect((result['definition'] as Map)['blocks'], blocks);
+      expect(wire, contains('{{description}}'));
+      expect(wire, isNot(contains(SupportTextContextFixture.card)));
+      expect(f.primitive.decryptAads, isEmpty);
+      expect(f.storage.operations, isEmpty);
+      expect(f.spy.writes, 0);
     },
   );
 
@@ -472,6 +801,10 @@ void main() {
     '[{"id":"a","type":"instruction","content":"x","futureCode":"x"}]',
     '[{"id":"a","id":"b","type":"instruction","content":"x"}]',
     '[{"id":"a","type":"instruction","content":"x","locked":true}]',
+    '[{"id":"a","name":"Synthetic seed","kind":"future_code","content":"x"}]',
+    '[{"id":"a","name":"Synthetic seed","kind":"instruction","content":"x","futureCode":"x"}]',
+    '[{"id":"a","name":"Synthetic seed","kind":"instruction","content":"x","locked":true}]',
+    '[{"id":"a","name":"Synthetic seed","kind":"instruction","kind":"custom_text","content":"x"}]',
     'not-json',
   ]) {
     sourceTest(
@@ -499,7 +832,55 @@ void main() {
             observation: observation,
             authority: _Authority(observation),
           ),
-          throwsA(isA<SupportSourceReadException>()),
+          throwsA(
+            sourceFailure(
+              bad.contains('"locked":true')
+                  ? SupportSourceReadFailure.locked
+                  : SupportSourceReadFailure.unsupportedFormat,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  for (final bad in [
+    'null',
+    '[]',
+    '{"continuity":1}',
+    '{"invalid id":true}',
+    '{"continuity":true,"continuity":false}',
+  ]) {
+    sourceTest(
+      'malformed native Studio toggle state refuses whole source: $bad',
+      () async {
+        await f.db
+            .into(f.db.studioPresetRows)
+            .insert(
+              StudioPresetRowsCompanion.insert(
+                presetId: 'synthetic-bad-toggle-state',
+                name: 'Synthetic bad toggle state',
+                blocksJson: const Value(
+                  '[{"id":"a","type":"instruction","content":"SYNTHETIC_REFUSED_BODY"}]',
+                ),
+                runtimeSettingsJson: Value(
+                  '{"agentEnabledBeforeDependencyOff":$bad}',
+                ),
+              ),
+            );
+        final observation = await studio();
+        await expectLater(
+          repo.read(
+            observation: observation,
+            authority: _Authority(observation),
+          ),
+          throwsA(sourceFailure(SupportSourceReadFailure.unsupportedFormat)),
+        );
+        expect(
+          const SupportSourceReadException(
+            failure: SupportSourceReadFailure.unsupportedFormat,
+          ).toString(),
+          'Support source unavailable.',
         );
       },
     );
@@ -532,17 +913,57 @@ void main() {
       );
       await expectLater(
         repo.observe(entry: page.entries.single, isCurrent: () => true),
-        throwsA(isA<SupportSourceReadException>()),
+        throwsA(sourceFailure(SupportSourceReadFailure.tooLarge)),
       );
       expect(f.spy.values, isNotEmpty);
       expect(jsonEncode(f.spy.values), isNot(contains('blocks_json')));
       f.stopObserving();
       await f.replaceRoleplayJson('{"invalid":"source"}');
-      await expectLater(game(), throwsA(isA<SupportSourceReadException>()));
+      await expectLater(
+        game(),
+        throwsA(sourceFailure(SupportSourceReadFailure.unsupportedFormat)),
+      );
       await f.replaceRoleplay([
         {...SupportTextContextFixture.message('locked'), 'isLocked': true},
       ]);
       await expectLater(game(), throwsA(isA<SupportSourceReadException>()));
+    },
+  );
+
+  sourceTest(
+    'safe not-found and unknown-failure categories retain no private error details',
+    () async {
+      final page = await repo.catalog(
+        domain: SupportSourceDomain.game,
+        isCurrent: () => true,
+      );
+      final entry = page.entries.singleWhere(
+        (e) => e.sourceId == SupportTextContextFixture.roleplayId,
+      );
+      await (f.db.delete(f.db.chatSessions)..where(
+            (t) => t.sessionId.equals(SupportTextContextFixture.roleplayId),
+          ))
+          .go();
+      f.observe();
+      await expectLater(
+        repo.observe(entry: entry, isCurrent: () => true),
+        throwsA(sourceFailure(SupportSourceReadFailure.notFound)),
+      );
+      f.spy.selectError = const _UnformattableSourceFailure();
+      await expectLater(
+        repo.catalog(domain: SupportSourceDomain.game, isCurrent: () => true),
+        throwsA(sourceFailure(SupportSourceReadFailure.unavailable)),
+      );
+      for (final failure in SupportSourceReadFailure.values) {
+        expect(
+          SupportSourceReadException(failure: failure).toString(),
+          'Support source unavailable.',
+        );
+      }
+      expect(f.spy.values.any((row) => row.containsKey('body')), isFalse);
+      expect(f.primitive.decryptAads, isEmpty);
+      expect(f.storage.operations, isEmpty);
+      expect(f.spy.writes, 0);
     },
   );
 

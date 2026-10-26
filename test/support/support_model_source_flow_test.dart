@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart' hide expect;
 import 'package:glaze_flutter/core/db/app_db.dart';
+import 'package:glaze_flutter/core/db/repositories/api_config_repo.dart';
 import 'package:glaze_flutter/core/models/support_models.dart';
 import 'package:glaze_flutter/features/settings/app_settings_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/models/support_model_provenance.dart';
@@ -93,6 +94,205 @@ final class _StopAfterSourceCommit extends QueryInterceptor {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  // Reuse the already-isolated FILE-owner graph for generic native confirmation;
+  // the old configuration-only fixture cannot bootstrap the current domain graph.
+  backupLoopTest(
+    'MODEL journal forwards exact generic confirmation for connection create',
+    (tester, f) async {
+      final loop = SourceLoop(f);
+      final ui = loop.nativeUi(tester);
+      const name = 'Journal synthetic connection';
+      final before = await backupLoopReal(
+        tester,
+        f.native.apiRepo.getConfigIds,
+      );
+      loop.script(
+        SourceLoop.call('astoria_connection_create', {
+          'template': 'openaiChat',
+          'model': 'synthetic-model',
+          'name': name,
+          'maxTokens': 2048,
+          'contextSize': 16384,
+          'temperature': 0.3,
+        }, id: 'journal_connection'),
+        rounds: 1,
+      );
+      try {
+        final send = await backupLoopReal(
+          tester,
+          () => loop
+              .emitter(tester, ui: ui)
+              .send(
+                text: 'Создай API-конфигурацию после моего подтверждения.',
+                draftRevision: 1,
+                isDraftCurrent: () => true,
+              ),
+        );
+        final signal = BackupLoopSignal(send.finished);
+        await loop.modal(tester);
+        expect(f.bridge.view.toolActivities, hasLength(1));
+        expect(
+          f.bridge.view.toolActivities.single.action,
+          'astoria_connection_create',
+        );
+        expect(
+          f.bridge.view.toolActivities.single.stage,
+          SupportModelToolStage.confirmation,
+        );
+        expect(find.text('Применить'), findsOneWidget);
+        expect(
+          await backupLoopReal(tester, f.native.apiRepo.getConfigIds),
+          before,
+        );
+        await loop.apply(tester);
+        final result = await loop.join(tester, signal);
+        expect(result.saved, isTrue);
+        expect(result.message!.text, contains('изменение сохранено'));
+        expect(f.wire, hasLength(1));
+        final after = await backupLoopReal(
+          tester,
+          f.native.apiRepo.getConfigIds,
+        );
+        final id = after.singleWhere((id) => !before.contains(id));
+        final saved = await backupLoopReal(
+          tester,
+          () => f.native.apiRepo.inspectKeyless(id),
+        );
+        expect(saved!.view.displayName, name);
+        expect(saved.view.maxTokens, 2048);
+        expect(after.length, before.length + 1);
+        loop.noBody();
+      } finally {
+        ui.dispose();
+      }
+    },
+  );
+
+  backupLoopTest(
+    'MODEL two catalogs then two approved reads in one turn accepts saved seed and toggle dialects',
+    (tester, f) async {
+      await seedModelSources(tester, f);
+      final loop = SourceLoop(f);
+      await backupLoopReal(tester, () async {
+        await (f.native.db.update(
+          f.native.db.studioPresetRows,
+        )..where((t) => t.presetId.equals(sourceStudio))).write(
+          StudioPresetRowsCompanion(
+            blocksJson: Value(
+              jsonEncode([
+                {
+                  'id': 'seed-block',
+                  'name': 'Saved seed text',
+                  'kind': 'custom_text',
+                  'content': '${sourceStudioBody}RAW_SAVED_SEED',
+                  'locked': false,
+                },
+              ]),
+            ),
+            runtimeSettingsJson: const Value(
+              '{"version":1,"broadcastBlocks":[],"agentEnabledBeforeDependencyOff":{"continuity":true}}',
+            ),
+          ),
+        );
+      });
+      Map<String, Object?> batch(
+        Map<String, Object?> first,
+        Map<String, Object?> second,
+      ) {
+        final message =
+            ((first['choices'] as List).single as Map)['message'] as Map;
+        final other =
+            ((second['choices'] as List).single as Map)['message'] as Map;
+        (message['tool_calls'] as List).addAll(other['tool_calls'] as List);
+        return first;
+      }
+
+      Map<String, dynamic> dataFor(String id) {
+        final messages = f.wire.last['messages'] as List;
+        final message = messages.cast<Map<dynamic, dynamic>>().lastWhere(
+          (m) => m['role'] == 'tool' && m['tool_call_id'] == id,
+        );
+        final result = jsonDecode(message['content'] as String) as Map;
+        expect(result['ok'], isTrue);
+        return Map<String, dynamic>.from(result['data'] as Map);
+      }
+
+      loop.script(
+        batch(
+          loop.list('game', 'batch_game_list'),
+          loop.list('studioPreset', 'batch_studio_list'),
+        ),
+        rounds: 3,
+        next: (round) {
+          if (round == 2) {
+            final games = (dataFor('batch_game_list')['entries'] as List)
+                .cast<Map<dynamic, dynamic>>();
+            final studios = (dataFor('batch_studio_list')['entries'] as List)
+                .cast<Map<dynamic, dynamic>>();
+            return batch(
+              loop.read(
+                games.firstWhere(
+                      (e) => e['label'] == 'Отель Петербург',
+                    )['opaqueHandle']
+                    as String,
+                'batch_game_read',
+              ),
+              loop.read(
+                studios.singleWhere(
+                      (e) => e['activeAtListing'] == true,
+                    )['opaqueHandle']
+                    as String,
+                'batch_studio_read',
+              ),
+            );
+          }
+          expect(
+            dataFor('batch_game_read')['sourceText'],
+            contains(sourceGameBody),
+          );
+          final studio =
+              jsonDecode(dataFor('batch_studio_read')['sourceText'] as String)
+                  as Map;
+          expect(studio['state'], 'CURRENT SAVED');
+          expect(jsonEncode(studio), contains('RAW_SAVED_SEED'));
+          expect(
+            jsonEncode(studio),
+            contains('agentEnabledBeforeDependencyOff'),
+          );
+          return SourceLoop.answer('Compared both approved saved sources.');
+        },
+      );
+      await loop.start(tester);
+      loop.noBody();
+      expect(f.bridge.view.toolActivities.map((a) => a.sequence), [1, 2, 3]);
+      expect(
+        f.bridge.view.toolActivities.last.stage,
+        SupportModelToolStage.confirmation,
+      );
+      await loop.apply(tester);
+      await loop.modal(tester);
+      expect(f.wire, hasLength(2));
+      loop.noBody();
+      expect(f.bridge.view.toolActivities.map((a) => a.sequence), [1, 2, 3, 4]);
+      await loop.apply(tester);
+      final reply = await loop.finish(tester);
+      expect(reply.status, 'complete');
+      expect(f.wire, hasLength(3));
+      expect(
+        f.bridge.view.toolActivities.every(
+          (a) => a.stage == SupportModelToolStage.completed,
+        ),
+        isTrue,
+      );
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(f, reply.id),
+      );
+      expect(recipe.toolDisclosures, hasLength(2));
+      f.noEgress(reply.body);
+    },
+  );
 
   backupLoopTest(
     'MODEL source metadata -> exact native game and Studio consent -> v4 -> cached next Send',
@@ -196,6 +396,16 @@ void main() {
       );
       await loop.start(tester);
       loop.noBody();
+      expect(f.bridge.view.toolActivities.map((a) => a.sequence), [1, 2]);
+      expect(f.bridge.view.toolActivities.map((a) => a.stage), [
+        SupportModelToolStage.completed,
+        SupportModelToolStage.confirmation,
+      ]);
+      expect(
+        f.bridge.view.toolActivities.last.sourceLabel,
+        contains('Отель Петербург'),
+      );
+      expect(f.bridge.view.toolActivities.last.label, contains('согласия'));
       expect(f.wire, hasLength(2));
       final tools = (f.wire.first['tools'] as List)
           .cast<Map<dynamic, dynamic>>();
@@ -230,6 +440,15 @@ void main() {
       );
       await loop.apply(tester);
       await loop.modal(tester);
+      expect(f.bridge.view.toolActivities.map((a) => a.sequence), [1, 2, 3, 4]);
+      expect(
+        f.bridge.view.toolActivities.last.stage,
+        SupportModelToolStage.confirmation,
+      );
+      expect(
+        f.bridge.view.toolActivities.last.sourceLabel,
+        contains('Comparison Studio'),
+      );
       expect(f.wire, hasLength(4));
       expect(jsonEncode(f.wire), contains(sourceGameBody));
       expect(jsonEncode(f.wire), isNot(contains(sourceStudioBody)));
@@ -250,6 +469,27 @@ void main() {
       final reply = await loop.finish(tester);
       expect(answerIssued, isTrue);
       expect(reply.status, 'complete');
+      expect(f.bridge.view.toolActivities, hasLength(4));
+      expect(
+        f.bridge.view.toolActivities.every(
+          (a) => a.stage == SupportModelToolStage.completed,
+        ),
+        isTrue,
+      );
+      expect(
+        f.bridge.view.hasToolActivitiesFor(reply.runId, reply.sessionId),
+        isTrue,
+      );
+      expect(
+        f.bridge.view.hasToolActivitiesFor('other-run', reply.sessionId),
+        isFalse,
+      );
+      final localTrace = f.bridge.view.toolActivities
+          .map((a) => '${a.title} ${a.sourceLabel} ${a.label}')
+          .join('\n');
+      expect(localTrace, isNot(contains(sourceGameBody)));
+      expect(localTrace, isNot(contains(sourceStudioBody)));
+      expect(jsonEncode(f.wire), isNot(contains('Ожидание твоего согласия')));
       expect(
         reply.body,
         'Compared the approved game page with the CURRENT SAVED Studio definition.',
@@ -297,6 +537,7 @@ void main() {
       await loop.start(tester, confirmation: false);
       final cached = await loop.finish(tester);
       expect(cached.status, 'complete');
+      expect(f.bridge.view.toolActivities, isEmpty);
       final cachedRecipe = await backupLoopReal(
         tester,
         () => modelSourceRecipe(f, cached.id),
@@ -528,7 +769,8 @@ void main() {
       // The native outcome deliberately overrides model prose after a failed
       // tool. A denied old handle is a factual error, not a successful read.
       expect(reply.status, 'error');
-      expect(reply.body, contains('astoria_source_read: denied'));
+      expect(reply.body, contains('Чтение источника'));
+      expect(reply.body, contains('Вызов не разрешён'));
       expect(f.wire, hasLength(5));
       expect(loop.lastResult()['ok'], isFalse);
       expect(loop.lastResult()['code'], 'denied');

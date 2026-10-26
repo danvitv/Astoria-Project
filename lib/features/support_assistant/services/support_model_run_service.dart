@@ -67,6 +67,8 @@ final class _ModelRun {
   SupportDatabaseBackupAdapter? originalBackup;
   bool toolsResolved = false;
   _ModelSourceToolRun? originalSourceTools;
+  int toolSequence = 0;
+  String? toolAction, toolSourceLabel, toolFailureDetail;
   String get sessionId => binding.sessionId;
   late final _ModelReadOperation operation;
   SupportTextContextRepo get history => operation.history;

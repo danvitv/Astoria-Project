@@ -211,6 +211,7 @@ final class SupportModelUiBridge {
                 usage: result.outcome?.usage,
                 compacted: result.compacted,
                 isCompaction: send._compact,
+                toolActivities: send._toolActivities,
               )
             : const SupportModelRunView(),
       );
@@ -254,13 +255,57 @@ final class SupportModelUiBridge {
         runId: send._runId,
         sessionId: send._capture?.sessionId,
         isCompaction: send._compact,
+        toolActivities: send._toolActivities,
       ),
     );
+  }
+
+  /// Only bounded local metadata from this exact native run; never tool bodies,
+  /// arguments, reasoning, URLs, credentials or serialized approval authority.
+  void onToolActivity(
+    String runId,
+    String sessionId,
+    SupportModelToolActivity activity,
+  ) {
+    final send = _active;
+    if (send == null ||
+        !send._publicationCurrent ||
+        send._runId != runId ||
+        send._capture?.sessionId != sessionId ||
+        activity.sequence < 1 ||
+        activity.sequence > 32 ||
+        activity.sequence > send._toolActivities.length + 1)
+      return;
+    final next = List<SupportModelToolActivity>.of(send._toolActivities);
+    final index = activity.sequence - 1;
+    if (index == next.length) {
+      next.add(activity);
+    } else {
+      if (next[index].action != activity.action) return;
+      next[index] = activity;
+    }
+    send._toolActivities = List.unmodifiable(next);
+    onPhase(SupportModelPhase.activity);
   }
 
   void _stop(SupportModelUiSend send) {
     if (!identical(_active, send)) return;
     send._stopped = true;
+    send._toolActivities = List.unmodifiable([
+      for (final activity in send._toolActivities)
+        if (activity.stage == SupportModelToolStage.preparing ||
+            activity.stage == SupportModelToolStage.confirmation ||
+            activity.stage == SupportModelToolStage.executing)
+          SupportModelToolActivity(
+            sequence: activity.sequence,
+            action: activity.action,
+            stage: SupportModelToolStage.stopped,
+            sourceLabel: activity.sourceLabel,
+            detail: 'Остановлено; дальнейшее чтение и передача не выполняются',
+          )
+        else
+          activity,
+    ]);
     _service.stop();
     _publish(
       SupportModelRunView(
@@ -270,6 +315,7 @@ final class SupportModelUiBridge {
         accepted: send._accepted,
         runId: send._runId,
         sessionId: send._capture?.sessionId,
+        toolActivities: send._toolActivities,
       ),
     );
   }

@@ -125,6 +125,8 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
         SupportTextAdmissionContract.auditedRootSingleConnectionNoBusyHandler,
     onMessage: (message) => bridge.onMessage(message),
     onPhase: (phase) => bridge.onPhase(phase),
+    onToolActivity: (runId, sessionId, activity) =>
+        bridge.onToolActivity(runId, sessionId, activity),
   );
   bridge = SupportModelUiBridge(
     service: service,

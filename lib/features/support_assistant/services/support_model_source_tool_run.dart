@@ -93,6 +93,15 @@ final class _ModelSourceToolRun
           final domain = SupportSourceDomain.values.byName(
             arguments['domain'] as String,
           );
+          run.toolActivity(
+            SupportModelToolStage.executing,
+            sourceLabel: domain == SupportSourceDomain.game
+                ? 'Истории игр'
+                : 'Сохранённые Studio-пресеты',
+            detail:
+                'Чтение только каталога; содержимое источников не передаётся',
+          );
+          check(context);
           final SupportSourceCatalogPage page;
           try {
             final activeReader = run.service._activeStudioPresetId;
@@ -110,7 +119,8 @@ final class _ModelSourceToolRun
               activeStudioPresetId: active,
               isCurrent: () => original(context) && admitted(),
             );
-          } on SupportSourceReadException {
+          } on SupportSourceReadException catch (error) {
+            run.refuseSourceTool(error);
             throw const SupportAppActionRefused(
               SupportAppActionCode.unavailable,
             );
@@ -158,6 +168,14 @@ final class _ModelSourceToolRun
     final entry = _handles[handle];
     if (entry == null)
       throw const SupportAppActionRefused(SupportAppActionCode.denied);
+    run.toolActivity(
+      SupportModelToolStage.preparing,
+      sourceLabel:
+          '${entry.domain == SupportSourceDomain.game ? 'История игры' : 'Studio-пресет'}: ${safeLabel(entry.label)}',
+      detail:
+          'Проверка выбранного источника и границ чтения; текст ещё не передаётся',
+    );
+    check(context);
     if (_approved.length >= SupportModelProvenanceLimits.maxToolDisclosures) {
       throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
     }
@@ -168,7 +186,8 @@ final class _ModelSourceToolRun
         activeMessageOffset: arguments['activeMessageOffset'] as int,
         isCurrent: () => original(context),
       );
-    } on SupportSourceReadException {
+    } on SupportSourceReadException catch (error) {
+      run.refuseSourceTool(error);
       throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
     }
     check(context);
@@ -228,7 +247,8 @@ final class _ModelSourceToolRun
         handle,
         admitted,
       );
-    } on SupportSourceReadException {
+    } on SupportSourceReadException catch (error) {
+      run.refuseSourceTool(error);
       throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
     } on SupportTextContextException {
       throw const SupportAppActionRefused(SupportAppActionCode.stale);
@@ -262,6 +282,11 @@ final class _ModelSourceToolRun
       lease,
       _destination!,
     );
+    run.toolActivity(
+      SupportModelToolStage.executing,
+      detail: 'Чтение одобренного текста для этого запроса',
+    );
+    check(context);
     // This future is joined, never abandoned on cancellation. Body SQL/crypto and
     // native confirmation stay OUTSIDE the original model read-only ROOT.
     final snapshot = await repo.read(

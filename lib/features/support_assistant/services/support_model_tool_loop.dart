@@ -256,7 +256,9 @@ extension _ModelTools on _ModelRun {
         cancelToken: operation.token,
         isCurrent: current,
         allowReversibleChanges: !isReattempt,
-        confirmation: binding.toolUi?.confirmation,
+        confirmation: binding.toolUi?.confirmation == null
+            ? null
+            : _ModelToolConfirmation(this, binding.toolUi!.confirmation!),
         navigation: isReattempt ? null : binding.toolUi?.navigation,
         sourceToolAccess: binding.toolUi?.confirmation == null
             ? null
@@ -300,6 +302,8 @@ extension _ModelTools on _ModelRun {
           // Sequential factual settlement, NEVER raced against UI cancellation.
           // A started native effect must finish reporting its actual outcome.
           phase(SupportModelPhase.activity);
+          beginTool(call);
+          operation.check();
           final isRead = SupportModelToolPayloads.isRead(call.name);
           final repeated =
               !isRead &&
@@ -307,6 +311,15 @@ extension _ModelTools on _ModelRun {
                 call.name,
                 SupportModelToolPayloads.argumentsKey(call.arguments),
               ));
+          if (!repeated &&
+              call.name != 'astoria_sources_list' &&
+              call.name != 'astoria_source_read') {
+            toolActivity(
+              SupportModelToolStage.executing,
+              detail: 'Вызов инструмента; результат ещё не подтверждён',
+            );
+            operation.check();
+          }
           final result = repeated
               ? NativeToolResult(
                   callId: call.id,
@@ -322,10 +335,21 @@ extension _ModelTools on _ModelRun {
                 )
               : await registry.execute(call, context);
           calls++;
-          facts.record(result);
           if (result.callId != call.id || result.name != call.name) {
+            refuseTool('Ответ инструмента не соответствует исходному вызову');
             throw const NativeToolException(NativeToolReason.denied);
           }
+          final description = finishTool(result);
+          facts.record(
+            result,
+            sourceDescription:
+                const {
+                  'astoria_sources_list',
+                  'astoria_source_read',
+                }.contains(call.name)
+                ? description
+                : null,
+          );
           if (!current() || !context.current) {
             return facts.finish(turn, interrupted: true);
           }

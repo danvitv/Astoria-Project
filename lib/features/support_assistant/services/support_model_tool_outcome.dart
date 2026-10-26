@@ -8,6 +8,7 @@ final class SupportModelToolOutcome {
   bool _wired = false;
   ProviderTokenUsage? _lastUsage;
   final _facts = <NativeToolResult>[];
+  final _sourceDescriptions = <NativeToolResult, String>{};
 
   void observe(NativeToolTurn turn) {
     if (turn.dispatch != NativeToolDispatch.notAdmitted) {
@@ -16,7 +17,11 @@ final class SupportModelToolOutcome {
     }
   }
 
-  void record(NativeToolResult result) => _facts.add(result);
+  void record(NativeToolResult result, {String? sourceDescription}) {
+    _facts.add(result);
+    if (sourceDescription != null)
+      _sourceDescriptions[result] = sourceDescription;
+  }
 
   bool get uncertain => _facts.any((r) => r.content['effect'] == 'uncertain');
   bool get navigated => _facts.any((r) => r.content['effect'] == 'navigation');
@@ -26,7 +31,9 @@ final class SupportModelToolOutcome {
     final lines = <String>[
       if (interrupted) 'Запрос остановлен. Дальнейшие действия не выполнялись.',
       for (final fact in _facts)
-        if (fact.name == 'astoria_database_restore_prepare' &&
+        if (_sourceDescriptions.containsKey(fact))
+          _sourceDescriptions[fact]!
+        else if (fact.name == 'astoria_database_restore_prepare' &&
             fact.content['code'] == 'unavailable' &&
             fact.content['effect'] == 'none' &&
             fact.content['data'] is Map &&

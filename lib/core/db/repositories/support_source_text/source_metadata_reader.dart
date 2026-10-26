@@ -35,7 +35,7 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
         map['label'] is! String ||
         (map['label'] as String).length > 256 ||
         utf8.encode(map['label'] as String).length > 1024)
-      _deny();
+      _deny(SupportSourceReadFailure.unsupportedFormat);
     if (domain == SupportSourceDomain.game &&
         (!_identity(map['character_id']) ||
             map['parent_identity'] is! int ||
@@ -49,7 +49,7 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
             (map['variant_group_id'] != null &&
                 map['variant_group_id'] != '' &&
                 !_identity(map['variant_group_id']))))
-      _deny();
+      _deny(SupportSourceReadFailure.unsupportedFormat);
     return map;
   }
 
@@ -123,6 +123,8 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
             : null,
         active,
       );
+    } on SupportSourceReadException {
+      rethrow;
     } catch (_) {
       _deny();
     }
@@ -148,7 +150,7 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
         )
         .getSingleOrNull();
     guard();
-    if (row == null) _deny();
+    if (row == null) _deny(SupportSourceReadFailure.notFound);
     return _metadata(row, domain);
   }
 
@@ -173,7 +175,8 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
         final before = await _stamp(guard);
         final header = await _header(entry.domain, entry.sourceId, guard);
         guard();
-        if (!_equal(header, entry._header)) _deny();
+        if (!_equal(header, entry._header))
+          _deny(SupportSourceReadFailure.changed);
         List<Map<String, Object?>>? discovery;
         List<String> ids;
         int count, chars, bytes;
@@ -200,9 +203,9 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
           bytes = extent.$2;
         }
         if (bytes > SupportSourceTextRepo.maxToolResultBytes || chars > 65536)
-          _deny();
+          _deny(SupportSourceReadFailure.tooLarge);
         final after = await _stamp(guard);
-        if (before != after) _deny();
+        if (before != after) _deny(SupportSourceReadFailure.changed);
         return SupportSourceObservation._(
           this,
           entry.domain,
@@ -218,6 +221,8 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
       });
       guard();
       return result;
+    } on SupportSourceReadException {
+      rethrow;
     } catch (_) {
       _deny();
     }

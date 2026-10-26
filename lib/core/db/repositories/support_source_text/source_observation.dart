@@ -78,6 +78,7 @@ final class SupportSourceSnapshot {
   final SupportSourceObservation _observation;
   final String _json, _digest;
   bool _revoked = false;
+  SupportSourceReadFailure? _refusal;
   SupportSourceDomain get domain => _observation.domain;
   String get sourceId => _observation.sourceId;
   List<String> get orderedSourceIds => _observation.orderedSourceIds;

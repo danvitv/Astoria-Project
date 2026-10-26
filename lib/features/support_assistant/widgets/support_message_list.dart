@@ -8,6 +8,7 @@ import '../models/support_workspace_models.dart';
 import '../services/support_message_display_projection.dart';
 import '../state/support_model_run_view.dart';
 import 'support_card_view.dart';
+import 'support_model_tool_activity_view.dart';
 import 'support_plain_markdown.dart';
 import 'support_message_text.dart';
 
@@ -272,6 +273,10 @@ class _SupportMessageBubble extends StatelessWidget {
             run.isActiveRun(message.runId, message.sessionId)
         ? run.label
         : message.statusLabel;
+    final showToolActivities =
+        !message.isLocked &&
+        message.role == SupportMessageRole.assistant &&
+        run.hasToolActivitiesFor(message.runId, message.sessionId);
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -338,6 +343,14 @@ class _SupportMessageBubble extends StatelessWidget {
                         fontSize: 12,
                         color: context.cs.onSurfaceVariant,
                       ),
+                    ),
+                  ),
+                if (showToolActivities)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: SupportModelToolActivityView(
+                      activities: run.toolActivities,
+                      display: display,
                     ),
                   ),
                 SupportPlainMarkdown(

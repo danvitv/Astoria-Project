@@ -30,10 +30,11 @@ extension _SourceStudioReader on SupportSourceTextRepo {
         )
         .getSingleOrNull();
     guard();
-    if (row == null ||
-        row.read<int>('valid') != 1 ||
-        row.read<int>('bytes') > 65536)
-      _deny();
+    if (row == null) _deny(SupportSourceReadFailure.notFound);
+    if (row.read<int>('valid') != 1)
+      _deny(SupportSourceReadFailure.unsupportedFormat);
+    if (row.read<int>('bytes') > 65536)
+      _deny(SupportSourceReadFailure.tooLarge);
     return (row.read<int>('chars'), row.read<int>('bytes'));
   }
 
@@ -43,7 +44,8 @@ extension _SourceStudioReader on SupportSourceTextRepo {
   ) async {
     final extent = await _studioExtent(observation.sourceId, guard);
     guard();
-    if (extent != (observation.textCharacters, observation.textBytes)) _deny();
+    if (extent != (observation.textCharacters, observation.textBytes))
+      _deny(SupportSourceReadFailure.changed);
     final row = await _db
         .customSelect(
           '''SELECT blocks_json, agents_json, agent_enabled_json,
@@ -54,11 +56,12 @@ extension _SourceStudioReader on SupportSourceTextRepo {
         )
         .getSingleOrNull();
     guard();
-    if (row == null) _deny();
+    if (row == null) _deny(SupportSourceReadFailure.changed);
     final raw = row.data;
     final decoded = <String, Object?>{};
     for (final key in _definitionColumns) {
-      if (raw[key] is! String) _deny();
+      if (raw[key] is! String)
+        _deny(SupportSourceReadFailure.unsupportedFormat);
       decoded[key] = SupportSourceJson.decode(raw[key] as String);
     }
     _StudioSourceShape(this)._validate(decoded);
@@ -70,7 +73,7 @@ extension _SourceStudioReader on SupportSourceTextRepo {
     ]) {
       if (raw[key] is! String ||
           ((raw[key] as String).isNotEmpty && !_identity(raw[key])))
-        _deny();
+        _deny(SupportSourceReadFailure.unsupportedFormat);
     }
     final definition = <String, Object?>{
       'blocks': decoded['blocks_json'],
@@ -95,7 +98,8 @@ extension _SourceStudioReader on SupportSourceTextRepo {
               maxOutputLength: 65536,
             )
             .redactText(value);
-        if (result.contains(SecretRedactor.limited)) _deny();
+        if (result.contains(SecretRedactor.limited))
+          _deny(SupportSourceReadFailure.tooLarge);
         return result;
       }
       if (value is List) return [for (final item in value) safe(item)];
@@ -123,11 +127,12 @@ extension _SourceStudioReader on SupportSourceTextRepo {
 }
 
 /// Deliberately strict saved-definition shape, not the migration/default codec.
-/// Future/legacy unsupported fields refuse the whole snapshot, never disappear.
+/// Supports the exact canonical serializer and the finite raw built-in seed
+/// dialect. Unsupported fields refuse the whole snapshot, never disappear.
 final class _StudioSourceShape {
   _StudioSourceShape(this.repo);
   final SupportSourceTextRepo repo;
-  Never bad() => repo._deny();
+  Never bad() => repo._deny(SupportSourceReadFailure.unsupportedFormat);
   Map<String, Object?> map(Object? value) {
     if (value is! Map<String, Object?>) bad();
     return value;
@@ -183,7 +188,9 @@ final class _StudioSourceShape {
         strings: const {
           'id',
           'title',
+          'name',
           'type',
+          'kind',
           'contextSlot',
           'targetAgentId',
           'role',
@@ -207,15 +214,34 @@ final class _StudioSourceShape {
       );
       if (!repo._identity(block['id']) ||
           !ids.add(block['id'] as String) ||
-          block['type'] is! String ||
-          block['content'] is! String ||
-          block['locked'] == true)
+          (block['type'] is! String && block['kind'] is! String) ||
+          block['content'] is! String)
         bad();
+      if (block['locked'] == true) repo._deny(SupportSourceReadFailure.locked);
       choice(block, 'type', const {
         'instruction',
         'context',
         'history',
         'priorBriefs',
+      });
+      // onCreate persists the raw seed rather than block.toJson(). Keep its
+      // name/kind and authored text exactly; no conversion, guessed defaults,
+      // macro expansion or silent acceptance of an unknown legacy kind.
+      choice(block, 'kind', const {
+        'instruction',
+        'agent_instruction',
+        'tracker_instruction',
+        'custom_text',
+        'previous_agents',
+        'user_persona',
+        'char_card',
+        'scenario',
+        'char_personality',
+        'example_dialogue',
+        'authors_note',
+        'memory',
+        'chat_history',
+        'dynamic_context',
       });
       choice(block, 'role', const {'system', 'user', 'assistant', 'tool'});
       choice(block, 'mode', const {
@@ -291,11 +317,14 @@ final class _StudioSourceShape {
       choice(agent, 'phase', const {'pre_generation', 'post_processing'});
       choice(agent, 'reasoningMode', const {'normal', 'think-replacement'});
     }
-    final enabled = map(decoded['agent_enabled_json']);
-    for (final item in enabled.entries) {
+    booleanMap(decoded['agent_enabled_json']);
+    _runtime(map(decoded['runtime_settings_json']));
+  }
+
+  void booleanMap(Object? value) {
+    for (final item in map(value).entries) {
       if (!repo._identity(item.key) || item.value is! bool) bad();
     }
-    _runtime(map(decoded['runtime_settings_json']));
   }
 
   void _runtime(Map<String, Object?> runtime) {
@@ -306,6 +335,7 @@ final class _StudioSourceShape {
       'cardRewriter',
       'broadcastBlocks',
       'agentBlockRestoreState',
+      'agentEnabledBeforeDependencyOff',
       'controllerAlternativeBlockIds',
     ]) {
       scalar.remove(key);
@@ -340,6 +370,11 @@ final class _StudioSourceShape {
     });
     if (runtime.containsKey('broadcastBlocks'))
       stringList(runtime['broadcastBlocks']);
+    // Native controlAgentToggle persists this separate boolean restoration
+    // map. Unlike the list-valued block restoration state, do not reinterpret
+    // its values or let tolerant controlObserve discard malformed entries.
+    if (runtime.containsKey('agentEnabledBeforeDependencyOff'))
+      booleanMap(runtime['agentEnabledBeforeDependencyOff']);
     for (final key in [
       'agentBlockRestoreState',
       'controllerAlternativeBlockIds',

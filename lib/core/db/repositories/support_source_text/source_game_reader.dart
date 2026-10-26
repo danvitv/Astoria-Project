@@ -30,16 +30,19 @@ extension _SourceGameReader on SupportSourceTextRepo {
         .customSelect(
           '''SELECT CASE
       WHEN typeof(messages_json) != 'text' THEN 0
-      WHEN length(CAST(messages_json AS BLOB)) > 2097152 THEN 0
+      WHEN length(CAST(messages_json AS BLOB)) > 2097152 THEN 2
       WHEN NOT json_valid(messages_json) THEN 0
       WHEN json_type(messages_json) != 'array' THEN 0
-      WHEN json_array_length(messages_json) > 2000 THEN 0 ELSE 1 END AS valid
+      WHEN json_array_length(messages_json) > 2000 THEN 2 ELSE 1 END AS valid
       FROM chat_sessions WHERE session_id = ? LIMIT 1''',
           variables: [Variable.withString(id)],
         )
         .getSingleOrNull();
     guard();
-    if (shape == null || shape.read<int>('valid') != 1) _deny();
+    if (shape == null) _deny(SupportSourceReadFailure.notFound);
+    if (shape.read<int>('valid') == 2) _deny(SupportSourceReadFailure.tooLarge);
+    if (shape.read<int>('valid') != 1)
+      _deny(SupportSourceReadFailure.unsupportedFormat);
     final rows = await _db
         .customSelect(
           '''$_entries
@@ -82,7 +85,7 @@ extension _SourceGameReader on SupportSourceTextRepo {
         )
         .get();
     guard();
-    if (rows.length > 2000) _deny();
+    if (rows.length > 2000) _deny(SupportSourceReadFailure.tooLarge);
     final seen = <String>{};
     final result = <Map<String, Object?>>[];
     for (final row in rows) {
@@ -92,7 +95,7 @@ extension _SourceGameReader on SupportSourceTextRepo {
           !seen.add(map['message_id'] as String) ||
           map['chars'] is! int ||
           map['bytes'] is! int)
-        _deny();
+        _deny(SupportSourceReadFailure.unsupportedFormat);
       result.add(Map.unmodifiable(map));
     }
     return List.unmodifiable(result);
@@ -104,7 +107,8 @@ extension _SourceGameReader on SupportSourceTextRepo {
   ) async {
     final discovery = await _discoverGame(observation.sourceId, guard);
     guard();
-    if (!_equal(discovery, observation._discovery)) _deny();
+    if (!_equal(discovery, observation._discovery))
+      _deny(SupportSourceReadFailure.changed);
     // Reuse the existing strict variation/eligibility reader. No tolerant
     // ChatMessage JSON codec, hidden variants, raw prompts or attachments.
     final strict = await _text.loadRoleplayForNativeSource(
@@ -153,12 +157,16 @@ extension _SourceGameReader on SupportSourceTextRepo {
               strict.messages[i].text)
         _deny();
       // Strict scalar validation also refuses lone-surrogate active text.
-      SupportSourceJson.decode(jsonEncode(body));
+      final encoded = jsonEncode(body);
+      if (utf8.encode(encoded).length >
+          SupportSourceTextRepo.maxToolResultBytes)
+        _deny(SupportSourceReadFailure.tooLarge);
+      SupportSourceJson.decode(encoded);
       chars += body.runes.length;
       bytes += utf8.encode(body).length;
     }
     if (chars != observation.textCharacters || bytes != observation.textBytes)
-      _deny();
+      _deny(SupportSourceReadFailure.changed);
     return _snapshot(
       observation,
       [

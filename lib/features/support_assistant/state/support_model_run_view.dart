@@ -1,8 +1,10 @@
 import '../models/support_model_view.dart';
+import '../models/support_model_tool_activity.dart';
 import '../services/support_model_service.dart' show SupportModelPreview;
 import '../../../core/llm/transport/private_text_outcome.dart';
 
 export '../models/support_model_view.dart';
+export '../models/support_model_tool_activity.dart';
 export '../../../core/llm/transport/private_text_outcome.dart';
 
 /// Payload-free activity plus the exact sanitized native preview. No tools,
@@ -23,6 +25,7 @@ final class SupportModelRunView {
     this.usage,
     this.compacted = false,
     this.isCompaction = false,
+    this.toolActivities = const [],
   });
   final SupportModelPhase? phase;
   final SupportModelRefusal reason;
@@ -34,6 +37,13 @@ final class SupportModelRunView {
   final String? runId, sessionId;
   final ProviderTokenUsage? usage;
   final bool compacted, isCompaction;
+  final List<SupportModelToolActivity> toolActivities;
+
+  bool hasToolActivitiesFor(String? id, String session) =>
+      id != null &&
+      id == runId &&
+      session == sessionId &&
+      toolActivities.isNotEmpty;
 
   bool isActiveRun(String? id, String session) =>
       busy && runId != null && id == runId && session == sessionId;
@@ -84,8 +94,14 @@ final class SupportModelRunView {
       SupportModelPhase.preparing => 'Подготовка сообщения…',
       SupportModelPhase.compacting => 'Сжатие старого контекста моделью…',
       SupportModelPhase.preview => 'Проверь точный текст перед отправкой.',
-      SupportModelPhase.waiting => 'Ожидание ответа модели…',
-      SupportModelPhase.activity => 'Получение ответа модели…',
+      SupportModelPhase.waiting =>
+        toolActivities.isEmpty
+            ? 'Ожидание ответа модели…'
+            : 'Ожидание ответа модели после вызовов инструментов…',
+      SupportModelPhase.activity =>
+        toolActivities.isEmpty
+            ? 'Получение ответа модели…'
+            : toolActivities.last.label,
       SupportModelPhase.settling => 'Сохранение результата…',
       SupportModelPhase.settled =>
         isCompaction && compacted

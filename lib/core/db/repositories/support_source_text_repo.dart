@@ -24,8 +24,22 @@ abstract interface class SupportSourceReadAuthority {
 
 enum SupportSourceDomain { game, studioPreset }
 
+/// Finite local refusal categories only. No SQL, source text, error details,
+/// path, identity, or digest is retained in a failure or its string form.
+enum SupportSourceReadFailure {
+  unavailable,
+  unsupportedFormat,
+  tooLarge,
+  notFound,
+  changed,
+  locked,
+}
+
 final class SupportSourceReadException implements Exception {
-  const SupportSourceReadException();
+  const SupportSourceReadException({
+    this.failure = SupportSourceReadFailure.unavailable,
+  });
+  final SupportSourceReadFailure failure;
   @override
   String toString() => 'Support source unavailable.';
 }
@@ -77,15 +91,20 @@ final class SupportSourceTextRepo {
       final snapshot = await _db.transaction(() async {
         _authority(observation, authority);
         final stamp = await _stamp(() => _authority(observation, authority));
-        if (stamp != observation._stamp) _deny();
+        if (stamp != observation._stamp)
+          _deny(SupportSourceReadFailure.changed);
         final value = await _materialize(observation, authority);
         _authority(observation, authority);
         final after = await _stamp(() => _authority(observation, authority));
-        if (after != stamp) _deny();
+        if (after != stamp) _deny(SupportSourceReadFailure.changed);
         return value;
       });
       _authority(observation, authority);
       return snapshot;
+    } on SupportSourceReadException {
+      rethrow;
+    } on FormatException {
+      _deny(SupportSourceReadFailure.unsupportedFormat);
     } catch (_) {
       _deny();
     }
@@ -110,14 +129,23 @@ final class SupportSourceTextRepo {
         final after = await _stamp(
           () => _authority(snapshot._observation, authority),
         );
-        if (before != after) _deny();
+        if (before != after) _deny(SupportSourceReadFailure.changed);
         return result;
       });
       _authority(snapshot._observation, authority);
       if (next._digest != snapshot._digest || next._json != snapshot._json)
-        _deny();
+        _deny(SupportSourceReadFailure.changed);
       return true;
+    } on SupportSourceReadException catch (error) {
+      snapshot._refusal = error.failure;
+      snapshot._revoked = true;
+      return false;
+    } on FormatException {
+      snapshot._refusal = SupportSourceReadFailure.unsupportedFormat;
+      snapshot._revoked = true;
+      return false;
     } catch (_) {
+      snapshot._refusal = SupportSourceReadFailure.unavailable;
       snapshot._revoked = true;
       return false;
     }
@@ -127,7 +155,8 @@ final class SupportSourceTextRepo {
     required SupportSourceSnapshot snapshot,
     required SupportSourceReadAuthority authority,
   }) async {
-    if (!await revalidate(snapshot: snapshot, authority: authority)) _deny();
+    if (!await revalidate(snapshot: snapshot, authority: authority))
+      _deny(snapshot._refusal ?? SupportSourceReadFailure.unavailable);
     _authority(snapshot._observation, authority);
     return snapshot._json;
   }
@@ -144,7 +173,8 @@ final class SupportSourceTextRepo {
       guard,
     );
     guard();
-    if (!_equal(header, observation._header)) _deny();
+    if (!_equal(header, observation._header))
+      _deny(SupportSourceReadFailure.changed);
     return observation.domain == SupportSourceDomain.game
         ? _game(observation, guard)
         : _studio(observation, guard);
@@ -156,7 +186,8 @@ final class SupportSourceTextRepo {
     Map<String, Object?> result,
   ) {
     final json = jsonEncode(result);
-    if (utf8.encode(json).length > maxToolResultBytes) _deny();
+    if (utf8.encode(json).length > maxToolResultBytes)
+      _deny(SupportSourceReadFailure.tooLarge);
     final digest = sha256
         .convert(utf8.encode(jsonEncode(privateMaterial)))
         .toString();
@@ -191,7 +222,9 @@ final class SupportSourceTextRepo {
   bool _identity(Object? value) =>
       SupportSourceJson.identity(value) &&
       _currentRedactor().redactText(value as String) == value;
-  Never _deny() => throw const SupportSourceReadException();
+  Never _deny([
+    SupportSourceReadFailure failure = SupportSourceReadFailure.unavailable,
+  ]) => throw SupportSourceReadException(failure: failure);
   @override
   String toString() => 'SupportSourceTextRepo';
 }

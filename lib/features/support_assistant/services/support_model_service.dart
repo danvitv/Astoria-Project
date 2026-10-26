@@ -27,6 +27,7 @@ import '../../../core/support/support_payload_cipher.dart';
 import '../../../core/utils/id_generator.dart';
 import '../models/support_model_provenance.dart';
 import '../models/support_model_view.dart';
+import '../models/support_model_tool_activity.dart';
 import '../models/support_model_tool_ui_ports.dart';
 import '../models/support_app_action_context.dart';
 import '../models/support_app_action.dart';
@@ -51,6 +52,7 @@ import 'support_model_tool_outcome.dart';
 
 export '../models/support_model_view.dart';
 export '../models/support_model_tool_ui_ports.dart';
+export '../models/support_model_tool_activity.dart';
 
 part 'support_model_native_intent.dart';
 part 'support_model_read_service.dart';
@@ -64,6 +66,7 @@ part 'support_model_tool_loop.dart';
 part 'support_model_reply_regeneration.dart';
 part 'support_model_unanswered_retry.dart';
 part 'support_model_source_tool_run.dart';
+part 'support_model_tool_activity.dart';
 
 /// Native-only write scheduling seam; NEVER expose this service/scheduler to
 /// tools. HTTP and user-controlled preview are never enqueued here.
@@ -116,6 +119,8 @@ final class SupportModelService {
     Duration deadline = PrivateTextLimits.deadline,
     void Function(SupportModelMessage)? onMessage,
     void Function(SupportModelPhase)? onPhase,
+    void Function(String runId, String sessionId, SupportModelToolActivity)?
+    onToolActivity,
   }) : _db = db,
        _writeCipher = writeCipher,
        _apiRepo = apiRepo,
@@ -142,6 +147,7 @@ final class SupportModelService {
        _deadline = deadline,
        _onMessage = onMessage,
        _onPhase = onPhase,
+       _onToolActivity = onToolActivity,
        _writer = SupportRepo(db, writeCipher) {
     if (readDeadline <= Duration.zero ||
         readDeadline > const Duration(seconds: 5) ||
@@ -180,6 +186,8 @@ final class SupportModelService {
   final Duration _readDeadline, _deadline;
   final void Function(SupportModelMessage)? _onMessage;
   final void Function(SupportModelPhase)? _onPhase;
+  final void Function(String, String, SupportModelToolActivity)?
+  _onToolActivity;
   final SupportRepo _writer;
   late final void Function() _unlistenRuntime, _unlistenRegistry;
   final _emissions = <_ModelReadOperation>{};
