@@ -4,6 +4,7 @@ extension _ModelToolActivity on _ModelRun {
   void beginTool(NativeToolCall call) {
     if (!current() || toolSequence >= NativeToolLimits.callsPerSession) return;
     toolSequence++;
+    toolCall = call;
     // Unknown provider names/arguments are not a display metadata capability.
     toolAction = originalActions!.definitions.any((d) => d.name == call.name)
         ? call.name
@@ -49,23 +50,6 @@ extension _ModelToolActivity on _ModelRun {
     toolActivity(SupportModelToolStage.failed, detail: fixedExplanation);
   }
 
-  void refuseSourceTool(
-    SupportSourceReadException error,
-  ) => refuseTool(switch (error.failure) {
-    SupportSourceReadFailure.unsupportedFormat =>
-      'Сохранённый формат источника не поддерживается безопасным чтением; текст не передан',
-    SupportSourceReadFailure.tooLarge =>
-      'Источник превышает допустимый размер; текст не обрезан и не передан',
-    SupportSourceReadFailure.notFound =>
-      'Выбранный источник больше не существует; другой источник не подставлялся',
-    SupportSourceReadFailure.changed =>
-      'Источник изменился после выбора или согласия; чтение остановлено',
-    SupportSourceReadFailure.locked =>
-      'Источник заблокирован для чтения; текст не передан',
-    SupportSourceReadFailure.unavailable =>
-      'Источник недоступен для безопасного чтения; текст не передан',
-  });
-
   String finishTool(NativeToolResult result) {
     final ok = result.content['ok'] == true;
     final stopped = const {
@@ -76,6 +60,10 @@ extension _ModelToolActivity on _ModelRun {
         ? switch (result.name) {
             'astoria_sources_list' =>
               'Каталог источников получен; текст ещё не читался',
+            'astoria_source_contents' =>
+              'Оглавление выбранной области получено; источник целиком не читался',
+            'astoria_source_search' =>
+              'Буквальный поиск выполнен в разрешённой области; смотри полноту результата',
             'astoria_source_read' =>
               toolSourcePart == null
                   ? 'Одобренный текст прочитан для этого запроса'
@@ -111,10 +99,15 @@ extension _ModelToolActivity on _ModelRun {
           : SupportModelToolStage.failed,
       detail: detail,
     );
-    final kind = result.name == 'astoria_sources_list'
-        ? 'Каталог источников'
-        : 'Чтение источника';
-    return '$toolSequence. $kind${toolSourceLabel == null ? '' : ' — $toolSourceLabel'}: $detail.';
+    final kind = switch (result.name) {
+      'astoria_sources_list' => 'Каталог источников',
+      'astoria_source_contents' => 'Оглавление источника',
+      'astoria_source_search' => 'Поиск в источнике',
+      _ => 'Чтение источника',
+    };
+    // Authored labels belong solely to local native activity/consent UI. Even a
+    // redacted refused label must not become a stored reply or a later Send.
+    return '$toolSequence. $kind: $detail.';
   }
 }
 
@@ -131,7 +124,7 @@ final class _ModelToolConfirmation implements SupportAppConfirmationPort {
   ) {
     run.toolActivity(
       SupportModelToolStage.confirmation,
-      detail: request.action == 'astoria_source_read'
+      detail: SupportSourceToolNames.body.contains(request.action)
           ? run.toolSourcePart == null
                 ? 'Ожидание твоего согласия на чтение и передачу выбранной модели'
                 : 'Ожидание твоего согласия на часть ${run.toolSourcePart} и её передачу выбранной модели'

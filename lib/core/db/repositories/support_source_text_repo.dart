@@ -1,18 +1,31 @@
 import 'dart:convert';
+import 'dart:math';
+import '../native_history/history_message_unit.dart' as history;
 
 import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 
 import '../../credentials/secret_redactor.dart';
 import '../../support/support_payload_cipher.dart';
+import '../../support/source_navigation.dart' as nav;
 import '../app_db.dart';
 import 'support_source_text/support_source_json.dart';
 import 'support_text_context_repo.dart';
+import 'support_repo.dart';
 
 part 'support_source_text/source_observation.dart';
 part 'support_source_text/source_metadata_reader.dart';
 part 'support_source_text/source_game_reader.dart';
 part 'support_source_text/source_studio_reader.dart';
+part 'support_source_text/navigation_repo.dart';
+part 'support_source_text/navigation_catalog.dart';
+part 'support_source_text/navigation_game.dart';
+part 'support_source_text/navigation_records.dart';
+part 'support_source_text/navigation_presets.dart';
+part 'support_source_text/navigation_memory.dart';
+part 'support_source_text/navigation_ledger.dart';
+part 'support_source_text/navigation_reconciliation.dart';
+part 'support_source_text/navigation_shape.dart';
 
 /// MODEL tools may request metadata; only the original exact native lease may
 /// implement this port after confirmation of extent AND the same destination.

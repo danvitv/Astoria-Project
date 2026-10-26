@@ -32,6 +32,8 @@ final class SupportModelToolActivity {
 
   String get title => switch (action) {
     'astoria_sources_list' => 'Поиск доступных источников',
+    'astoria_source_contents' => 'Оглавление источника',
+    'astoria_source_search' => 'Поиск по тексту источника',
     'astoria_source_read' => 'Чтение источника',
     'unknown' => 'Неподключённый инструмент',
     _ => 'Инструмент приложения: $action',

@@ -4,6 +4,7 @@ import '../../../core/llm/transport/native_tool_types.dart';
 
 export 'support_app_action_context.dart';
 export 'support_app_action_definition.dart';
+export 'support_source_tool_names.dart';
 
 enum SupportAppActionCode {
   completed,
@@ -83,5 +84,15 @@ abstract interface class SupportAppSourceBodyResultPort {
   bool acceptsSourceBodyOutcome(
     NativeToolCall call,
     SupportAppActionOutcome outcome,
+  );
+}
+
+/// Original-run source adapters may own the native scope dialogue themselves.
+/// The registry accepts this only from its identical registered source port;
+/// model arguments cannot implement it or waive native UI/result custody.
+abstract interface class SupportAppNativeSourceApprovalPort {
+  bool ownsOriginalSourceApproval(
+    String action,
+    SupportAppActionContext original,
   );
 }

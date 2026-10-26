@@ -84,7 +84,7 @@ final class BackupLoopNative {
     databaseReady = true;
     expect(db.nativeDataSourceIdentity, isNull);
     await db.customSelect('SELECT 1').get();
-    expect(db.allTables.length, 61);
+    expect(db.allTables.length, 64);
     expect(
       db.nativeDataSourceIdentity?.belongsTo(db),
       memory ? isNull : isTrue,

@@ -23,6 +23,42 @@ final class SupportReplySourceObservation {
   String toString() => 'SupportReplySourceObservation';
 }
 
+/// A one-use attestation issued ONLY after the original pending-row CAS COMMIT.
+/// No public constructor, reconstructed reservation or generic rebase authority.
+final class SupportReplySourceCommit {
+  SupportReplySourceCommit._(
+    this._issuer,
+    this.original,
+    this.reservation,
+    this.before,
+    this.after,
+  );
+  final _SupportGuardedReplyStore _issuer;
+  final SupportReplySourceObservation original;
+  final SupportReplyReservation reservation;
+  final (int, int) before, after;
+  bool _consumed = false;
+  bool consumeForSourceAdvance(
+    AppDatabase database,
+    (int, int) previous,
+    (int, int) current,
+  ) {
+    if (_consumed ||
+        !identical(_issuer.db, database) ||
+        previous != before ||
+        current != after ||
+        after.$1 != before.$1 + 1 ||
+        after.$2 != before.$2 ||
+        reservation.message != original.reservation.message)
+      return false;
+    _consumed = true;
+    return true;
+  }
+
+  @override
+  String toString() => 'SupportReplySourceCommit';
+}
+
 /// Only historical source metadata can be appended to protected provenance.
 /// No generic body/context setter, model plaintext output, ROOT writes or grants.
 extension _SupportReplySourceStore on _SupportGuardedReplyStore {
@@ -79,8 +115,9 @@ extension _SupportReplySourceStore on _SupportGuardedReplyStore {
   Future<SupportReplyReservation?> extendReplySources(
     SupportReplySourceObservation expected,
     String provenanceJson,
-    bool Function() current,
-  ) => _transaction(current, () async {
+    bool Function() current, {
+    void Function((int, int) before, (int, int) after)? attestation,
+  }) => _transaction(current, () async {
     _require(
       identical(expected._owner, this) &&
           !expected._consumed &&
@@ -119,6 +156,7 @@ extension _SupportReplySourceStore on _SupportGuardedReplyStore {
     }
 
     await _checked(same(), current);
+    final before = await _sourceWriteStamp();
     _require(
       await _checked(_message(expected._row, current), current) == reply,
     );
@@ -185,8 +223,40 @@ extension _SupportReplySourceStore on _SupportGuardedReplyStore {
     // The exact new reservation refreshes settlement and ROOT expectations.
     // Consumption occurs only after durable readback, never before encryption.
     expected._consumed = true;
+    final after = await _sourceWriteStamp();
+    _require(after.$1 == before.$1 + 1 && after.$2 == before.$2);
+    attestation?.call(before, after);
     return (message: reply, provenance: durable);
   });
+
+  Future<(int, int)> _sourceWriteStamp() async {
+    final row = await db
+        .customSelect(
+          'SELECT total_changes() AS c,data_version AS v FROM pragma_data_version',
+        )
+        .getSingle();
+    return (row.read<int>('c'), row.read<int>('v'));
+  }
+
+  Future<SupportReplySourceCommit?> extendReplySourcesAttested(
+    SupportReplySourceObservation original,
+    String json,
+    bool Function() current,
+  ) async {
+    (int, int)? before, after;
+    final actual = await extendReplySources(
+      original,
+      json,
+      current,
+      attestation: (b, a) {
+        before = b;
+        after = a;
+      },
+    );
+    // This await joins the ORIGINAL COMMIT. No Stop check may erase its custody.
+    if (actual == null || before == null || after == null) return null;
+    return SupportReplySourceCommit._(this, original, actual, before!, after!);
+  }
 }
 
 /// Native structural header guard independent of feature codecs. The caller

@@ -69,6 +69,7 @@ final class _ModelRun {
   _ModelSourceToolRun? originalSourceTools;
   int toolSequence = 0;
   int? toolSourcePart;
+  NativeToolCall? toolCall;
   String? toolAction, toolSourceLabel, toolFailureDetail;
   String get sessionId => binding.sessionId;
   late final _ModelReadOperation operation;

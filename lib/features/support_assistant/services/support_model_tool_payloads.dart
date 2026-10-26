@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../../../core/llm/transport/native_tool_types.dart';
+import '../models/support_source_tool_names.dart';
 
 /// Run-local DCP only: exact duplicate metadata payloads become backward refs.
 /// Correlation, status and effects are never pruned. Every read still executes
@@ -8,8 +9,7 @@ import '../../../core/llm/transport/native_tool_types.dart';
 final class SupportModelToolPayloads {
   final _copies = <(String, String, String), String>{};
   static const _reads = {
-    'astoria_sources_list',
-    'astoria_source_read',
+    ...SupportSourceToolNames.all,
     'astoria_preferences_read',
     'astoria_themes_list',
     'astoria_connections_list',
@@ -30,7 +30,7 @@ final class SupportModelToolPayloads {
   static bool isRead(String action) => _reads.contains(action);
 
   NativeToolResult project(NativeToolCall call, NativeToolResult result) {
-    if (call.name == 'astoria_source_read' ||
+    if (SupportSourceToolNames.body.contains(call.name) ||
         !isRead(call.name) ||
         result.content['ok'] != true ||
         result.content['effect'] != 'none') {

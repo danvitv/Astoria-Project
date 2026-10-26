@@ -334,6 +334,7 @@ final class TextContextSqlSpy extends QueryInterceptor {
   bool observing = false;
   int writes = 0;
   final values = <Map<String, Object?>>[];
+  final statements = <String>[];
   Object? selectError;
   @override
   Future<List<Map<String, Object?>>> runSelect(
@@ -343,7 +344,10 @@ final class TextContextSqlSpy extends QueryInterceptor {
   ) async {
     if (observing && selectError != null) throw selectError!;
     final rows = await super.runSelect(executor, statement, args);
-    if (observing) values.addAll(rows);
+    if (observing) {
+      values.addAll(rows);
+      statements.add(statement);
+    }
     return rows;
   }
 

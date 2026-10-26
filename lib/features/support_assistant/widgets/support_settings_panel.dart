@@ -10,6 +10,7 @@ import '../../../shared/widgets/menu_group.dart';
 import '../../../shared/widgets/sheet_view.dart';
 import '../state/support_workspace_provider.dart';
 import '../models/support_permission_preferences.dart';
+import '../models/support_source_tool_names.dart';
 import 'support_settings_focus.dart';
 import 'support_settings_pickers.dart';
 import 'support_settings_unavailable.dart';
@@ -17,6 +18,7 @@ import 'support_settings_start_session.dart';
 import 'support_privacy_group.dart';
 import 'support_output_token_field.dart';
 import 'support_connection_selector.dart';
+import 'support_source_preparation_sheet.dart';
 
 /// Right panel for Astoria Assistant: mode selector (`Onboarding / Diagnostics / Hybrid`),
 /// independent API connection & model selector using safe `CredentialMetadata`
@@ -258,6 +260,32 @@ class SupportSettingsPanel extends ConsumerWidget {
               )
             else
               SupportPrivacyGroup(focusedPermission: focusedPermission),
+          if (supportSourceNavigationExperimentalEnabled &&
+              focus == SupportSettingsFocus.all)
+            MenuGroup(
+              header: 'Источники Астории',
+              description:
+                  'Локальный индекс не даёт модели разрешения на чтение или передачу истории.',
+              items: [
+                MenuItem(
+                  key: const ValueKey('support_local_source_preparation'),
+                  icon: Icons.manage_search_rounded,
+                  label: 'Подготовить историю для навигации',
+                  onTap: () => showModalBottomSheet<void>(
+                    context: context,
+                    useRootNavigator: true,
+                    isScrollControlled: true,
+                    backgroundColor: Colors.transparent,
+                    builder: (sheetContext) => SheetView(
+                      title: 'Локальная подготовка источников',
+                      showBack: true,
+                      onBack: () => Navigator.of(sheetContext).pop(),
+                      body: const SupportSourcePreparationSheet(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           if (focus == SupportSettingsFocus.all)
             MenuGroup(
               header: 'Быстрая диагностика и действия',

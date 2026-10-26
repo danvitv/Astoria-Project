@@ -468,6 +468,7 @@ extension _ModelAdmission on _ModelRun {
   Future<bool> admitOriginalRoot({
     required bool Function() capsuleCurrent,
     required void Function() dispatch,
+    Future<bool> Function(void Function() checkpoint)? additionalReadOnlyCheck,
   }) {
     final configuration = binding.configuration;
     return history.admitDispatch(
@@ -521,6 +522,9 @@ extension _ModelAdmission on _ModelRun {
             checkpoint,
           );
           if (!await sourceToolsRevalidate(checkpoint)) return false;
+          if (additionalReadOnlyCheck != null &&
+              !await additionalReadOnlyCheck(checkpoint))
+            return false;
           checkpoint();
           return reply == expected!.message &&
               provenance == expected!.provenance;

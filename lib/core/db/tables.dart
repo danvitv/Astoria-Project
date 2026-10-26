@@ -8,3 +8,4 @@ part 'tables/studio_and_presets.dart';
 part 'tables/lorebooks.dart';
 part 'tables/extensions.dart';
 part 'tables/support_assistant.dart';
+part 'tables/history_source_index.dart';

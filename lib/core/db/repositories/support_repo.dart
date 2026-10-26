@@ -215,6 +215,16 @@ class SupportRepo {
   }) =>
       _messages.replies.extendReplySources(expected, provenanceJson, isCurrent);
 
+  Future<SupportReplySourceCommit?> extendReplySourcesAttested({
+    required SupportReplySourceObservation expected,
+    required String provenanceJson,
+    required bool Function() isCurrent,
+  }) => _messages.replies.extendReplySourcesAttested(
+    expected,
+    provenanceJson,
+    isCurrent,
+  );
+
   /// Fixed native LOCAL response only. Reuses the exact-user reservation and
   /// settlement port, adding its cards in the SAME outer transaction. A refusal
   /// or any failure rolls back both the reply and dedicated encrypted recipe.

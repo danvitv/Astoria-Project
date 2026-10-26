@@ -92,7 +92,10 @@ final class BackupNativeFixture {
     databaseReady = true;
     expect(db.nativeDataSourceIdentity, isNull);
     await db.customSelect('SELECT 1').get();
-    expect(db.allTables.length, 61);
+    expect(
+      db.allTables.length,
+      64,
+    ); // Schema 138 adds three local derived tables.
     expect(db.nativeDataSourceIdentity!.belongsTo(db), isTrue);
     final cipher = SupportPayloadCipher(
       vault: CredentialVault(

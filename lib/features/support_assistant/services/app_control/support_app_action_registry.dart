@@ -53,16 +53,21 @@ final class SupportAppActionRegistry {
     return bound;
   }
 
-  /// Append only the two original-run private source definitions, preserving
+  /// Append only the four original-run private source definitions, preserving
   /// the exact normal action owner and serialization gate.
   SupportAppActionRegistry withNativeSources(SupportAppActionAdapter sources) {
     final definitions = sources.definitions;
-    if (definitions.length != 2 ||
-        definitions[0].name != 'astoria_sources_list' ||
-        definitions[0].risk != SupportAppActionRisk.metadata ||
-        definitions[1].name != 'astoria_source_read' ||
-        definitions[1].risk != SupportAppActionRisk.bodyRead ||
-        definitions.any((d) => _actions.containsKey(d.name))) {
+    if (definitions.length != SupportSourceToolNames.all.length ||
+        definitions.map((d) => d.name).toSet().length != definitions.length ||
+        definitions.any(
+          (d) =>
+              !SupportSourceToolNames.all.contains(d.name) ||
+              d.risk !=
+                  (d.name == SupportSourceToolNames.list
+                      ? SupportAppActionRisk.metadata
+                      : SupportAppActionRisk.bodyRead) ||
+              _actions.containsKey(d.name),
+        )) {
       throw StateError('Not the finite native source definitions.');
     }
     final bound = SupportAppActionRegistry._bound(
@@ -127,10 +132,7 @@ final class SupportAppActionRegistry {
       // Reattempt safety is an execution-time allowlist, BEFORE preparation.
       // DCP's isRead classification is not an authority boundary.
       if (context.readOnlySources &&
-          !const {
-            'astoria_sources_list',
-            'astoria_source_read',
-          }.contains(call.name)) {
+          !SupportSourceToolNames.all.contains(call.name)) {
         return result(
           call,
           SupportAppActionOutcome(SupportAppActionCode.denied),
@@ -159,10 +161,7 @@ final class SupportAppActionRegistry {
         );
       }
       final risk = definition.risk;
-      final sourceAction = const {
-        'astoria_sources_list',
-        'astoria_source_read',
-      }.contains(call.name);
+      final sourceAction = SupportSourceToolNames.all.contains(call.name);
       final sourceAccess = sourceAction
           ? context.sourceToolAccess
           : context.sourceAccess;
@@ -211,7 +210,14 @@ final class SupportAppActionRegistry {
         );
       }
       SupportAppConfirmationLease? lease;
-      if (_needsConfirmation(risk)) {
+      final sourceOwnsApproval =
+          sourceAction &&
+          identical(adapter, sourceAccess) &&
+          sourceAccess is SupportAppNativeSourceApprovalPort &&
+          (sourceAccess as SupportAppNativeSourceApprovalPort)
+              .ownsOriginalSourceApproval(call.name, context);
+      if (!current()) return result(call, interrupted());
+      if (_needsConfirmation(risk) && !sourceOwnsApproval) {
         if (!_safeJson(prepared.preview) || !current()) {
           return result(
             call,
@@ -418,7 +424,7 @@ final class SupportAppActionRegistry {
     SupportAppActionContext context,
   ) {
     final port = context.sourceToolAccess;
-    if (call.name == 'astoria_source_read') {
+    if (SupportSourceToolNames.body.contains(call.name)) {
       if (port is SupportAppSourceBodyResultPort &&
           identical(_actions[call.name]?.$1, port) &&
           (port as SupportAppSourceBodyResultPort).acceptsSourceBodyOutcome(

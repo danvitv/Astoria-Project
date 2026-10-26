@@ -13,6 +13,9 @@ import 'package:sqlite3/sqlite3.dart' as sqlite;
 import '../services/database_snapshot_service.dart';
 import '../services/android_snapshot_namespace.dart';
 import 'repositories/database_background_snapshot_source_repo.dart';
+import 'repositories/history_source_index_repo.dart';
+import 'native_history/history_index_worker.dart';
+import 'native_history/history_index_schema.dart';
 import '../models/studio_preset_block_migration.dart';
 import '../models/studio_preset_codec.dart';
 import '../models/studio_agent_codec.dart';
@@ -36,6 +39,7 @@ part 'migrations/upgrade_v133.dart';
 part 'migrations/upgrade_v134.dart';
 part 'migrations/upgrade_v135.dart';
 part 'migrations/upgrade_v137.dart';
+part 'migrations/upgrade_v138.dart';
 
 @DriftDatabase(
   tables: [
@@ -43,6 +47,9 @@ part 'migrations/upgrade_v137.dart';
     CharacterFolders,
     CharacterFolderMembers,
     ChatSessions,
+    HistoryIndexClock,
+    HistorySourceGenerations,
+    HistoryMessageUnits,
     Presets,
     PresetFolders,
     PresetFolderMembers,
@@ -126,6 +133,7 @@ class AppDatabase extends _$AppDatabase {
     AndroidSnapshotNamespace? androidSnapshotNamespace,
   }) {
     final native = _AppDatabaseNativeFile.fromOpened(connection);
+    NativeHistoryIndexWorker.install(connection);
     native.checkSnapshotSource = checkSnapshotSource;
     if (androidSnapshotNamespace != null) {
       final file = native.file;
@@ -164,6 +172,18 @@ class AppDatabase extends _$AppDatabase {
   bool get hasCompletedOpening => _completedOpening;
   bool get isClosing => _closing != null;
 
+  late final HistorySourceIndexRepo historySourceIndex = HistorySourceIndexRepo(
+    database: this,
+    isCurrent: () =>
+        hasCompletedOpening && !isClosing && nativeDataSourceIdentity != null,
+    joinLifetime: (work) {
+      final native = _nativeFile;
+      if (native == null)
+        return Future.error(StateError('Native history unavailable'));
+      return native.borrow(work);
+    },
+  );
+
   /// No path/value getter. Null until the original native executor has opened.
   NativeDataSourceIdentity? get nativeDataSourceIdentity {
     final native = _nativeFile;
@@ -193,7 +213,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 137;
+  int get schemaVersion => 138;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -222,6 +242,7 @@ class AppDatabase extends _$AppDatabase {
         ],
       );
       await _ensureSchemaIntegrity();
+      await _installHistoryInvalidation();
     },
     onUpgrade: (Migrator m, int from, int to) async {
       await _upgradeV2ToV50(m, from);
@@ -232,6 +253,7 @@ class AppDatabase extends _$AppDatabase {
       await _upgradeV134(m, from);
       await _upgradeV135(m, from);
       await _upgradeV137(m, from);
+      await _upgradeV138(m, from);
       // Local v136 repairs missing indexes/triggers and replaces the request
       // capture trigger. Only install current-schema integrity after all
       // historical table rebuilds and data normalization have finished.
@@ -274,7 +296,11 @@ LazyDatabase _openConnection(_AppDatabaseNativeFile native, {File? fixedFile}) {
         ),
       );
     }
-    return NativeDatabase.createInBackground(file);
+    return NativeDatabase.createInBackground(
+      file,
+      readPool: 0,
+      setup: NativeHistoryIndexWorker.install,
+    );
   });
 }
 
@@ -282,9 +308,11 @@ LazyDatabase _openConnection(_AppDatabaseNativeFile native, {File? fixedFile}) {
 void Function(sqlite.Database) _androidSnapshotWorkerSetup(
   String sourcePath,
   String stageRoot,
-) =>
-    (source) => BackgroundDatabaseSnapshotWorker.install(
-      source,
-      sourcePath: sourcePath,
-      privateStageRoot: stageRoot,
-    );
+) => (source) {
+  NativeHistoryIndexWorker.install(source);
+  BackgroundDatabaseSnapshotWorker.install(
+    source,
+    sourcePath: sourcePath,
+    privateStageRoot: stageRoot,
+  );
+};

@@ -223,6 +223,7 @@ final class SupportSourceTextNativeFixture {
   void observe() {
     spy.observing = true;
     spy.values.clear();
+    spy.statements.clear();
     primitive.decryptAads.clear();
     storage.operations.clear();
   }

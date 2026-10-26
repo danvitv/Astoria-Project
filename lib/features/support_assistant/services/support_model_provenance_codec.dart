@@ -222,16 +222,43 @@ SupportModelToolDisclosure _disclosure(Object? value) {
     'sourceId',
     'orderedSourceIds',
     'snapshotDigest',
+    'operation',
+    'extent',
   });
   return SupportModelToolDisclosure(
     domain: switch (item['domain']) {
       'game' => SupportModelToolDisclosureDomain.game,
       'studioPreset' => SupportModelToolDisclosureDomain.studioPreset,
+      'ordinaryPreset' => SupportModelToolDisclosureDomain.ordinaryPreset,
+      'memory' => SupportModelToolDisclosureDomain.memory,
+      'savedSummary' => SupportModelToolDisclosureDomain.savedSummary,
+      'ledgerState' => SupportModelToolDisclosureDomain.ledgerState,
+      'ledgerSnapshot' => SupportModelToolDisclosureDomain.ledgerSnapshot,
+      'reconciliation' => SupportModelToolDisclosureDomain.reconciliation,
+      'characterKnowledge' =>
+        SupportModelToolDisclosureDomain.characterKnowledge,
       _ => _reject(SupportModelProvenanceFailure.invalidSource),
     },
     sourceId: _string(item['sourceId']),
     orderedSourceIds: _conversationIds(item['orderedSourceIds']),
     snapshotDigest: _string(item['snapshotDigest']),
+    operation: !item.containsKey('operation')
+        ? null
+        : switch (item['operation']) {
+            'contents' => SupportModelToolDisclosureOperation.contents,
+            'search' => SupportModelToolDisclosureOperation.search,
+            'read' => SupportModelToolDisclosureOperation.read,
+            _ => _reject(SupportModelProvenanceFailure.invalidSource),
+          },
+    extent: !item.containsKey('extent')
+        ? null
+        : switch (item['extent']) {
+            'sourceIdentity' => SupportModelToolDisclosureExtent.sourceIdentity,
+            'selectedMessages' =>
+              SupportModelToolDisclosureExtent.selectedMessages,
+            'scopeMetadata' => SupportModelToolDisclosureExtent.scopeMetadata,
+            _ => _reject(SupportModelProvenanceFailure.invalidSource),
+          },
   );
 }
 
@@ -319,6 +346,12 @@ final class _ProvenanceStorageWriter {
         }
         _append('],"snapshotDigest":');
         _text(item.snapshotDigest);
+        if (item.operation != null) {
+          _append(',"operation":');
+          _text(item.operation!.name);
+          _append(',"extent":');
+          _text(item.extent!.name);
+        }
         _append('}');
       }
       _append(']');

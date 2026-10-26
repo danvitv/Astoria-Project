@@ -31,7 +31,9 @@ abstract final class _ProvenanceToolRetention {
         final key = (item.domain, item.sourceId, item.snapshotDigest);
         final old = seen[key];
         if (old != null) {
-          if (old.orderedSourceIds.length != item.orderedSourceIds.length ||
+          if (old.operation != item.operation ||
+              old.extent != item.extent ||
+              old.orderedSourceIds.length != item.orderedSourceIds.length ||
               Iterable<int>.generate(old.orderedSourceIds.length).any(
                 (i) => old.orderedSourceIds[i] != item.orderedSourceIds[i],
               )) {

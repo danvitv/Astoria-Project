@@ -19,7 +19,27 @@ abstract final class SupportModelProvenanceLimits {
 
 enum SupportModelSourceDomain { support, game }
 
-enum SupportModelToolDisclosureDomain { game, studioPreset }
+enum SupportModelToolDisclosureDomain {
+  game,
+  studioPreset,
+  ordinaryPreset,
+  memory,
+  savedSummary,
+  ledgerState,
+  ledgerSnapshot,
+  reconciliation,
+  characterKnowledge,
+}
+
+enum SupportModelToolDisclosureOperation { contents, search, read }
+
+/// New navigation declarations distinguish source identity / approved metadata
+/// from actual message selections. Absent on legacy v4 source-read declarations.
+enum SupportModelToolDisclosureExtent {
+  sourceIdentity,
+  selectedMessages,
+  scopeMetadata,
+}
 
 /// Historical approved tool INPUT metadata, not current source state or rights.
 /// The digest is private encrypted-storage data; never include it in a prompt.
@@ -29,12 +49,20 @@ final class SupportModelToolDisclosure {
     required String sourceId,
     required List<String> orderedSourceIds,
     required String snapshotDigest,
+    this.operation,
+    this.extent,
   }) : sourceId = _identifier(sourceId),
        orderedSourceIds = _disclosureIds(orderedSourceIds),
        snapshotDigest = _snapshotDigest(snapshotDigest) {
+    if ((operation == null) != (extent == null)) {
+      _fail(SupportModelProvenanceFailure.invalidSource);
+    }
     if (orderedSourceIds.length >
             SupportModelProvenanceLimits.maxToolDisclosureIds ||
-        (domain == SupportModelToolDisclosureDomain.studioPreset &&
+        (const {
+              SupportModelToolDisclosureDomain.studioPreset,
+              SupportModelToolDisclosureDomain.ordinaryPreset,
+            }.contains(domain) &&
             (orderedSourceIds.length != 1 ||
                 orderedSourceIds.single != sourceId))) {
       _fail(SupportModelProvenanceFailure.invalidSource);
@@ -44,6 +72,8 @@ final class SupportModelToolDisclosure {
   final String sourceId;
   final List<String> orderedSourceIds;
   final String snapshotDigest;
+  final SupportModelToolDisclosureOperation? operation;
+  final SupportModelToolDisclosureExtent? extent;
   @override
   String toString() => 'SupportModelToolDisclosure';
 }

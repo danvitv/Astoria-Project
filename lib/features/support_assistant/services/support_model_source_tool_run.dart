@@ -1,69 +1,151 @@
 part of 'support_model_service.dart';
 
-/// Private per-original-run adapter/custody. Handles are metadata references,
-/// never source IDs, paths, repair handles, approvals or persisted rights.
+/// Trusted native plan, not a model selector or permission serialization.
+final class _ModelSourceScopePlan {
+  const _ModelSourceScopePlan(this.scope, this.label, this.extent);
+  final nav.FrozenScope scope;
+  final String label, extent;
+}
+
+/// Dirty-room integration of the independently implemented navigation engine.
+/// The repository and callbacks retain this run's actual native DB. Only the
+/// finite registry is model-visible; none of the native ports is a tool.
 final class _ModelSourceToolRun
     implements
         SupportAppActionAdapter,
         SupportAppSourceAccessPort,
-        SupportAppSourceBodyResultPort {
-  _ModelSourceToolRun(this.run, this.repo);
+        SupportAppSourceBodyResultPort,
+        SupportAppNativeSourceApprovalPort,
+        nav.OwnerPort {
+  _ModelSourceToolRun(
+    this.run,
+    this.repo, {
+    required this.scopeForApproval,
+    required this.acknowledgeOwnWrite,
+    required this.releaseRepository,
+  }) {
+    projection = _ModelSourceProjection(this);
+  }
   final _ModelRun run;
-  final SupportSourceTextRepo repo;
-  final _handles = <String, SupportSourceCatalogEntry>{};
-  final _approved = <_ModelApprovedSource>[];
+  final SupportSourceNavigationRepo repo;
+  final Future<_ModelSourceScopePlan> Function(nav.SourceObservation)
+  scopeForApproval;
+  final Future<void> Function(nav.ProvenanceEntry, SupportReplySourceCommit)
+  acknowledgeOwnWrite;
+  final void Function() releaseRepository;
+  late final nav.RunContext navigationRun;
+  late final nav.SourceNavigationEngine engine;
+  late final _ModelSourceProjection projection;
   final _outcomes =
-      Map<SupportAppActionOutcome, _ModelApprovedSource>.identity();
+      Map<SupportAppActionOutcome, _ModelNavigationOutcome>.identity();
+  final _admitted = <nav.ProvenanceEntry>[];
+  final _published = <nav.NavigationResult>[];
+  final _scopeSpent = Map<nav.NativeGrant, int>.identity();
+  final _wireBounds = Map<nav.ProvenanceEntry, int>.identity();
   SupportAppActionContext? _context;
+  NativeToolCall? _call;
   Uri? _destination;
   bool _closed = false;
+  bool _bound = false;
+  int _wireSpent = 0;
 
-  static const listAction = 'astoria_sources_list',
-      readAction = 'astoria_source_read';
-  static const maxHandles = 64;
   @override
   List<SupportAppActionDefinition> get definitions => [
     SupportAppActionDefinition(
-      name: listAction,
+      name: SupportSourceToolNames.list,
       description:
-          'List only source metadata: games newest activity first; Studio selected '
-          'preset first, then newest activity. activeAtListing is selection metadata '
-          'at discovery, not a historical prompt or permission. '
-          'Use the returned opaque handle for an exact native source-read request.',
+          'Discover bounded source metadata. Names and text are not '
+          'disclosed before native approval. Use returned run-local handles; '
+          'ordinary and Studio presets are different namespaces.',
       risk: SupportAppActionRisk.metadata,
       fields: {
-        'domain': SupportAppActionField.choice(const ['game', 'studioPreset']),
-        'offset': const SupportAppActionField.integer(0, 4096),
+        'domain': SupportAppActionField.choice(
+          nav.SourceDomain.values.map((d) => d.name).toList(),
+        ),
+        'parent': const SupportAppActionField.text(128),
+        'cursor': const SupportAppActionField.text(128),
       },
-      requiredFields: const {'domain', 'offset'},
+      requiredFields: const {'domain'},
     ),
     SupportAppActionDefinition(
-      name: readAction,
+      name: SupportSourceToolNames.contents,
       description:
-          'Request one exact native confirmation for local read AND disclosure '
-          'to this model: at most 16 trailing ACTIVE game messages, or CURRENT SAVED '
-          'Studio definition. Large Studio presets return one definitionChunk, not the '
-          'whole preset; follow nextStudioPage with a fresh confirmation for each part. '
-          'studioPage starts at 0 and must be 0 for games. '
-          'No hidden variants, attachments or historical prompt.',
+          'Obtain a bounded logical contents map within native-approved '
+          'source scope. Follow issued section selectors and nextCursor. This '
+          'does not mean the whole source was read.',
       risk: SupportAppActionRisk.bodyRead,
       fields: const {
-        'opaqueHandle': SupportAppActionField.text(128),
-        'activeMessageOffset': SupportAppActionField.integer(0, 2000),
-        'studioPage': SupportAppActionField.integer(0, 255),
+        'source': SupportAppActionField.text(128),
+        'section': SupportAppActionField.text(128),
+        'cursor': SupportAppActionField.text(128),
       },
-      requiredFields: const {'opaqueHandle', 'activeMessageOffset'},
+      requiredFields: const {'source'},
+    ),
+    SupportAppActionDefinition(
+      name: SupportSourceToolNames.search,
+      description:
+          'Case-sensitive Unicode literal search in one approved scope. '
+          'No regex, normalization or SQL syntax. Native literal limit is 256 '
+          'UTF-16 units. Results are bounded excerpts with issued selectors; '
+          'complete/partial/incompleteReason describe scan coverage, not all occurrences.',
+      risk: SupportAppActionRisk.bodyRead,
+      fields: const {
+        'source': SupportAppActionField.text(128),
+        'literal': SupportAppActionField.text(256),
+        'section': SupportAppActionField.text(128),
+        'cursor': SupportAppActionField.text(128),
+      },
+      requiredFields: const {'source', 'literal'},
+    ),
+    SupportAppActionDefinition(
+      name: SupportSourceToolNames.read,
+      description:
+          'Read ONE issued logical record, native ACTIVE-message range '
+          'or opaque text continuation. before/after add at most two ACTIVE '
+          'neighbours inside the same frozen scope. Never load whole history or '
+          'invent a raw ID, offset, path or JSON pointer. Partial text is not a full source.',
+      risk: SupportAppActionRisk.bodyRead,
+      fields: const {
+        'source': SupportAppActionField.text(128),
+        'selector': SupportAppActionField.text(128),
+        'before': SupportAppActionField.integer(0, 2),
+        'after': SupportAppActionField.integer(0, 2),
+      },
+      requiredFields: const {'source', 'selector'},
     ),
   ];
 
   void bindOriginalContext(SupportAppActionContext context, Uri destination) {
     if (_context != null ||
-        !identical(context.sourceToolAccess, this) &&
-            run.binding.toolUi?.confirmation != null) {
+        (run.binding.toolUi?.confirmation != null &&
+            !identical(context.sourceToolAccess, this))) {
       throw const SupportAppActionRefused(SupportAppActionCode.denied);
     }
     _context = context;
     _destination = destination;
+    final config = run.binding.configuration,
+        recipient = config.recipient.recipient;
+    navigationRun = nav.RunContext(
+      run,
+      run.runId,
+      nav.Recipient(
+        config.api.protocol,
+        recipient.connectionId,
+        config.api.protocol,
+        config.settings.modelId ?? '',
+        nativeRoute: destination.toString(),
+        configurationRevision: recipient.configurationRevision,
+      ),
+    );
+    engine = nav.SourceNavigationEngine(
+      run: navigationRun,
+      repository: repo,
+      owner: this,
+      approval: _ModelSourceApproval(this),
+      projection: projection,
+      provenance: _ModelSourceProvenance(this),
+    );
+    _bound = true;
   }
 
   bool get current => !_closed && run.current();
@@ -71,6 +153,7 @@ final class _ModelSourceToolRun
       current &&
       identical(context, _context) &&
       identical(context.sourceToolAccess, this) &&
+      identical(context.cancelToken, run.operation.token) &&
       context.current &&
       current;
   void check(SupportAppActionContext context) {
@@ -80,416 +163,188 @@ final class _ModelSourceToolRun
   }
 
   @override
+  bool isOriginalOwnerCurrent(nav.RunContext originalRun) =>
+      identical(originalRun, navigationRun) &&
+      identical(originalRun.originalOwner, run) &&
+      _context != null &&
+      original(_context!);
+  @override
+  bool ownsOriginalSourceApproval(
+    String action,
+    SupportAppActionContext context,
+  ) =>
+      SupportSourceToolNames.body.contains(action) &&
+      _call?.name == action &&
+      context.confirmation != null &&
+      original(context);
+
+  @override
   Future<SupportAppPreparedAction?> prepare(
     String action,
     Map<String, Object?> arguments,
     SupportAppActionContext context,
   ) async {
     check(context);
-    if (action == listAction) {
-      return SupportAppPreparedAction(
-        target: 'source-metadata',
-        observation: this,
-        observationIsCurrent: () => original(context),
-        execute: (admitted) async {
-          if (!admitted())
-            throw const SupportAppActionRefused(SupportAppActionCode.stale);
-          final domain = SupportSourceDomain.values.byName(
-            arguments['domain'] as String,
-          );
+    final call = run.toolCall;
+    if (call == null ||
+        call.name != action ||
+        SupportModelToolPayloads.argumentsKey(call.arguments) !=
+            SupportModelToolPayloads.argumentsKey(arguments)) {
+      throw const SupportAppActionRefused(SupportAppActionCode.denied);
+    }
+    _call = call;
+    return SupportAppPreparedAction(
+      target: 'original-source-navigation',
+      observation: this,
+      observationIsCurrent: () => original(context),
+      execute: (admitted) async {
+        check(context);
+        if (!admitted())
+          throw const SupportAppActionRefused(SupportAppActionCode.stale);
+        try {
           run.toolActivity(
             SupportModelToolStage.executing,
-            sourceLabel: domain == SupportSourceDomain.game
-                ? 'Истории игр'
-                : 'Сохранённые Studio-пресеты',
-            detail:
-                'Чтение только каталога; содержимое источников не передаётся',
+            detail: action == SupportSourceToolNames.list
+                ? 'Поиск метаданных источников; текст не передаётся'
+                : 'Навигация только внутри нативно разрешённой области',
           );
           check(context);
-          final SupportSourceCatalogPage page;
-          try {
-            final activeReader = run.service._activeStudioPresetId;
-            final active =
-                domain == SupportSourceDomain.studioPreset &&
-                    activeReader != null
-                ? await activeReader()
-                : null;
-            check(context);
-            if (!admitted())
-              throw const SupportAppActionRefused(SupportAppActionCode.stale);
-            page = await repo.catalog(
-              domain: domain,
-              offset: arguments['offset'] as int,
-              activeStudioPresetId: active,
-              isCurrent: () => original(context) && admitted(),
-            );
-          } on SupportSourceReadException catch (error) {
-            run.refuseSourceTool(error);
-            throw const SupportAppActionRefused(
-              SupportAppActionCode.unavailable,
-            );
-          }
+          final result = await engine.invoke(
+            action,
+            arguments,
+            retryOrRegeneration: context.readOnlySources,
+          );
           check(context);
-          if (_handles.length + page.entries.length > maxHandles) {
-            throw const SupportAppActionRefused(
-              SupportAppActionCode.unavailable,
-            );
+          if (result.wire['status'] != 'ok') {
+            _refuseNavigation(result.wire['status']);
+            return SupportAppActionOutcome(_failureCode(result.wire['status']));
           }
-          final entries = <Map<String, Object?>>[];
-          for (final entry in page.entries) {
-            final handle = run.service._newId();
-            if (handle.length > 128 ||
-                handle.isEmpty ||
-                _handles.containsKey(handle) ||
-                _ModelSourceMetadata(run).exactText(handle, maxLength: 128) !=
-                    handle) {
-              throw const SupportAppActionRefused(
-                SupportAppActionCode.unsafeMetadata,
-              );
-            }
-            _handles[handle] = entry;
-            entries.add({
-              'opaqueHandle': handle,
-              'label': safeLabel(entry.label),
-              'kind': domain.name,
-              'updatedAt': entry.updatedAt,
-              if (domain == SupportSourceDomain.studioPreset &&
-                  page.activeStudioSourceId != null)
-                'activeAtListing': entry.sourceId == page.activeStudioSourceId,
-              if (entry.sessionIndex != null)
-                'sessionIndex': entry.sessionIndex,
-            });
-          }
-          return SupportAppActionOutcome(
+          final outcome = SupportAppActionOutcome(
             SupportAppActionCode.completed,
-            data: {'entries': entries, 'nextOffset': page.nextOffset},
+            data: result.bodyBearing
+                ? {'sourceText': result.encoded}
+                : result.wire,
           );
-        },
-      );
-    }
-    if (action != readAction) return null;
-    final handle = arguments['opaqueHandle'] as String;
-    final entry = _handles[handle];
-    if (entry == null)
-      throw const SupportAppActionRefused(SupportAppActionCode.denied);
-    run.toolActivity(
-      SupportModelToolStage.preparing,
-      sourceLabel:
-          '${entry.domain == SupportSourceDomain.game ? 'История игры' : 'Studio-пресет'}: ${safeLabel(entry.label)}',
-      detail:
-          'Проверка выбранного источника и границ чтения; текст ещё не передаётся',
-    );
-    check(context);
-    if (_approved.length >= SupportModelProvenanceLimits.maxToolDisclosures) {
-      throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
-    }
-    final SupportSourceObservation observation;
-    try {
-      observation = await repo.observe(
-        entry: entry,
-        activeMessageOffset: arguments['activeMessageOffset'] as int,
-        studioPage: arguments['studioPage'] as int? ?? 0,
-        isCurrent: () => original(context),
-      );
-    } on SupportSourceReadException catch (error) {
-      run.refuseSourceTool(error);
-      throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
-    }
-    check(context);
-    if (observation.studioIsPaged) {
-      run.toolSourcePart = observation.studioPage + 1;
-      run.toolActivity(
-        SupportModelToolStage.preparing,
-        sourceLabel: 'Studio-пресет: ${safeLabel(observation.label)}',
-        detail:
-            'Часть ${observation.studioPage + 1}; полный пресет проверяется '
-            'локально, модели передаётся только эта часть',
-      );
-      check(context);
-    }
-    final recipient = run.binding.configuration.recipient;
-    return SupportAppPreparedAction(
-      target: handle,
-      observation: observation,
-      observationIsCurrent: () => original(context),
-      preview: {
-        'sourceLabel': safeLabel(observation.label),
-        'kind': observation.domain.name,
-        // Generic preview strings keep their original 256-character limit.
-        // Full local-validation and part limits are rendered from bounded fields.
-        'extent': observation.domain == SupportSourceDomain.game
-            ? observation.extentDescription
-            : observation.studioIsPaged
-            ? 'CURRENT SAVED Studio: ONLY Part ${observation.studioPage + 1}; '
-                  'studioPage ${observation.studioPage}. Deterministic Unicode scalar boundaries; '
-                  'total parts known after local validation. One part is not the full preset.'
-            : 'CURRENT SAVED Studio: complete saved definition (studioPage 0).',
-        if (observation.domain == SupportSourceDomain.studioPreset) ...{
-          'studioIsPaged': observation.studioIsPaged,
-          'studioPage': observation.studioPage,
-          'partCharacters': SupportSourceTextRepo.maxStudioPartCharacters,
-          'partEscapedBytes':
-              SupportSourceTextRepo.maxStudioPartDoubleJsonBytes,
-        },
-        'selectedCount': observation.orderedSourceIds.length,
-        'activeMessageOffset': observation.activeMessageOffset,
-        'orderedSourceIds': observation.orderedSourceIds,
-        'storedTextBytes': observation.textBytes,
-        'exclusions': observation.domain == SupportSourceDomain.game
-            ? 'Hidden/failed/locked messages, inactive variants, attachments, prompts, cards, memory and trackers.'
-            : 'Historical assembled prompts, old versions, runtime state; no proof of association with game answers.',
-        'connection': safeLabel(recipient.connectionLabel),
-        'protocol': safeLabel(recipient.protocolLabel),
-        'routing': safeLabel(recipient.routingLabel),
-        'origin': safeLabel(recipient.originLabel),
-        'model': safeLabel(run.binding.configuration.settings.modelId!),
-        'operation': switch (run.binding.configuration.api.protocol) {
-          'gemini' => 'generateContent',
-          'anthropic' => 'Messages',
-          'openai_responses' => 'Responses',
-          _ => 'Chat Completions',
-        },
-        'consent':
-            'One local bounded read AND disclosure of the resulting text to this exact selected model for this request only.',
-      },
-      execute: (admitted) =>
-          _read(context, observation, arguments, handle, admitted),
-    );
-  }
-
-  String safeLabel(String value) => _safeText(
-    run.service._redaction.redactor,
-    value,
-    256,
-  ).replaceAll(RegExp(r'[\x00-\x1f\x7f\u200b-\u200f\ufeff]'), ' ');
-
-  Future<SupportAppActionOutcome> _read(
-    SupportAppActionContext context,
-    SupportSourceObservation observation,
-    Map<String, Object?> arguments,
-    String handle,
-    bool Function() admitted,
-  ) async {
-    try {
-      return await _readApproved(
-        context,
-        observation,
-        arguments,
-        handle,
-        admitted,
-      );
-    } on SupportSourceReadException catch (error) {
-      run.refuseSourceTool(error);
-      throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
-    } on SupportTextContextException {
-      throw const SupportAppActionRefused(SupportAppActionCode.stale);
-    } on SupportModelProvenanceException {
-      throw const SupportAppActionRefused(SupportAppActionCode.denied);
-    } on NativeToolException {
-      // Exact FULL native result overflow happens before the provenance CAS.
-      throw const SupportAppActionRefused(SupportAppActionCode.denied);
-    }
-  }
-
-  Future<SupportAppActionOutcome> _readApproved(
-    SupportAppActionContext context,
-    SupportSourceObservation observation,
-    Map<String, Object?> arguments,
-    String handle,
-    bool Function() admitted,
-  ) async {
-    check(context);
-    final lease = context.sourceReadConfirmation(observation);
-    if (lease == null ||
-        lease.request.target != handle ||
-        SupportModelToolPayloads.argumentsKey(lease.request.arguments) !=
-            SupportModelToolPayloads.argumentsKey(arguments) ||
-        !admitted()) {
-      throw const SupportAppActionRefused(SupportAppActionCode.denied);
-    }
-    final authority = _ModelSourceAuthority(
-      this,
-      observation,
-      lease,
-      _destination!,
-    );
-    run.toolActivity(
-      SupportModelToolStage.executing,
-      detail: observation.studioIsPaged
-          ? 'Чтение одобренной части ${observation.studioPage + 1} Studio-пресета'
-          : 'Чтение одобренного текста для этого запроса',
-    );
-    check(context);
-    // This future is joined, never abandoned on cancellation. Body SQL/crypto and
-    // native confirmation stay OUTSIDE the original model read-only ROOT.
-    final snapshot = await repo.read(
-      observation: observation,
-      authority: authority,
-    );
-    check(context);
-    final json = await repo.toolResult(
-      snapshot: snapshot,
-      authority: authority,
-    );
-    check(context);
-    final outcome = SupportAppActionOutcome(
-      SupportAppActionCode.completed,
-      data: {'sourceText': json},
-    );
-    // Validate the FULL actual result before any provenance append. Body strings
-    // stay a bounded encoded data payload, not generic relaxed metadata JSON.
-    final native = NativeToolResult(
-      callId: lease.request.callId,
-      name: readAction,
-      content: {
-        'ok': true,
-        'code': outcome.code.name,
-        'effect': 'none',
-        'data': outcome.data,
+          if (result.bodyBearing) {
+            final native = NativeToolResult(
+              callId: call.id,
+              name: call.name,
+              content: {
+                'ok': true,
+                'code': 'completed',
+                'effect': 'none',
+                'data': outcome.data,
+              },
+            );
+            if (jsonEncode(native.content) != result.postEncoded) {
+              throw const SupportAppActionRefused(SupportAppActionCode.denied);
+            }
+            _outcomes[outcome] = _ModelNavigationOutcome(call, result, native);
+          }
+          return outcome;
+        } finally {
+          _call = null;
+        }
       },
     );
-    final approved = _ModelApprovedSource(authority, snapshot, json, native);
-    _approved.add(approved);
-    if (!await run.admitOriginalRoot(
-      capsuleCurrent: () => authority.isCurrent,
-      dispatch: () {},
-    )) {
-      throw const SupportAppActionRefused(SupportAppActionCode.stale);
-    }
-    check(context);
-    final old = run.context!.recipe;
-    final disclosure = SupportModelToolDisclosure(
-      domain: SupportModelToolDisclosureDomain.values.byName(
-        snapshot.domain.name,
-      ),
-      sourceId: snapshot.sourceId,
-      // Provenance v4 identifies a Studio source with exactly its preset ID.
-      // Each part has its own private digest (full raw source + chosen extent),
-      // never a persisted read grant or a claim that one part was the whole preset.
-      orderedSourceIds: snapshot.domain == SupportSourceDomain.studioPreset
-          ? [snapshot.sourceId]
-          : snapshot.orderedSourceIds,
-      snapshotDigest: snapshot.snapshotDigestForEncryptedProvenance,
-    );
-    final prior = old.toolDisclosures ?? const <SupportModelToolDisclosure>[];
-    final same = prior.any(
-      (d) =>
-          d.domain == disclosure.domain &&
-          d.sourceId == disclosure.sourceId &&
-          d.snapshotDigest == disclosure.snapshotDigest,
-    );
-    if (same &&
-        prior.any(
-          (d) =>
-              d.domain == disclosure.domain &&
-              d.sourceId == disclosure.sourceId &&
-              d.snapshotDigest == disclosure.snapshotDigest &&
-              !_sameConversationIds(
-                d.orderedSourceIds,
-                disclosure.orderedSourceIds,
-              ),
-        )) {
-      throw const SupportAppActionRefused(SupportAppActionCode.denied);
-    }
-    if (!same) {
-      final next = SupportModelProvenance(
-        supportSessionId: old.supportSessionId,
-        replyMessageId: old.replyMessageId,
-        runId: old.runId,
-        currentUserMessageId: old.currentUserMessageId,
-        originalRanges: old.originalRanges,
-        directReplies: old.directReplies,
-        currentConversationMessageIds: old.currentConversationMessageIds,
-        compactedThroughMessageId: old.compactedThroughMessageId,
-        toolDisclosures: [...prior, disclosure],
-      );
-      _checkRecipeIdentifiers(run.service._redaction.redactor, next);
-      final encoded = SupportModelProvenanceCodec.encodeForEncryptedStorage(
-        next,
-      );
-      final refreshed = await run.service._writes.enqueue(() async {
-        check(context);
-        if (!authority.isCurrent)
-          throw const SupportAppActionRefused(SupportAppActionCode.stale);
-        final pending = await run.service._writer.readReplyForSourceExtension(
-          expected: run.expected!,
-          originatingUser: run.durableUser!,
-          isCurrent: () => original(context) && authority.isCurrent,
-        );
-        check(context);
-        if (pending == null)
-          throw const SupportAppActionRefused(SupportAppActionCode.conflict);
-        final written = await run.service._writer.extendReplySources(
-          expected: pending,
-          provenanceJson: encoded,
-          isCurrent: () => original(context) && authority.isCurrent,
-        );
-        if (written == null)
-          throw const SupportAppActionRefused(SupportAppActionCode.conflict);
-        // Settlement must retain OUR actual durable reservation even if Stop
-        // retired publication during the transaction's release.
-        run.expected = written;
-        return written;
-      });
-      check(context);
-      if (refreshed.provenance.protectedFactsJson != encoded) {
-        throw const SupportAppActionRefused(SupportAppActionCode.conflict);
-      }
-      final originals = run.snapshots;
-      final fresh = await run.history.refreshAfterOwnSourceExtension(
-        snapshots: originals,
-        checkpoint: () {
-          check(context);
-        },
-      );
-      check(context);
-      run.snapshots = fresh;
-      run.context = _ModelContextPlan(
-        fresh.take(run.context!.snapshots.length),
-        run.context!.custody,
-        next,
-      );
-    }
-    check(context);
-    if (!authority.isCurrent)
-      throw const SupportAppActionRefused(SupportAppActionCode.stale);
-    _outcomes[outcome] = approved;
-    return outcome;
   }
+
+  void _refuseNavigation(Object? status) => run.refuseTool(switch (status) {
+    'approvalRequired' ||
+    'denied' => 'Нативное согласие на эту область не получено или отозвано',
+    'staleSource' =>
+      'Исходный снимок изменился; область не расширялась и не подменялась',
+    'budgetExceeded' =>
+      'Лимит навигации исчерпан; прочитанную часть нельзя считать всем источником',
+    'invalidReference' || 'invalidArguments' =>
+      'Модель передала невыданную ссылку или неподдерживаемые параметры',
+    'stopped' =>
+      'Исходное чтение остановлено; дальнейшая передача не разрешена',
+    _ => 'Источник не прошёл безопасную проверку; содержимое не передано',
+  });
+  SupportAppActionCode _failureCode(Object? status) => switch (status) {
+    'approvalRequired' ||
+    'denied' ||
+    'invalidReference' => SupportAppActionCode.denied,
+    'invalidArguments' => SupportAppActionCode.invalidArguments,
+    'staleSource' => SupportAppActionCode.conflict,
+    'stopped' =>
+      run.operation.token.isCancelled
+          ? SupportAppActionCode.cancelled
+          : SupportAppActionCode.stale,
+    _ => SupportAppActionCode.unavailable,
+  };
 
   @override
   bool acceptsSourceBodyOutcome(
     NativeToolCall call,
     SupportAppActionOutcome outcome,
   ) {
-    final approved = _outcomes[outcome];
-    return call.name == readAction &&
-        current &&
-        approved != null &&
-        call.id == approved.native.callId &&
-        SupportModelToolPayloads.argumentsKey(call.arguments) ==
-            SupportModelToolPayloads.argumentsKey(
-              approved.authority.lease.request.arguments,
-            ) &&
-        approved.authority.isCurrent &&
-        outcome.code == SupportAppActionCode.completed &&
-        outcome.effect == SupportAppActionEffect.none &&
-        outcome.data.length == 1 &&
-        outcome.data['sourceText'] == approved.json &&
-        approved.native.content['data'] is Map;
+    final captured = _outcomes[outcome];
+    if (!SupportSourceToolNames.body.contains(call.name) ||
+        !current ||
+        captured == null ||
+        !identical(call, captured.call) ||
+        outcome.code != SupportAppActionCode.completed ||
+        outcome.effect != SupportAppActionEffect.none ||
+        outcome.data.length != 1 ||
+        outcome.data['sourceText'] != captured.result.encoded ||
+        jsonEncode(captured.native.content) != captured.result.postEncoded)
+      return false;
+    if (!_published.contains(captured.result)) _published.add(captured.result);
+    return true;
   }
 
+  /// Actual ROOT validation is distinct from a POST: it must not charge a fake
+  /// transmission or use withPost as a synthetic permission/check callback.
   Future<bool> revalidate(void Function() checkpoint) async {
-    for (final approved in _approved) {
+    if (!_bound) return _admitted.isEmpty && current;
+    if (!await engine.revalidateForHost(
+      _admitted.map((e) => e.source),
+      checkpoint,
+    ))
+      return false;
+    for (final entry in _admitted) {
       checkpoint();
-      if (!await repo.revalidate(
-        snapshot: approved.snapshot,
-        authority: approved.authority,
-      ))
+      if (!entry.grant.lease.isCurrent() ||
+          !entry.source.lease.isCurrent() ||
+          !entry.source.lease.isCurrent())
         return false;
       checkpoint();
+      final stamp = await projection.currentStamp();
+      checkpoint();
+      if (!stamp.same(entry.projection) ||
+          !entry.grant.lease.isCurrent() ||
+          !entry.source.lease.isCurrent())
+        return false;
     }
     return current;
+  }
+
+  Future<bool> withPost(Future<bool> Function() dispatch) async {
+    if (!_bound) return false;
+    var accepted = false;
+    final ok = await engine.withPost(_published, (_) async {
+      var bytes = 0;
+      final scopeBytes = Map<nav.NativeGrant, int>.identity();
+      for (final entry in _admitted) {
+        final bound = _wireBounds[entry];
+        if (bound == null) return;
+        bytes += bound;
+        scopeBytes.update(entry.grant, (n) => n + bound, ifAbsent: () => bound);
+      }
+      if (_wireSpent + bytes > nav.Limits.disclosureBytes ||
+          scopeBytes.entries.any(
+            (e) => (_scopeSpent[e.key] ?? 0) + e.value > e.key.disclosureBytes,
+          ))
+        return;
+      _wireSpent += bytes;
+      for (final e in scopeBytes.entries) {
+        _scopeSpent.update(e.key, (n) => n + e.value, ifAbsent: () => e.value);
+      }
+      accepted = await dispatch();
+    });
+    return ok && accepted;
   }
 
   @override
@@ -499,61 +354,23 @@ final class _ModelSourceToolRun
     required Object observation,
     required SupportAppActionContext context,
   }) async => null;
-
   void close() {
+    if (_closed) return;
     _closed = true;
-    for (final item in _approved) {
-      item.authority.release();
-    }
-    _handles.clear();
+    if (_bound) engine.stop();
     _outcomes.clear();
-    _approved.clear();
+    _published.clear();
+    _admitted.clear();
+    _wireBounds.clear();
+    _scopeSpent.clear();
+    releaseRepository();
   }
 }
 
-final class _ModelSourceAuthority
-    implements SupportSourceReadAuthority, SupportAppSourceLease {
-  _ModelSourceAuthority(
-    this.owner,
-    this.observation,
-    this.lease,
-    this.destination,
-  );
-  final _ModelSourceToolRun owner;
-  @override
-  final SupportSourceObservation observation;
-  final SupportAppConfirmationLease lease;
-  final Uri destination;
-  bool _retired = false;
-  @override
-  bool get isCurrent {
-    if (_retired) return false;
-    if (!owner.current ||
-        !identical(lease.request.observation, observation) ||
-        !identical(lease.request.context, owner._context) ||
-        destination != owner._destination ||
-        !lease.current ||
-        !lease.request.current ||
-        !owner.current) {
-      _retired = true;
-    }
-    return !_retired;
-  }
-
-  @override
-  void release() => _retired = true;
-}
-
-final class _ModelApprovedSource {
-  const _ModelApprovedSource(
-    this.authority,
-    this.snapshot,
-    this.json,
-    this.native,
-  );
-  final _ModelSourceAuthority authority;
-  final SupportSourceSnapshot snapshot;
-  final String json;
+final class _ModelNavigationOutcome {
+  const _ModelNavigationOutcome(this.call, this.result, this.native);
+  final NativeToolCall call;
+  final nav.NavigationResult result;
   final NativeToolResult native;
 }
 

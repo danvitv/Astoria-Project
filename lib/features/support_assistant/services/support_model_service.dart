@@ -24,6 +24,7 @@ import '../../../core/models/api_config.dart';
 import '../../../core/models/support_models.dart';
 import '../../../core/models/support_text_context.dart';
 import '../../../core/support/support_payload_cipher.dart';
+import '../../../core/support/source_navigation.dart' as nav;
 import '../../../core/utils/id_generator.dart';
 import '../models/support_model_provenance.dart';
 import '../models/support_model_view.dart';
@@ -66,6 +67,7 @@ part 'support_model_tool_loop.dart';
 part 'support_model_reply_regeneration.dart';
 part 'support_model_unanswered_retry.dart';
 part 'support_model_source_tool_run.dart';
+part 'support_model_source_navigation_ports.dart';
 part 'support_model_tool_activity.dart';
 
 /// Native-only write scheduling seam; NEVER expose this service/scheduler to

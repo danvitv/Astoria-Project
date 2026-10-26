@@ -9,6 +9,7 @@ import '../../../shared/widgets/glaze_action_button.dart';
 import '../../../shared/widgets/glaze_bottom_sheet.dart';
 import '../models/support_app_action_context.dart';
 import '../models/support_model_tool_ui_ports.dart';
+import '../models/support_source_tool_names.dart';
 
 /// Actual original-screen UI. Route changes latch a revision, including A→B→A.
 /// No model-selected path, generic approval callback or Send confirmation.
@@ -112,7 +113,9 @@ final class SupportModelToolNativeUi
               if (!open) {
                 WidgetsBinding.instance.addPostFrameCallback((_) => dismiss());
               }
-              final sourceRead = request.action == 'astoria_source_read';
+              final sourceRead = SupportSourceToolNames.body.contains(
+                request.action,
+              );
               final cancel = GlazeActionButton(
                 key: const ValueKey('support_tool_confirmation_cancel'),
                 label: 'Отмена',
@@ -168,7 +171,7 @@ final class SupportModelToolNativeUi
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                         child: Text(
-                          request.action == 'astoria_source_read'
+                          sourceRead
                               ? 'Чтение источника для выбранной модели'
                               : request.action.startsWith('astoria_connection_')
                               ? 'Изменение подключения'
@@ -183,7 +186,7 @@ final class SupportModelToolNativeUi
                           ),
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: Text(
-                            request.action == 'astoria_source_read'
+                            sourceRead
                                 ? _sourceReadPreview(request)
                                 : 'Действие: ${request.action}\nЦель: ${request.target}\n'
                                       'Аргументы: ${jsonEncode(request.arguments)}\n'
@@ -263,6 +266,41 @@ final class SupportModelToolNativeUi
 
 String _sourceReadPreview(SupportAppConfirmationRequest request) {
   final p = request.preview;
+  if (p['sourceNavigation'] == true) {
+    final kind = switch (p['kind']) {
+      'game' => 'Игра — активная история',
+      'ordinaryPreset' => 'Обычный пресет — CURRENT SAVED',
+      'studioPreset' => 'Studio — CURRENT SAVED',
+      'memory' => 'Сохранённая память и производные записи',
+      'savedSummary' => 'Сохранённое саммари',
+      'ledgerState' => 'Текущее сохранённое состояние Ledger',
+      'ledgerSnapshot' => 'Сохранённые снимки Ledger',
+      'reconciliation' => 'Сохранённые записи реконcиляции',
+      'characterKnowledge' => 'Сохранённые знания персонажей',
+      _ => 'Источник приложения',
+    };
+    return 'Источник: ${p['sourceLabel']}\nТип: $kind\n'
+        'Неизменяемая область исходного снимка: ${p['extent']}\n'
+        'Разделы: ${jsonEncode(p['sections'])}\n'
+        'Не включается: ${p['exclusions']}\n'
+        'Общий предел: ${p['disclosureBytes']} байт; не более '
+        '${p['bodyResults']} результатов с содержимым. '
+        'Повторные передачи также расходуют предел.\n\n'
+        'Получатель: ${p['connection']}\nМодель: ${p['model']}\n'
+        'Протокол: ${p['protocol']}\nМаршрут: ${p['routing']}\n'
+        'Адрес получателя: ${p['origin']}\n\n'
+        'Кнопка разрешает локальное оглавление, буквальный поиск и адресное '
+        'чтение только внутри показанной области для исходного запроса. '
+        'Модели могут передаваться названия, найденные выдержки и выбранные '
+        'записи; вся история автоматически не передаётся. Техническое '
+        'дочитывание в этой же области не требует повторного подтверждения. '
+        'Другой источник, расширение области и новый запрос требуют нового согласия. '
+        'Stop, выход с исходного экрана или изменение источника прекращают доступ. '
+        'Настройки и глобальные разрешения не меняются. Неподдерживаемые данные '
+        'не чинятся и не подменяются. Сохранённые пресеты — не исторический '
+        'собранный промпт; память, саммари и Ledger не доказывают, каким '
+        'промптом был создан прежний ответ.';
+  }
   final studio = p['kind'] == 'studioPreset';
   final studioExtent = !studio
       ? ''
