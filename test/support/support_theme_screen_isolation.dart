@@ -30,6 +30,12 @@ final class ThemeScreenIsolation extends ProviderObserver {
 
   @override
   void didAddProvider(ProviderObserverContext context, Object? value) {
+    // The original metadata lookup returns null for the overridden legacy API
+    // repository. This fixture never owns a native provider recipient.
+    if (identical(context.provider, nativeProviderRuntimeProvider) &&
+        value != null) {
+      block('native provider recipient');
+    }
     if (!{
       appDbProvider,
       supportPayloadCipherProvider,
@@ -37,6 +43,7 @@ final class ThemeScreenIsolation extends ProviderObserver {
       credentialStorageProvider,
       credentialVaultProvider,
       apiConfigRepoProvider,
+      nativeProviderRuntimeProvider,
       connectionRevisionRegistryProvider,
       chatSourceMutationRegistryProvider,
       secretRedactionCoordinatorProvider,

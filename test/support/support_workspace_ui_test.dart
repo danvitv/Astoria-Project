@@ -113,6 +113,12 @@ void main() {
       await tester.enterText(input, 'Сохрани мой черновик');
       // The real screen's main send now requires original native model custody;
       // this visual-only fake exercises the explicit offline composer action.
+      await tester.tap(find.byKey(const ValueKey('support_drawer_toggle')));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('support_composer_local_help_btn')),
+      );
+      await tester.pump();
       await tester.tap(
         find.byKey(const ValueKey('support_composer_local_help_btn')),
       );
@@ -173,7 +179,7 @@ void main() {
       await tester.tap(find.byKey(ValueKey(key)));
       await tester.pumpAndSettle();
       final sheet = tester.widget<SheetView>(find.byType(SheetView));
-      expect(sheet.showBack, isTrue);
+      expect(sheet.showBack, isFalse);
       expect(sheet.onBack, isNotNull);
       expect(
         key.contains('sessions')

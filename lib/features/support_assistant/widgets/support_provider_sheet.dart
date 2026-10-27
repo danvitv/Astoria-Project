@@ -14,6 +14,7 @@ import 'support_provider_form.dart';
 import 'support_provider_key_sheet.dart';
 import 'support_provider_preview.dart';
 import 'support_provider_screen_controller.dart';
+import 'support_surface_layout.dart';
 
 /// List, offline form, exact review and trusted key entry share ONE route.
 class SupportProviderSheet extends ConsumerStatefulWidget {
@@ -139,111 +140,124 @@ class _SheetState extends ConsumerState<SupportProviderSheet> {
 
     return SheetView(
       title: 'support_provider_title'.tr(),
-      showBack: true,
+      showBack: false,
+      titleWidget: SupportSheetTitle(
+        title: 'support_provider_title'.tr(),
+        onBack: _close,
+        backKey: const ValueKey('support_provider_cancel'),
+      ),
       onBack: _close,
       body: Builder(
-        builder: (bodyContext) => ListView(
-          key: const ValueKey('support_provider_scroll'),
-          padding: EdgeInsets.fromLTRB(
-            0,
-            MediaQuery.paddingOf(bodyContext).top + 12,
-            0,
-            MediaQuery.paddingOf(bodyContext).bottom + 24,
-          ),
-          // SheetView already consumes viewInsets: no second keyboard padding.
-          children: [
-            SupportProviderButton(
-              key: const ValueKey('support_provider_cancel'),
-              label: 'support_provider_close'.tr(),
-              icon: Icons.close_rounded,
-              onTap: _close,
+        builder: (bodyContext) => SupportSheetDecisionBody(
+          footer: review == null || preview == null
+              ? const SizedBox.shrink()
+              : SupportProviderReviewActions(
+                  controller: c!,
+                  review: review,
+                  preview: preview,
+                ),
+          content: ListView(
+            key: const ValueKey('support_provider_scroll'),
+            padding: EdgeInsets.fromLTRB(
+              0,
+              12,
+              0,
+              MediaQuery.paddingOf(bodyContext).bottom + 24,
             ),
-            if (!usable) ...[
-              SupportProviderNotice('support_provider_permissions'.tr()),
-              if (c != null || widget.nativeUnavailable)
-                SupportProviderNotice('support_provider_unavailable'.tr()),
-            ] else if (keyEntry != null)
-              SupportProviderKeySheet(
-                key: ObjectKey(keyEntry),
-                target: keyEntry,
-                onBack: widget.createForAstoria ? c!.showResult : c!.showList,
-              )
-            else if (c != null) ...[
-              SupportProviderNotice('support_provider_scope_notice'.tr()),
-              if (!c.changesAllowed)
-                SupportProviderNotice('support_provider_read_only'.tr()),
-              if (c.notice != null) SupportProviderNotice(c.notice!.tr()),
-              if (c.busy) SupportProviderNotice('support_provider_busy'.tr()),
-              if (!widget.createForAstoria && review == null && !c.hasForm) ...[
-                SupportProviderButton(
-                  key: const ValueKey('support_provider_mode_create'),
-                  label: 'support_provider_new'.tr(),
-                  icon: Icons.add_rounded,
-                  primary: true,
-                  onTap: c.changesAllowed && !c.busy ? c.newProfile : null,
-                ),
-                SupportProviderButton(
-                  key: const ValueKey('support_provider_mode_list'),
-                  label: 'support_provider_existing'.tr(),
-                  icon: Icons.list_alt_rounded,
-                  onTap: !c.busy ? c.showList : null,
-                ),
-                SupportProviderConnectionsList(controller: c),
-              ],
-              if (c.hasForm && editingCurrent)
-                Offstage(
-                  key: ObjectKey(c.formIdentity),
-                  offstage: review != null,
-                  child: SupportProviderForm(
-                    key: const ValueKey('support_provider_form'),
-                    controller: c,
-                    simple: widget.createForAstoria,
-                    onCancel: widget.createForAstoria ? _close : null,
+            // SheetView already consumes viewInsets: no second keyboard padding.
+            children: [
+              if (!usable) ...[
+                SupportProviderNotice('support_provider_permissions'.tr()),
+                if (c != null || widget.nativeUnavailable)
+                  SupportProviderNotice('support_provider_unavailable'.tr()),
+              ] else if (keyEntry != null)
+                SupportProviderKeySheet(
+                  key: ObjectKey(keyEntry),
+                  target: keyEntry,
+                  onBack: widget.createForAstoria ? c!.showResult : c!.showList,
+                )
+              else if (c != null) ...[
+                SupportProviderNotice('support_provider_scope_notice'.tr()),
+                if (!c.changesAllowed)
+                  SupportProviderNotice('support_provider_read_only'.tr()),
+                if (c.notice != null) SupportProviderNotice(c.notice!.tr()),
+                if (c.busy) SupportProviderNotice('support_provider_busy'.tr()),
+                if (!widget.createForAstoria &&
+                    review == null &&
+                    !c.hasForm) ...[
+                  SupportProviderButton(
+                    key: const ValueKey('support_provider_mode_create'),
+                    label: 'support_provider_new'.tr(),
+                    icon: Icons.add_rounded,
+                    primary: true,
+                    onTap: c.changesAllowed && !c.busy ? c.newProfile : null,
                   ),
+                  SupportProviderButton(
+                    key: const ValueKey('support_provider_mode_list'),
+                    label: 'support_provider_existing'.tr(),
+                    icon: Icons.list_alt_rounded,
+                    selected: true,
+                    onTap: !c.busy ? c.showList : null,
+                  ),
+                  SupportProviderConnectionsList(controller: c),
+                ],
+                if (c.hasForm && editingCurrent)
+                  Offstage(
+                    key: ObjectKey(c.formIdentity),
+                    offstage: review != null,
+                    child: SupportProviderForm(
+                      key: const ValueKey('support_provider_form'),
+                      controller: c,
+                      simple: widget.createForAstoria,
+                      onCancel: widget.createForAstoria ? _close : null,
+                    ),
+                  ),
+                if (c.hasForm && !editingCurrent)
+                  SupportProviderNotice('support_provider_unavailable'.tr()),
+                if (review != null)
+                  if (preview != null)
+                    SupportProviderPreview(
+                      showActions: false,
+                      controller: c,
+                      review: review,
+                      preview: preview,
+                    )
+                  else
+                    SupportProviderNotice('support_provider_unavailable'.tr()),
+                if (fact != null && review == null)
+                  if (result != null)
+                    SupportProviderResult(controller: c, view: result)
+                  else
+                    SupportProviderNotice('support_provider_unavailable'.tr()),
+              ],
+              if (widget.createForAstoria &&
+                  widget.onUseConnection != null &&
+                  fact?.code == SupportProviderActionCode.applied &&
+                  fact?.applied != null &&
+                  fact!.applied!.value != null &&
+                  review == null)
+                SupportProviderButton(
+                  key: const ValueKey('support_provider_use_astoria'),
+                  label: 'Использовать в Астории',
+                  icon: Icons.check_rounded,
+                  primary: true,
+                  onTap: usable && !c!.busy && !_usingConnection
+                      ? () => _useConnection(fact.applied!)
+                      : null,
                 ),
-              if (c.hasForm && !editingCurrent)
-                SupportProviderNotice('support_provider_unavailable'.tr()),
-              if (review != null)
-                if (preview != null)
-                  SupportProviderPreview(
-                    controller: c,
-                    review: review,
-                    preview: preview,
-                  )
-                else
-                  SupportProviderNotice('support_provider_unavailable'.tr()),
-              if (fact != null && review == null)
-                if (result != null)
-                  SupportProviderResult(controller: c, view: result)
-                else
-                  SupportProviderNotice('support_provider_unavailable'.tr()),
+              if (widget.onPermissions != null &&
+                  (!usable || !c!.changesAllowed))
+                SupportProviderButton(
+                  key: const ValueKey('support_provider_permissions_open'),
+                  label: 'support_provider_permissions_open'.tr(),
+                  icon: Icons.privacy_tip_outlined,
+                  onTap: () {
+                    widget.onPermissions!();
+                    _close();
+                  },
+                ),
             ],
-            if (widget.createForAstoria &&
-                widget.onUseConnection != null &&
-                fact?.code == SupportProviderActionCode.applied &&
-                fact?.applied != null &&
-                fact!.applied!.value != null &&
-                review == null)
-              SupportProviderButton(
-                key: const ValueKey('support_provider_use_astoria'),
-                label: 'Использовать в Астории',
-                icon: Icons.check_rounded,
-                primary: true,
-                onTap: usable && !c!.busy && !_usingConnection
-                    ? () => _useConnection(fact.applied!)
-                    : null,
-              ),
-            if (widget.onPermissions != null && (!usable || !c!.changesAllowed))
-              SupportProviderButton(
-                key: const ValueKey('support_provider_permissions_open'),
-                label: 'support_provider_permissions_open'.tr(),
-                icon: Icons.privacy_tip_outlined,
-                onTap: () {
-                  widget.onPermissions!();
-                  _close();
-                },
-              ),
-          ],
+          ),
         ),
       ),
     );

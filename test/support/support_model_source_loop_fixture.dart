@@ -220,10 +220,13 @@ final class SourceLoop {
       find.byType(TextField).first,
       'Сравни последнюю игру «Отель Петербург» с текущим сохранённым Studio.',
     );
-    await backupLoopReal(
-      tester,
-      () => tester.tap(find.byKey(const ValueKey('support_composer_send_btn'))),
-    );
+    // Empty -> draft schedules the real composer's availability rebuild. The
+    // gesture must target its emitted enabled button, not the previous frame.
+    await tester.pump();
+    final send = find.byKey(const ValueKey('support_composer_send_btn'));
+    expect(send.hitTestable(), findsOneWidget);
+    expect(tester.widget<IconButton>(send).onPressed, isNotNull);
+    await backupLoopReal(tester, () => tester.tap(send));
     if (confirmation) await modal(tester);
   }
 

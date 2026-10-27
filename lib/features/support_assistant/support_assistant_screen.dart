@@ -15,6 +15,10 @@ import '../settings/app_settings_provider.dart';
 import 'state/support_workspace_provider.dart';
 import 'state/support_model_provider.dart';
 import 'widgets/support_composer_bar.dart';
+import 'widgets/support_action_strip.dart';
+import 'widgets/support_surface_layout.dart';
+import 'widgets/support_source_preparation_entry.dart';
+import 'models/support_source_tool_names.dart';
 import 'widgets/support_message_list.dart';
 import 'widgets/support_message_text.dart';
 import 'widgets/support_user_message_editor.dart';
@@ -72,6 +76,7 @@ class _SupportAssistantScreenState
   final SupportModelScreenController _modelUi = SupportModelScreenController();
   final _providerEntry = GlobalKey<SupportProviderEntryState>();
   final _themeEntry = GlobalKey<SupportThemeEntryState>();
+  final _composer = GlobalKey<SupportComposerBarState>();
   List<SupportGuidanceTarget> _guidance = const [];
   SupportComposerDraft? _guidanceDraft;
   String? _guidanceSession;
@@ -80,7 +85,10 @@ class _SupportAssistantScreenState
   bool _guidancePersistent = false, _guidanceBlocking = true;
   bool _showSendSnapshot = false;
   bool _sheetOpen = false;
+  String? _openPanel;
   Object _messageMenuLifetime = Object();
+
+  void _setSheetOpen(bool open) => setState(() => _sheetOpen = open);
 
   @override
   void deactivate() {
@@ -170,9 +178,21 @@ class _SupportAssistantScreenState
     }
   }
 
+  void _handleScreenBack() {
+    if (_composer.currentState?.closeActions() == true) return;
+    if (MediaQuery.viewInsetsOf(context).bottom > 0) {
+      FocusManager.instance.primaryFocus?.unfocus();
+      return;
+    }
+    _navigateBackToCharacters();
+  }
+
   Future<void> _openSessionsSheet() async {
     if (_sheetOpen || !mounted) return;
-    _sheetOpen = true;
+    setState(() {
+      _sheetOpen = true;
+      _openPanel = 'sessions';
+    });
     try {
       await showModalBottomSheet<void>(
         context: context,
@@ -181,33 +201,39 @@ class _SupportAssistantScreenState
         backgroundColor: Colors.transparent,
         builder: (sheetCtx) => SheetView(
           title: 'История сессий Астории',
-          showBack: true,
+          showBack: false,
+          titleWidget: SupportSheetTitle(
+            title: 'История сессий Астории',
+            onBack: () => Navigator.of(sheetCtx).pop(),
+          ),
           onBack: () => Navigator.of(sheetCtx).pop(),
           startExpanded: false,
-          body: Builder(
-            builder: (bodyContext) => Padding(
-              padding: EdgeInsets.only(
-                top: MediaQuery.paddingOf(bodyContext).top,
-              ),
-              child: SupportSessionsPanel(
-                onSessionSelected: () => Navigator.of(sheetCtx).pop(),
-                onBackToCharacters: () {
-                  Navigator.of(sheetCtx).pop();
-                  _navigateBackToCharacters();
-                },
-              ),
-            ),
+          body: SupportSessionsPanel(
+            sheetHosted: true,
+            onSessionSelected: () => Navigator.of(sheetCtx).pop(),
+            onBackToCharacters: () {
+              Navigator.of(sheetCtx).pop();
+              _navigateBackToCharacters();
+            },
           ),
         ),
       );
     } finally {
-      _sheetOpen = false;
+      if (mounted) {
+        setState(() {
+          _sheetOpen = false;
+          _openPanel = null;
+        });
+      }
     }
   }
 
   Future<void> _openSettingsSheet() async {
     if (_sheetOpen || !mounted) return;
-    _sheetOpen = true;
+    setState(() {
+      _sheetOpen = true;
+      _openPanel = 'settings';
+    });
     try {
       await showModalBottomSheet<void>(
         context: context,
@@ -216,23 +242,26 @@ class _SupportAssistantScreenState
         backgroundColor: Colors.transparent,
         builder: (sheetCtx) => SheetView(
           title: 'Настройки Астории',
-          showBack: true,
+          showBack: false,
+          titleWidget: SupportSheetTitle(
+            title: 'Настройки Астории',
+            onBack: () => Navigator.of(sheetCtx).pop(),
+          ),
           onBack: () => Navigator.of(sheetCtx).pop(),
           startExpanded: false,
-          body: Builder(
-            builder: (bodyContext) => Padding(
-              padding: EdgeInsets.only(
-                top: MediaQuery.paddingOf(bodyContext).top,
-              ),
-              child: SupportSettingsPanel(
-                onActionTriggered: () => Navigator.of(sheetCtx).pop(),
-              ),
-            ),
+          body: SupportSettingsPanel(
+            sheetHosted: true,
+            onActionTriggered: () => Navigator.of(sheetCtx).pop(),
           ),
         ),
       );
     } finally {
-      _sheetOpen = false;
+      if (mounted) {
+        setState(() {
+          _sheetOpen = false;
+          _openPanel = null;
+        });
+      }
     }
   }
 
@@ -327,32 +356,45 @@ class _SupportAssistantScreenState
 
     return GlazeScaffold(
       title: activeTitle,
+      titleWidget: Text(
+        activeTitle,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: context.cs.onSurface,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
       showBack: true,
-      onBack: _navigateBackToCharacters,
+      onBack: _handleScreenBack,
       showBackground: !isDesktop,
       flushHeader: isDesktop,
       actions: [
-        SupportThemeEntry(key: _themeEntry),
-        SupportProviderEntry(
-          key: _providerEntry,
-          onOpenPermissions: _openSettingsSheet,
-        ),
+        if (isDesktop) ...[
+          SupportThemeEntry(key: _themeEntry),
+          SupportProviderEntry(
+            key: _providerEntry,
+            onOpenPermissions: _openSettingsSheet,
+          ),
+        ],
         if (!isDesktop) ...[
           IconButton(
-            key: const ValueKey('mobile_open_sessions_btn'),
-            tooltip: 'История сессий',
-            icon: Icon(
-              Icons.history_rounded,
-              size: 22,
-              color: context.cs.primary,
-            ),
-            onPressed: _openSessionsSheet,
+            key: const ValueKey('mobile_open_settings_btn'),
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            isSelected: _openPanel == 'settings',
+            tooltip: 'Настройки Астории',
+            color: context.cs.primary,
+            icon: const Icon(Icons.tune_rounded, size: 22),
+            onPressed: _sheetOpen ? null : _openSettingsSheet,
           ),
           IconButton(
-            key: const ValueKey('mobile_open_settings_btn'),
-            tooltip: 'Настройки Астории',
-            icon: Icon(Icons.tune_rounded, size: 22, color: context.cs.primary),
-            onPressed: _openSettingsSheet,
+            key: const ValueKey('mobile_open_sessions_btn'),
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            isSelected: _openPanel == 'sessions',
+            tooltip: 'История сессий',
+            color: context.cs.primary,
+            icon: const Icon(Icons.more_horiz_rounded, size: 22),
+            onPressed: _sheetOpen ? null : _openSessionsSheet,
           ),
         ] else
           Padding(
@@ -373,21 +415,6 @@ class _SupportAssistantScreenState
       ],
       body: Column(
         children: [
-          if (workspace.error != null)
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: GlazeErrorBlock(
-                message: workspace.error!,
-                label: 'Астория',
-              ),
-            ),
-          if (!workspace.settingsAvailable)
-            const Padding(
-              padding: EdgeInsets.all(12),
-              child: Text(
-                'Настройки сессии недоступны. Отправка заблокирована; открой настройки Астории.',
-              ),
-            ),
           if (run.label.isNotEmpty ||
               _modelUi.refusal != SupportModelRefusal.none)
             Padding(
@@ -400,97 +427,161 @@ class _SupportAssistantScreenState
               ),
             ),
           Expanded(
-            child: SupportMessageList(
-              messages: workspace.activeMessages,
-              hasConfiguredModel: workspace.settings.hasConfiguredModel,
-              run: run,
-              welcomeAvatar: widget.welcomeAvatar,
-              // Full capability copy scrolls with the feed instead of crowding
-              // out the composer on narrow screens with large text.
-              notice: Column(
+            child: LayoutBuilder(
+              builder: (_, constraints) => Column(
                 children: [
-                  const Padding(
-                    key: ValueKey('support_text_only_notice'),
-                    padding: EdgeInsets.symmetric(vertical: 8),
-                    child: Text(
-                      '«Отправить» и Enter (если включён в общих настройках) сразу '
-                      'отправляют вопрос и видимый текущий диалог выбранной модели. '
-                      'Другие чаты и приватные источники требуют отдельных разрешений. '
-                      'При нативном подключении модель может читать и менять безопасные '
-                      'настройки интерфейса, энергосбережение и установленную тему без '
-                      'повторного подтверждения отправки. Метаданные подключений доступны '
-                      'без ключей; создание и ограниченные изменения профиля требуют точного '
-                      'нативного подтверждения. Переход по разделам не изменяет их данные. '
-                      'Защищённый ввод ключа остаётся отдельным нативным действием. '
-                      'Диагностику можно обсудить без выбора игровой сессии. '
-                      'Подключены конечные операции карточек, персон, лора, обычных и Studio-пресетов, '
-                      'настроек Memory и отключения блока расширения с точным подтверждением. '
-                      'Доступны метаданные сессий и диагностики, ограниченная проверка всех зарегистрированных '
-                      'таблиц БД, выбранные скалярные исправления и условный Undo по сохранённой квитанции. '
-                      'Collector/Ledger требуют существующего безопасного владельца сессии; спящие цели '
-                      'могут быть недоступны. Проверка записанных хешей внутренняя, не оценка правды текста. '
-                      'Чтение приватных тел, сборка каталога без отдельного разрешения, произвольное удаление, '
-                      'каноническая перепись истории, экспорт и универсальное восстановление БД не подключены. '
-                      'Компакт сжимает старый контекст выбранной моделью, не удаляя историю. '
-                      'DCP автоматически запускает компакт при давлении на контекст; '
-                      'внутри одного запроса также убирает точные дубли метаданных инструментов. '
-                      'Между запросами сохраняются ответы, но не скрытый журнал инструментов. '
-                      'счётчик показывает только токены из ответа провайдера. '
-                      'Локальная помощь — отдельно, без сети.',
-                      style: TextStyle(fontSize: 12),
+                  Expanded(
+                    child: SupportMessageList(
+                      messages: workspace.activeMessages,
+                      hasConfiguredModel: workspace.settings.hasConfiguredModel,
+                      run: run,
+                      welcomeAvatar: widget.welcomeAvatar,
+                      // Full capability copy scrolls with the feed instead of crowding
+                      // out the composer on narrow screens with large text.
+                      notice: Column(
+                        children: [
+                          if (workspace.error != null)
+                            GlazeErrorBlock(
+                              message: workspace.error!,
+                              label: 'Астория',
+                            ),
+                          if (!workspace.settingsAvailable)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 12),
+                              child: Text(
+                                'Настройки сессии недоступны. Отправка заблокирована; открой настройки Астории.',
+                              ),
+                            ),
+                          const Padding(
+                            key: ValueKey('support_text_only_notice'),
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: Text(
+                              '«Отправить» и Enter (если включён в общих настройках) сразу '
+                              'отправляют вопрос и видимый текущий диалог выбранной модели. '
+                              'Другие чаты и приватные источники требуют отдельных разрешений. '
+                              'При нативном подключении модель может читать и менять безопасные '
+                              'настройки интерфейса, энергосбережение и установленную тему без '
+                              'повторного подтверждения отправки. Метаданные подключений доступны '
+                              'без ключей; создание и ограниченные изменения профиля требуют точного '
+                              'нативного подтверждения. Переход по разделам не изменяет их данные. '
+                              'Защищённый ввод ключа остаётся отдельным нативным действием. '
+                              'Диагностику можно обсудить без выбора игровой сессии. '
+                              'Подключены конечные операции карточек, персон, лора, обычных и Studio-пресетов, '
+                              'настроек Memory и отключения блока расширения с точным подтверждением. '
+                              'Доступны метаданные сессий и диагностики, ограниченная проверка всех зарегистрированных '
+                              'таблиц БД, выбранные скалярные исправления и условный Undo по сохранённой квитанции. '
+                              'Collector/Ledger требуют существующего безопасного владельца сессии; спящие цели '
+                              'могут быть недоступны. Проверка записанных хешей внутренняя, не оценка правды текста. '
+                              'Чтение приватных тел, сборка каталога без отдельного разрешения, произвольное удаление, '
+                              'каноническая перепись истории, экспорт и универсальное восстановление БД не подключены. '
+                              'Компакт сжимает старый контекст выбранной моделью, не удаляя историю. '
+                              'DCP автоматически запускает компакт при давлении на контекст; '
+                              'внутри одного запроса также убирает точные дубли метаданных инструментов. '
+                              'Между запросами сохраняются ответы, но не скрытый журнал инструментов. '
+                              'счётчик показывает только токены из ответа провайдера. '
+                              'Локальная помощь — отдельно, без сети.',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ),
+                          ..._pendingGuidance(workspace.activeSessionId),
+                        ],
+                      ),
+                      onQuickAction: _handleSetupCardAction,
+                      onApplyPlan: notifier.applyMutationPlan,
+                      onRollback: notifier.rollbackMutation,
+                      onSetupAction: _handleSetupCardAction,
+                      onGuidance: _openGuidance,
+                      onMessageMenu: _openMessageMenu,
+                      onRegenerate:
+                          emitter == null ||
+                              workspace.isBusy ||
+                              workspace.isLoading ||
+                              activeSend != null
+                          ? null
+                          : (message) => _modelUi.regenerate(emitter, message),
+                      onRetry:
+                          emitter == null ||
+                              workspace.isBusy ||
+                              workspace.isLoading ||
+                              activeSend != null
+                          ? null
+                          : (message) => _modelUi.retry(emitter, message),
                     ),
                   ),
-                  ..._pendingGuidance(workspace.activeSessionId),
+                  // A non-flex footer otherwise receives unbounded height from
+                  // Column. Use the body remaining after header/status/IME, not
+                  // the window height; the composer's drawer can then yield.
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: constraints.maxHeight,
+                    ),
+                    child: SupportComposerBar(
+                      key: _composer,
+                      useActionDrawer: !isDesktop,
+                      auxiliaryActions: isDesktop
+                          ? [
+                              if (supportSourceNavigationExperimentalEnabled)
+                                const SupportSourcePreparationEntry(),
+                            ]
+                          : [
+                              SupportThemeEntry(
+                                key: _themeEntry,
+                                compact: true,
+                              ),
+                              SupportProviderEntry(
+                                key: _providerEntry,
+                                compact: true,
+                                onOpenPermissions: _openSettingsSheet,
+                              ),
+                              if (supportSourceNavigationExperimentalEnabled)
+                                const SupportSourcePreparationEntry(),
+                              SupportActionTile(
+                                key: const ValueKey(
+                                  'support_panel_report_action',
+                                ),
+                                icon: Icons.enhanced_encryption_rounded,
+                                label: 'Отчёт недоступен',
+                                tooltip:
+                                    '.astoria-report — экспорт пока недоступен',
+                                onTap: null,
+                              ),
+                            ],
+                      controller: _composerCtrl,
+                      sessionId: workspace.activeSessionId,
+                      enterToSend: enterToSend,
+                      busy:
+                          workspace.isBusy ||
+                          workspace.isLoading ||
+                          run.busy ||
+                          activeSend != null,
+                      available:
+                          workspace.settingsAvailable &&
+                          workspace.activeSessionId.isNotEmpty,
+                      onSend: notifier.sendUserMessage,
+                      nativeOwner: emitter,
+                      onNativeSend: (draft) => _sendWithGuidance(
+                        emitter,
+                        draft,
+                        workspace.activeSessionId,
+                      ),
+                      onLocalHelp: notifier.sendLocalHelp,
+                      onStop: activeSend?.stop,
+                      onCompact: emitter == null
+                          ? null
+                          : () => _modelUi.compact(emitter),
+                      usage: run.sessionId == workspace.activeSessionId
+                          ? run.usage
+                          : null,
+                      usageIsCompaction:
+                          run.sessionId == workspace.activeSessionId &&
+                          run.isCompaction,
+                      onRunQuickDiagnostics: () =>
+                          _handleSetupCardAction('connection_diagnostics'),
+                    ),
+                  ),
                 ],
               ),
-              onQuickAction: _handleSetupCardAction,
-              onApplyPlan: notifier.applyMutationPlan,
-              onRollback: notifier.rollbackMutation,
-              onSetupAction: _handleSetupCardAction,
-              onGuidance: _openGuidance,
-              onMessageMenu: _openMessageMenu,
-              onRegenerate:
-                  emitter == null ||
-                      workspace.isBusy ||
-                      workspace.isLoading ||
-                      activeSend != null
-                  ? null
-                  : (message) => _modelUi.regenerate(emitter, message),
-              onRetry:
-                  emitter == null ||
-                      workspace.isBusy ||
-                      workspace.isLoading ||
-                      activeSend != null
-                  ? null
-                  : (message) => _modelUi.retry(emitter, message),
             ),
-          ),
-          SupportComposerBar(
-            controller: _composerCtrl,
-            sessionId: workspace.activeSessionId,
-            enterToSend: enterToSend,
-            busy:
-                workspace.isBusy ||
-                workspace.isLoading ||
-                run.busy ||
-                activeSend != null,
-            available:
-                workspace.settingsAvailable &&
-                workspace.activeSessionId.isNotEmpty,
-            onSend: notifier.sendUserMessage,
-            nativeOwner: emitter,
-            onNativeSend: (draft) =>
-                _sendWithGuidance(emitter, draft, workspace.activeSessionId),
-            onLocalHelp: notifier.sendLocalHelp,
-            onStop: activeSend?.stop,
-            onCompact: emitter == null ? null : () => _modelUi.compact(emitter),
-            usage: run.sessionId == workspace.activeSessionId
-                ? run.usage
-                : null,
-            usageIsCompaction:
-                run.sessionId == workspace.activeSessionId && run.isCompaction,
-            onRunQuickDiagnostics: () =>
-                _handleSetupCardAction('connection_diagnostics'),
           ),
         ],
       ),

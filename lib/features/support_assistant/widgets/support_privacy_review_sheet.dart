@@ -6,6 +6,7 @@ import '../../../shared/widgets/menu_group.dart';
 import '../../../shared/widgets/sheet_view.dart';
 import '../models/support_recipient_resolution.dart';
 import '../services/support_native_consent_controller.dart';
+import 'support_surface_layout.dart';
 
 /// Native review chrome. Keeps no transient inspection or raw route metadata.
 class SupportPrivacyReviewSheet extends StatefulWidget {
@@ -83,110 +84,124 @@ class _ReviewSheetState extends State<SupportPrivacyReviewSheet> {
                   ? 'support_privacy_recovery_title'
                   : 'support_privacy_recipient_title')
               .tr(),
-      showBack: true,
+      showBack: false,
+      titleWidget: SupportSheetTitle(
+        title:
+            (widget.recovery
+                    ? 'support_privacy_recovery_title'
+                    : 'support_privacy_recipient_title')
+                .tr(),
+        onBack: () => _finish(false),
+      ),
       onBack: () => _finish(false),
       collapsedFraction: 0.85,
       body: Builder(
-        builder: (context) => ListView(
-          padding: EdgeInsets.only(
-            top: MediaQuery.paddingOf(context).top + 12,
-            bottom: MediaQuery.paddingOf(context).bottom + 24,
+        builder: (context) => SupportSheetDecisionBody(
+          content: ListView(
+            key: const ValueKey('support_privacy_review_scroll'),
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            children: [
+              MenuGroup(
+                header: 'support_privacy_review_scope'.tr(),
+                description:
+                    widget.controller.runtime.snapshot.preferences?.isGlobal ==
+                        true
+                    ? 'Общий профиль Астории. Выбранные сообщения не переносятся в другой чат; весь текущий чат доступен только при явном выборе этой области. Каждое действие по-прежнему требует своего подтверждения.'
+                    : 'support_privacy_session_only'.tr(),
+                items: [
+                  _Notice(
+                    'support_privacy_saved_counts'.tr(
+                      args: [
+                        '${widget.review.view.gameMessageCount}',
+                        '${widget.review.view.supportMessageCount}',
+                      ],
+                    ),
+                  ),
+                  _Notice(
+                    'support_privacy_review_connections'.tr(
+                      args: [
+                        (widget.review.view.connectionsSelected
+                                ? 'support_privacy_yes'
+                                : 'support_privacy_no')
+                            .tr(),
+                      ],
+                    ),
+                  ),
+                  _Notice('support_privacy_saved_links'.tr()),
+                  if (widget.recovery)
+                    _Notice('support_privacy_recovery_notice'.tr())
+                  else if (recipient is SupportResolvedRecipient) ...[
+                    _SafeLabel(
+                      'support_privacy_connection'.tr(),
+                      recipient.connectionLabel,
+                    ),
+                    _SafeLabel(
+                      'support_privacy_model'.tr(),
+                      recipient.recipient.modelId,
+                    ),
+                    _SafeLabel(
+                      'support_privacy_protocol'.tr(),
+                      recipient.protocolLabel,
+                    ),
+                    _SafeLabel(
+                      'support_privacy_origin'.tr(),
+                      recipient.originLabel,
+                    ),
+                    _SafeLabel(
+                      'support_privacy_operation'.tr(),
+                      recipient.operationLabel,
+                    ),
+                    _SafeLabel(
+                      'support_privacy_routing'.tr(),
+                      recipient.routingLabel,
+                    ),
+                    _Notice('support_privacy_router_limit'.tr()),
+                  ] else
+                    _Notice('support_privacy_recipient_unavailable'.tr()),
+                  _Notice('support_privacy_no_action'.tr()),
+                  if (!current) _Notice('support_privacy_stale'.tr()),
+                ],
+              ),
+            ],
           ),
-          children: [
-            MenuGroup(
-              header: 'support_privacy_review_scope'.tr(),
-              description:
-                  widget.controller.runtime.snapshot.preferences?.isGlobal ==
-                      true
-                  ? 'Общий профиль Астории. Выбранные сообщения не переносятся в другой чат; весь текущий чат доступен только при явном выборе этой области. Каждое действие по-прежнему требует своего подтверждения.'
-                  : 'support_privacy_session_only'.tr(),
-              items: [
-                _Notice(
-                  'support_privacy_saved_counts'.tr(
-                    args: [
-                      '${widget.review.view.gameMessageCount}',
-                      '${widget.review.view.supportMessageCount}',
-                    ],
-                  ),
-                ),
-                _Notice(
-                  'support_privacy_review_connections'.tr(
-                    args: [
-                      (widget.review.view.connectionsSelected
-                              ? 'support_privacy_yes'
-                              : 'support_privacy_no')
+          footer: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: GlazeActionButton(
+                  key: const ValueKey('support_privacy_review_confirm'),
+                  icon: widget.recovery ? Icons.restart_alt : Icons.check,
+                  label:
+                      (widget.recovery
+                              ? 'support_privacy_recovery_confirm'
+                              : 'support_privacy_recipient_confirm')
                           .tr(),
-                    ],
-                  ),
+                  expand: true,
+                  maxLabelLines: null,
+                  tone: widget.recovery
+                      ? GlazeActionTone.destructive
+                      : GlazeActionTone.primary,
+                  onTap:
+                      current &&
+                          (widget.recovery ||
+                              recipient is SupportResolvedRecipient)
+                      ? () => _finish(true)
+                      : null,
                 ),
-                _Notice('support_privacy_saved_links'.tr()),
-                if (widget.recovery)
-                  _Notice('support_privacy_recovery_notice'.tr())
-                else if (recipient is SupportResolvedRecipient) ...[
-                  _SafeLabel(
-                    'support_privacy_connection'.tr(),
-                    recipient.connectionLabel,
-                  ),
-                  _SafeLabel(
-                    'support_privacy_model'.tr(),
-                    recipient.recipient.modelId,
-                  ),
-                  _SafeLabel(
-                    'support_privacy_protocol'.tr(),
-                    recipient.protocolLabel,
-                  ),
-                  _SafeLabel(
-                    'support_privacy_origin'.tr(),
-                    recipient.originLabel,
-                  ),
-                  _SafeLabel(
-                    'support_privacy_operation'.tr(),
-                    recipient.operationLabel,
-                  ),
-                  _SafeLabel(
-                    'support_privacy_routing'.tr(),
-                    recipient.routingLabel,
-                  ),
-                  _Notice('support_privacy_router_limit'.tr()),
-                ] else
-                  _Notice('support_privacy_recipient_unavailable'.tr()),
-                _Notice('support_privacy_no_action'.tr()),
-                if (!current) _Notice('support_privacy_stale'.tr()),
-              ],
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: GlazeActionButton(
-                key: const ValueKey('support_privacy_review_confirm'),
-                icon: widget.recovery ? Icons.restart_alt : Icons.check,
-                label:
-                    (widget.recovery
-                            ? 'support_privacy_recovery_confirm'
-                            : 'support_privacy_recipient_confirm')
-                        .tr(),
-                expand: true,
-                tone: widget.recovery
-                    ? GlazeActionTone.destructive
-                    : GlazeActionTone.primary,
-                onTap:
-                    current &&
-                        (widget.recovery ||
-                            recipient is SupportResolvedRecipient)
-                    ? () => _finish(true)
-                    : null,
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: GlazeActionButton(
-                key: const ValueKey('support_privacy_review_cancel'),
-                icon: Icons.close,
-                label: 'support_privacy_cancel'.tr(),
-                expand: true,
-                onTap: () => _finish(false),
+              Padding(
+                padding: EdgeInsets.zero,
+                child: GlazeActionButton(
+                  key: const ValueKey('support_privacy_review_cancel'),
+                  icon: Icons.close,
+                  label: 'support_privacy_cancel'.tr(),
+                  expand: true,
+                  onTap: () => _finish(false),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

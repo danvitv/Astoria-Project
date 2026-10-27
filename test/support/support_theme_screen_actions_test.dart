@@ -22,6 +22,11 @@ void main() {
         expect(f.controller.view.themeSelected, isFalse);
         expect(f.controller.view.rights.where((r) => r.enabled), isEmpty);
         final reads = f.theme.store.freshReads;
+        final drawer = find.byKey(const ValueKey('support_drawer_toggle'));
+        if (drawer.evaluate().isNotEmpty) {
+          await f.gesture(tester, () => tester.tap(drawer));
+          await tester.pumpAndSettle();
+        }
         await f.gesture(
           tester,
           () => tester.tap(find.byKey(const ValueKey('support_theme_open'))),

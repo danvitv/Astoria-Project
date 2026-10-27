@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../shared/widgets/glaze_action_button.dart';
 import '../../../shared/widgets/sheet_view.dart';
 import 'support_plain_markdown.dart';
+import 'support_surface_layout.dart';
 
 /// Presentation roles only; these are not transport or permission types.
 enum SupportPromptPreviewRole { user, assistant, system }
@@ -187,68 +188,76 @@ class _PromptPreviewState extends State<SupportModelPromptPreviewSheet> {
         if (didPop) _closed = true;
       },
       child: SheetView(
-        titleWidget: const Text(
-          'Prompt preview',
-          key: ValueKey('support_prompt_preview_header'),
+        titleWidget: SupportSheetTitle(
+          title: 'Prompt preview',
+          titleKey: const ValueKey('support_prompt_preview_header'),
+          onBack: () => _finish(false),
         ),
-        showBack: true,
+        showBack: false,
         onBack: () => _finish(false),
         canPop: true,
         collapsedFraction: 0.85,
         body: Builder(
-          builder: (bodyContext) => ListView(
-            key: const ValueKey('support_prompt_preview_scroll'),
-            padding: EdgeInsets.fromLTRB(
-              16,
-              MediaQuery.paddingOf(bodyContext).top + 12,
-              16,
-              MediaQuery.paddingOf(bodyContext).bottom + 24,
+          builder: (bodyContext) => SupportSheetDecisionBody(
+            footer: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                GlazeActionButton(
+                  key: const ValueKey('support_prompt_preview_confirm'),
+                  icon: Icons.check,
+                  label: 'Confirm',
+                  expand: true,
+                  tone: GlazeActionTone.primary,
+                  onTap: current ? () => _finish(true) : null,
+                ),
+                const SizedBox(height: 8),
+                GlazeActionButton(
+                  key: const ValueKey('support_prompt_preview_cancel'),
+                  icon: Icons.close,
+                  label: 'Cancel',
+                  expand: true,
+                  onTap: _closed ? null : () => _finish(false),
+                ),
+              ],
             ),
-            children: [
-              GlazeActionButton(
-                key: const ValueKey('support_prompt_preview_cancel'),
-                icon: Icons.close,
-                label: 'Cancel',
-                expand: true,
-                onTap: _closed ? null : () => _finish(false),
+            content: ListView(
+              key: const ValueKey('support_prompt_preview_scroll'),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                12,
+                16,
+                MediaQuery.paddingOf(bodyContext).bottom + 24,
               ),
-              const SizedBox(height: 12),
-              GlazeActionButton(
-                key: const ValueKey('support_prompt_preview_confirm'),
-                icon: Icons.check,
-                label: 'Confirm',
-                expand: true,
-                tone: GlazeActionTone.primary,
-                onTap: current ? () => _finish(true) : null,
-              ),
-              if (!current)
-                const Padding(
-                  padding: EdgeInsets.only(top: 12),
+              children: [
+                if (!current)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 12),
+                    child: Text(
+                      'This preview is no longer current. Go back or cancel.',
+                    ),
+                  ),
+                _TargetLabel('Origin', _values.originLabel),
+                _TargetLabel('Operation', _values.operationLabel),
+                _TargetLabel('Model', _values.modelLabel),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
                   child: Text(
-                    'This preview is no longer current. Go back or cancel.',
+                    'Selected game messages: ${_values.gameMessageCount}\n'
+                    'Selected assistant-chat messages: ${_values.supportMessageCount}\n'
+                    'Text sections: ${_values.sections.length}\n'
+                    'Text length (UTF-16 code units): ${_values.textLength}',
                   ),
                 ),
-              _TargetLabel('Origin', _values.originLabel),
-              _TargetLabel('Operation', _values.operationLabel),
-              _TargetLabel('Model', _values.modelLabel),
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Text(
-                  'Selected game messages: ${_values.gameMessageCount}\n'
-                  'Selected assistant-chat messages: ${_values.supportMessageCount}\n'
-                  'Text sections: ${_values.sections.length}\n'
-                  'Text length (UTF-16 code units): ${_values.textLength}',
+                const Text(
+                  'Only text generation. Tools, actions, undo and reports are not '
+                  'performed. This preview does not authorize or transmit anything. '
+                  'Text selection does not automatically copy, export or open '
+                  'links or images. Target labels do not verify downstream routing.',
                 ),
-              ),
-              const Text(
-                'Only text generation. Tools, actions, undo and reports are not '
-                'performed. This preview does not authorize or transmit anything. '
-                'Text selection does not automatically copy, export or open '
-                'links or images. Target labels do not verify downstream routing.',
-              ),
-              for (var index = 0; index < _values.sections.length; index++)
-                _TextSection(section: _values.sections[index], index: index),
-            ],
+                for (var index = 0; index < _values.sections.length; index++)
+                  _TextSection(section: _values.sections[index], index: index),
+              ],
+            ),
           ),
         ),
       ),

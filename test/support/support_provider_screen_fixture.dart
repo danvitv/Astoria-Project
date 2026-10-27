@@ -58,7 +58,11 @@ final class ProviderScreenFixture {
     return result;
   }
 
-  Future<void> mount(WidgetTester tester) async {
+  Future<void> mount(
+    WidgetTester tester, {
+    double textScale = 1,
+    Brightness brightness = Brightness.light,
+  }) async {
     await real(tester, () async {
       root = ProviderVerticalFixture();
       _rootCreated = true;
@@ -76,6 +80,13 @@ final class ProviderScreenFixture {
           saveLocale: false,
           child: Builder(
             builder: (context) => MaterialApp(
+              theme: ThemeData(brightness: brightness),
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(textScaler: TextScaler.linear(textScale)),
+                child: child!,
+              ),
               locale: context.locale,
               localizationsDelegates: context.localizationDelegates,
               supportedLocales: context.supportedLocales,
@@ -162,6 +173,22 @@ final class ProviderScreenFixture {
         greaterThanOrEqualTo(revealed.visible.left),
       );
       expect(revealed.control.right, lessThanOrEqualTo(revealed.visible.right));
+    } else if (find
+        .ancestor(of: finder, matching: find.byType(SheetView))
+        .evaluate()
+        .isNotEmpty) {
+      final sheet = tester.getRect(find.byType(SheetView));
+      final rect = tester.getRect(finder);
+      expect(rect.top, greaterThanOrEqualTo(sheet.top));
+      expect(
+        rect.bottom,
+        lessThanOrEqualTo(
+          sheet.bottom -
+              tester.view.viewInsets.bottom / tester.view.devicePixelRatio,
+        ),
+      );
+      expect(rect.left, greaterThanOrEqualTo(sheet.left));
+      expect(rect.right, lessThanOrEqualTo(sheet.right));
     }
     expect(finder.hitTestable(), findsOneWidget);
   }

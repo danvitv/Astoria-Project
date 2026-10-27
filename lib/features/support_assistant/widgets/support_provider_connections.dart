@@ -7,6 +7,7 @@ import '../state/support_provider_ui_binding.dart';
 import 'support_provider_fields.dart';
 import 'support_provider_preview.dart';
 import 'support_provider_screen_controller.dart';
+import 'support_surface_layout.dart';
 
 class SupportProviderConnectionsList extends StatelessWidget {
   const SupportProviderConnectionsList({super.key, required this.controller});
@@ -21,8 +22,8 @@ class SupportProviderConnectionsList extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SupportProviderNotice('support_provider_list_notice'.tr()),
-        IgnorePointer(
-          ignoring: c.busy,
+        SupportControlAvailability(
+          enabled: c.current && !c.busy,
           child: MenuGroup(
             items: [
               SupportProviderSelector<SupportProviderPurpose>(
@@ -101,12 +102,20 @@ class _ConnectionRow extends StatelessWidget {
                   ),
                 ),
                 IconButton(
+                  constraints: const BoxConstraints(
+                    minWidth: 48,
+                    minHeight: 48,
+                  ),
                   key: const ValueKey('support_provider_edit'),
                   tooltip: 'support_provider_edit'.tr(),
                   icon: const Icon(Icons.edit_outlined),
                   onPressed: onEdit,
                 ),
                 IconButton(
+                  constraints: const BoxConstraints(
+                    minWidth: 48,
+                    minHeight: 48,
+                  ),
                   key: const ValueKey('support_provider_key_open'),
                   tooltip: 'support_provider_key_title'.tr(),
                   icon: const Icon(Icons.key_outlined),

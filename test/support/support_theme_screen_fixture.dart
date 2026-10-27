@@ -263,6 +263,9 @@ final class ThemeScreenFixture {
       ],
     );
     _containerCreated = true;
+    // Exercise the original nullable metadata provider, not a manufactured
+    // native runtime or an override that conceals a recipient.
+    expect(container.read(nativeProviderRuntimeProvider), isNull);
     router = GoRouter(
       initialLocation: '/support',
       routes: [
@@ -461,38 +464,40 @@ final class ThemeScreenFixture {
   Future<T> finish<T>(WidgetTester tester, ThemeScreenSignal<T> signal) =>
       turns.finish(tester, signal);
 
-  Widget host({double scale = 1}) => UncontrolledProviderScope(
-    container: container,
-    child: EasyLocalization(
-      supportedLocales: const [Locale('en')],
-      startLocale: const Locale('en'),
-      saveLocale: false,
-      path: 'owned-memory-translations',
-      assetLoader: const _MemoryTranslations(),
-      child: Builder(
-        builder: (context) => MaterialApp.router(
-          theme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: const Color(0xff506080),
-            ),
-          ),
-          routerConfig: router,
-          locale: context.locale,
-          supportedLocales: context.supportedLocales,
-          localizationsDelegates: context.localizationDelegates,
-          builder: (context, child) => MediaQuery(
-            data: MediaQuery.of(
-              context,
-            ).copyWith(textScaler: TextScaler.linear(scale)),
-            child: FlatBackdrop(
-              color: Theme.of(context).colorScheme.surface,
-              child: child!,
+  Widget host({double scale = 1, Brightness brightness = Brightness.light}) =>
+      UncontrolledProviderScope(
+        container: container,
+        child: EasyLocalization(
+          supportedLocales: const [Locale('en')],
+          startLocale: const Locale('en'),
+          saveLocale: false,
+          path: 'owned-memory-translations',
+          assetLoader: const _MemoryTranslations(),
+          child: Builder(
+            builder: (context) => MaterialApp.router(
+              theme: ThemeData(
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: const Color(0xff506080),
+                  brightness: brightness,
+                ),
+              ),
+              routerConfig: router,
+              locale: context.locale,
+              supportedLocales: context.supportedLocales,
+              localizationsDelegates: context.localizationDelegates,
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(textScaler: TextScaler.linear(scale)),
+                child: FlatBackdrop(
+                  color: Theme.of(context).colorScheme.surface,
+                  child: child!,
+                ),
+              ),
             ),
           ),
         ),
-      ),
-    ),
-  );
+      );
 
   Future<void> run(WidgetTester tester, Future<void> Function() body) async {
     Object? failure;

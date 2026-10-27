@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 
 import '../../../shared/widgets/menu_group.dart';
+import 'support_surface_layout.dart';
 
 typedef SupportProviderModelLoader =
     Future<List<String>> Function({
@@ -110,8 +111,8 @@ class _ModelSelectionState extends State<SupportModelSelectionForm> {
   }
 
   @override
-  Widget build(BuildContext context) => IgnorePointer(
-    ignoring: !_current,
+  Widget build(BuildContext context) => SupportControlAvailability(
+    enabled: _current,
     child: MenuGroup(
       header: 'Выбор модели',
       description:
@@ -119,13 +120,17 @@ class _ModelSelectionState extends State<SupportModelSelectionForm> {
           'prompt и не запускает генерацию. «Отправить» в чате сразу передаёт '
           'вопрос и видимый текущий диалог выбранной модели.',
       items: [
-        MenuSelectorItem(
-          key: const ValueKey('support_model_dropdown'),
-          label: 'Модели провайдера',
-          currentValue: _controller.text.isEmpty
-              ? 'Не выбрана'
-              : _controller.text,
-          onTap: _toggle,
+        Semantics(
+          expanded: _expanded,
+          child: MenuSelectorItem(
+            key: const ValueKey('support_model_dropdown'),
+            label: 'Модели провайдера',
+            wrapLabel: true,
+            currentValue: _controller.text.isEmpty
+                ? 'Не выбрана'
+                : _controller.text,
+            onTap: _toggle,
+          ),
         ),
         if (_loading)
           const Padding(
@@ -146,14 +151,21 @@ class _ModelSelectionState extends State<SupportModelSelectionForm> {
           ),
         if (_expanded)
           for (final model in _models)
-            MenuItem(
-              key: ValueKey('support_model_option_$model'),
-              label: model,
-              onTap: () => _choose(model),
+            Semantics(
+              selected: model == _controller.text,
+              child: MenuItem(
+                key: ValueKey('support_model_option_$model'),
+                label: model,
+                trailing: model == _controller.text
+                    ? const Icon(Icons.check_rounded)
+                    : null,
+                onTap: () => _choose(model),
+              ),
             ),
         MenuFieldItem(
           key: const ValueKey('support_model_manual_id'),
           label: 'Идентификатор модели',
+          wrapLabel: true,
           helper: 'Если нужной модели нет в списке, введи её ID вручную.',
           controller: _controller,
           onChanged: (_) {

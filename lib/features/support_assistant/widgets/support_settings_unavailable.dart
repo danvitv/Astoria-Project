@@ -4,11 +4,17 @@ import '../../../shared/widgets/glaze_action_button.dart';
 import '../../../shared/widgets/glaze_bottom_sheet.dart';
 import '../../../shared/widgets/glaze_error_block.dart';
 import '../state/support_workspace_provider.dart';
+import 'support_surface_layout.dart';
 
 /// Recovery is a deliberate confirmed preference reset, not ciphertext repair.
 class SupportSettingsUnavailableView extends ConsumerWidget {
-  const SupportSettingsUnavailableView({super.key, this.collapsed = false});
+  const SupportSettingsUnavailableView({
+    super.key,
+    this.collapsed = false,
+    this.sheetHosted = false,
+  });
   final bool collapsed;
+  final bool sheetHosted;
 
   Future<void> _confirm(BuildContext context, WidgetRef ref, String id) async {
     final notifier = ref.read(supportWorkspaceProvider.notifier);
@@ -60,7 +66,11 @@ class SupportSettingsUnavailableView extends ConsumerWidget {
     return Material(
       type: MaterialType.transparency,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: supportSurfacePadding(
+          context,
+          sheetHosted: sheetHosted,
+          horizontal: 16,
+        ),
         children: [
           GlazeErrorBlock(message: message, label: 'Настройки недоступны'),
           if (workspace.error != null) ...[

@@ -6,6 +6,7 @@ import '../../../shared/widgets/menu_group.dart';
 import '../state/support_provider_ui_binding.dart';
 import 'support_provider_fields.dart';
 import 'support_provider_screen_controller.dart';
+import 'support_surface_layout.dart';
 
 /// Deterministic offline form. It creates only keyless setup input, never IDs.
 class SupportProviderForm extends StatefulWidget {
@@ -138,8 +139,8 @@ class _FormState extends State<SupportProviderForm> {
         SupportProviderNotice('support_provider_offline'.tr()),
         if (_updating)
           SupportProviderNotice('support_provider_update_immutable'.tr()),
-        IgnorePointer(
-          ignoring: !enabled,
+        SupportControlAvailability(
+          enabled: enabled,
           child: MenuGroup(
             header: 'support_provider_route'.tr(),
             description: 'support_provider_purpose_notice'.tr(),
@@ -205,8 +206,8 @@ class _FormState extends State<SupportProviderForm> {
           ),
         ),
         if (widget.simple)
-          IgnorePointer(
-            ignoring: !enabled,
+          SupportControlAvailability(
+            enabled: enabled,
             child: MenuGroup(
               header: 'support_provider_profile'.tr(),
               items: [

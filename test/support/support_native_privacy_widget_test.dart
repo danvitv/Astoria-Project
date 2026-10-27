@@ -16,9 +16,11 @@ import 'package:glaze_flutter/features/support_assistant/services/support_native
 import 'package:glaze_flutter/features/support_assistant/widgets/support_privacy_group.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_settings_panel.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_history_selection_sheet.dart';
+import 'package:glaze_flutter/features/support_assistant/widgets/support_surface_layout.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_workspace_provider.dart';
 import 'package:glaze_flutter/shared/widgets/glaze_action_button.dart';
 import 'package:glaze_flutter/shared/widgets/glaze_switch.dart';
+import 'package:glaze_flutter/shared/widgets/menu_group.dart';
 import 'package:glaze_flutter/shared/widgets/sheet_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -163,13 +165,36 @@ Future<void> _saveLegacyHistory(WidgetTester tester) async {
   expect(find.byType(SupportHistorySelectionSheet), findsNothing);
 }
 
-Future<void> _backLegacyHistory(WidgetTester tester) async {
-  await tester.tap(
-    find.descendant(
-      of: find.byType(SheetView),
-      matching: find.byIcon(Icons.arrow_back),
-    ),
+Finder _legacyHistoryBack(WidgetTester tester) {
+  final sheet = find.byType(SheetView);
+  expect(sheet, findsOneWidget);
+  expect(tester.widget<SheetView>(sheet).showBack, false);
+  final title = find.descendant(
+    of: sheet,
+    matching: find.byType(SupportSheetTitle),
   );
+  expect(title, findsOneWidget);
+  expect(
+    find.descendant(
+      of: sheet,
+      matching: find.text(tester.widget<SupportSheetTitle>(title).title),
+    ),
+    findsOneWidget,
+  );
+  final back = find.descendant(
+    of: sheet,
+    matching: find.widgetWithIcon(IconButton, Icons.arrow_back),
+  );
+  expect(back, findsOneWidget);
+  expect(back.hitTestable(), findsOneWidget);
+  expect(tester.widget<IconButton>(back).onPressed, isNotNull);
+  expect(tester.getSize(back).width, greaterThanOrEqualTo(48));
+  expect(tester.getSize(back).height, greaterThanOrEqualTo(48));
+  return back;
+}
+
+Future<void> _backLegacyHistory(WidgetTester tester) async {
+  await tester.tap(_legacyHistoryBack(tester));
   await tester.pumpAndSettle();
 }
 
@@ -411,7 +436,7 @@ void main() {
         findsNothing,
       );
       await _tap(tester, 'support_privacy_session_game-session');
-      expect(tester.widget<SheetView>(find.byType(SheetView)).showBack, true);
+      _legacyHistoryBack(tester);
       expect(tester.getSize(find.byType(SheetView)).height.isFinite, true);
       expect(
         find.textContaining('пропущено скрытых/недоступных: 1'),
@@ -423,6 +448,7 @@ void main() {
       );
       await _show(tester, 'support_privacy_message_game-0');
       expect(find.text('Сообщение 1 · пользователь'), findsOneWidget);
+      await _show(tester, 'support_privacy_message_game-2');
       expect(find.text('Сообщение 3 · пользователь'), findsOneWidget);
       for (final canary in [
         SyntheticConsentSelectionFixture.bodyCanary,
@@ -509,12 +535,33 @@ void main() {
         f,
         SupportConsentSelectionSource.support,
       );
+      await _show(tester, 'support_privacy_message_synthetic-message');
+      final message = find.byKey(
+        const ValueKey('support_privacy_message_synthetic-message'),
+      );
+      final historyScroll = find.descendant(
+        of: find.byKey(const ValueKey('support_history_selection_scroll')),
+        matching: find.byType(Scrollable),
+      );
+      expect(historyScroll, findsOneWidget);
+      expect(ModalRoute.of(tester.element(message))!.isCurrent, true);
+      expect(message.hitTestable(), findsOneWidget);
+      final viewport = tester.getRect(historyScroll);
+      final row = tester.getRect(message);
+      expect(row.top, greaterThanOrEqualTo(viewport.top));
+      expect(row.bottom, lessThanOrEqualTo(viewport.bottom));
       expect(
         find.byKey(const ValueKey('support_privacy_message_synthetic-message')),
         findsOneWidget,
       );
       expect(
-        tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+        tester
+            .widget<MenuSwitchItem>(
+              find.byKey(
+                const ValueKey('support_privacy_message_synthetic-message'),
+              ),
+            )
+            .value,
         false,
       );
       await _saveLegacyHistory(tester);

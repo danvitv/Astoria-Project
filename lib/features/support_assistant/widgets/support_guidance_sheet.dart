@@ -9,6 +9,7 @@ import '../state/support_native_provider.dart';
 import 'support_privacy_group.dart';
 import 'support_settings_focus.dart';
 import 'support_settings_panel.dart';
+import 'support_surface_layout.dart';
 
 /// Fresh current native UI, not an executable/restored card approval.
 class SupportGuidanceSheet extends ConsumerStatefulWidget {
@@ -94,30 +95,32 @@ class _GuidanceSheetState extends ConsumerState<SupportGuidanceSheet> {
     };
     return SheetView(
       title: target.title,
-      showBack: true,
+      showBack: false,
+      titleWidget: SupportSheetTitle(
+        title: target.title,
+        onBack: () => Navigator.of(context).pop(),
+      ),
       onBack: () => Navigator.of(context).pop(),
       body: Builder(
-        builder: (bodyContext) => Padding(
-          padding: EdgeInsets.only(top: MediaQuery.paddingOf(bodyContext).top),
-          child: !current
-              ? const Center(
-                  child: Text('Сессия изменилась. Предложение устарело.'),
-                )
-              : sessionSource != null ||
-                    target == SupportGuidanceTarget.recipient
-              ? SingleChildScrollView(
-                  child: SupportPrivacyGroup(
-                    initialSessionSource: sessionSource,
-                    initialRecipientReview:
-                        target == SupportGuidanceTarget.recipient,
-                  ),
-                )
-              : SupportSettingsPanel(
-                  focus: focus,
-                  focusedPermission: target.permission,
-                  isOriginalUiCurrent: _current,
+        builder: (bodyContext) => !current
+            ? const Center(
+                child: Text('Сессия изменилась. Предложение устарело.'),
+              )
+            : sessionSource != null || target == SupportGuidanceTarget.recipient
+            ? SingleChildScrollView(
+                padding: supportSurfacePadding(bodyContext),
+                child: SupportPrivacyGroup(
+                  initialSessionSource: sessionSource,
+                  initialRecipientReview:
+                      target == SupportGuidanceTarget.recipient,
                 ),
-        ),
+              )
+            : SupportSettingsPanel(
+                sheetHosted: true,
+                focus: focus,
+                focusedPermission: target.permission,
+                isOriginalUiCurrent: _current,
+              ),
       ),
     );
   }

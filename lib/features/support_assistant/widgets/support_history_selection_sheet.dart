@@ -7,6 +7,7 @@ import '../../../shared/widgets/glaze_action_button.dart';
 import '../../../shared/widgets/menu_group.dart';
 import '../../../shared/widgets/sheet_view.dart';
 import '../services/support_native_consent_controller.dart';
+import 'support_surface_layout.dart';
 
 /// Action-free native metadata picker: one exact returned page, never a union.
 class SupportHistorySelectionSheet extends StatefulWidget {
@@ -156,149 +157,153 @@ class _HistorySelectionState extends State<SupportHistorySelectionSheet> {
                   ? 'support_privacy_game_picker'
                   : 'support_privacy_support_picker')
               .tr(),
-      showBack: true,
+      showBack: false,
+      titleWidget: SupportSheetTitle(
+        title:
+            (widget.source == SupportConsentSelectionSource.roleplay
+                    ? 'support_privacy_game_picker'
+                    : 'support_privacy_support_picker')
+                .tr(),
+        onBack: _back,
+      ),
       onBack: _back,
       canPop:
           _sessionId == null ||
           widget.source == SupportConsentSelectionSource.support,
       collapsedFraction: 0.85,
       body: Builder(
-        builder: (context) => ListView(
-          padding: EdgeInsets.fromLTRB(
-            16,
-            MediaQuery.paddingOf(context).top + 12,
-            16,
-            MediaQuery.paddingOf(context).bottom + 24,
-          ),
-          children: [
-            Text('support_privacy_metadata_only'.tr()),
-            if (!current) Text('support_privacy_stale'.tr()),
-            if (_busy) const Center(child: CircularProgressIndicator()),
-            if (_failure != null) Text(_failure!.tr()),
-            if (_sessionId == null && sessions != null) ...[
-              Text(_statusKey(sessions.status).tr()),
-              Text(
-                'support_privacy_session_omissions'.tr(
-                  args: ['${sessions.omittedCount}'],
+        builder: (context) => SupportSheetDecisionBody(
+          footer: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (page != null) ...[
+                GlazeActionButton(
+                  key: const ValueKey('support_privacy_select_messages'),
+                  icon: Icons.check,
+                  label: 'support_privacy_save_selection'.tr(
+                    args: ['${_selected.length}'],
+                  ),
+                  expand: true,
+                  maxLabelLines: null,
+                  onTap: current && !_busy ? _approve : null,
                 ),
+                const SizedBox(height: 8),
+              ],
+              GlazeActionButton(
+                label: 'support_privacy_cancel'.tr(),
+                icon: Icons.close_rounded,
+                expand: true,
+                maxLabelLines: null,
+                onTap: () {
+                  _closed = true;
+                  Navigator.of(context).pop();
+                },
               ),
-              for (final session in sessions.items)
-                Material(
-                  type: MaterialType.transparency,
-                  child: ListTile(
-                    key: ValueKey(
-                      'support_privacy_session_${session.sessionId}',
-                    ),
-                    title: Text(
-                      '${session.characterLabel} · ${session.variantLabel}',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(
-                      'support_privacy_session_metadata'.tr(
+            ],
+          ),
+          content: ListView(
+            key: const ValueKey('support_history_selection_scroll'),
+            padding: EdgeInsets.fromLTRB(
+              16,
+              12,
+              16,
+              MediaQuery.paddingOf(context).bottom + 24,
+            ),
+            children: [
+              Text('support_privacy_metadata_only'.tr()),
+              if (!current) Text('support_privacy_stale'.tr()),
+              if (_busy) const Center(child: CircularProgressIndicator()),
+              if (_failure != null) Text(_failure!.tr()),
+              if (_sessionId == null && sessions != null) ...[
+                Text(_statusKey(sessions.status).tr()),
+                Text(
+                  'support_privacy_session_omissions'.tr(
+                    args: ['${sessions.omittedCount}'],
+                  ),
+                ),
+                for (final session in sessions.items)
+                  SupportControlAvailability(
+                    enabled: current && !_busy && _eligible(session.status),
+                    child: MenuItem(
+                      key: ValueKey(
+                        'support_privacy_session_${session.sessionId}',
+                      ),
+                      label:
+                          '${session.characterLabel} · ${session.variantLabel}',
+                      subtitle: 'support_privacy_session_metadata'.tr(
                         args: [
                           '${session.sessionIndex + 1}',
                           '${session.messageCount ?? '—'}',
                         ],
                       ),
+                      onTap: () => _messages(session.sessionId),
                     ),
-                    enabled: current && !_busy && _eligible(session.status),
-                    onTap: () => _messages(session.sessionId),
+                  ),
+                if (sessions.nextOffset != null)
+                  GlazeActionButton(
+                    key: const ValueKey('support_privacy_next_sessions'),
+                    icon: Icons.navigate_next,
+                    label: 'support_privacy_next_page'.tr(),
+                    expand: true,
+                    onTap: current && !_busy
+                        ? () => _listSessions(offset: sessions.nextOffset!)
+                        : null,
+                  ),
+              ],
+              if (page != null) ...[
+                if (page.roleplaySession case final session?)
+                  Text(
+                    '${session.characterLabel} · ${session.variantLabel}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                Text(_statusKey(page.status).tr()),
+                Text(
+                  'support_privacy_message_counts'.tr(
+                    args: [
+                      '${page.items.length}',
+                      '${page.omittedCount}',
+                      '${page.limitedCount}',
+                    ],
                   ),
                 ),
-              if (sessions.nextOffset != null)
-                GlazeActionButton(
-                  key: const ValueKey('support_privacy_next_sessions'),
-                  icon: Icons.navigate_next,
-                  label: 'support_privacy_next_page'.tr(),
-                  expand: true,
-                  onTap: current && !_busy
-                      ? () => _listSessions(offset: sessions.nextOffset!)
-                      : null,
-                ),
-            ],
-            if (page != null) ...[
-              if (page.roleplaySession case final session?)
-                Text(
-                  '${session.characterLabel} · ${session.variantLabel}',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              Text(_statusKey(page.status).tr()),
-              Text(
-                'support_privacy_message_counts'.tr(
-                  args: [
-                    '${page.items.length}',
-                    '${page.omittedCount}',
-                    '${page.limitedCount}',
-                  ],
-                ),
-              ),
-              Text('support_privacy_page_replaces'.tr()),
-              if (_replacement)
-                Text('support_privacy_page_selection_cleared'.tr()),
-              for (final row in page.items)
-                Material(
-                  type: MaterialType.transparency,
-                  child: CheckboxListTile(
-                    key: ValueKey('support_privacy_message_${row.messageId}'),
-                    value: _selected.contains(row.messageId),
-                    title: Text(
-                      'support_privacy_message_label'.tr(
+                Text('support_privacy_page_replaces'.tr()),
+                if (_replacement)
+                  Text('support_privacy_page_selection_cleared'.tr()),
+                for (final row in page.items)
+                  SupportControlAvailability(
+                    enabled: current && !_busy,
+                    child: MenuSwitchItem(
+                      key: ValueKey('support_privacy_message_${row.messageId}'),
+                      value: _selected.contains(row.messageId),
+                      label: 'support_privacy_message_label'.tr(
                         args: [
                           '${row.nativeOrder + 1}',
                           'support_privacy_role_${row.role.name}'.tr(),
                         ],
                       ),
+                      onChanged: (checked) => setState(() {
+                        if (checked == true) {
+                          _selected.add(row.messageId);
+                        } else {
+                          _selected.remove(row.messageId);
+                        }
+                      }),
                     ),
-                    controlAffinity: ListTileControlAffinity.leading,
-                    onChanged: current && !_busy
-                        ? (checked) => setState(() {
-                            if (checked == true) {
-                              _selected.add(row.messageId);
-                            } else {
-                              _selected.remove(row.messageId);
-                            }
-                          })
+                  ),
+                if (page.nextOffset != null)
+                  GlazeActionButton(
+                    key: const ValueKey('support_privacy_next_messages'),
+                    icon: Icons.navigate_next,
+                    label: 'support_privacy_next_page'.tr(),
+                    expand: true,
+                    onTap: current && !_busy
+                        ? () => _messages(_sessionId!, offset: page.nextOffset!)
                         : null,
                   ),
-                ),
-              if (page.nextOffset != null)
-                GlazeActionButton(
-                  key: const ValueKey('support_privacy_next_messages'),
-                  icon: Icons.navigate_next,
-                  label: 'support_privacy_next_page'.tr(),
-                  expand: true,
-                  onTap: current && !_busy
-                      ? () => _messages(_sessionId!, offset: page.nextOffset!)
-                      : null,
-                ),
-              const SizedBox(height: 12),
-              GlazeActionButton(
-                key: const ValueKey('support_privacy_select_messages'),
-                icon: Icons.check,
-                label: 'support_privacy_save_selection'.tr(
-                  args: ['${_selected.length}'],
-                ),
-                expand: true,
-                onTap: current && !_busy ? _approve : null,
-              ),
+              ],
             ],
-            const SizedBox(height: 12),
-            MenuGroupNesting(
-              child: MenuGroup(
-                items: [
-                  MenuItem(
-                    label: 'support_privacy_cancel'.tr(),
-                    onTap: () {
-                      _closed = true;
-                      Navigator.of(context).pop();
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

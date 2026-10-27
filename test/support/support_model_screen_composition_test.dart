@@ -55,16 +55,32 @@ Future<void> _release(SupportModelUiBridge original) => Future.any([
   original.drained,
 ]);
 
+Future<VoidCallback> _emittedSend(
+  WidgetTester tester,
+  ModelScreenFixture fixture,
+  String text,
+) async {
+  final controller = _draft(tester);
+  await fixture.action(tester, () => controller.text = text);
+  // Empty -> draft must rebuild the ORIGINAL composer before retaining Send.
+  // Pumps stay outside the real/native action zone and before any dispatch.
+  await tester.pump();
+  expect(_draft(tester), same(controller));
+  expect(controller.text, text);
+  expect(find.byKey(_send).hitTestable(), findsOneWidget);
+  final callback = tester.widget<IconButton>(find.byKey(_send)).onPressed;
+  expect(callback, isNotNull);
+  return callback!;
+}
+
 Future<void> _sendDirect(
   WidgetTester tester,
   ModelScreenFixture fixture, {
   String text = 'Exact native current question',
   bool duplicate = false,
-}) {
-  final callback = tester.widget<IconButton>(find.byKey(_send)).onPressed!;
-  final controller = _draft(tester);
-  return fixture.action(tester, () {
-    controller.text = text;
+}) async {
+  final callback = await _emittedSend(tester, fixture, text);
+  await fixture.action(tester, () {
     callback();
     if (duplicate) callback();
   });
@@ -214,6 +230,21 @@ void main() {
         final before = f.state.activeMessages.length;
         await f.action(tester, () async {
           _draft(tester).text = 'Help without network';
+        });
+        await tester.pump();
+        final drawer = find.byKey(const ValueKey('support_drawer_toggle'));
+        if (drawer.evaluate().isNotEmpty) {
+          await f.action(tester, () => tester.tap(drawer));
+          await tester.pumpAndSettle();
+          await Scrollable.ensureVisible(
+            tester.element(
+              find.byKey(const ValueKey('support_composer_local_help_btn')),
+            ),
+            alignment: .5,
+          );
+          await tester.pump();
+        }
+        await f.action(tester, () async {
           await tester.tap(
             find.byKey(const ValueKey('support_composer_local_help_btn')),
           );
@@ -304,11 +335,12 @@ void main() {
       final f = ModelScreenFixture();
       await f.run(tester, () async {
         final controller = _draft(tester);
-        final oldCallback = tester
-            .widget<IconButton>(find.byKey(_send))
-            .onPressed!;
+        final oldCallback = await _emittedSend(
+          tester,
+          f,
+          'Retained emitted Send',
+        );
         await f.action(tester, () {
-          controller.text = 'Retained emitted Send';
           f.workspace.selectSession(ModelScreenFixture.other);
           f.workspace.selectSession(ModelScreenFixture.session);
           oldCallback();
@@ -906,6 +938,22 @@ void main() {
           ),
           hasLength(3),
         );
+        final scrollable = find
+            .descendant(
+              of: find.byType(SupportMessageList),
+              matching: find.byType(Scrollable),
+            )
+            .first;
+        // The notice shares the lazy feed; restored rows need a real scroll.
+        await f.action(
+          tester,
+          () => tester.scrollUntilVisible(
+            find.byKey(const ValueKey('support_message_status_restored-user')),
+            240,
+            scrollable: scrollable,
+          ),
+        );
+        await tester.pumpAndSettle();
         expect(
           find.text(
             'Ответ прерван; автоматическая повторная отправка отключена.',
@@ -918,12 +966,6 @@ void main() {
           find.byKey(const ValueKey('support_message_status_old')),
           findsNothing,
         );
-        final scrollable = find
-            .descendant(
-              of: find.byType(SupportMessageList),
-              matching: find.byType(Scrollable),
-            )
-            .first;
         await tester.scrollUntilVisible(
           find.byKey(const ValueKey('support_message_status_oversize')),
           240,
@@ -963,10 +1005,8 @@ void main() {
             () => f.adapterCreated.future,
             label: 'original $width geometry adapter',
           );
-          await f.action(tester, () async {
-            _draft(tester).text = 'Scaled direct question';
-            await tester.tap(find.byKey(_send));
-          });
+          await _emittedSend(tester, f, 'Scaled direct question');
+          await f.action(tester, () => tester.tap(find.byKey(_send)));
           final adapter = await f.finish(tester, created);
           final listening = await f.signal(
             tester,
@@ -1019,11 +1059,9 @@ void main() {
           label: 'original issuer retired by key priming',
         );
         final controller = _draft(tester);
-        await f.action(tester, () async {
-          f.redaction.addListener(observePriming);
-          controller.text = 'Original issuer draft';
-          await tester.tap(find.byKey(_send));
-        });
+        await f.action(tester, () => f.redaction.addListener(observePriming));
+        await _emittedSend(tester, f, 'Original issuer draft');
+        await f.action(tester, () => tester.tap(find.byKey(_send)));
         await f.finish(tester, priming);
         await f.action(tester, () {
           f.redaction.removeListener(observePriming);

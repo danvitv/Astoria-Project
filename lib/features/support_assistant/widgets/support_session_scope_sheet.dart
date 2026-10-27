@@ -7,6 +7,7 @@ import '../../../shared/widgets/menu_group.dart';
 import '../../../shared/widgets/sheet_view.dart';
 import '../services/support_native_consent_controller.dart';
 import '../services/support_native_runtime.dart';
+import 'support_surface_layout.dart';
 
 /// Native metadata proposal only. The caller confirms its opaque choice once.
 class SupportSessionScopeSheet extends StatefulWidget {
@@ -195,80 +196,99 @@ class _SessionScopeState extends State<SupportSessionScopeSheet> {
     final choice = current && _choice?.isCurrent == true ? _choice : null;
     return SheetView(
       title: 'Область сессии',
-      showBack: true,
+      showBack: false,
+      titleWidget: SupportSheetTitle(
+        title: 'Область сессии',
+        onBack: () => Navigator.of(context).pop(),
+      ),
       onBack: () => Navigator.of(context).pop(),
       body: Builder(
-        builder: (bodyContext) => ListView(
-          key: const ValueKey('support_session_scope_scroll'),
-          padding: EdgeInsets.fromLTRB(
-            16,
-            MediaQuery.paddingOf(bodyContext).top + 12,
-            16,
-            MediaQuery.paddingOf(bodyContext).bottom + 24,
-          ),
-          children: [
-            Text(
-              widget.source == SupportConsentSelectionSource.support
-                  ? 'Предлагаю текущую сессию с Асторией.'
-                  : 'Предлагаю ранее выбранную или последнюю доступную ролевую сессию. Можно выбрать другую.',
-            ),
-            const SizedBox(height: 12),
-            if (!current)
-              const Text(
-                'Область или настройки изменились. Закрой это окно '
-                'и открой выбор снова — старое подтверждение не действует.',
-              ),
-            const Text(
-              'Это область всей сессии, включая её новые обычные сообщения. '
-              'Выбор области не включает чтение, передачу модели или репорт. '
-              'Скрытые варианты, вложения, ключи и сырые промпты сюда не входят. '
-              'Каждый запрос модели всё равно требует точного обзора и подтверждения.',
-            ),
-            if (_page case final page?)
-              IgnorePointer(
-                ignoring: !current || _catalogLoading,
-                child: MenuGroup(
-                  header: 'Доступные сессии — только метаданные',
-                  items: [
-                    for (final option in page.items)
-                      MenuItem(
-                        key: ValueKey(
-                          'support_session_scope_option_${option.sessionId}',
-                        ),
-                        label: option.label,
-                        subtitle:
-                            'Сохранённых сообщений: ${option.messageCount ?? 'неизвестно'}',
-                        onTap: () => _choose(option),
-                      ),
-                  ],
+        builder: (bodyContext) => SupportSheetDecisionBody(
+          footer: choice == null
+              ? const SizedBox.shrink()
+              : GlazeActionButton(
+                  key: const ValueKey('support_session_scope_confirm'),
+                  label: 'Добавить сессию в область доступа',
+                  icon: Icons.check_rounded,
+                  expand: true,
+                  maxLabelLines: null,
+                  onTap: !_busy ? _confirm : null,
                 ),
-              ),
-            if (_busy) const LinearProgressIndicator(),
-            if (_notice != null) Text(_notice!),
-            if (choice != null) ...[
-              const SizedBox(height: 16),
+          content: ListView(
+            key: const ValueKey('support_session_scope_scroll'),
+            padding: EdgeInsets.fromLTRB(
+              16,
+              12,
+              16,
+              MediaQuery.paddingOf(bodyContext).bottom + 24,
+            ),
+            children: [
               Text(
-                choice.metadata.roleplaySession?.label ??
-                    'Текущая сессия Астории',
-                key: const ValueKey('support_session_scope_proposal'),
+                widget.source == SupportConsentSelectionSource.support
+                    ? 'Предлагаю текущую сессию с Асторией.'
+                    : 'Предлагаю ранее выбранную или последнюю доступную ролевую сессию. Можно выбрать другую.',
               ),
-              const SizedBox(height: 8),
-              GlazeActionButton(
-                key: const ValueKey('support_session_scope_confirm'),
-                label: 'Добавить сессию в область доступа',
-                icon: Icons.check_rounded,
-                expand: true,
-                onTap: !_busy ? _confirm : null,
+              const SizedBox(height: 12),
+              if (!current)
+                const Text(
+                  'Область или настройки изменились. Закрой это окно '
+                  'и открой выбор снова — старое подтверждение не действует.',
+                ),
+              const Text(
+                'Это область всей сессии, включая её новые обычные сообщения. '
+                'Выбор области не включает чтение, передачу модели или репорт. '
+                'Скрытые варианты, вложения, ключи и сырые промпты сюда не входят. '
+                'Каждый запрос модели всё равно требует точного обзора и подтверждения.',
               ),
+              if (_page case final page?)
+                SupportControlAvailability(
+                  enabled: current && !_catalogLoading,
+                  child: MenuGroup(
+                    header: 'Доступные сессии — только метаданные',
+                    items: [
+                      for (final option in page.items)
+                        Semantics(
+                          selected:
+                              choice?.metadata.roleplaySession?.sessionId ==
+                              option.sessionId,
+                          child: MenuItem(
+                            key: ValueKey(
+                              'support_session_scope_option_${option.sessionId}',
+                            ),
+                            label: option.label,
+                            subtitle: _pendingSession == option.sessionId
+                                ? 'Проверка области…'
+                                : 'Сохранённых сообщений: ${option.messageCount ?? 'неизвестно'}',
+                            trailing:
+                                choice?.metadata.roleplaySession?.sessionId ==
+                                    option.sessionId
+                                ? const Icon(Icons.check_rounded)
+                                : null,
+                            onTap: () => _choose(option),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              if (_busy) const LinearProgressIndicator(),
+              if (_notice != null) Text(_notice!),
+              if (choice != null) ...[
+                const SizedBox(height: 16),
+                Text(
+                  choice.metadata.roleplaySession?.label ??
+                      'Текущая сессия Астории',
+                  key: const ValueKey('support_session_scope_proposal'),
+                ),
+              ],
+              if (_page?.nextOffset case final int offset)
+                GlazeActionButton(
+                  key: const ValueKey('support_session_scope_next'),
+                  icon: Icons.navigate_next_rounded,
+                  label: 'Другие сессии',
+                  onTap: current && !_busy ? () => _load(offset) : null,
+                ),
             ],
-            if (_page?.nextOffset case final int offset)
-              GlazeActionButton(
-                key: const ValueKey('support_session_scope_next'),
-                icon: Icons.navigate_next_rounded,
-                label: 'Другие сессии',
-                onTap: current && !_busy ? () => _load(offset) : null,
-              ),
-          ],
+          ),
         ),
       ),
     );

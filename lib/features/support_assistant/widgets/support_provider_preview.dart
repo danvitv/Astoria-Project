@@ -13,10 +13,12 @@ class SupportProviderPreview extends StatelessWidget {
     required this.controller,
     required this.review,
     required this.preview,
+    this.showActions = true,
   });
   final SupportProviderScreenController controller;
   final SupportProviderReview review;
   final SupportProviderSetupPreview preview;
+  final bool showActions;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -54,6 +56,31 @@ class SupportProviderPreview extends StatelessWidget {
               : null,
         ),
       ],
+      if (showActions)
+        SupportProviderReviewActions(
+          controller: controller,
+          review: review,
+          preview: preview,
+        ),
+    ],
+  );
+}
+
+/// The exact original final decisions can be pinned below the review scroll.
+class SupportProviderReviewActions extends StatelessWidget {
+  const SupportProviderReviewActions({
+    super.key,
+    required this.controller,
+    required this.review,
+    required this.preview,
+  });
+  final SupportProviderScreenController controller;
+  final SupportProviderReview review;
+  final SupportProviderSetupPreview preview;
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
       SupportProviderButton(
         key: const ValueKey('support_provider_confirm'),
         label:

@@ -6,6 +6,7 @@ import '../../../shared/theme/app_colors.dart';
 import '../../../shared/widgets/glaze_action_button.dart';
 import '../../../shared/widgets/menu_group.dart';
 import '../models/support_provider_values.dart';
+import 'support_surface_layout.dart';
 
 const supportProviderProtocols = <String>[
   'openai',
@@ -47,42 +48,49 @@ class _SelectorState<T> extends State<SupportProviderSelector<T>> {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      MenuSelectorItem(
-        key: ValueKey('support_provider_${widget.id}'),
-        label: widget.label,
-        description: widget.description,
-        currentValue: widget.labelFor(widget.value),
-        onTap: () => setState(() => _expanded = !_expanded),
+      Semantics(
+        expanded: _expanded,
+        child: MenuSelectorItem(
+          key: ValueKey('support_provider_${widget.id}'),
+          label: widget.label,
+          description: widget.description,
+          currentValue: widget.labelFor(widget.value),
+          onTap: () => setState(() => _expanded = !_expanded),
+        ),
       ),
       if (_expanded)
         for (final value in widget.values)
           Material(
             type: MaterialType.transparency,
-            child: InkWell(
-              key: ValueKey(
-                'support_provider_${widget.id}_${widget.idFor(value)}',
-              ),
-              onTap: () {
-                setState(() => _expanded = false);
-                widget.onChanged(value);
-              },
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
+            child: Semantics(
+              selected: value == widget.value,
+              child: InkWell(
+                key: ValueKey(
+                  'support_provider_${widget.id}_${widget.idFor(value)}',
                 ),
-                child: Row(
-                  children: [
-                    Icon(
-                      value == widget.value
-                          ? Icons.check_circle_outline
-                          : Icons.radio_button_unchecked,
-                      size: 20,
-                      color: context.cs.primary,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(child: Text(widget.labelFor(value))),
-                  ],
+                onTap: () {
+                  setState(() => _expanded = false);
+                  widget.onChanged(value);
+                },
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 48),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        value == widget.value
+                            ? Icons.check_circle_outline
+                            : Icons.radio_button_unchecked,
+                        size: 20,
+                        color: context.cs.primary,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(child: Text(widget.labelFor(value))),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -107,8 +115,8 @@ class SupportProviderFields extends StatelessWidget {
   final bool enabled;
 
   @override
-  Widget build(BuildContext context) => IgnorePointer(
-    ignoring: !enabled,
+  Widget build(BuildContext context) => SupportControlAvailability(
+    enabled: enabled,
     child: MenuGroup(
       header: 'support_provider_profile'.tr(),
       items: [
@@ -169,22 +177,32 @@ class SupportProviderButton extends StatelessWidget {
     this.icon = Icons.arrow_forward_rounded,
     this.primary = false,
     this.busy = false,
+    this.selected = false,
   });
   final String label;
   final VoidCallback? onTap;
   final IconData icon;
-  final bool primary, busy;
+  final bool primary, busy, selected;
 
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-    child: GlazeActionButton(
-      icon: icon,
-      label: label,
-      onTap: onTap,
-      busy: busy,
-      expand: true,
-      tone: primary ? GlazeActionTone.primary : GlazeActionTone.neutral,
+    child: Semantics(
+      selected: selected,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: GlazeActionButton(
+          maxLabelLines: null,
+          icon: selected ? Icons.check_circle_outline : icon,
+          label: label,
+          onTap: onTap,
+          busy: busy,
+          expand: true,
+          tone: primary || selected
+              ? GlazeActionTone.primary
+              : GlazeActionTone.neutral,
+        ),
+      ),
     ),
   );
 }

@@ -9,6 +9,7 @@ import '../state/support_workspace_provider.dart';
 import 'support_privacy_group.dart';
 import 'support_provider_entry.dart';
 import 'support_settings_pickers.dart';
+import 'support_surface_layout.dart';
 
 /// The API row owns the same trusted provider entry as the native header.
 class SupportConnectionSelector extends ConsumerStatefulWidget {
@@ -97,12 +98,15 @@ class _SelectorState extends ConsumerState<SupportConnectionSelector> {
       backgroundColor: Colors.transparent,
       builder: (_) => SheetView(
         title: 'Доступ к настройке провайдера',
-        showBack: true,
+        showBack: false,
+        titleWidget: SupportSheetTitle(
+          title: 'Доступ к настройке провайдера',
+          onBack: () => Navigator.of(context, rootNavigator: true).pop(),
+        ),
+        onBack: () => Navigator.of(context, rootNavigator: true).pop(),
         body: Builder(
           builder: (context) => SingleChildScrollView(
-            padding: EdgeInsets.only(
-              top: MediaQuery.paddingOf(context).top + 12,
-            ),
+            padding: supportSurfacePadding(context),
             child: const SupportPrivacyGroup(),
           ),
         ),

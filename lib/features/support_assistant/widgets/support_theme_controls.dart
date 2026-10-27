@@ -12,28 +12,61 @@ class SupportThemeButton extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.destructive = false,
+    this.selected = false,
+    this.busy = false,
   });
   final String label;
   final VoidCallback? onTap;
   final bool destructive;
+  final bool selected, busy;
 
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 6),
-    child: Opacity(
-      opacity: onTap == null ? 0.4 : 1,
-      child: GlassSurface(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: context.cs.outlineVariant),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: destructive ? context.cs.error : context.cs.primary,
-              fontWeight: FontWeight.w600,
+    child: Semantics(
+      button: true,
+      selected: selected,
+      enabled: onTap != null && !busy,
+      child: Opacity(
+        opacity: onTap == null ? 0.4 : 1,
+        child: GlassSurface(
+          borderRadius: BorderRadius.circular(14),
+          tint: selected ? context.cs.primaryContainer : null,
+          border: Border.all(
+            color: selected ? context.cs.primary : context.cs.outlineVariant,
+          ),
+          onTap: busy ? null : onTap,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 48),
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (busy)
+                  const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                if (selected)
+                  Icon(
+                    Icons.check_rounded,
+                    size: 20,
+                    color: context.cs.onPrimaryContainer,
+                  ),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: destructive
+                        ? context.cs.error
+                        : selected
+                        ? context.cs.onPrimaryContainer
+                        : context.cs.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
           ),
         ),

@@ -47,45 +47,15 @@ Future<void> _prepareLocally(WidgetTester tester, BackupLoopFixture f) async {
                 .getSingle())
             .read<String>('messages_json'),
   );
-  final mobile = find.byKey(const ValueKey('mobile_open_settings_btn'));
-  final button = mobile.evaluate().isNotEmpty
-      ? mobile
-      : find.byKey(const ValueKey('support_collapsed_settings_btn'));
-  expect(button.hitTestable(), findsOneWidget);
-  await backupLoopReal(tester, () => tester.tap(button));
-  final settingsFrame = find.byWidgetPredicate(
-    (w) => w is SheetView && w.title == 'Настройки Астории',
-  );
-  await backupLoopUntil(tester, () => settingsFrame.evaluate().isNotEmpty);
-  final settingsRoute = ModalRoute.of<void>(tester.element(settingsFrame))!;
-  await tester.pump();
-  await tester.pump(settingsRoute.transitionDuration);
-  await tester.pump(const Duration(microseconds: 1));
-  expect(settingsRoute.isCurrent, isTrue);
-  expect(settingsRoute.animation!.status, AnimationStatus.completed);
-  final entry = find.descendant(
-    of: settingsFrame,
-    matching: find.byKey(const ValueKey('support_local_source_preparation')),
-  );
-  // This lazy row is not mounted initially. Scroll the original settings list,
-  // not a horizontal EditableText Scrollable inside one of its profile fields.
-  final settingsScrollable = find.descendant(
-    of: settingsFrame,
-    matching: find.byWidgetPredicate(
-      (w) =>
-          w is Scrollable &&
-          axisDirectionToAxis(w.axisDirection) == Axis.vertical,
-    ),
-  );
-  expect(settingsScrollable, findsOneWidget);
-  await tester.scrollUntilVisible(
-    entry,
-    200,
-    scrollable: settingsScrollable,
-    maxScrolls: 20,
-  );
-  await tester.pump();
-  expect(settingsRoute.isCurrent, isTrue);
+  // The real mobile shell owns this entry in its action drawer, not Settings.
+  // Both accepted fixture sizes use that shell (no DesktopScope is installed).
+  final toggle = find.byKey(const ValueKey('support_drawer_toggle'));
+  expect(toggle.hitTestable(), findsOneWidget);
+  if (!tester.widget<IconButton>(toggle).isSelected!) {
+    await backupLoopReal(tester, () => tester.tap(toggle));
+    await tester.pump();
+  }
+  final entry = find.byKey(const ValueKey('support_local_source_preparation'));
   expect(entry.hitTestable(), findsOneWidget);
   await backupLoopReal(tester, () => tester.tap(entry));
   final frame = find.byWidgetPredicate(
@@ -154,7 +124,7 @@ Future<void> _prepareLocally(WidgetTester tester, BackupLoopFixture f) async {
     find.byKey(const ValueKey('support_tool_confirmation_accept')),
     findsNothing,
   );
-  // SheetView's real header arrow is inside Material/InkWell, not IconButton.
+  // Close the one real preparation route through its header control.
   final back = find.descendant(
     of: frame,
     matching: find.byIcon(Icons.arrow_back),
@@ -174,25 +144,11 @@ Future<void> _prepareLocally(WidgetTester tester, BackupLoopFixture f) async {
   await backupLoopReal(tester, () => route.completed);
   expect(route.isActive, isFalse);
   expect(frame, findsNothing);
-  expect(settingsRoute.isCurrent, isTrue);
-  final settingsBack = find.descendant(
-    of: settingsFrame,
-    matching: find.byIcon(Icons.arrow_back),
-  );
-  expect(settingsBack.hitTestable(), findsOneWidget);
-  final settingsClosed = BackupLoopSignal(settingsRoute.completed);
-  await backupLoopReal(tester, () => tester.tap(settingsBack));
+  final drawerClose = find.byKey(const ValueKey('support_drawer_close'));
+  expect(drawerClose.hitTestable(), findsOneWidget);
+  await backupLoopReal(tester, () => tester.tap(drawerClose));
   await tester.pump();
-  await tester.pump(settingsRoute.reverseTransitionDuration);
-  await tester.pump(const Duration(microseconds: 1));
-  await backupLoopUntil(
-    tester,
-    () => settingsClosed.done,
-    signal: settingsClosed,
-  );
-  await backupLoopReal(tester, () => settingsRoute.completed);
-  expect(settingsRoute.isActive, isFalse);
-  expect(settingsFrame, findsNothing);
+  expect(tester.widget<IconButton>(toggle).isSelected, isFalse);
   _noPrivateSources(f);
 }
 

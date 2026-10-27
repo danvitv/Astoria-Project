@@ -12,11 +12,17 @@ import '../state/support_provider_provider.dart';
 import '../state/support_provider_ui_binding.dart';
 import 'support_provider_screen_controller.dart';
 import 'support_provider_sheet.dart';
+import 'support_action_strip.dart';
 
 /// No model, provider probe, key hydration or action owner on header creation.
 class SupportProviderEntry extends ConsumerStatefulWidget {
-  const SupportProviderEntry({super.key, this.onOpenPermissions});
+  const SupportProviderEntry({
+    super.key,
+    this.onOpenPermissions,
+    this.compact = false,
+  });
   final VoidCallback? onOpenPermissions;
+  final bool compact;
 
   @override
   SupportProviderEntryState createState() => SupportProviderEntryState();
@@ -34,7 +40,7 @@ class SupportProviderEntryState extends ConsumerState<SupportProviderEntry> {
     bool Function(SupportProviderConnectionHandle)? onUseConnection,
   }) async {
     if (!mounted || _open || isOriginalUiCurrent?.call() == false) return;
-    _open = true;
+    setState(() => _open = true);
     final lifetime = _lifetime = Object();
     final controller = ref.read(supportNativeConsentControllerProvider);
     final snapshot = controller.runtime.localPermissionSnapshot;
@@ -113,7 +119,7 @@ class SupportProviderEntryState extends ConsumerState<SupportProviderEntry> {
         isOriginalUiCurrent?.call() == false) {
       owner?.dispose();
       if (identical(_opened, owner)) _opened = null;
-      _open = false;
+      if (mounted) setState(() => _open = false);
       return;
     }
     var openPermissions = false;
@@ -148,7 +154,7 @@ class SupportProviderEntryState extends ConsumerState<SupportProviderEntry> {
     } finally {
       owner?.dispose();
       if (identical(_opened, owner)) _opened = null;
-      _open = false;
+      if (mounted) setState(() => _open = false);
     }
     // Never nest the permissions route over a still-current provider lifetime.
     if (mounted &&
@@ -174,10 +180,20 @@ class SupportProviderEntryState extends ConsumerState<SupportProviderEntry> {
   }
 
   @override
-  Widget build(BuildContext context) => IconButton(
-    key: const ValueKey('support_provider_open'),
-    tooltip: 'support_provider_title'.tr(),
-    icon: const Icon(Icons.dns_outlined),
-    onPressed: open,
-  );
+  Widget build(BuildContext context) => widget.compact
+      ? SupportActionTile(
+          key: const ValueKey('support_provider_open'),
+          icon: Icons.dns_outlined,
+          label: 'Подключение',
+          tooltip: 'support_provider_title'.tr(),
+          selected: _open,
+          onTap: _open ? null : open,
+        )
+      : IconButton(
+          key: const ValueKey('support_provider_open'),
+          tooltip: 'support_provider_title'.tr(),
+          icon: const Icon(Icons.dns_outlined),
+          isSelected: _open,
+          onPressed: _open ? null : open,
+        );
 }

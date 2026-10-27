@@ -553,6 +553,10 @@ class MenuSwitchItem extends StatelessWidget {
 
 class MenuFieldItem extends StatelessWidget {
   final String label;
+
+  /// Constrain the full label to the row so it can wrap at larger text scales.
+  /// Opt-in only; existing forms retain their original label layout.
+  final bool wrapLabel;
   final String? helpTerm;
   final TextEditingController controller;
   final String? placeholder;
@@ -578,6 +582,7 @@ class MenuFieldItem extends StatelessWidget {
   const MenuFieldItem({
     super.key,
     required this.label,
+    this.wrapLabel = false,
     this.helpTerm,
     required this.controller,
     this.placeholder,
@@ -595,6 +600,10 @@ class MenuFieldItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final labelText = Text(
+      label,
+      style: TextStyle(color: context.cs.onSurfaceVariant, fontSize: 13),
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
       child: Column(
@@ -602,15 +611,9 @@ class MenuFieldItem extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text(
-                label,
-                style: TextStyle(
-                  color: context.cs.onSurfaceVariant,
-                  fontSize: 13,
-                ),
-              ),
+              if (wrapLabel) Flexible(child: labelText) else labelText,
               if (helpTerm != null) HelpTip(term: helpTerm!, size: 14),
-              const Spacer(),
+              if (!wrapLabel) const Spacer(),
               if (onExpand != null)
                 GestureDetector(
                   onTap: onExpand,
@@ -1096,6 +1099,10 @@ class _MenuScriptItemState extends State<MenuScriptItem> {
 
 class MenuSelectorItem extends StatelessWidget {
   final String label;
+
+  /// Constrain the full label to the row without truncating or reducing scale.
+  /// Opt-in only; existing selectors retain their original label layout.
+  final bool wrapLabel;
   final String? helpTerm;
   final String currentValue;
   final bool? included;
@@ -1108,6 +1115,7 @@ class MenuSelectorItem extends StatelessWidget {
   const MenuSelectorItem({
     super.key,
     required this.label,
+    this.wrapLabel = false,
     this.helpTerm,
     required this.currentValue,
     this.included,
@@ -1122,6 +1130,15 @@ class MenuSelectorItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isIncluded = included ?? true;
+    final labelText = Text(
+      label,
+      style: TextStyle(
+        color: isIncluded
+            ? context.cs.onSurfaceVariant
+            : context.cs.onSurfaceVariant.withValues(alpha: 0.4),
+        fontSize: 13,
+      ),
+    );
     return InkWell(
       onTap: isIncluded
           ? () {
@@ -1143,15 +1160,7 @@ class MenuSelectorItem extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                 ],
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: isIncluded
-                        ? context.cs.onSurfaceVariant
-                        : context.cs.onSurfaceVariant.withValues(alpha: 0.4),
-                    fontSize: 13,
-                  ),
-                ),
+                if (wrapLabel) Flexible(child: labelText) else labelText,
                 if (helpTerm != null) HelpTip(term: helpTerm!, size: 14),
               ],
             ),

@@ -7,6 +7,7 @@ import 'package:glaze_flutter/features/support_assistant/state/support_workspace
 import 'package:glaze_flutter/features/support_assistant/support_assistant_screen.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_sessions_panel.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_settings_panel.dart';
+import 'package:glaze_flutter/features/support_assistant/widgets/support_surface_layout.dart';
 import 'package:glaze_flutter/shared/shell/desktop/desktop_layout_provider.dart';
 import 'package:glaze_flutter/shared/shell/desktop/desktop_shell.dart';
 import 'package:glaze_flutter/shared/shell/desktop/desktop_sidebar_surface.dart';
@@ -92,7 +93,7 @@ Rect _measuredHeader(WidgetTester tester, String title, Size viewport) {
   expect(headerBounds.height, greaterThan(tester.getSize(_sheetBack).height));
   expect(headerBounds.bottom, greaterThan(tester.getRect(_sheetBack).bottom));
   final sheet = tester.widget<SheetView>(_sheet);
-  expect(sheet.showBack, isTrue);
+  expect(sheet.showBack, isFalse); // One owned 48px back in the title slot.
   expect(sheet.onBack, isNotNull);
   return headerBounds;
 }
@@ -154,8 +155,10 @@ void main() {
           viewport,
         );
         final panel = find.byType(SupportSessionsPanel);
-        _expectBelowHeader(tester, panel, header, hittable: false);
-        _expectBelowHeader(tester, find.text('История Астории'), header);
+        // The viewport intentionally extends behind SheetView's header; its
+        // first controls, not the ListView box, consume the measured inset.
+        _expectContained(tester.getRect(panel), tester.getRect(_sheet));
+        expect(find.text('История Астории'), findsNothing);
         _expectBelowHeader(tester, _key('support_sessions_back_btn'), header);
         _expectBelowHeader(tester, _key('support_new_session_btn'), header);
         _expectBelowHeader(tester, _key('support_session_row_first'), header);
@@ -210,41 +213,40 @@ void main() {
       await tester.tap(_key('mobile_open_settings_btn'));
       await tester.pumpAndSettle();
       final header = _measuredHeader(tester, 'Настройки Астории', viewport);
+      _expectContained(
+        tester.getRect(find.byType(SupportSettingsPanel)),
+        tester.getRect(_sheet),
+      );
       _expectBelowHeader(
         tester,
-        find.byType(SupportSettingsPanel),
+        find.text('Режим Астории'),
         header,
         hittable: false,
       );
-      _expectBelowHeader(tester, find.text('Режим Астории'), header);
       final tabs = find.descendant(
         of: _sheet,
         matching: find.byType(GlazeTabBar),
       );
-      _expectBelowHeader(tester, tabs, header);
-      final tabBounds = tester.getRect(tabs);
-      for (final mode in SupportAssistantMode.values) {
-        if (mode == SupportAssistantMode.hybrid) {
-          // The production pill strip shows 2.35 tabs. Reveal the third using
-          // the actual horizontal gesture, without scrolling the form upwards.
-          await tester.drag(tabs, Offset(-tabBounds.width, 0));
-          await tester.pumpAndSettle();
-        }
-        final label = find.descendant(
-          of: tabs,
-          matching: find.text(mode.shortLabel),
-        );
-        final target = find
-            .ancestor(
-              of: label,
-              matching: find.byWidgetPredicate(
-                (widget) => widget is GestureDetector && widget.onTap != null,
-              ),
-            )
-            .first;
-        _expectBelowHeader(tester, target, header, within: tabBounds);
-        _expectBelowHeader(tester, label, header, within: tabBounds);
-      }
+      _expectBelowHeader(tester, tabs, header, hittable: false);
+      // This presentation-only fixture has no native settings owner. Its
+      // control must now be genuinely unavailable, not styled as a live fake.
+      final availability = find.ancestor(
+        of: tabs,
+        matching: find.byType(SupportControlAvailability),
+      );
+      expect(
+        tester.widget<SupportControlAvailability>(availability).enabled,
+        isFalse,
+      );
+      expect(tabs.hitTestable(), findsNothing);
+      expect(
+        tester.widget<GlazeTabBar>(tabs).activeIndex,
+        SupportAssistantMode.values.indexOf(
+          ProviderScope.containerOf(
+            tester.element(find.byType(SupportAssistantScreen)),
+          ).read(supportWorkspaceProvider).settings.mode,
+        ),
+      );
       fixture.expectNoExternalWork();
       expect(tester.takeException(), isNull);
       await _closeAndExpectScreen(tester, fixture, router, screenState);

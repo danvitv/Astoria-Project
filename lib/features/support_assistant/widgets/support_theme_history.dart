@@ -26,6 +26,7 @@ class SupportThemeHistory extends StatelessWidget {
           SupportThemeButton(
             key: ValueKey('support_theme_history_kind_${operation.name}'),
             label: 'support_theme_history_kind_${operation.name}'.tr(),
+            selected: c.historyOperation == operation,
             onTap: c.current && !c.busy && c.historyOperation != operation
                 ? () => c.selectHistoryOperation(operation)
                 : null,
@@ -39,6 +40,7 @@ class SupportThemeHistory extends StatelessWidget {
         SupportThemeButton(
           key: const ValueKey('support_theme_history_refresh'),
           label: 'support_theme_history_refresh'.tr(),
+          busy: c.busy,
           onTap: c.current && original != null && !c.busy
               ? () => c.discover()
               : null,

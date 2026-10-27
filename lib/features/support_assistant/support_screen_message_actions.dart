@@ -45,7 +45,7 @@ extension _ScreenMessageActions on _SupportAssistantScreenState {
         shown == message.body &&
         shown.length <= 8192;
     final navigator = Navigator.of(context, rootNavigator: true);
-    _sheetOpen = true;
+    _setSheetOpen(true);
     try {
       String? action;
       await GlazeBottomSheet.show<void>(
@@ -93,8 +93,9 @@ extension _ScreenMessageActions on _SupportAssistantScreenState {
         final safe = currentDisplay.project(shown);
         if (!intent.isCurrent ||
             safe == SupportMessageDisplayProjection.tooLong ||
-            safe == SupportMessageDisplayProjection.unavailable)
+            safe == SupportMessageDisplayProjection.unavailable) {
           return;
+        }
         try {
           await Clipboard.setData(ClipboardData(text: safe));
         } catch (_) {
@@ -130,7 +131,7 @@ extension _ScreenMessageActions on _SupportAssistantScreenState {
         await _confirmMessageDeletion(message, intent, notifier, lifetime);
       }
     } finally {
-      _sheetOpen = false;
+      if (mounted) _setSheetOpen(false);
     }
   }
 

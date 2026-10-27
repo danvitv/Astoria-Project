@@ -130,6 +130,7 @@ class SupportDesktopShellFixture {
     GoRouter router, {
     String language = 'ru',
     double textScale = 1,
+    Brightness brightness = Brightness.dark,
   }) => ProviderScope(
     // One flat scope before shell/sidebar/header/native evaluation. The
     // shell's own inner scope overrides ONLY its resizer controllers.
@@ -190,7 +191,7 @@ class SupportDesktopShellFixture {
           locale: context.locale,
           supportedLocales: context.supportedLocales,
           localizationsDelegates: context.localizationDelegates,
-          theme: ThemeData.dark(),
+          theme: ThemeData(brightness: brightness),
           routerConfig: router,
           builder: (context, child) => MediaQuery(
             data: MediaQuery.of(

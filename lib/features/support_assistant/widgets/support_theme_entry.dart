@@ -9,11 +9,14 @@ import '../state/support_native_provider.dart';
 import '../state/support_theme_provider.dart';
 import 'support_theme_screen_controller.dart';
 import 'support_theme_sheet.dart';
+import 'support_action_strip.dart';
+import 'support_surface_layout.dart';
 
 /// Installed-theme native entry, independent of model/recipient configuration.
 /// Ordinary theme_setup navigation remains a separate escape hatch.
 class SupportThemeEntry extends ConsumerStatefulWidget {
-  const SupportThemeEntry({super.key});
+  const SupportThemeEntry({super.key, this.compact = false});
+  final bool compact;
 
   @override
   SupportThemeEntryState createState() => SupportThemeEntryState();
@@ -32,7 +35,7 @@ class SupportThemeEntryState extends ConsumerState<SupportThemeEntry> {
     if (original != null && original.current) {
       return _show(original);
     }
-    _open = true;
+    setState(() => _open = true);
     try {
       await showModalBottomSheet<void>(
         context: context,
@@ -42,7 +45,7 @@ class SupportThemeEntryState extends ConsumerState<SupportThemeEntry> {
         builder: (_) => const _PermissionSheet(),
       );
     } finally {
-      _open = false;
+      if (mounted) setState(() => _open = false);
     }
   }
 
@@ -70,7 +73,7 @@ class SupportThemeEntryState extends ConsumerState<SupportThemeEntry> {
 
   Future<void> _show(SupportThemeScreenController original) async {
     if (!mounted || _open || !identical(original, _displayed)) return;
-    _open = true;
+    setState(() => _open = true);
     // Modal dependencies and original owner are captured before the first await.
     try {
       await showModalBottomSheet<void>(
@@ -102,18 +105,7 @@ class SupportThemeEntryState extends ConsumerState<SupportThemeEntry> {
     // The permission instruction is passive and requires no configured model.
     if (!allowed) {
       _displayed?.retire();
-      return IconButton(
-        key: const ValueKey('support_theme_open'),
-        tooltip: 'support_theme_title'.tr(),
-        icon: const Icon(Icons.palette_outlined),
-        onPressed: () => showModalBottomSheet<void>(
-          context: context,
-          useRootNavigator: true,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          builder: (_) => const _PermissionSheet(),
-        ),
-      );
+      return _entry(_open ? null : open);
     }
     final binding = ref.watch(supportThemeUiBindingProvider);
     ref.watch(supportThemePresentationProvider);
@@ -143,13 +135,25 @@ class SupportThemeEntryState extends ConsumerState<SupportThemeEntry> {
       _owners.add(owner);
     }
     final original = _displayed;
-    return IconButton(
-      key: const ValueKey('support_theme_open'),
-      tooltip: 'support_theme_title'.tr(),
-      icon: const Icon(Icons.palette_outlined),
-      onPressed: original == null || _open ? null : () => _show(original),
-    );
+    return _entry(original == null || _open ? null : () => _show(original));
   }
+
+  Widget _entry(VoidCallback? onTap) => widget.compact
+      ? SupportActionTile(
+          key: const ValueKey('support_theme_open'),
+          icon: Icons.palette_outlined,
+          label: 'Тема',
+          tooltip: 'support_theme_title'.tr(),
+          selected: _open,
+          onTap: onTap,
+        )
+      : IconButton(
+          key: const ValueKey('support_theme_open'),
+          tooltip: 'support_theme_title'.tr(),
+          icon: const Icon(Icons.palette_outlined),
+          isSelected: _open,
+          onPressed: onTap,
+        );
 }
 
 class _PermissionSheet extends StatelessWidget {
@@ -158,7 +162,11 @@ class _PermissionSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SheetView(
     title: 'support_theme_title'.tr(),
-    showBack: true,
+    showBack: false,
+    titleWidget: SupportSheetTitle(
+      title: 'support_theme_title'.tr(),
+      onBack: () => Navigator.of(context).pop(),
+    ),
     onBack: () => Navigator.of(context).pop(),
     body: Builder(
       builder: (bodyContext) => ListView(

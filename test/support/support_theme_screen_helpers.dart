@@ -130,12 +130,37 @@ Rect _visible(WidgetTester tester, Finder list, Finder scrollable) {
 }
 
 void fullControl(WidgetTester tester, Finder control, Finder list) {
+  expect(control, findsOneWidget);
+  if (find
+      .ancestor(of: control, matching: find.byType(ListView))
+      .evaluate()
+      .isEmpty) {
+    _fixedControl(tester, control);
+    return;
+  }
   final b = bounds(tester, control, list);
   expect(b.control.top, greaterThanOrEqualTo(b.visible.top));
   expect(b.control.bottom, lessThanOrEqualTo(b.visible.bottom));
   expect(b.control.left, greaterThanOrEqualTo(b.visible.left));
   expect(b.control.right, lessThanOrEqualTo(b.visible.right));
   expect(control.hitTestable(), findsOneWidget);
+}
+
+void _fixedControl(WidgetTester tester, Finder control) {
+  expect(control.hitTestable(), findsOneWidget);
+  final owner = find.ancestor(of: control, matching: find.byType(SheetView));
+  expect(owner, findsOneWidget);
+  final rect = tester.getRect(control), sheet = tester.getRect(owner);
+  expect(rect.top, greaterThanOrEqualTo(sheet.top));
+  expect(
+    rect.bottom,
+    lessThanOrEqualTo(
+      sheet.bottom -
+          tester.view.viewInsets.bottom / tester.view.devicePixelRatio,
+    ),
+  );
+  expect(rect.left, greaterThanOrEqualTo(sheet.left));
+  expect(rect.right, lessThanOrEqualTo(sheet.right));
 }
 
 Future<void> _scrollBy(
@@ -186,6 +211,16 @@ Future<void> reveal(
   Finder control,
   Finder list,
 ) async {
+  if (control.evaluate().isNotEmpty &&
+      find
+          .ancestor(of: control, matching: find.byType(ListView))
+          .evaluate()
+          .isEmpty) {
+    // Only a MOUNTED control without a list owner can be fixed chrome. An
+    // absent lazy row still needs the original finite ListView traversal.
+    _fixedControl(tester, control);
+    return;
+  }
   final scrollable = _outerScrollable(tester, list);
   final original = tester.state<ScrollableState>(scrollable);
   final row = find.descendant(of: list, matching: control);
@@ -291,6 +326,12 @@ Future<SupportThemeScreenController> openThemes(
   WidgetTester tester,
   ThemeScreenFixture f,
 ) async {
+  final toggle = find.byKey(const ValueKey('support_drawer_toggle'));
+  if (toggle.evaluate().isNotEmpty &&
+      !tester.widget<IconButton>(toggle).isSelected!) {
+    await f.gesture(tester, () => tester.tap(toggle));
+    await tester.pumpAndSettle();
+  }
   final entry = find.byKey(const ValueKey('support_theme_open'));
   expect(entry.hitTestable(), findsOneWidget);
   final rect = tester.getRect(entry);
@@ -330,10 +371,7 @@ Future<void> reviewTheme(
   await f.finish(tester, reached);
   await tester.pumpAndSettle();
   final list = find.byKey(const ValueKey('support_theme_scroll'));
-  final confirm = find.descendant(
-    of: list,
-    matching: find.byKey(const ValueKey('support_theme_confirm')),
-  );
+  final confirm = find.byKey(const ValueKey('support_theme_confirm'));
   await reveal(tester, f, confirm, list);
   expect(tester.widget<SupportThemeButton>(confirm).onTap, isNotNull);
 }

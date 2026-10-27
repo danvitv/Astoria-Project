@@ -3,7 +3,7 @@ part of 'support_assistant_screen.dart';
 extension _ScreenGuidance on _SupportAssistantScreenState {
   Future<void> _openGuidance(SupportGuidanceTarget target) async {
     if (!mounted || _sheetOpen) return;
-    _sheetOpen = true;
+    _setSheetOpen(true);
     try {
       if (target == SupportGuidanceTarget.providerSetup) {
         await _providerEntry.currentState?.open();
@@ -19,7 +19,7 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
         );
       }
     } finally {
-      _sheetOpen = false;
+      if (mounted) _setSheetOpen(false);
     }
   }
 

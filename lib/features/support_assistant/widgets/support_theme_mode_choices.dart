@@ -14,6 +14,16 @@ class SupportThemeModeChoices extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = controller, original = controller.intent;
     final observed = c.observation;
+    final installed = c.current && original != null && observed != null
+        ? original.installed(observed)
+        : null;
+    String? currentMode;
+    if (installed != null) {
+      for (final choice in installed.choices) {
+        final value = choice.value;
+        if (value?.active == true) currentMode = value!.mode;
+      }
+    }
     final choices = c.current && original != null && observed != null
         ? original.modeChoices(observed)
         : null;
@@ -31,6 +41,7 @@ class SupportThemeModeChoices extends StatelessWidget {
               SupportThemeButton(
                 key: ValueKey('support_theme_mode_choice_${value.mode}'),
                 label: 'support_theme_mode_${value.mode}'.tr(),
+                selected: currentMode != null && value.mode == currentMode,
                 onTap: c.busy ? null : () => c.prepare(choice),
               )
             else

@@ -6,7 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/db/repositories/history_source_index_repo.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../shared/widgets/menu_group.dart';
+import '../../../shared/widgets/glaze_action_button.dart';
 import '../state/support_source_preparation_provider.dart';
+import 'support_surface_layout.dart';
 
 /// The sole explicit app entry to bounded local index maintenance. It neither
 /// sends anything nor grants model access. Stop/disposal retires the original
@@ -72,19 +74,21 @@ class _PreparationState extends ConsumerState<SupportSourcePreparationSheet> {
                 'Формат не поддерживается. История не изменена.',
             };
           },
-          onError: (Object _, StackTrace __) {
-            if (current())
+          onError: (Object _, StackTrace _) {
+            if (current()) {
               _message =
                   'Подготовка недоступна или неполна. История не изменена.';
+            }
           },
         )
         .whenComplete(() {
           // Clear busy only when the actual original maintenance future settles.
           _pending = null;
-          if (mounted)
+          if (mounted) {
             setState(() {
               _working = null;
             });
+          }
         });
     await _pending;
   }
@@ -100,104 +104,116 @@ class _PreparationState extends ConsumerState<SupportSourcePreparationSheet> {
   @override
   Widget build(BuildContext context) {
     final page = ref.watch(supportSourcePreparationPageProvider(_after));
-    return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      children: [
-        const Padding(
-          padding: EdgeInsets.all(16),
-          child: Text(
-            'Локальная подготовка читает выбранную историю только для производного индекса. '
-            'Оригинал сохраняется точно; передачи модели и разрешения на чтение нет. '
-            'Готовность проверяется на текущем native-владельце и теряется при изменении источника.',
+    return SupportSheetDecisionBody(
+      footer: _pending == null
+          ? const SizedBox.shrink()
+          : GlazeActionButton(
+              key: const ValueKey('support_source_prepare_stop'),
+              icon: Icons.stop_rounded,
+              label: 'Остановить подготовку',
+              expand: true,
+              maxLabelLines: null,
+              onTap: _stop,
+            ),
+      content: ListView(
+        key: const ValueKey('support_source_preparation_scroll'),
+        padding: supportSurfacePadding(context, sheetHosted: false),
+        children: [
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text(
+              'Локальная подготовка читает выбранную историю только для производного индекса. '
+              'Оригинал сохраняется точно; передачи модели и разрешения на чтение нет. '
+              'Готовность проверяется на текущем native-владельце и теряется при изменении источника.',
+            ),
           ),
-        ),
-        if (_message != null)
-          Padding(padding: const EdgeInsets.all(16), child: Text(_message!)),
-        if (_pending != null)
-          MenuGroup(
-            items: [
-              MenuItem(
-                key: const ValueKey('support_source_prepare_stop'),
-                icon: Icons.stop_rounded,
-                label: 'Остановить подготовку',
-                onTap: _stop,
+          if (_message != null)
+            Padding(padding: const EdgeInsets.all(16), child: Text(_message!)),
+          ...page.when(
+            data: (value) => <Widget>[
+              SupportControlAvailability(
+                enabled: _pending == null,
+                child: MenuGroup(
+                  header: 'Истории — локальный выбор',
+                  items: [
+                    for (final source in value.items)
+                      SupportControlAvailability(
+                        enabled:
+                            source.state !=
+                            HistoryIndexMaintenanceState.unsupported,
+                        child: MenuItem(
+                          key: ValueKey(
+                            'support_source_prepare_${source.sessionId}',
+                          ),
+                          icon: Icons.manage_search_rounded,
+                          label: '${source.label} · чат ${source.sessionIndex}',
+                          subtitle: _working == source.sessionId
+                              ? 'Подготовка…'
+                              : switch (source.state) {
+                                  HistoryIndexMaintenanceState.ready =>
+                                    'Текущий индекс готов · пересобрать',
+                                  HistoryIndexMaintenanceState.incomplete =>
+                                    'Не готов · подготовить / продолжить',
+                                  HistoryIndexMaintenanceState.unsupported =>
+                                    'Неподдерживаемый формат',
+                                },
+                          onTap: () {
+                            if (_pending != null) return;
+                            unawaited(_prepare(source));
+                          },
+                        ),
+                      ),
+                    if (value.items.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text('На этой странице нет доступных историй.'),
+                      ),
+                    if (value.nextRowid != null)
+                      MenuItem(
+                        key: const ValueKey('support_source_prepare_next'),
+                        icon: Icons.navigate_next_rounded,
+                        label: 'Следующая страница (до 16 кандидатов)',
+                        onTap: () {
+                          if (_pending != null) return;
+                          setState(() {
+                            _after = value.nextRowid!;
+                            _message = null;
+                          });
+                        },
+                      ),
+                    if (_after != 0)
+                      MenuItem(
+                        icon: Icons.first_page_rounded,
+                        label: 'В начало',
+                        onTap: () {
+                          if (_pending != null) return;
+                          setState(() {
+                            _after = 0;
+                            _message = null;
+                          });
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ],
+            loading: () => [
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('Проверка локальной готовности…'),
+              ),
+            ],
+            error: (error, stack) => [
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(
+                  'Оригинальный native-владелец или индекс недоступен.',
+                ),
               ),
             ],
           ),
-        ...page.when(
-          data: (value) => <Widget>[
-            MenuGroup(
-              header: 'Истории — локальный выбор',
-              items: [
-                for (final source in value.items)
-                  MenuItem(
-                    key: ValueKey('support_source_prepare_${source.sessionId}'),
-                    icon: Icons.manage_search_rounded,
-                    label: '${source.label} · чат ${source.sessionIndex}',
-                    subtitle: _working == source.sessionId
-                        ? 'Подготовка…'
-                        : switch (source.state) {
-                            HistoryIndexMaintenanceState.ready =>
-                              'Текущий индекс готов · пересобрать',
-                            HistoryIndexMaintenanceState.incomplete =>
-                              'Не готов · подготовить / продолжить',
-                            HistoryIndexMaintenanceState.unsupported =>
-                              'Неподдерживаемый формат',
-                          },
-                    onTap: () {
-                      if (_pending != null) return;
-                      unawaited(_prepare(source));
-                    },
-                  ),
-                if (value.items.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Text('На этой странице нет доступных историй.'),
-                  ),
-                if (value.nextRowid != null)
-                  MenuItem(
-                    key: const ValueKey('support_source_prepare_next'),
-                    icon: Icons.navigate_next_rounded,
-                    label: 'Следующая страница (до 16 кандидатов)',
-                    onTap: () {
-                      if (_pending != null) return;
-                      setState(() {
-                        _after = value.nextRowid!;
-                        _message = null;
-                      });
-                    },
-                  ),
-                if (_after != 0)
-                  MenuItem(
-                    icon: Icons.first_page_rounded,
-                    label: 'В начало',
-                    onTap: () {
-                      if (_pending != null) return;
-                      setState(() {
-                        _after = 0;
-                        _message = null;
-                      });
-                    },
-                  ),
-              ],
-            ),
-          ],
-          loading: () => [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Проверка локальной готовности…'),
-            ),
-          ],
-          error: (error, stack) => [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                'Оригинальный native-владелец или индекс недоступен.',
-              ),
-            ),
-          ],
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

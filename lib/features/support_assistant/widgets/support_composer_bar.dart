@@ -8,6 +8,7 @@ import '../../../shared/theme/app_colors.dart';
 import '../../../shared/widgets/glass_surface.dart';
 import '../../../shared/widgets/glaze_text_field.dart';
 import '../../../core/llm/provider_token_usage.dart';
+import 'support_action_strip.dart';
 
 /// Exact emitted draft ownership, including content ABA before acceptance.
 final class SupportComposerDraft {
@@ -37,6 +38,8 @@ class SupportComposerBar extends StatefulWidget {
   final VoidCallback? onCompact;
   final ProviderTokenUsage? usage;
   final bool usageIsCompaction;
+  final List<Widget> auxiliaryActions;
+  final bool useActionDrawer;
 
   const SupportComposerBar({
     super.key,
@@ -54,13 +57,24 @@ class SupportComposerBar extends StatefulWidget {
     this.onCompact,
     this.usage,
     this.usageIsCompaction = false,
+    this.auxiliaryActions = const [],
+    this.useActionDrawer = false,
   });
 
   @override
-  State<SupportComposerBar> createState() => _SupportComposerBarState();
+  SupportComposerBarState createState() => SupportComposerBarState();
 }
 
-class _SupportComposerBarState extends State<SupportComposerBar> {
+class SupportComposerBarState extends State<SupportComposerBar> {
+  bool _drawerOpen = false;
+
+  /// Presentation back handling only; never stops or rebinds the active send.
+  bool closeActions() {
+    if (!_drawerOpen) return false;
+    setState(() => _drawerOpen = false);
+    return true;
+  }
+
   bool _sending = false;
   String? _error;
   int _ownership = 0;
@@ -78,8 +92,12 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
   void _draftChanged() {
     final text = widget.controller.text;
     if (text == _lastText) return;
+    final oldEmpty = _lastText.trim().isEmpty;
     _lastText = text;
     _draftRevision++;
+    // Rebuild button availability only on empty/non-empty transitions, not
+    // cursor, selection or every IME update (as in our ChatInputBar).
+    if (text.trim().isEmpty != oldEmpty) setState(() {});
   }
 
   @override
@@ -171,6 +189,7 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
   @override
   Widget build(BuildContext context) {
     final busy = _sending || widget.busy;
+    final keyboardUp = View.of(context).viewInsets.bottom > 0;
     final emitted = widget;
     final emittedOwnership = _ownership;
     KeyEventResult draftKey(FocusNode node, KeyEvent event) {
@@ -195,113 +214,164 @@ class _SupportComposerBarState extends State<SupportComposerBar> {
       return KeyEventResult.handled;
     }
 
+    final hasDraft = widget.controller.text.trim().isNotEmpty;
+    final actions = <Widget>[
+      ...widget.auxiliaryActions,
+      SupportActionTile(
+        key: const ValueKey('support_composer_compact_btn'),
+        icon: Icons.compress_rounded,
+        label: 'Компакт',
+        tooltip: 'Сжать старый контекст выбранной моделью; история останется',
+        busy: busy && widget.usageIsCompaction,
+        onTap: busy || !widget.available ? null : widget.onCompact,
+      ),
+      if (widget.onLocalHelp != null)
+        SupportActionTile(
+          key: const ValueKey('support_composer_local_help_btn'),
+          icon: Icons.menu_book_outlined,
+          label: 'Помощь',
+          tooltip: 'Локальная помощь без сети — использует текст в поле ввода',
+          onTap: busy || !widget.available || !hasDraft
+              ? null
+              : () => _submit(emitted, emittedOwnership, local: true),
+        ),
+      if (widget.onRunQuickDiagnostics != null)
+        SupportActionTile(
+          key: const ValueKey('support_composer_diag_btn'),
+          icon: Icons.troubleshoot_rounded,
+          label: 'Диагностика',
+          tooltip: 'Обсудить диагностику; выбор данных требует разрешения',
+          onTap: busy || !widget.available
+              ? null
+              : widget.onRunQuickDiagnostics,
+        ),
+    ];
     return SafeArea(
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: GlassSurface(
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: context.cs.outlineVariant),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_error != null)
-                  Text(_error!, style: TextStyle(color: context.cs.error)),
-                Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Same arrangement as our ChatInputBar: input pill first, actions
+            // underneath. Astoria retains its own exact draft acceptance rules.
+            GlassSurface(
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: context.cs.outlineVariant),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (widget.onCompact != null)
-                      IconButton(
-                        key: const ValueKey('support_composer_compact_btn'),
-                        tooltip:
-                            'Сжать старый контекст выбранной моделью; история останется',
-                        icon: const Icon(Icons.compress_rounded, size: 20),
-                        onPressed: busy || !widget.available
-                            ? null
-                            : widget.onCompact,
-                      ),
-                    if (widget.onRunQuickDiagnostics != null)
-                      IconButton(
-                        key: const ValueKey('support_composer_diag_btn'),
-                        tooltip: 'О диагностике (исполнитель пока недоступен)',
-                        icon: const Icon(Icons.troubleshoot_rounded, size: 20),
-                        onPressed: busy ? null : widget.onRunQuickDiagnostics,
-                      ),
-                    if (widget.onLocalHelp != null)
-                      IconButton(
-                        key: const ValueKey('support_composer_local_help_btn'),
-                        tooltip: 'Локальная помощь без сети',
-                        icon: const Icon(Icons.menu_book_outlined, size: 20),
-                        onPressed: busy || !widget.available
-                            ? null
-                            : () => _submit(
-                                emitted,
-                                emittedOwnership,
-                                local: true,
-                              ),
-                      ),
-                    Expanded(
-                      child: Focus(
-                        onKeyEvent: draftKey,
-                        child: GlazeTextField(
-                          key: const ValueKey('support_composer_input'),
-                          controller: widget.controller,
-                          focusNode: _inputFocus,
-                          maxLines: 4,
-                          keyboardType: TextInputType.multiline,
-                          textInputAction: TextInputAction.newline,
-                          isDense: true,
-                          hint: 'Сообщение Астории (без API-ключей)…',
-                        ),
+                    if (_error != null)
+                      Text(_error!, style: TextStyle(color: context.cs.error)),
+                    Focus(
+                      onKeyEvent: draftKey,
+                      child: GlazeTextField(
+                        key: const ValueKey('support_composer_input'),
+                        controller: widget.controller,
+                        focusNode: _inputFocus,
+                        maxLines: keyboardUp ? 2 : 4,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.newline,
+                        isDense: true,
+                        hint: 'Сообщение Астории (без API-ключей)…',
                       ),
                     ),
-                    IconButton(
-                      key: const ValueKey('support_composer_send_btn'),
-                      tooltip: widget.available
-                          ? (widget.onNativeSend != null
-                                ? 'Отправить модели'
-                                : 'Сохранить сообщение')
-                          : 'Отправка недоступна',
-                      icon: busy
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.send_rounded, size: 20),
-                      onPressed: busy || !widget.available
-                          ? null
-                          : () => _submit(emitted, emittedOwnership),
-                    ),
-                    if (widget.onStop != null)
-                      IconButton(
-                        key: const ValueKey('support_composer_stop_btn'),
-                        tooltip: 'Остановить отправку',
-                        icon: Icon(Icons.stop_rounded, color: context.cs.error),
-                        // Never a busy/disabled action: works before HTTP and
-                        // while a quiet SSE response or settlement is pending.
-                        onPressed: widget.onStop,
-                      ),
                   ],
                 ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '${widget.usageIsCompaction ? 'Компакт' : 'Последний запрос'} · '
-                    'вход: ${widget.usage?.inputTokens ?? 'нет данных'} · '
-                    'выход: ${widget.usage?.outputTokens ?? 'нет данных'} · '
-                    'всего: ${widget.usage?.totalTokens ?? 'нет данных'}',
-                    key: const ValueKey('support_request_token_usage'),
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: context.cs.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                if (widget.useActionDrawer)
+                  Semantics(
+                    expanded: _drawerOpen,
+                    child: IconButton(
+                      key: const ValueKey('support_drawer_toggle'),
+                      constraints: const BoxConstraints(
+                        minWidth: 48,
+                        minHeight: 48,
+                      ),
+                      tooltip: 'Действия Астории',
+                      isSelected: _drawerOpen,
+                      icon: const Icon(Icons.auto_awesome_rounded),
+                      onPressed: () =>
+                          setState(() => _drawerOpen = !_drawerOpen),
+                    ),
+                  ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Text(
+                      '${widget.usageIsCompaction ? 'Компакт' : 'Последний запрос'} · '
+                      'вход: ${widget.usage?.inputTokens ?? 'нет данных'} · '
+                      'выход: ${widget.usage?.outputTokens ?? 'нет данных'} · '
+                      'всего: ${widget.usage?.totalTokens ?? 'нет данных'}',
+                      key: const ValueKey('support_request_token_usage'),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: context.cs.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ),
+                IconButton(
+                  key: const ValueKey('support_composer_send_btn'),
+                  constraints: const BoxConstraints(
+                    minWidth: 48,
+                    minHeight: 48,
+                  ),
+                  tooltip: widget.available
+                      ? (widget.onNativeSend != null
+                            ? 'Отправить модели'
+                            : 'Сохранить сообщение')
+                      : 'Отправка недоступна',
+                  icon: busy
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send_rounded, size: 20),
+                  onPressed: busy || !widget.available || !hasDraft
+                      ? null
+                      : () => _submit(emitted, emittedOwnership),
+                ),
+                if (widget.onStop != null)
+                  IconButton(
+                    key: const ValueKey('support_composer_stop_btn'),
+                    constraints: const BoxConstraints(
+                      minWidth: 48,
+                      minHeight: 48,
+                    ),
+                    tooltip: 'Остановить отправку',
+                    icon: Icon(Icons.stop_rounded, color: context.cs.error),
+                    // Never a busy/disabled action: works before HTTP and
+                    // while a quiet SSE response or settlement is pending.
+                    onPressed: widget.onStop,
+                  ),
               ],
             ),
-          ),
+            if (widget.useActionDrawer)
+              // Only auxiliary content yields height under the actual screen
+              // constraint. Input, Send and live Stop remain fixed siblings.
+              Flexible(
+                fit: FlexFit.loose,
+                child: SupportActionDrawer(
+                  open: _drawerOpen,
+                  onClose: closeActions,
+                  children: actions,
+                ),
+              )
+            else
+              SupportActionStrip(children: actions),
+          ],
         ),
       ),
     );
