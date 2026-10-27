@@ -217,13 +217,15 @@ SupportModelReplyReference _reference(Object? value) {
 }
 
 SupportModelToolDisclosure _disclosure(Object? value) {
-  final item = _object(value, const {
+  final navigation =
+      value is Map<String, dynamic> &&
+      (value.containsKey('operation') || value.containsKey('extent'));
+  final item = _object(value, {
     'domain',
     'sourceId',
     'orderedSourceIds',
     'snapshotDigest',
-    'operation',
-    'extent',
+    if (navigation) ...{'operation', 'extent'},
   });
   return SupportModelToolDisclosure(
     domain: switch (item['domain']) {

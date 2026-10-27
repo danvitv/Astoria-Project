@@ -43,9 +43,15 @@ final class SourceLoop {
   Set<String> _previous = const {};
   Object? _scriptFailure;
   StackTrace? _scriptTrace;
+  final _activityTrail = <String>[];
+  void Function()? _stopActivity;
+
+  String get activityDiagnostic =>
+      'Original source milestones: ${_activityTrail.join('; ')}';
 
   void checkScript() {
     if (_scriptFailure != null) {
+      debugPrint(activityDiagnostic, wrapWidth: 160);
       Error.throwWithStackTrace(_scriptFailure!, _scriptTrace!);
     }
   }
@@ -172,6 +178,20 @@ final class SourceLoop {
   }
 
   Future<void> start(WidgetTester tester, {bool confirmation = true}) async {
+    _stopActivity?.call();
+    _activityTrail.clear();
+    _stopActivity = file.bridge.listen(() {
+      final activities = file.bridge.view.toolActivities;
+      if (activities.isEmpty || _activityTrail.length >= 512) return;
+      final activity = activities.last;
+      // Original activity only. Never retain authored labels, IDs, arguments,
+      // bodies, native captures or exceptions for diagnostics.
+      final milestone =
+          '${activity.sequence}/${activity.action}/${activity.stage.name}: ${activity.detail}';
+      if (_activityTrail.isEmpty || _activityTrail.last != milestone) {
+        _activityTrail.add(milestone);
+      }
+    });
     await backupLoopReal(tester, () async {
       final old = await file.native.repo.getMessagesForSession(
         file.native.session,
@@ -208,15 +228,22 @@ final class SourceLoop {
   }
 
   Future<SupportMessage> finish(WidgetTester tester) async {
-    final signal = file.settlement!;
-    await backupLoopUntil(tester, () => signal.done, signal: signal);
-    await backupLoopReal(tester, () => signal.settled);
-    await idle(tester);
-    checkScript();
-    return signal.value.singleWhere(
-      (m) =>
-          !_previous.contains(m.id) && m.role == 'assistant' && m.runId != null,
-    );
+    try {
+      final signal = file.settlement!;
+      await backupLoopUntil(tester, () => signal.done, signal: signal);
+      await backupLoopReal(tester, () => signal.settled);
+      await idle(tester);
+      checkScript();
+      return signal.value.singleWhere(
+        (m) =>
+            !_previous.contains(m.id) &&
+            m.role == 'assistant' &&
+            m.runId != null,
+      );
+    } finally {
+      _stopActivity?.call();
+      _stopActivity = null;
+    }
   }
 
   Future<T> join<T>(WidgetTester tester, BackupLoopSignal<T> signal) async {
@@ -246,7 +273,8 @@ final class SourceLoop {
         throw TestFailure(
           'Source settled before confirmation: '
           '${file.bridge.view.reason}/${file.bridge.view.transportReason}; '
-          'POSTs=${file.wire.length}',
+          'POSTs=${file.wire.length}; '
+          '$activityDiagnostic',
         );
       }
       return accept.evaluate().isNotEmpty;

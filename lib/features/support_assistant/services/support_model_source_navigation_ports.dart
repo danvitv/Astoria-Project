@@ -69,11 +69,20 @@ final class _ModelSourceApproval implements nav.ApprovalPort {
     );
     final lease = await context.confirmation!.confirm(native);
     owner.check(context);
+    owner.run.toolActivity(
+      SupportModelToolStage.executing,
+      detail:
+          'Исходный запрос согласия вернулся; проверка точного нативного решения',
+    );
     if (lease == null ||
         !lease.accept(native) ||
         !lease.current ||
         !native.current)
       return null;
+    owner.run.toolActivity(
+      SupportModelToolStage.executing,
+      detail: 'Точное нативное согласие принято; область чтения заморожена',
+    );
     return nav.NativeGrant(
       run: request.run,
       source: request.source.key,
@@ -153,9 +162,15 @@ final class _ModelSourceProjection implements nav.ProjectionPort {
     final stamp = _stamp();
     if (call == null ||
         call.name != candidate.operation ||
-        SupportModelToolPayloads.argumentsKey(call.arguments) !=
-            candidate.argumentsJson) {
+        jsonEncode(call.arguments) != candidate.argumentsJson) {
       throw const SupportAppActionRefused(SupportAppActionCode.denied);
+    }
+    if (call.name == SupportSourceToolNames.contents) {
+      owner.run.toolActivity(
+        SupportModelToolStage.executing,
+        detail:
+            'Оглавление разрешённой области построено; проверка полного результата',
+      );
     }
     final content = <String, Object?>{
       'ok': true,
@@ -175,6 +190,11 @@ final class _ModelSourceProjection implements nav.ProjectionPort {
       throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
     }
     owner.check(owner._context!);
+    owner.run.toolActivity(
+      SupportModelToolStage.executing,
+      detail:
+          'Полный нативный результат проверен; проверка вложенного конверта',
+    );
     return nav.ProjectedWire(candidate, content, stamp);
   }
 }
@@ -189,12 +209,17 @@ final class _ModelSourceProvenance implements nav.ProvenancePort {
     if (call == null ||
         !identical(entry.run, owner.navigationRun) ||
         entry.operation != call.name ||
-        entry.argumentsJson !=
-            SupportModelToolPayloads.argumentsKey(call.arguments) ||
+        entry.argumentsJson != jsonEncode(call.arguments) ||
         !entry.grant.lease.isCurrent() ||
         !entry.source.lease.isCurrent()) {
       throw const SupportAppActionRefused(SupportAppActionCode.denied);
     }
+    // append is reached only after the engine validates the actual FULL nested
+    // envelope and its original candidate custody, never a payload estimate.
+    run.toolActivity(
+      SupportModelToolStage.executing,
+      detail: 'Полный вложенный конверт принят; проверка исходного ROOT',
+    );
     final bytes = utf8.encode(jsonEncode(entry.exactEnvelopeJson)).length + 512;
     final old = run.context!.recipe;
     final prior = old.toolDisclosures ?? const <SupportModelToolDisclosure>[];
@@ -219,11 +244,21 @@ final class _ModelSourceProvenance implements nav.ProvenancePort {
       throw const SupportAppActionRefused(SupportAppActionCode.stale);
     }
     owner.check(context);
+    run.toolActivity(
+      SupportModelToolStage.executing,
+      detail:
+          'Исходный ROOT проверен; проверка нативного захвата происхождения',
+    );
     final ids = owner.repo.nativeIdsFor(entry),
         digest = owner.repo.privateDigestFor(entry);
     if (ids == null || digest == null || ids.isEmpty || ids.length > 16) {
       throw const SupportAppActionRefused(SupportAppActionCode.denied);
     }
+    run.toolActivity(
+      SupportModelToolStage.executing,
+      detail:
+          'Нативный захват происхождения проверен; подготовка зашифрованного расширения',
+    );
     final selection =
         entry.source.key.domain == nav.SourceDomain.game &&
         entry.extents.any((e) => e.selection.range != null);
@@ -237,10 +272,10 @@ final class _ModelSourceProvenance implements nav.ProvenancePort {
       operation: SupportModelToolDisclosureOperation.values.byName(
         entry.operation.substring('astoria_source_'.length),
       ),
-      extent: selection
-          ? SupportModelToolDisclosureExtent.selectedMessages
-          : entry.operation == SupportSourceToolNames.contents
+      extent: entry.operation == SupportSourceToolNames.contents
           ? SupportModelToolDisclosureExtent.scopeMetadata
+          : selection
+          ? SupportModelToolDisclosureExtent.selectedMessages
           : SupportModelToolDisclosureExtent.sourceIdentity,
     );
     final next = SupportModelProvenance(
@@ -261,6 +296,10 @@ final class _ModelSourceProvenance implements nav.ProvenancePort {
       entry.grant,
       (n) => n + bytes,
       ifAbsent: () => bytes,
+    );
+    run.toolActivity(
+      SupportModelToolStage.executing,
+      detail: 'Запись зашифрованного расширения исходного ответа',
     );
     final written = await run.service._writes.enqueue(() async {
       owner.check(context);
@@ -287,11 +326,20 @@ final class _ModelSourceProvenance implements nav.ProvenancePort {
       return actual;
     });
     owner.check(context);
+    run.toolActivity(
+      SupportModelToolStage.executing,
+      detail:
+          'Зашифрованное расширение сохранено; проверка собственного commit',
+    );
     if (written.reservation.provenance.protectedFactsJson != encoded) {
       throw const SupportAppActionRefused(SupportAppActionCode.conflict);
     }
     await owner.acknowledgeOwnWrite(entry, written);
     owner.check(context);
+    run.toolActivity(
+      SupportModelToolStage.executing,
+      detail: 'Собственный commit подтверждён; обновление исходного контекста',
+    );
     final fresh = await run.history.refreshAfterOwnSourceExtension(
       snapshots: run.snapshots,
       checkpoint: () => owner.check(context),
@@ -305,6 +353,11 @@ final class _ModelSourceProvenance implements nav.ProvenancePort {
     );
     owner._admitted.add(entry);
     owner._wireBounds[entry] = bytes;
+    run.toolActivity(
+      SupportModelToolStage.executing,
+      detail:
+          'Зашифрованное происхождение и исходный контекст подтверждены до передачи',
+    );
     return nav.ProvenanceReceipt(entry, durableEncrypted: true);
   }
 }

@@ -361,25 +361,59 @@ abstract final class _ReplySourceHeader {
       if (v == 4) {
         final seen = <String>{};
         for (final item in array(root['toolDisclosures'], 16)) {
-          final disclosure = object(item, const {
+          // Legacy v4 has four fields. Navigation adds an exact paired operation
+          // and extent, not an open-ended body/argument schema or new authority.
+          final navigation =
+              item is Map<String, Object?> &&
+              (item.containsKey('operation') || item.containsKey('extent'));
+          final disclosure = object(item, {
             'domain',
             'sourceId',
             'orderedSourceIds',
             'snapshotDigest',
+            if (navigation) ...{'operation', 'extent'},
           });
-          if (!const ['game', 'studioPreset'].contains(disclosure['domain']) ||
+          if (!const [
+                'game',
+                'studioPreset',
+                'ordinaryPreset',
+                'memory',
+                'savedSummary',
+                'ledgerState',
+                'ledgerSnapshot',
+                'reconciliation',
+                'characterKnowledge',
+              ].contains(disclosure['domain']) ||
               !SupportSourceJson.identity(disclosure['sourceId']) ||
               disclosure['snapshotDigest'] is! String ||
               !RegExp(
                 r'^[0-9a-f]{64}$',
-              ).hasMatch(disclosure['snapshotDigest'] as String))
+              ).hasMatch(disclosure['snapshotDigest'] as String)) {
             bad();
+          }
+          if (navigation &&
+              (!const [
+                    'contents',
+                    'search',
+                    'read',
+                  ].contains(disclosure['operation']) ||
+                  !const [
+                    'sourceIdentity',
+                    'selectedMessages',
+                    'scopeMetadata',
+                  ].contains(disclosure['extent']))) {
+            bad();
+          }
           ids(disclosure['orderedSourceIds'], max: 16);
           final sourceIds = disclosure['orderedSourceIds'] as List;
-          if (disclosure['domain'] == 'studioPreset' &&
+          if (const [
+                'studioPreset',
+                'ordinaryPreset',
+              ].contains(disclosure['domain']) &&
               (sourceIds.length != 1 ||
-                  sourceIds.single != disclosure['sourceId']))
+                  sourceIds.single != disclosure['sourceId'])) {
             bad();
+          }
           if (!seen.add(
             jsonEncode([
               disclosure['domain'],
