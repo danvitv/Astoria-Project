@@ -47,29 +47,66 @@ Future<void> _prepareLocally(WidgetTester tester, BackupLoopFixture f) async {
                 .getSingle())
             .read<String>('messages_json'),
   );
-  final entry = find.byKey(const ValueKey('support_local_source_preparation'));
-  final openedSettings = entry.evaluate().isEmpty;
-  if (openedSettings) {
-    final mobile = find.byKey(const ValueKey('mobile_open_settings_btn'));
-    final button = mobile.evaluate().isNotEmpty
-        ? mobile
-        : find.byKey(const ValueKey('support_collapsed_settings_btn'));
-    expect(button.hitTestable(), findsOneWidget);
-    await backupLoopReal(tester, () => tester.tap(button));
-    await backupLoopUntil(tester, () => entry.evaluate().isNotEmpty);
-    await tester.pump(const Duration(milliseconds: 350));
-  }
-  await tester.ensureVisible(entry);
+  final mobile = find.byKey(const ValueKey('mobile_open_settings_btn'));
+  final button = mobile.evaluate().isNotEmpty
+      ? mobile
+      : find.byKey(const ValueKey('support_collapsed_settings_btn'));
+  expect(button.hitTestable(), findsOneWidget);
+  await backupLoopReal(tester, () => tester.tap(button));
+  final settingsFrame = find.byWidgetPredicate(
+    (w) => w is SheetView && w.title == 'Настройки Астории',
+  );
+  await backupLoopUntil(tester, () => settingsFrame.evaluate().isNotEmpty);
+  final settingsRoute = ModalRoute.of<void>(tester.element(settingsFrame))!;
   await tester.pump();
+  await tester.pump(settingsRoute.transitionDuration);
+  await tester.pump(const Duration(microseconds: 1));
+  expect(settingsRoute.isCurrent, isTrue);
+  expect(settingsRoute.animation!.status, AnimationStatus.completed);
+  final entry = find.descendant(
+    of: settingsFrame,
+    matching: find.byKey(const ValueKey('support_local_source_preparation')),
+  );
+  // This lazy row is not mounted initially. Scroll the original settings list,
+  // not a horizontal EditableText Scrollable inside one of its profile fields.
+  final settingsScrollable = find.descendant(
+    of: settingsFrame,
+    matching: find.byWidgetPredicate(
+      (w) =>
+          w is Scrollable &&
+          axisDirectionToAxis(w.axisDirection) == Axis.vertical,
+    ),
+  );
+  expect(settingsScrollable, findsOneWidget);
+  await tester.scrollUntilVisible(
+    entry,
+    200,
+    scrollable: settingsScrollable,
+    maxScrolls: 20,
+  );
+  await tester.pump();
+  expect(settingsRoute.isCurrent, isTrue);
   expect(entry.hitTestable(), findsOneWidget);
   await backupLoopReal(tester, () => tester.tap(entry));
-  final sheet = find.byType(SupportSourcePreparationSheet);
-  final candidate = find.byKey(
-    ValueKey('support_source_prepare_$sourceSession'),
+  final frame = find.byWidgetPredicate(
+    (w) => w is SheetView && w.title == 'Локальная подготовка источников',
+  );
+  final sheet = find.descendant(
+    of: frame,
+    matching: find.byType(SupportSourcePreparationSheet),
+  );
+  await backupLoopUntil(tester, () => sheet.evaluate().isNotEmpty);
+  final route = ModalRoute.of<void>(tester.element(sheet))!;
+  await tester.pump();
+  await tester.pump(route.transitionDuration);
+  await tester.pump(const Duration(microseconds: 1));
+  expect(route.isCurrent, isTrue);
+  expect(route.animation!.status, AnimationStatus.completed);
+  final candidate = find.descendant(
+    of: sheet,
+    matching: find.byKey(ValueKey('support_source_prepare_$sourceSession')),
   );
   await backupLoopUntil(tester, () => candidate.evaluate().isNotEmpty);
-  await tester.pump(const Duration(milliseconds: 350));
-  final route = ModalRoute.of(tester.element(sheet))!;
   expect(route.isCurrent, isTrue);
   expect(
     tester.widget<MenuItem>(candidate).subtitle,
@@ -78,6 +115,12 @@ Future<void> _prepareLocally(WidgetTester tester, BackupLoopFixture f) async {
   await tester.ensureVisible(candidate);
   await tester.pump();
   expect(candidate.hitTestable(), findsOneWidget);
+  expect(f.wire, isEmpty);
+  SourceLoop(f).noBody();
+  expect(
+    find.byKey(const ValueKey('support_tool_confirmation_accept')),
+    findsNothing,
+  );
   await backupLoopReal(tester, () => tester.tap(candidate));
   await backupLoopUntil(
     tester,
@@ -111,21 +154,45 @@ Future<void> _prepareLocally(WidgetTester tester, BackupLoopFixture f) async {
     find.byKey(const ValueKey('support_tool_confirmation_accept')),
     findsNothing,
   );
-  final frame = find.byWidgetPredicate(
-    (w) => w is SheetView && w.title == 'Локальная подготовка источников',
-  );
+  // SheetView's real header arrow is inside Material/InkWell, not IconButton.
   final back = find.descendant(
     of: frame,
-    matching: find.widgetWithIcon(IconButton, Icons.arrow_back),
+    matching: find.byIcon(Icons.arrow_back),
   );
+  expect(route.isCurrent, isTrue);
   expect(back.hitTestable(), findsOneWidget);
+  final preparationClosed = BackupLoopSignal(route.completed);
   await backupLoopReal(tester, () => tester.tap(back));
-  await tester.pump(const Duration(milliseconds: 350));
-  await backupLoopUntil(tester, () => !route.isActive);
-  if (openedSettings) {
-    await tester.pageBack();
-    await tester.pump(const Duration(milliseconds: 350));
-  }
+  await tester.pump();
+  await tester.pump(route.reverseTransitionDuration);
+  await tester.pump(const Duration(microseconds: 1));
+  await backupLoopUntil(
+    tester,
+    () => preparationClosed.done,
+    signal: preparationClosed,
+  );
+  await backupLoopReal(tester, () => route.completed);
+  expect(route.isActive, isFalse);
+  expect(frame, findsNothing);
+  expect(settingsRoute.isCurrent, isTrue);
+  final settingsBack = find.descendant(
+    of: settingsFrame,
+    matching: find.byIcon(Icons.arrow_back),
+  );
+  expect(settingsBack.hitTestable(), findsOneWidget);
+  final settingsClosed = BackupLoopSignal(settingsRoute.completed);
+  await backupLoopReal(tester, () => tester.tap(settingsBack));
+  await tester.pump();
+  await tester.pump(settingsRoute.reverseTransitionDuration);
+  await tester.pump(const Duration(microseconds: 1));
+  await backupLoopUntil(
+    tester,
+    () => settingsClosed.done,
+    signal: settingsClosed,
+  );
+  await backupLoopReal(tester, () => settingsRoute.completed);
+  expect(settingsRoute.isActive, isFalse);
+  expect(settingsFrame, findsNothing);
   _noPrivateSources(f);
 }
 
@@ -184,12 +251,23 @@ void _noPrivateSources(BackupLoopFixture f) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  for (final localPreparation in [false, true]) {
+  for (final (localPreparation, mobile) in [
+    (false, false),
+    (true, false),
+    (true, true),
+  ]) {
     backupLoopTest(
       localPreparation
-          ? 'production local preparation sheet -> native catalog -> frozen consent -> contents/search/read -> encrypted provenance -> settled reply'
+          ? 'production local preparation sheet -> native catalog -> frozen consent -> contents/search/read -> encrypted provenance -> settled reply${mobile ? ' (390x844, DPR1)' : ''}'
           : 'native catalog -> one frozen consent -> contents/search/read -> durable provenance -> settled reply',
       (tester, f) async {
+        if (mobile) {
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          tester.view.devicePixelRatio = 1;
+          tester.view.physicalSize = const Size(390, 844);
+          await tester.pump();
+        }
         await seedModelSources(tester, f, messages: 4);
         if (localPreparation) {
           await _prepareLocally(tester, f);
