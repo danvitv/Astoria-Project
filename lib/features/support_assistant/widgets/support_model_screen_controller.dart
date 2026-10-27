@@ -76,6 +76,7 @@ final class SupportModelScreenController extends ChangeNotifier {
           otherConfirmation: native,
         );
         _nativePorts = SupportModelToolUiPorts(
+          sourceTargetSelection: _nativeUi,
           confirmation: host,
           navigation: native,
           backupFileHost: host,

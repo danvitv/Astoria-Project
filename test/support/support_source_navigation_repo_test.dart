@@ -640,6 +640,9 @@ void main() {
       expect(await repo.revalidate(source, _bound), isFalse);
       expect(source.lease.isCurrent(), isFalse);
       expect(repo.lastFailure, SupportSourceReadFailure.changed);
+      expect(source.lease.isCurrent(), isFalse);
+      expect(await repo.revalidate(source, _bound), isFalse);
+      expect(repo.lastFailure, SupportSourceReadFailure.changed);
     },
   );
 

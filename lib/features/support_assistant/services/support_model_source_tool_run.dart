@@ -40,6 +40,7 @@ final class _ModelSourceToolRun
       Map<SupportAppActionOutcome, _ModelNavigationOutcome>.identity();
   final _admitted = <nav.ProvenanceEntry>[];
   final _published = <nav.NavigationResult>[];
+  final _discovered = <nav.SourceObservation>[];
   final _scopeSpent = Map<nav.NativeGrant, int>.identity();
   final _wireBounds = Map<nav.ProvenanceEntry, int>.identity();
   SupportAppActionContext? _context;
@@ -223,7 +224,7 @@ final class _ModelSourceToolRun
             SupportAppActionCode.completed,
             data: result.bodyBearing
                 ? {'sourceText': result.encoded}
-                : result.wire,
+                : await _selectNativeTarget(result, context, call),
           );
           if (result.bodyBearing) {
             final native = NativeToolResult(
@@ -247,6 +248,75 @@ final class _ModelSourceToolRun
         }
       },
     );
+  }
+
+  Future<Map<String, Object?>> _selectNativeTarget(
+    nav.NavigationResult result,
+    SupportAppActionContext context,
+    NativeToolCall call,
+  ) async {
+    check(context);
+    final observations = repo.nativeDiscoveryCandidates;
+    final pieces = result.wire['pieces'] as List;
+    if (pieces.length != observations.length || pieces.length > 16) {
+      throw const SupportAppActionRefused(SupportAppActionCode.denied);
+    }
+    if (pieces.isEmpty) return result.wire;
+    var index = 0;
+    if (pieces.length > 1) {
+      final port = run.binding.toolUi?.sourceTargetSelection;
+      if (port == null) {
+        throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
+      }
+      final redactor = run.service._redaction.redactor;
+      final candidates = [
+        for (final observation in observations)
+          SupportSourceTargetCandidate(
+            observation: observation,
+            label: _safeText(
+              redactor,
+              repo.nativeLabel(observation) ?? observation.key.domain.name,
+              256,
+            ),
+            hint: _safeText(
+              redactor,
+              repo.nativeIdentityHint(observation),
+              256,
+            ),
+          ),
+      ];
+      final request = SupportSourceTargetSelectionRequest(
+        context: context,
+        callId: call.id,
+        candidates: candidates,
+        isOriginalCurrent: () =>
+            original(context) && observations.every((o) => o.lease.isCurrent()),
+      );
+      final selected = await port.selectSource(request);
+      check(context);
+      index = candidates.indexWhere((c) => identical(c, selected));
+      if (index < 0 || !request.current) {
+        repo.retire();
+        throw const SupportAppActionRefused(SupportAppActionCode.denied);
+      }
+    }
+    final observation = observations[index];
+    if (!await engine.revalidateForHost([observation], () => check(context))) {
+      throw const SupportAppActionRefused(SupportAppActionCode.conflict);
+    }
+    check(context);
+    if (!_discovered.contains(observation)) _discovered.add(observation);
+    // Return the engine's original pointer unchanged. Never retarget a body
+    // handle, expose private labels, or mark an omitted catalog as complete.
+    return {
+      ...result.wire,
+      'pieces': [pieces[index]],
+      'count': 1,
+      if (pieces.length > 1) ...{
+        'complete': false,
+        'incompleteReason': 'localTargetSelection',
+      },
+    };
   }
 
   void _refuseNavigation(Object? status) => run.refuseTool(switch (status) {
@@ -299,10 +369,10 @@ final class _ModelSourceToolRun
   /// transmission or use withPost as a synthetic permission/check callback.
   Future<bool> revalidate(void Function() checkpoint) async {
     if (!_bound) return _admitted.isEmpty && current;
-    if (!await engine.revalidateForHost(
-      _admitted.map((e) => e.source),
-      checkpoint,
-    ))
+    if (!await engine.revalidateForHost([
+      ..._discovered,
+      ..._admitted.map((e) => e.source),
+    ], checkpoint))
       return false;
     for (final entry in _admitted) {
       checkpoint();
@@ -360,6 +430,7 @@ final class _ModelSourceToolRun
     if (_bound) engine.stop();
     _outcomes.clear();
     _published.clear();
+    _discovered.clear();
     _admitted.clear();
     _wireBounds.clear();
     _scopeSpent.clear();

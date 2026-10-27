@@ -14,7 +14,10 @@ import '../models/support_source_tool_names.dart';
 /// Actual original-screen UI. Route changes latch a revision, including A→B→A.
 /// No model-selected path, generic approval callback or Send confirmation.
 final class SupportModelToolNativeUi
-    implements SupportAppConfirmationPort, SupportAppNavigationPort {
+    implements
+        SupportAppConfirmationPort,
+        SupportAppNavigationPort,
+        SupportSourceTargetSelectionPort {
   SupportModelToolNativeUi({
     required this.context,
     required this.isOriginalUiCurrent,
@@ -30,8 +33,11 @@ final class SupportModelToolNativeUi
   bool _alive = true;
   final _pending = <void Function()>{};
 
-  SupportModelToolUiPorts get ports =>
-      SupportModelToolUiPorts(confirmation: this, navigation: this);
+  SupportModelToolUiPorts get ports => SupportModelToolUiPorts(
+    confirmation: this,
+    navigation: this,
+    sourceTargetSelection: this,
+  );
 
   bool get _current => _alive && context.mounted && isOriginalUiCurrent();
   bool get isCurrent => _current;
@@ -50,13 +56,40 @@ final class SupportModelToolNativeUi
   @override
   Future<SupportAppConfirmationLease?> confirm(
     SupportAppConfirmationRequest request,
+  ) async => (await _present(request)).$1;
+
+  @override
+  Future<SupportSourceTargetCandidate?> selectSource(
+    SupportSourceTargetSelectionRequest request,
   ) async {
-    if (!_current || !request.current) return null;
+    if (request.candidates.length < 2 || request.candidates.length > 16) {
+      return null;
+    }
+    final native = SupportAppConfirmationRequest(
+      context: request.context,
+      callId: request.callId,
+      action: SupportSourceToolNames.list,
+      target: 'local-source-target',
+      arguments: const {},
+      observation: request,
+      observationIsCurrent: () => request.current,
+      preview: const {},
+    );
+    return (await _present(native, selection: request)).$2;
+  }
+
+  Future<(SupportAppConfirmationLease?, SupportSourceTargetCandidate?)>
+  _present(
+    SupportAppConfirmationRequest request, {
+    SupportSourceTargetSelectionRequest? selection,
+  }) async {
+    if (!_current || !request.current) return (null, null);
     final revision = _revision, location = _location;
     bool original() =>
         _current && _revision == revision && _location == location;
     var open = true, decided = false, dismissed = false;
     SupportAppConfirmationLease? accepted;
+    SupportSourceTargetCandidate? selected;
     final navigator = Navigator.of(context, rootNavigator: true);
     final localizations = MaterialLocalizations.of(context);
     late final ModalBottomSheetRoute<void> route;
@@ -146,7 +179,9 @@ final class SupportModelToolNativeUi
               );
               // Keep the disclosure verb visible on phone-sized screens instead
               // of ellipsizing it beside Cancel.
-              final footer = sourceRead && constraints.maxWidth < 600
+              final footer = selection != null
+                  ? cancel
+                  : sourceRead && constraints.maxWidth < 600
                   ? Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [accept, const SizedBox(height: 12), cancel],
@@ -171,7 +206,9 @@ final class SupportModelToolNativeUi
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                         child: Text(
-                          sourceRead
+                          selection != null
+                              ? 'Выбери локальный источник'
+                              : sourceRead
                               ? 'Чтение источника для выбранной модели'
                               : request.action.startsWith('astoria_connection_')
                               ? 'Изменение подключения'
@@ -185,14 +222,56 @@ final class SupportModelToolNativeUi
                             'support_tool_confirmation_preview',
                           ),
                           padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: Text(
-                            sourceRead
-                                ? _sourceReadPreview(request)
-                                : 'Действие: ${request.action}\nЦель: ${request.target}\n'
-                                      'Аргументы: ${jsonEncode(request.arguments)}\n'
-                                      'Последствия: ${jsonEncode(request.preview)}\n'
-                                      '${request.action.startsWith('astoria_connection_') ? 'Ключ не вводится, активное подключение не выбирается, сеть не проверяется.' : 'Применяется только показанная операция и её последствия. Доступ к существующему приватному содержимому не выдаётся.'}',
-                          ),
+                          child: selection != null
+                              ? Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    const Text(
+                                      'Названия остаются на этом экране. Выбор возвращает только ссылку на источник; чтение и передача модели требуют отдельного согласия.',
+                                    ),
+                                    const SizedBox(height: 12),
+                                    for (
+                                      var i = 0;
+                                      i < selection.candidates.length;
+                                      i++
+                                    )
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 12,
+                                        ),
+                                        child: GlazeActionButton(
+                                          key: ValueKey(
+                                            'support_source_target_$i',
+                                          ),
+                                          label:
+                                              '${selection.candidates[i].label}\n${selection.candidates[i].hint}',
+                                          maxLabelLines: null,
+                                          icon: Icons.source_outlined,
+                                          onTap: () {
+                                            if (!open ||
+                                                decided ||
+                                                !original() ||
+                                                !request.current) {
+                                              return;
+                                            }
+                                            decided = true;
+                                            selected = selection.candidates[i];
+                                            // Deliberately NO confirmation lease/body grant.
+                                            close();
+                                          },
+                                        ),
+                                      ),
+                                  ],
+                                )
+                              : Text(
+                                  sourceRead
+                                      ? _sourceReadPreview(request)
+                                      : 'Действие: ${request.action}\nЦель: ${request.target}\n'
+                                            'Аргументы: ${jsonEncode(request.arguments)}\n'
+                                            'Последствия: ${jsonEncode(request.preview)}\n'
+                                            '${request.action.startsWith('astoria_connection_') ? 'Ключ не вводится, активное подключение не выбирается, сеть не проверяется.' : 'Применяется только показанная операция и её последствия. Доступ к существующему приватному содержимому не выдаётся.'}',
+                                ),
                         ),
                       ),
                       SafeArea(
@@ -217,7 +296,9 @@ final class SupportModelToolNativeUi
       // the original navigator need not complete Route.popped, but does dispose
       // its routes; it must not strand the native run awaiting confirmation.
       await route.completed;
-      return original() && request.current ? accepted : null;
+      return original() && request.current
+          ? (accepted, selected)
+          : (null, null);
     } finally {
       open = false;
       decided = true;

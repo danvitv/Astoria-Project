@@ -10,13 +10,20 @@ final class SupportSourceNavigationRepo implements nav.NavigationRepository {
     required SupportSourceTextRepo boundary,
     required bool Function() isCurrent,
     Future<String> Function()? activeStudioPresetId,
+    Future<String?> Function()? activeOrdinaryPresetId,
   }) : _boundary = boundary,
        _current = isCurrent,
-       _activeStudio = activeStudioPresetId;
+       _activeStudio = activeStudioPresetId,
+       _activeOrdinary = activeOrdinaryPresetId;
 
   final SupportSourceTextRepo _boundary;
   final bool Function() _current;
   final Future<String> Function()? _activeStudio;
+  final Future<String?> Function()? _activeOrdinary;
+  List<nav.SourceObservation> _lastDiscovery = const [];
+
+  /// Exact observations from the last bounded page, for LOCAL target selection.
+  List<nav.SourceObservation> get nativeDiscoveryCandidates => _lastDiscovery;
   AppDatabase get _db => _boundary._db;
   NativeDataSourceIdentity? _native;
   SecretRedactor? _projectionPolicy;
@@ -41,6 +48,16 @@ final class SupportSourceNavigationRepo implements nav.NavigationRepository {
   /// Local UI only. Never put this authored label in discovery/model metadata.
   String? nativeLabel(nav.SourceObservation observation) =>
       _owned(observation)?.label;
+
+  String nativeIdentityHint(nav.SourceObservation observation) {
+    final source = _owned(observation);
+    if (source == null || !_alive()) return '';
+    final index = source.header['session_index'];
+    final activity = source.header['updated_at'];
+    return '${index is int ? 'Сессия ${index + 1} · ' : ''}'
+        '${observation.activeAtListing == true ? 'Выбран сейчас · ' : ''}'
+        '${activity is int ? 'Сохранённая активность: $activity' : observation.state.name}';
+  }
 
   /// Only call immediately after the host's successful ORIGINAL CAS append.
   /// This does not prove write identity; the host owns that attestation. Foreign
@@ -183,9 +200,9 @@ final class SupportSourceNavigationRepo implements nav.NavigationRepository {
   Never _fail([
     SupportSourceReadFailure failure = SupportSourceReadFailure.unavailable,
   ]) {
-    _failure = failure;
+    _failure ??= failure;
     _retired = true;
-    throw SupportSourceReadException(failure: failure);
+    throw SupportSourceReadException(failure: _failure!);
   }
 
   Future<List<QueryRow>> _sql(
@@ -277,7 +294,11 @@ final class SupportSourceNavigationRepo implements nav.NavigationRepository {
     nav.SourceKey? parent,
     Object? cursor,
     nav.WorkBound bound,
-  ) => _run(bound, () => _discover(domain, parent, cursor, bound));
+  ) => _run(bound, () async {
+    final page = await _discover(domain, parent, cursor, bound);
+    _lastDiscovery = List.unmodifiable(page.items);
+    return page;
+  });
   @override
   Future<nav.SourceObservation?> observe(
     nav.SourceKey key,

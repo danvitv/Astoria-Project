@@ -1,8 +1,8 @@
-/// Checkpoint gate for unfinished source navigation and local preparation.
-/// Opting in does not imply that the feature has been verified.
+/// Source navigation and local preparation are enabled in production.
+/// An explicit false define remains an opt-out, not a source permission.
 const supportSourceNavigationExperimentalEnabled = bool.fromEnvironment(
   'ASTORIA_SOURCE_NAVIGATION_EXPERIMENTAL',
-  defaultValue: false,
+  defaultValue: true,
 );
 
 /// Finite source-navigation surface. These names confer no source authority;

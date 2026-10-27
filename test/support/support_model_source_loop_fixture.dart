@@ -5,6 +5,9 @@ import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
+import 'package:glaze_flutter/shared/widgets/glaze_action_button.dart';
+import 'package:glaze_flutter/core/db/repositories/history_source_index_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/ledger_reconciliation_run_repo.dart';
 import 'package:glaze_flutter/core/models/support_models.dart';
 import 'package:glaze_flutter/core/state/active_studio_preset_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/models/support_model_provenance.dart';
@@ -43,6 +46,9 @@ final class SourceLoop {
   Set<String> _previous = const {};
   Object? _scriptFailure;
   StackTrace? _scriptTrace;
+  final _dispatchAuthorizations = <String>[];
+  List<String> get dispatchAuthorizations =>
+      List.unmodifiable(_dispatchAuthorizations);
   final _activityTrail = <String>[];
   void Function()? _stopActivity;
 
@@ -91,16 +97,35 @@ final class SourceLoop {
   };
 
   Map<String, Object?> list(String domain, String id) =>
-      call('astoria_sources_list', {'domain': domain, 'offset': 0}, id: id);
-  Map<String, Object?> read(
-    String handle,
+      call('astoria_sources_list', {'domain': domain}, id: id);
+  Map<String, Object?> contents(String source, String id, {String? section}) =>
+      call('astoria_source_contents', {
+        'source': source,
+        if (section != null) 'section': section,
+      }, id: id);
+  Map<String, Object?> search(
+    String source,
+    String literal,
     String id, {
-    int offset = 0,
-    int? studioPage,
+    String? section,
+    String? cursor,
+  }) => call('astoria_source_search', {
+    'source': source,
+    'literal': literal,
+    if (section != null) 'section': section,
+    if (cursor != null) 'cursor': cursor,
+  }, id: id);
+  Map<String, Object?> read(
+    String source,
+    String selector,
+    String id, {
+    int before = 0,
+    int after = 0,
   }) => call('astoria_source_read', {
-    'opaqueHandle': handle,
-    'activeMessageOffset': offset,
-    if (studioPage != null) 'studioPage': studioPage,
+    'source': source,
+    'selector': selector,
+    if (before != 0) 'before': before,
+    if (after != 0) 'after': after,
   }, id: id);
 
   /// BackupLoopWire checks the declared finite reply budget BEFORE onFetch.
@@ -120,19 +145,27 @@ final class SourceLoop {
       ..removeRange(start, file.replies.length)
       ..addAll(List.generate(rounds, (_) => first));
     file.onFetch = (absolute) async {
-      final round = absolute - start;
-      if (round < 1 || round > rounds) throw TestFailure('Extra source POST');
-      if (round > 1) {
-        if (next == null) throw TestFailure('Unscripted source POST');
-        try {
+      try {
+        observerZone.run(() {
+          // Observe the original options before NativeToolWire scrubs headers.
+          // Keep only the immutable synthetic value, never the mutable map.
+          final authorization =
+              file.requests[absolute - 1].headers['Authorization'];
+          expect(authorization, 'Bearer ${BackupLoopNative.key}');
+          _dispatchAuthorizations.add(authorization as String);
+        });
+        final round = absolute - start;
+        if (round < 1 || round > rounds) throw TestFailure('Extra source POST');
+        if (round > 1) {
+          if (next == null) throw TestFailure('Unscripted source POST');
           file.replies[absolute - 1] = await observerZone.run(
             () => next(round),
           );
-        } catch (error, trace) {
-          _scriptFailure = error;
-          _scriptTrace = trace;
-          rethrow;
         }
+      } catch (error, trace) {
+        _scriptFailure = error;
+        _scriptTrace = trace;
+        rethrow;
       }
     };
   }
@@ -157,27 +190,31 @@ final class SourceLoop {
     return Map<String, dynamic>.from(result['data'] as Map);
   }
 
-  String handle(String label, {int? sessionIndex}) {
-    final entries = (lastData()['entries'] as List)
+  String handle() {
+    final entries = (lastData()['pieces'] as List)
         .cast<Map<dynamic, dynamic>>();
-    return entries.singleWhere(
-          (e) =>
-              e['label'] == label &&
-              (sessionIndex == null || e['sessionIndex'] == sessionIndex),
-        )['opaqueHandle']
-        as String;
+    return entries.single['source'] as String;
   }
 
   String activeStudioHandle() {
-    final entries = (lastData()['entries'] as List)
+    final entries = (lastData()['pieces'] as List)
         .cast<Map<dynamic, dynamic>>();
-    return entries.singleWhere(
-          (e) => e['activeAtListing'] == true,
-        )['opaqueHandle']
+    return entries.singleWhere((e) => e['activeAtListing'] == true)['source']
         as String;
   }
 
-  Future<void> start(WidgetTester tester, {bool confirmation = true}) async {
+  Map<String, dynamic> body() => Map<String, dynamic>.from(
+    jsonDecode(lastData()['sourceText'] as String) as Map,
+  );
+
+  String selector() => (body()['pieces'] as List).first['selector'] as String;
+
+  Future<void> start(
+    WidgetTester tester, {
+    bool confirmation = true,
+    String text =
+        'Сравни последнюю игру «Отель Петербург» с текущим сохранённым Studio.',
+  }) async {
     _stopActivity?.call();
     _activityTrail.clear();
     _stopActivity = file.bridge.listen(() {
@@ -216,10 +253,7 @@ final class SourceLoop {
             ),
       );
     });
-    await tester.enterText(
-      find.byType(TextField).first,
-      'Сравни последнюю игру «Отель Петербург» с текущим сохранённым Studio.',
-    );
+    await tester.enterText(find.byType(TextField).first, text);
     // Empty -> draft schedules the real composer's availability rebuild. The
     // gesture must target its emitted enabled button, not the previous frame.
     await tester.pump();
@@ -266,24 +300,10 @@ final class SourceLoop {
     await tester.pump();
   }
 
-  Future<void> modal(WidgetTester tester) async {
-    final accept = find.byKey(
-      const ValueKey('support_tool_confirmation_accept'),
-    );
-    await backupLoopUntil(tester, () {
-      checkScript();
-      if (file.settlement?.done == true && accept.evaluate().isEmpty) {
-        throw TestFailure(
-          'Source settled before confirmation: '
-          '${file.bridge.view.reason}/${file.bridge.view.transportReason}; '
-          'POSTs=${file.wire.length}; '
-          '$activityDiagnostic',
-        );
-      }
-      return accept.evaluate().isNotEmpty;
-    }, signal: file.settlement);
-    await sourceLoopModal(tester, file.settlement);
-  }
+  Future<void> modal(
+    WidgetTester tester, {
+    BackupLoopSignal<dynamic>? signal,
+  }) => sourceLoopModal(tester, signal ?? file.settlement, loop: this);
 
   Future<void> apply(WidgetTester tester) =>
       sourceLoopDecision(tester, 'accept');
@@ -347,20 +367,31 @@ void sourceNoEgress(BackupLoopFixture file, [String text = '']) {
 
 Future<void> sourceLoopModal(
   WidgetTester tester,
-  BackupLoopSignal<dynamic>? signal,
-) async {
+  BackupLoopSignal<dynamic>? signal, {
+  required SourceLoop loop,
+}) async {
   final accept = find.byKey(const ValueKey('support_tool_confirmation_accept'));
-  await backupLoopUntil(
-    tester,
-    () => accept.evaluate().isNotEmpty,
-    signal: signal,
-  );
-  final route = ModalRoute.of<void>(tester.element(accept))!;
-  await tester.pump();
-  await tester.pump(route.transitionDuration);
-  await tester.pump(const Duration(microseconds: 1));
-  expect(route.isCurrent, isTrue);
-  expect(route.animation!.status, AnimationStatus.completed);
+  final picker = find.byKey(const ValueKey('support_source_target_0'));
+  bool mounted() {
+    loop.checkScript();
+    final ready = accept.evaluate().isNotEmpty || picker.evaluate().isNotEmpty;
+    if (signal?.done == true && !ready) {
+      throw TestFailure(
+        'Source settled before confirmation: '
+        '${loop.file.bridge.view.reason}/${loop.file.bridge.view.transportReason}; '
+        'POSTs=${loop.file.wire.length}; '
+        '${loop.activityDiagnostic}',
+      );
+    }
+    return ready;
+  }
+
+  await backupLoopUntil(tester, mounted, signal: signal);
+  while (picker.evaluate().isNotEmpty) {
+    await sourceLoopChooseTarget(tester);
+    await backupLoopUntil(tester, mounted, signal: signal);
+  }
+  await sourceLoopReadyRoute(tester, accept);
   final viewport =
       Offset.zero & (tester.view.physicalSize / tester.view.devicePixelRatio);
   for (final decision in ['accept', 'cancel']) {
@@ -379,14 +410,62 @@ Future<void> sourceLoopModal(
   }
 }
 
-Future<void> sourceLoopDecision(WidgetTester tester, String decision) async {
-  final button = find.byKey(ValueKey('support_tool_confirmation_$decision'));
-  expect(button.hitTestable(), findsOneWidget);
-  final route = ModalRoute.of<void>(tester.element(button))!;
-  await backupLoopReal(tester, () => tester.tap(button));
+/// Retain and finish the ORIGINAL forward transition before a native decision.
+Future<ModalRoute<void>> sourceLoopReadyRoute(
+  WidgetTester tester,
+  Finder control,
+) async {
+  final route = ModalRoute.of<void>(tester.element(control))!;
+  await tester.pump();
+  await tester.pump(route.transitionDuration);
+  await tester.pump(const Duration(microseconds: 1));
+  expect(route.isCurrent, isTrue);
+  expect(route.animation!.status, AnimationStatus.completed);
+  expect(control.hitTestable(), findsOneWidget);
+  return route;
+}
+
+/// Join the same route's real disposal, never a substitute completion signal.
+Future<void> sourceLoopRouteClosed(
+  WidgetTester tester,
+  ModalRoute<void> route,
+) async {
+  final closed = BackupLoopSignal(route.completed);
   await tester.pump();
   await tester.pump(route.reverseTransitionDuration);
   await tester.pump(const Duration(microseconds: 1));
+  await backupLoopUntil(tester, () => closed.done, signal: closed);
+  await backupLoopReal(tester, () => route.completed);
+  expect(route.isActive, isFalse);
+}
+
+/// An actual local selection gesture, not model title matching or a grant.
+Future<void> sourceLoopChooseTarget(WidgetTester tester) async {
+  final first = find.byKey(const ValueKey('support_source_target_0'));
+  final route = await sourceLoopReadyRoute(tester, first);
+  final candidates = find.byWidgetPredicate(
+    (w) =>
+        w is GlazeActionButton &&
+        w.key is ValueKey<String> &&
+        (w.key! as ValueKey<String>).value.startsWith('support_source_target_'),
+  );
+  final chosen = candidates.evaluate().singleWhere((e) {
+    final label = (e.widget as GlazeActionButton).label;
+    return label.contains('Сессия 2 ·') || label.contains('Выбран сейчас ·');
+  });
+  final button = find.byWidget(chosen.widget);
+  await tester.ensureVisible(button);
+  await tester.pump();
+  expect(button.hitTestable(), findsOneWidget);
+  await backupLoopReal(tester, () => tester.tap(button));
+  await sourceLoopRouteClosed(tester, route);
+}
+
+Future<void> sourceLoopDecision(WidgetTester tester, String decision) async {
+  final button = find.byKey(ValueKey('support_tool_confirmation_$decision'));
+  final route = await sourceLoopReadyRoute(tester, button);
+  await backupLoopReal(tester, () => tester.tap(button));
+  await sourceLoopRouteClosed(tester, route);
 }
 
 Future<void> seedModelSources(
@@ -395,6 +474,7 @@ Future<void> seedModelSources(
   String? studioJson,
   String? gameJson,
   int messages = 20,
+  bool prepareHistory = true,
 }) => backupLoopReal(tester, () async {
   final db = f.native.db;
   f.isolation.extraAllowed.add(activeStudioPresetProvider);
@@ -520,11 +600,284 @@ Future<void> seedModelSources(
       ),
     );
   }
+  if (prepareHistory) {
+    final prepared = await db.historySourceIndex.maintain(
+      sessionId: sourceSession,
+      isCurrent: () => true,
+    );
+    expect(prepared.state, HistoryIndexMaintenanceState.ready);
+  }
   await f.container.read(supportWorkspaceProvider.notifier).refresh();
   await f.container.pump();
   // Synthetic seeding legitimately decrypts its own putMessage return values.
   // Observe subsequent model runs, not those declared setup operations.
   f.native.primitive.decryptAads.clear();
+});
+
+/// Small actual saved rows for independent FILE/provider MODEL runs. These are
+/// setup writers only: model tools continue through the production native repo.
+Future<void> seedSavedModelDomains(
+  WidgetTester tester,
+  BackupLoopFixture f,
+) => backupLoopReal(tester, () async {
+  final db = f.native.db;
+  await db.customStatement('DELETE FROM presets WHERE preset_id <> ?', [
+    sourceStudio,
+  ]);
+  await db.customStatement(
+    'DELETE FROM studio_preset_rows WHERE preset_id <> ?',
+    [sourceStudio],
+  );
+  await db.customStatement(
+    'UPDATE presets SET name = ?, data_json = ? WHERE preset_id = ?',
+    [
+      'LOCAL_ORDINARY_AUTHORED_TITLE',
+      jsonEncode({
+        'id': sourceStudio,
+        'name': 'LOCAL_ORDINARY_AUTHORED_TITLE',
+        'imagePath': BackupLoopNative.private,
+        'blocks': [
+          {
+            'id': 'private-ordinary-block',
+            'name': 'Block',
+            'role': 'system',
+            'content': 'MODEL_NINE_ordinaryPreset_BODY ${BackupLoopNative.key}',
+            'enabled': true,
+          },
+        ],
+        'regexes': <Object?>[],
+        'summaryPrompt': 'MODEL_NINE_ordinaryPreset_TEMPLATE',
+      }),
+      sourceStudio,
+    ],
+  );
+  await db.customStatement(
+    'UPDATE studio_preset_rows SET expensive_api_config_id = ?, cheap_api_config_id = ? WHERE preset_id = ?',
+    ['private-studio-expensive', 'private-studio-cheap', sourceStudio],
+  );
+  await db.customStatement(
+    'INSERT INTO memory_book_rows(session_id,entries_json,pending_drafts_json,settings_json) VALUES(?,?,?,?)',
+    [
+      sourceSession,
+      jsonEncode([
+        {
+          'id': 'private-memory-entry',
+          'title': 'Entry',
+          'content': 'MODEL_NINE_memory_BODY',
+          'status': 'active',
+          'activeRevisionId': 'private-revision',
+          'revisions': [
+            {
+              'id': 'private-revision',
+              'version': 1,
+              'content': 'MODEL_NINE_memory_REVISION',
+              'createdAt': 1,
+            },
+          ],
+          'sourceManifest': {
+            'version': 0,
+            'originSessionId': '',
+            'messages': <Object?>[],
+            'invalidated': true,
+          },
+        },
+      ]),
+      jsonEncode([
+        {
+          'id': 'private-draft',
+          'content': 'MODEL_NINE_memory_DRAFT',
+          'status': 'pending_approval',
+        },
+      ]),
+      '{}',
+    ],
+  );
+  await db.customStatement(
+    'INSERT INTO memory_catalog_rows(id,chat_session_id,memory_entry_id,abstract_text) VALUES(?,?,?,?)',
+    [
+      'private-catalog',
+      sourceSession,
+      'private-memory-entry',
+      'MODEL_NINE_memory_DERIVED',
+    ],
+  );
+  await db.customStatement(
+    'INSERT INTO chat_summaries(session_id,content,message_count,prompt) VALUES(?,?,?,?)',
+    [
+      sourceSession,
+      'MODEL_NINE_savedSummary_BODY',
+      4,
+      'MODEL_NINE_savedSummary_TEMPLATE',
+    ],
+  );
+  await db.customStatement(
+    'INSERT INTO tracker_rows(session_id,name,value,scope,provenance) VALUES(?,?,?,?,?)',
+    [
+      sourceSession,
+      'scene.location',
+      'MODEL_NINE_ledgerState_BODY',
+      'ledger',
+      'saved',
+    ],
+  );
+  await db.customStatement(
+    'INSERT INTO tracker_rows(session_id,name,value,scope) VALUES(?,?,?,?)',
+    [
+      sourceSession,
+      'diagnostic',
+      'MODEL_NINE_EXCLUDED_DIAGNOSTIC',
+      'diagnostic',
+    ],
+  );
+  final snapshot = [
+    {
+      'sessionId': sourceSession,
+      'name': 'scene.location',
+      'value': 'MODEL_NINE_ledgerSnapshot_BODY',
+      'scope': 'ledger',
+      'provenance': 'saved',
+    },
+  ];
+  await db.customStatement(
+    'INSERT INTO tracker_snapshots(session_id,message_id,swipe_id,agent_swipe_id,trackers_json,committed) VALUES(?,?,?,?,?,?)',
+    [sourceSession, 'model-source-2', 0, 0, jsonEncode(snapshot), 1],
+  );
+  await db.customStatement(
+    'INSERT INTO ledger_reconciliation_checkpoints(session_id,start_message_id,end_message_id,end_swipe_id,end_agent_swipe_id,message_ids_json,range_hash) VALUES(?,?,?,?,?,?,?)',
+    [
+      sourceSession,
+      'model-source-1',
+      'model-source-2',
+      0,
+      0,
+      jsonEncode(['model-source-1', 'model-source-2']),
+      'private-checkpoint-range',
+    ],
+  );
+  final run = LedgerReconciliationRun(
+    id: 'private-saved-run',
+    sessionId: sourceSession,
+    ordinal: 1,
+    anchors: const [
+      ReconciliationAnchor(
+        messageId: 'model-source-2',
+        swipeId: 0,
+        agentSwipeId: 0,
+        role: 'assistant',
+        contentHash:
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      ),
+    ],
+    acceptedManifestRefs: const [],
+    effectiveCanonStamp: 'private-canon',
+    effectiveCanonRevision: 0,
+    effectiveCanonHash:
+        'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    canonicalResult: {
+      'cleanupOps': <Object?>[],
+      'export': {
+        'ops': [
+          {
+            'op': 'set',
+            'key': 'scene.location',
+            'value': 'MODEL_NINE_reconciliation_BODY',
+            'evidence': 'saved range',
+            'eventState': '',
+          },
+        ],
+        'sceneState': null,
+        'entities': <Object?>[],
+        'arcState': <Object?>[],
+        'knowledgeFacts': <Object?>[],
+      },
+    },
+    predecessorChainHash: '',
+    contractVersion: 1,
+    opsApplied: const ['tracker:set:scene.location'],
+    createdAt: 1,
+  );
+  await db
+      .into(db.ledgerReconciliationSuccessfulRuns)
+      .insert(
+        LedgerReconciliationSuccessfulRunsCompanion.insert(
+          id: run.id,
+          sessionId: run.sessionId,
+          ordinal: run.ordinal,
+          startMessageId: run.start.messageId,
+          startSwipeId: run.start.swipeId,
+          startAgentSwipeId: run.start.agentSwipeId,
+          endMessageId: run.end.messageId,
+          endSwipeId: run.end.swipeId,
+          endAgentSwipeId: run.end.agentSwipeId,
+          anchorsJson: run.anchorsJson,
+          rangeHash: run.rangeHash,
+          acceptedManifestRefsJson: run.manifestsJson,
+          effectiveCanonStamp: run.effectiveCanonStamp,
+          effectiveCanonRevision: run.effectiveCanonRevision,
+          effectiveCanonHash: run.effectiveCanonHash,
+          canonicalResultJson: run.resultJson,
+          contentHash: run.contentHash,
+          predecessorChainHash: run.predecessorChainHash,
+          chainHash: run.chainHash,
+          contractVersion: run.contractVersion,
+          opsAppliedJson: run.opsJson,
+          createdAt: run.createdAt,
+        ),
+      );
+  Object? canonical(Object? value) {
+    if (value is Map<String, Object?>) {
+      final keys = value.keys.toList()..sort();
+      return {for (final key in keys) key: canonical(value[key])};
+    }
+    if (value is List) return value.map(canonical).toList();
+    return value;
+  }
+
+  await LedgerReconciliationRunRepo(db).recordEffect(
+    runId: run.id,
+    sessionId: sourceSession,
+    before: ReconciliationStateSnapshot(ledgerJson: '[]', knowledgeJson: '[]'),
+    after: ReconciliationStateSnapshot(
+      ledgerJson: jsonEncode(
+        canonical([
+          {
+            'sessionId': sourceSession,
+            'name': 'scene.location',
+            'value': 'MODEL_NINE_reconciliation_EFFECT',
+            'scope': 'ledger',
+            'provenance': 'saved',
+            'basisRevision': 0,
+            'basisRevisionHash': '',
+            'updatedAt': 1,
+          },
+        ]),
+      ),
+      knowledgeJson: '[]',
+    ),
+    createdAt: 1,
+  );
+  await db.customStatement(
+    '''INSERT INTO character_knowledge_fact_rows(
+    id,chat_session_id,knower_key,subject_key,fact_class,predicate,object,epistemic_state,
+    confidence,importance,source_message_id,source_swipe_id,source_agent_swipe_id,lifecycle)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+    [
+      'private-knowledge',
+      sourceSession,
+      'private-knower',
+      'private-subject',
+      'knowledge',
+      'knows',
+      'MODEL_NINE_characterKnowledge_BODY',
+      'confirmed',
+      0.7,
+      0.5,
+      'model-source-2',
+      0,
+      0,
+      'active',
+    ],
+  );
 });
 
 /// Read REAL encrypted persisted provenance. Call from onFetch directly, or

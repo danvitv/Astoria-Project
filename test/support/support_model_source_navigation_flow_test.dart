@@ -5,8 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart' hide expect;
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/history_source_index_repo.dart';
+import 'package:glaze_flutter/core/state/active_studio_preset_provider.dart';
+import 'package:glaze_flutter/features/support_assistant/models/support_model_provenance.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_source_preparation_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_source_preparation_sheet.dart';
+import 'package:glaze_flutter/features/support_assistant/widgets/support_composer_bar.dart';
 import 'package:glaze_flutter/shared/widgets/menu_group.dart';
 import 'package:glaze_flutter/shared/widgets/sheet_view.dart';
 
@@ -207,6 +210,521 @@ void _noPrivateSources(BackupLoopFixture f) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  for (final action in ['cancel', 'stop', 'routeABA', 'sourceABA']) {
+    backupLoopTest('MODEL LOCAL named-target $action returns no title/body/grant', (
+      tester,
+      f,
+    ) async {
+      await seedModelSources(tester, f, messages: 4);
+      const title = 'LOCAL_PICKER_TITLE_CANARY';
+      await backupLoopReal(
+        tester,
+        () =>
+            (f.native.db.update(f.native.db.characters)
+                  ..where((t) => t.charId.equals(sourceCharacter)))
+                .write(const CharactersCompanion(name: Value(title))),
+      );
+      final loop = SourceLoop(f);
+      final policy = f.native.runtime.snapshot.preferences;
+      final epoch = f.native.runtime.epoch;
+      loop.script(
+        loop.list('game', 'local_target'),
+        rounds: 2,
+        next: (_) {
+          expect(loop.lastResult()['ok'], isFalse);
+          expect(loop.lastResult()['effect'], 'none');
+          expect(
+            loop.lastResult()['code'],
+            action == 'sourceABA' ? 'conflict' : 'denied',
+          );
+          expect(jsonEncode(f.wire), isNot(contains(title)));
+          return SourceLoop.answer('No local target was read or disclosed.');
+        },
+      );
+      await loop.start(
+        tester,
+        confirmation: false,
+        text: 'Select a named saved game locally.',
+      );
+      final target = find.byKey(const ValueKey('support_source_target_0'));
+      await backupLoopUntil(tester, () {
+        loop.checkScript();
+        if (f.settlement!.done && target.evaluate().isEmpty) {
+          throw TestFailure('Source settled before the original local picker');
+        }
+        return target.evaluate().isNotEmpty;
+      }, signal: f.settlement);
+      final route = await sourceLoopReadyRoute(tester, target);
+      final stop = tester
+          .widget<SupportComposerBar>(find.byType(SupportComposerBar))
+          .onStop!;
+      expect(f.wire, hasLength(1));
+      loop.noBody();
+      expect(
+        find.byKey(const ValueKey('support_tool_confirmation_accept')),
+        findsNothing,
+      );
+      final localPreview = tester
+          .widgetList<Text>(
+            find.descendant(
+              of: find.byKey(
+                const ValueKey('support_tool_confirmation_preview'),
+              ),
+              matching: find.byType(Text),
+            ),
+          )
+          .map((w) => w.data ?? '')
+          .join('\n');
+      expect(localPreview, contains(title));
+      expect(localPreview, contains('Сессия 2 ·'));
+      if (action == 'cancel') {
+        await loop.cancel(tester);
+      } else if (action == 'sourceABA') {
+        await backupLoopReal(tester, () async {
+          await (f.native.db.update(
+            f.native.db.chatSessions,
+          )..where((t) => t.sessionId.equals(sourceSession))).write(
+            const ChatSessionsCompanion(draft: Value('outside chosen target')),
+          );
+          await (f.native.db.update(f.native.db.chatSessions)
+                ..where((t) => t.sessionId.equals(sourceSession)))
+              .write(const ChatSessionsCompanion(draft: Value('')));
+        });
+        await sourceLoopChooseTarget(tester);
+      } else {
+        await backupLoopReal(tester, () async {
+          if (action == 'stop') {
+            stop();
+          } else {
+            f.router.go('/characters');
+            f.router.go('/support');
+          }
+        });
+        await sourceLoopRouteClosed(tester, route);
+      }
+      final reply = await loop.finish(tester);
+      expect(
+        reply.status,
+        action == 'stop' || action == 'routeABA' ? 'stopped' : 'error',
+      );
+      if (action == 'cancel' || action == 'sourceABA') {
+        expect(f.bridge.view.transportReason.name, 'denied');
+        expect(
+          reply.body,
+          contains(
+            action == 'sourceABA'
+                ? 'Исходный источник или контекст изменился; чтение не продолжено'
+                : 'Вызов не разрешён; согласие не получено или ссылка на источник недействительна',
+          ),
+        );
+        expect(
+          reply.body,
+          isNot(contains('No local target was read or disclosed.')),
+        );
+      }
+      expect(
+        f.wire,
+        hasLength(action == 'stop' || action == 'routeABA' ? 1 : 2),
+      );
+      expect((await modelSourceRecipe(f, reply.id)).toolDisclosures, isEmpty);
+      expect(f.native.runtime.snapshot.preferences, policy);
+      expect(f.native.runtime.epoch, epoch);
+      expect(jsonEncode(f.wire), isNot(contains(title)));
+      expect(
+        find.byKey(const ValueKey('support_tool_confirmation_accept')),
+        findsNothing,
+      );
+      loop.noBody();
+      sourceNoEgress(f, reply.body);
+    });
+  }
+
+  backupLoopTest(
+    'MODEL missing Studio selection resolves SAVED default without authored metadata egress',
+    (tester, f) async {
+      await seedModelSources(tester, f, messages: 4);
+      await backupLoopReal(tester, () async {
+        await f.native.db.customStatement(
+          '''INSERT INTO studio_preset_rows(preset_id,name,blocks_json,execution_mode)
+        SELECT 'default','LOCAL_FALLBACK_TITLE',blocks_json,execution_mode FROM studio_preset_rows WHERE preset_id = ?''',
+          [sourceStudio],
+        );
+        await f.container
+            .read(activeStudioPresetProvider.notifier)
+            .set('missing-saved-studio');
+      });
+      final loop = SourceLoop(f);
+      late String source;
+      loop.script(
+        loop.list('studioPreset', 'fallback_catalog'),
+        rounds: 5,
+        next: (round) async {
+          if (round == 2) {
+            source = loop.activeStudioHandle();
+            expect(loop.lastData()['count'], 1);
+            expect(loop.lastData()['complete'], isFalse);
+            expect(loop.lastData()['incompleteReason'], 'localTargetSelection');
+            expect(
+              jsonEncode(loop.lastData()),
+              isNot(contains('LOCAL_FALLBACK_TITLE')),
+            );
+            loop.noBody();
+            return loop.contents(source, 'fallback_contents');
+          }
+          final rows = await f.native.repo.getMessagesForSession(
+            f.native.session,
+          );
+          final recipe = await modelSourceRecipe(f, rows.last.id);
+          expect(recipe.toolDisclosures, hasLength(round - 2));
+          expect(recipe.toolDisclosures!.map((d) => d.sourceId).toSet(), {
+            'default',
+          });
+          if (round == 3)
+            return loop.search(source, sourceStudioBody, 'fallback_search');
+          if (round == 4)
+            return loop.read(source, loop.selector(), 'fallback_read');
+          expect(jsonEncode(_body(loop)), contains(sourceStudioBody));
+          return SourceLoop.answer(
+            'The selected SAVED default text was read, not its historical prompt use.',
+          );
+        },
+      );
+      await loop.start(tester, text: 'Read the current saved Studio.');
+      await loop.apply(tester);
+      final reply = await loop.finish(tester);
+      expect(reply.status, 'complete');
+      expect(f.wire, hasLength(5));
+      expect(jsonEncode(f.wire), isNot(contains('LOCAL_FALLBACK_TITLE')));
+      sourceNoEgress(f, reply.body);
+    },
+  );
+
+  // Each domain owns an independent original FILE/provider/native run. Do not
+  // combine them and accidentally evade the native 16-disclosure/8-round caps.
+  for (final scenario in <(String, String, String, String?)>[
+    ('game', '${sourceGameBody}2', 'active', null),
+    ('ordinaryPreset', 'MODEL_NINE_ordinaryPreset_BODY', 'currentSaved', null),
+    ('studioPreset', sourceStudioBody, 'currentSaved', null),
+    ('memory', 'MODEL_NINE_memory_BODY', 'active', 'invalid'),
+    ('savedSummary', 'MODEL_NINE_savedSummary_BODY', 'current', 'unknown'),
+    ('ledgerState', 'MODEL_NINE_ledgerState_BODY', 'current', 'unknown'),
+    (
+      'ledgerSnapshot',
+      'MODEL_NINE_ledgerSnapshot_BODY',
+      'historicalCommitted',
+      'unknown',
+    ),
+    (
+      'reconciliation',
+      'MODEL_NINE_reconciliation_BODY',
+      'historicalCommitted',
+      'unknown',
+    ),
+    (
+      'characterKnowledge',
+      'MODEL_NINE_characterKnowledge_BODY',
+      'active',
+      'unknown',
+    ),
+    ('memory', 'MODEL_NINE_memory_REVISION', 'currentSaved', 'unknown'),
+    ('memory', 'MODEL_NINE_memory_DRAFT', 'pendingApproval', 'unknown'),
+    ('memory', 'MODEL_NINE_memory_DERIVED', 'derived', 'unknown'),
+    ('savedSummary', 'MODEL_NINE_savedSummary_TEMPLATE', 'current', 'unknown'),
+    (
+      'reconciliation',
+      'MODEL_NINE_reconciliation_EFFECT',
+      'historicalCommitted',
+      null,
+    ),
+    (
+      'ledgerSnapshot',
+      'MODEL_NINE_ledgerSnapshot_BODY',
+      'tentative',
+      'unknown',
+    ),
+    (
+      'ledgerSnapshot',
+      'MODEL_NINE_ledgerSnapshot_BODY',
+      'historicalCommitted',
+      'missing',
+    ),
+  ]) {
+    final (domain, literal, state, evidence) = scenario;
+    backupLoopTest(
+      'MODEL native $domain $literal $state/$evidence contents/search/read encrypted BEFORE each actual POST',
+      (tester, f) async {
+        await seedModelSources(tester, f, messages: 4);
+        await seedSavedModelDomains(tester, f);
+        if (domain == 'ledgerSnapshot' &&
+            (state == 'tentative' || evidence == 'missing')) {
+          await backupLoopReal(
+            tester,
+            () => f.native.db.customStatement(
+              'UPDATE tracker_snapshots SET committed = ?, message_id = ? WHERE session_id = ?',
+              [
+                state == 'tentative' ? 0 : 1,
+                evidence == 'missing'
+                    ? 'private-removed-anchor'
+                    : 'model-source-2',
+                sourceSession,
+              ],
+            ),
+          );
+        }
+        final loop = SourceLoop(f);
+        final parentLinked = !const {
+          'game',
+          'ordinaryPreset',
+          'studioPreset',
+        }.contains(domain);
+        final originalDb = f.native.db.nativeDataSourceIdentity!;
+        final originalModel = f.native.api.model;
+        final policy = f.native.runtime.snapshot.preferences;
+        final epoch = f.native.runtime.epoch;
+        late String source;
+        String? parent;
+        String? section;
+        var committed = 0;
+        var emptySearchPages = 0;
+        var readRequested = false;
+        final rounds = parentLinked ? 6 : 5;
+        loop.script(
+          loop.list(parentLinked ? 'game' : domain, 'nine_catalog'),
+          rounds: 8,
+          next: (round) async {
+            expect(originalDb.belongsTo(f.native.db), isTrue);
+            expect(f.wire.last['model'], originalModel);
+            if (parentLinked && round == 2) {
+              parent = _readyGame(loop);
+              loop.noBody();
+              return SourceLoop.call('astoria_sources_list', {
+                'domain': domain,
+                'parent': parent,
+              }, id: 'nine_parent_catalog');
+            }
+            final logicalRound = round - (parentLinked ? 1 : 0);
+            if (logicalRound == 2) {
+              final metadata = loop.lastData();
+              expect(metadata['count'], 1);
+              final piece = (metadata['pieces'] as List).single as Map;
+              expect(piece['domain'], domain);
+              expect(piece['label'], domain);
+              expect(piece['historicalUse'], 'unknown');
+              expect(piece['parent'], parent);
+              source = piece['source'] as String;
+              expect(source, isNot(sourceSession));
+              expect(source, isNot(sourceStudio));
+              expect(
+                jsonEncode(metadata),
+                isNot(contains('LOCAL_ORDINARY_AUTHORED_TITLE')),
+              );
+              loop.noBody();
+              return loop.contents(source, 'nine_contents');
+            }
+            committed++;
+            final rows = await f.native.repo.getMessagesForSession(
+              f.native.session,
+            );
+            final recipe = await modelSourceRecipe(f, rows.last.id);
+            expect(recipe.toolDisclosures, hasLength(committed));
+            expect(recipe.toolDisclosures!.map((d) => d.domain.name).toSet(), {
+              domain,
+            });
+            expect(recipe.toolDisclosures!.map((d) => d.sourceId).toSet(), {
+              const {'ordinaryPreset', 'studioPreset'}.contains(domain)
+                  ? sourceStudio
+                  : sourceSession,
+            });
+            expect(
+              recipe.toolDisclosures!.last.operation,
+              committed == 1
+                  ? SupportModelToolDisclosureOperation.contents
+                  : readRequested
+                  ? SupportModelToolDisclosureOperation.read
+                  : SupportModelToolDisclosureOperation.search,
+            );
+            expect(
+              recipe.toolDisclosures!.last.extent,
+              committed == 1
+                  ? SupportModelToolDisclosureExtent.scopeMetadata
+                  : domain == 'game'
+                  ? SupportModelToolDisclosureExtent.selectedMessages
+                  : SupportModelToolDisclosureExtent.sourceIdentity,
+            );
+            for (final d in recipe.toolDisclosures!) {
+              expect(d.snapshotDigest, hasLength(64));
+              expect(jsonEncode(f.wire), isNot(contains(d.snapshotDigest)));
+              for (final id in d.orderedSourceIds) {
+                expect(jsonEncode(f.wire), isNot(contains(id)));
+              }
+            }
+            for (final request in f.wire) {
+              for (final message in request['messages'] as List) {
+                if (message['role'] == 'tool')
+                  expect(
+                    utf8.encode(message['content'] as String).length,
+                    lessThanOrEqualTo(65536),
+                  );
+              }
+            }
+            final body = _body(loop);
+            if (logicalRound == 3) {
+              expect(jsonEncode(body), isNot(contains(literal)));
+              expect(body['pieces'], isNotEmpty);
+              expect(
+                find.byKey(const ValueKey('support_tool_confirmation_accept')),
+                findsNothing,
+              );
+              if (domain == 'memory') {
+                final kind = literal.endsWith('_DERIVED')
+                    ? 'memoryDerived'
+                    : literal.endsWith('_DRAFT')
+                    ? 'memoryDraft'
+                    : literal.endsWith('_REVISION')
+                    ? 'memoryRevision'
+                    : 'memoryEntry';
+                section =
+                    (body['pieces'] as List).singleWhere(
+                          (p) => p['kind'] == kind,
+                        )['selector']
+                        as String;
+              }
+              return loop.search(
+                source,
+                literal,
+                'nine_search',
+                section: section,
+              );
+            }
+            if (!readRequested && (body['pieces'] as List).isEmpty) {
+              // Native work pages are honest partial results. Continue the SAME
+              // literal and issued section/cursor under the original frozen scope.
+              // The original 8-round cap remains the finite stopping condition.
+              expect(body['complete'], isFalse);
+              final cursor = body['nextCursor'] as String;
+              emptySearchPages++;
+              return loop.search(
+                source,
+                literal,
+                'nine_search_$emptySearchPages',
+                section: section,
+                cursor: cursor,
+              );
+            }
+            final hits = (body['pieces'] as List)
+                .cast<Map<dynamic, dynamic>>()
+                .toList();
+            final effectSearch =
+                !readRequested && literal == 'MODEL_NINE_reconciliation_EFFECT';
+            if (effectSearch) {
+              // The saved after-state and added-effect record legitimately
+              // expose the same scalar. Both must be actual issued matches;
+              // read one original selector, not an invented record identity.
+              expect(hits, hasLength(2));
+              expect(hits.map((h) => h['selector']).toSet(), hasLength(2));
+              for (final match in hits) {
+                expect(match['kind'], 'reconciliationSavedResult');
+                expect(match['state'], state);
+                expect(match['excerpt'], literal);
+                expect(match['occurrence'], 'first_visible_literal_per_record');
+              }
+            }
+            final hit = effectSearch ? hits[0] : hits.single;
+            expect(hit['state'], state);
+            expect(jsonEncode(hit), contains(literal));
+            if (evidence != null) {
+              final binding = (hit['citation'] as Map)['binding'] as Map;
+              expect((binding['evidence'] as Map)['state'], evidence);
+            }
+            if (!readRequested) {
+              expect(hit['occurrence'], 'first_visible_literal_per_record');
+              readRequested = true;
+              return loop.read(source, hit['selector'] as String, 'nine_read');
+            }
+            expect(body['complete'], isTrue);
+            expect(hit['payload'], contains(literal));
+            return SourceLoop.answer(
+              'Only this approved $domain saved text was read; $state/$evidence is not historical assembled-prompt proof.',
+            );
+          },
+        );
+        await loop.start(
+          tester,
+          text: 'Read the selected native $domain saved source.',
+        );
+        // Target selection (if any) has finished. This is exactly ONE ORIGINAL
+        // body-scope gesture, with no metadata/body before its native custody.
+        expect(jsonEncode(f.wire), isNot(contains(literal)));
+        expect(find.text('Прочитать и передать модели'), findsOneWidget);
+        await loop.apply(tester);
+        final reply = await loop.finish(tester);
+        expect(reply.status, 'complete');
+        expect(f.wire, hasLength(rounds + emptySearchPages));
+        expect(f.wire.first['tools'], hasLength(47));
+        expect(committed, 3 + emptySearchPages);
+        expect(f.wire.length, lessThanOrEqualTo(8));
+        expect(f.native.runtime.epoch, epoch);
+        expect(f.native.runtime.snapshot.preferences, policy);
+        expect(
+          find.byKey(const ValueKey('support_tool_confirmation_accept')),
+          findsNothing,
+        );
+        for (final request in f.requests) {
+          expect(
+            request.uri.toString(),
+            'https://api.openai.com/v1/chat/completions',
+          );
+        }
+        expect(loop.dispatchAuthorizations, hasLength(f.requests.length));
+        expect(
+          loop.dispatchAuthorizations,
+          everyElement('Bearer ${BackupLoopNative.key}'),
+        );
+        final outward = jsonEncode(f.wire);
+        for (final excluded in [
+          sourceExcluded,
+          sourceOlderBody,
+          sourceInactiveStudioBody,
+          'MODEL_NINE_EXCLUDED_DIAGNOSTIC',
+          'private-studio-expensive',
+          'private-studio-cheap',
+          'private-ordinary-block',
+          'private-memory-entry',
+          'private-revision',
+          'private-draft',
+          'private-catalog',
+          'private-saved-run',
+          'private-canon',
+          'private-checkpoint-range',
+          'private-knowledge',
+          'private-knower',
+          'private-subject',
+          'private-removed-anchor',
+          sourceSession,
+          sourceStudio,
+          sourceCharacter,
+        ]) {
+          expect(outward, isNot(contains(excluded)));
+        }
+        for (final other in const [
+          'ordinaryPreset',
+          'memory',
+          'savedSummary',
+          'ledgerState',
+          'ledgerSnapshot',
+          'reconciliation',
+          'characterKnowledge',
+        ]) {
+          if (other != domain)
+            expect(outward, isNot(contains('MODEL_NINE_${other}_BODY')));
+        }
+        if (domain != 'game') expect(outward, isNot(contains(sourceGameBody)));
+        if (domain != 'studioPreset')
+          expect(outward, isNot(contains(sourceStudioBody)));
+        sourceNoEgress(f, reply.body);
+      },
+    );
+  }
   for (final (localPreparation, mobile) in [
     (false, false),
     (true, false),
@@ -224,7 +742,7 @@ void main() {
           tester.view.physicalSize = const Size(390, 844);
           await tester.pump();
         }
-        await seedModelSources(tester, f, messages: 4);
+        await seedModelSources(tester, f, messages: 4, prepareHistory: false);
         if (localPreparation) {
           await _prepareLocally(tester, f);
         } else {
@@ -328,6 +846,8 @@ void main() {
               'source': _readyGame(loop),
             }, id: 'private-contents');
           expect(loop.lastResult()['ok'], isFalse);
+          expect(loop.lastResult()['code'], 'denied');
+          expect(loop.lastResult()['effect'], 'none');
           return SourceLoop.answer('No source text was disclosed.');
         },
       );
@@ -335,6 +855,13 @@ void main() {
       expect(find.textContaining(label), findsWidgets); // Local UI only.
       await loop.cancel(tester);
       final refused = await loop.finish(tester);
+      expect(refused.status, 'error');
+      expect(f.bridge.view.transportReason.name, 'denied');
+      expect(
+        refused.body,
+        contains('Нативное согласие на эту область не получено или отозвано'),
+      );
+      expect(refused.body, isNot(contains('No source text was disclosed.')));
       expect(refused.body, isNot(contains(label)));
       expect(jsonEncode(f.wire), isNot(contains(label)));
       loop.noBody();

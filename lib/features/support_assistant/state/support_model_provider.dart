@@ -8,6 +8,8 @@ import '../../../core/state/connection_revision_provider.dart';
 import '../../../core/state/credential_vault_provider.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../core/state/active_studio_preset_provider.dart';
+import '../../../core/state/active_selection_provider.dart';
+import '../../presets/preset_list_provider.dart';
 import '../../../core/db/repositories/support_source_text_repo.dart';
 import '../../../core/db/repositories/support_text_context_repo.dart';
 import '../../../core/llm/transport/native_provider_transport.dart';
@@ -83,6 +85,25 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
               throw StateError('Original model owner retired.');
             }
             return id;
+          },
+    activeOrdinaryPresetId: native == null
+        ? null
+        : () async {
+            if (!current() || !ref.mounted) {
+              throw StateError('Original model owner retired.');
+            }
+            // Use the actual already-loaded selection graph. Do not hydrate or
+            // scan every preset merely to guess an active discovery flag.
+            if (!ref.exists(presetListProvider)) return null;
+            final presets = ref.read(presetListProvider).asData?.value;
+            if (presets == null) return null;
+            return getEffectivePreset(
+              presets,
+              null,
+              null,
+              ref.read(activePresetIdProvider),
+              ref.read(presetConnectionsProvider),
+            )?.id;
           },
     // Resolve ONCE only after this original native saved source was prepared.
     // Legacy text-only fixtures never evaluate the application action graph.

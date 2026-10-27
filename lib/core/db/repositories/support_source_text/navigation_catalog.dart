@@ -76,15 +76,20 @@ extension _NavCatalog on SupportSourceNavigationRepo {
       final table = domain == nav.SourceDomain.ordinaryPreset
           ? 'presets'
           : 'studio_preset_rows';
+      // Ordinary presets declare no activity timestamp. Keep it unknown rather
+      // than reading a Studio-only column or inventing saved activity.
+      final activity = domain == nav.SourceDomain.ordinaryPreset
+          ? 'NULL AS updated_at'
+          : 'updated_at';
       return 'SELECT rowid AS incarnation, CASE WHEN octet_length(preset_id)<=256 THEN preset_id END AS source_id, '
-          'CASE WHEN octet_length(name) <= 1024 THEN name END AS label '
+          'CASE WHEN octet_length(name) <= 1024 THEN name END AS label, $activity '
           'FROM $table WHERE rowid > ?';
     }
     return '''SELECT s.rowid AS incarnation, CASE WHEN octet_length(s.session_id)<=256 THEN s.session_id END AS source_id,
       CASE WHEN octet_length(s.character_id)<=256 THEN s.character_id END AS character_id, s.session_index, c.rowid AS character_incarnation,
       CASE WHEN octet_length(c.variant_group_id)<=256 THEN c.variant_group_id END AS variant_group_id, c.variant_order,
       (c.variant_group_id IS NULL OR octet_length(c.variant_group_id)<=256) AS identities_bounded,
-      CASE WHEN octet_length(c.name) <= 1024 THEN c.name END AS label
+      CASE WHEN octet_length(c.name) <= 1024 THEN c.name END AS label, s.updated_at
       FROM chat_sessions s INNER JOIN characters c ON c.char_id = s.character_id
       WHERE s.rowid > ? AND c.hidden = 0 AND ${_savedExists(domain)}''';
   }
@@ -220,8 +225,28 @@ extension _NavCatalog on SupportSourceNavigationRepo {
       final selected = await _activeStudio();
       _guard();
       _shape.id(selected);
-      active =
-          key.nativeId == selected; // No guessed/migrated selection fallback.
+      // Mirror studioPresetProvider / StudioPresetRepo.getDefault(): existing
+      // selected ID, otherwise the saved `default`. Probe identities only;
+      // never hydrate or parse authored definitions merely for metadata.
+      final resolved = await _sql(
+        'SELECT preset_id FROM studio_preset_rows '
+        'WHERE preset_id IN (?, ?) ORDER BY CASE WHEN preset_id = ? THEN 0 ELSE 1 END LIMIT 1',
+        [
+          Variable.withString(selected),
+          Variable.withString('default'),
+          Variable.withString(selected),
+        ],
+      );
+      _guard();
+      active = resolved.isEmpty
+          ? null
+          : key.nativeId == resolved.single.read<String>('preset_id');
+    } else if (key.domain == nav.SourceDomain.ordinaryPreset &&
+        _activeOrdinary != null) {
+      final selected = await _activeOrdinary();
+      _guard();
+      if (selected != null) _shape.id(selected);
+      active = selected == null ? null : key.nativeId == selected;
     }
     if (key.domain == nav.SourceDomain.game) {
       header = {...header, 'history_index': await _gameIndex(key.nativeId)};

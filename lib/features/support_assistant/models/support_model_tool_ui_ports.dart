@@ -6,6 +6,7 @@ final class SupportModelToolUiPorts {
     this.confirmation,
     this.navigation,
     this.backupFileHost,
+    this.sourceTargetSelection,
   });
   final SupportAppConfirmationPort? confirmation;
   final SupportAppNavigationPort? navigation;
@@ -13,4 +14,37 @@ final class SupportModelToolUiPorts {
   /// Service composition requires the exact native file-host implementation.
   /// The model layer retains a native port, not a service/source or JSON handle.
   final SupportAppConfirmationPort? backupFileHost;
+  final SupportSourceTargetSelectionPort? sourceTargetSelection;
+}
+
+/// LOCAL discovery only. Candidate and observation identities are opaque native
+/// pointers, never model arguments, body grants or persisted selections.
+abstract interface class SupportSourceTargetSelectionPort {
+  Future<SupportSourceTargetCandidate?> selectSource(
+    SupportSourceTargetSelectionRequest request,
+  );
+}
+
+final class SupportSourceTargetCandidate {
+  const SupportSourceTargetCandidate({
+    required this.observation,
+    required this.label,
+    required this.hint,
+  });
+  final Object observation;
+  final String label, hint;
+}
+
+final class SupportSourceTargetSelectionRequest {
+  SupportSourceTargetSelectionRequest({
+    required this.context,
+    required this.callId,
+    required this.isOriginalCurrent,
+    required List<SupportSourceTargetCandidate> candidates,
+  }) : candidates = List.unmodifiable(candidates);
+  final SupportAppActionContext context;
+  final String callId;
+  final bool Function() isOriginalCurrent;
+  final List<SupportSourceTargetCandidate> candidates;
+  bool get current => context.current && isOriginalCurrent() && context.current;
 }

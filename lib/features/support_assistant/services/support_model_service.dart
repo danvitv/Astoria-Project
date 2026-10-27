@@ -111,6 +111,7 @@ final class SupportModelService {
     SupportAppActionRegistry? appActions,
     SupportSourceTextRepo? sourceRepo,
     Future<String> Function()? activeStudioPresetId,
+    Future<String?> Function()? activeOrdinaryPresetId,
     SupportAppActionRegistry Function()? appActionsFactory,
     SupportAppActionRegistry Function(SupportDatabaseBackupAdapter)?
     appActionsWithBackupFactory,
@@ -140,6 +141,7 @@ final class SupportModelService {
        _appActions = appActions,
        _sourceRepo = sourceRepo,
        _activeStudioPresetId = activeStudioPresetId,
+       _activeOrdinaryPresetId = activeOrdinaryPresetId,
        _appActionsFactory = appActionsFactory,
        _appActionsWithBackupFactory = appActionsWithBackupFactory,
        _newId = newId ?? generateId,
@@ -179,6 +181,7 @@ final class SupportModelService {
   final SupportAppActionRegistry? _appActions;
   final SupportSourceTextRepo? _sourceRepo;
   final Future<String> Function()? _activeStudioPresetId;
+  final Future<String?> Function()? _activeOrdinaryPresetId;
   final SupportAppActionRegistry Function()? _appActionsFactory;
   final SupportAppActionRegistry Function(SupportDatabaseBackupAdapter)?
   _appActionsWithBackupFactory;

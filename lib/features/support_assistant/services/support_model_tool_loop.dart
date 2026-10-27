@@ -41,7 +41,9 @@ const _supportSourceInstruction =
     'astoria_source_search and astoria_source_read. The nine domains are game, ordinaryPreset, '
     'studioPreset, memory, savedSummary, ledgerState, ledgerSnapshot, reconciliation and '
     'characterKnowledge. Ordinary and Studio CURRENT SAVED presets are separate namespaces. '
-    'List is metadata only and supplies opaque run-local handles, never a grant. Contents '
+    'List is metadata only and supplies opaque run-local handles, never a grant. Ambiguous '
+    'pages require LOCAL target selection; only the selected original handle is returned. '
+    'Authored names stay local. A selected target is not a complete catalog or body consent. Contents '
     'requires one exact native gesture approving local access AND disclosure to this original '
     'recipient/model. Only that frozen source/snapshot/sections or active interval can be reused '
     'by technical navigation in this run; other links, wider scope, appended messages and a '
@@ -148,6 +150,7 @@ extension _ModelTools on _ModelRun {
       boundary: source,
       isCurrent: current,
       activeStudioPresetId: service._activeStudioPresetId,
+      activeOrdinaryPresetId: service._activeOrdinaryPresetId,
     );
     return _ModelSourceToolRun(
       this,
