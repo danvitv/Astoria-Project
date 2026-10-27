@@ -37,7 +37,7 @@ void main() {
   tearDown(() => f.close());
 
   test(
-    'migration 137 -> 138 preserves exact canonical bytes; production worker seam',
+    'migration 137 -> 139 preserves exact canonical bytes; production worker seam',
     () async {
       const original =
           '[ \n {"id":"a","role":"user","content":"😀 \\u0061","unknown":[1,true]} ] \t';
@@ -60,7 +60,7 @@ void main() {
       final migrated = AppDatabase.fixedNativeFile(File(f.sourcePath));
       try {
         await migrated.customSelect('SELECT 1').get();
-        expect(migrated.schemaVersion, 138);
+        expect(migrated.schemaVersion, 139);
         expect(migrated.allTables.length, 64);
         final before =
             (await migrated
@@ -98,6 +98,179 @@ void main() {
       }
     },
   );
+
+  for (final eightColumns in [true, false]) {
+    test(
+      'migration 138 ${eightColumns ? 'eight' : 'twelve'} columns -> 139 preserves canonical bytes and requires owned maintenance',
+      () async {
+        const original =
+            '[ \n {"id":"anchor","role":"assistant","content":"😀 \\u0061","unknown":{"keep":true}} ] \t';
+        await f.replaceRoleplayJson(original);
+        final built = await f.db.historySourceIndex.maintain(
+          sessionId: _session,
+          isCurrent: () => true,
+        );
+        expect(built.state, HistoryIndexMaintenanceState.ready);
+        // Keep a real tombstone and its original incarnation through the upgrade.
+        f.handle.execute('INSERT INTO characters(char_id,name) VALUES (?,?)', [
+          'migration-tombstone-character',
+          'Synthetic tombstone',
+        ]);
+        f.handle.execute(
+          'INSERT INTO chat_sessions(session_id,character_id,session_index,messages_json) VALUES (?,?,?,?)',
+          ['migration-tombstone', 'migration-tombstone-character', 0, '[]'],
+        );
+        f.handle.execute('DELETE FROM chat_sessions WHERE session_id=?', [
+          'migration-tombstone',
+        ]);
+        if (eightColumns) {
+          // Actual delivered eight-column cache, not missing generated Dart.
+          // Strip authenticated metadata from the real local worker's units;
+          // cached rows/ready/checkpoints must not become trusted by migration.
+          f.handle.execute('''CREATE TEMP TABLE legacy_units AS SELECT
+            session_id,incarnation,revision,native_order,active_ordinal,
+            message_id,raw_json,integrity FROM history_message_units''');
+          f.handle.execute('DROP TABLE history_message_units');
+          f.handle.execute('''CREATE TABLE history_message_units (
+            session_id TEXT NOT NULL, incarnation INTEGER NOT NULL,
+            revision INTEGER NOT NULL, native_order INTEGER NOT NULL,
+            active_ordinal INTEGER, message_id TEXT NOT NULL,
+            raw_json TEXT NOT NULL CHECK(octet_length(raw_json)<=65536),
+            integrity TEXT NOT NULL,
+            PRIMARY KEY(session_id,incarnation,revision,native_order))''');
+          f.handle.execute(
+            'INSERT INTO history_message_units SELECT * FROM legacy_units',
+          );
+          f.handle.execute('DROP TABLE legacy_units');
+          for (final suffix in ['active', 'identity']) {
+            f.handle.execute(
+              'CREATE UNIQUE INDEX idx_history_units_$suffix ON history_message_units '
+              '(session_id,incarnation,revision,${suffix == 'active' ? 'active_ordinal' : 'message_id'})',
+            );
+          }
+          for (final statement in historyIndexTriggers.values) {
+            f.handle.execute(statement);
+          }
+        }
+        final generations = f.handle
+            .select(
+              'SELECT * FROM history_source_generations ORDER BY session_id',
+            )
+            .map((row) => Map<String, Object?>.from(row))
+            .toList();
+        final clock = f.handle
+            .select('SELECT incarnation FROM history_index_clock WHERE id=1')
+            .single['incarnation'];
+        final units = f.handle
+            .select(
+              'SELECT * FROM history_message_units ORDER BY session_id,native_order',
+            )
+            .map((row) => Map<String, Object?>.from(row))
+            .toList();
+        expect(units, isNotEmpty);
+        f.handle.execute('PRAGMA user_version=138');
+        await f.db.close();
+        final migrated = AppDatabase.fixedNativeFile(File(f.sourcePath));
+        Future<List<int>> canonical() async => utf8.encode(
+          (await migrated
+                  .customSelect(
+                    'SELECT messages_json FROM chat_sessions WHERE session_id=?',
+                    variables: [Variable.withString(_session)],
+                  )
+                  .getSingle())
+              .read<String>('messages_json'),
+        );
+        try {
+          await migrated.customSelect('SELECT 1').get();
+          expect(migrated.schemaVersion, 139);
+          expect(
+            (await migrated.customSelect('PRAGMA user_version').getSingle())
+                .read<int>('user_version'),
+            139,
+          );
+          expect(migrated.allTables.length, 64);
+          expect(
+            (await migrated
+                    .customSelect(
+                      "SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+                    )
+                    .getSingle())
+                .read<int>('n'),
+            64,
+          );
+          expect(await canonical(), utf8.encode(original));
+          final columns = await migrated
+              .customSelect(
+                "SELECT name,type FROM pragma_table_info('history_message_units')",
+              )
+              .get();
+          expect(columns, hasLength(12));
+          final types = {
+            for (final row in columns)
+              row.read<String>('name'): row.read<String>('type'),
+          };
+          expect(types['swipe_id'], 'INTEGER');
+          expect(types['agent_swipe_id'], 'INTEGER');
+          expect(types['role'], 'TEXT');
+          expect(types['anchor_integrity'], 'TEXT');
+          expect(
+            (await migrated
+                    .customSelect(
+                      'SELECT incarnation FROM history_index_clock WHERE id=1',
+                    )
+                    .getSingle())
+                .read<int>('incarnation'),
+            clock,
+          );
+          final after = await migrated
+              .customSelect(
+                'SELECT * FROM history_source_generations ORDER BY session_id',
+              )
+              .get();
+          expect(after, hasLength(generations.length));
+          for (var i = 0; i < after.length; i++) {
+            final expected = {
+              ...generations[i],
+              if (eightColumns) ...{
+                'revision': (generations[i]['revision'] as int) + 1,
+                'state': 'incomplete',
+                'checkpoint': 0,
+                'unit_count': 0,
+                'active_count': 0,
+                'integrity': null,
+              },
+            };
+            expect(after[i].data, expected);
+          }
+          final cached = await migrated
+              .customSelect(
+                'SELECT * FROM history_message_units ORDER BY session_id,native_order',
+              )
+              .get();
+          expect(
+            cached.map((row) => row.data).toList(),
+            eightColumns ? isEmpty : equals(units),
+          );
+          expect(
+            (await migrated.historySourceIndex.observe(_session))['status'],
+            'incomplete',
+          );
+          final result = await migrated.historySourceIndex.maintain(
+            sessionId: _session,
+            isCurrent: () => true,
+          );
+          expect(result.state, HistoryIndexMaintenanceState.ready);
+          expect(
+            (await migrated.historySourceIndex.observe(_session))['status'],
+            'ready',
+          );
+          expect(await canonical(), utf8.encode(original));
+        } finally {
+          await migrated.close();
+        }
+      },
+    );
+  }
 
   test(
     'missing index refuses; bounded local checkpoint/Stop remains incomplete',
