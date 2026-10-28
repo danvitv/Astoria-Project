@@ -307,6 +307,8 @@ extension _ModelTools on _ModelRun {
             ? null
             : _ModelToolConfirmation(this, binding.toolUi!.confirmation!),
         navigation: isReattempt ? null : binding.toolUi?.navigation,
+        // Registry access is approval authority, not original owner identity.
+        // Keep it absent without UI; the bound owner still fences actual POSTs.
         sourceToolAccess: binding.toolUi?.confirmation == null
             ? null
             : originalSourceTools,

@@ -160,7 +160,12 @@ Future<void> _durableBeforePost(BackupLoopFixture f, int count) async {
   final reply = rows.singleWhere(
     (r) => r.role == 'assistant' && r.runId != null,
   );
-  final recipe = await modelSourceRecipe(f, reply.id);
+  final recipe = await modelSourceRecipe(
+    f,
+    reply.id,
+    expectedVersion: 4,
+    expectedDisclosureCount: count,
+  );
   expect(recipe.toolDisclosures, hasLength(count));
   for (var i = 0; i < count; i++) {
     final disclosure = recipe.toolDisclosures![i];
@@ -227,16 +232,18 @@ void main() {
       final loop = SourceLoop(f);
       final policy = f.native.runtime.snapshot.preferences;
       final epoch = f.native.runtime.epoch;
+      var replayPosts = 0;
       loop.script(
         loop.list('game', 'local_target'),
         rounds: 2,
         next: (_) {
+          replayPosts++;
+          // A changed source is rejected by original-ROOT admission before
+          // this callback can observe any replay POST, including a refusal.
+          expect(action, 'cancel');
           expect(loop.lastResult()['ok'], isFalse);
           expect(loop.lastResult()['effect'], 'none');
-          expect(
-            loop.lastResult()['code'],
-            action == 'sourceABA' ? 'conflict' : 'denied',
-          );
+          expect(loop.lastResult()['code'], 'denied');
           expect(jsonEncode(f.wire), isNot(contains(title)));
           return SourceLoop.answer('No local target was read or disclosed.');
         },
@@ -322,11 +329,32 @@ void main() {
           isNot(contains('No local target was read or disclosed.')),
         );
       }
+      expect(f.wire, hasLength(action == 'cancel' ? 2 : 1));
+      expect(replayPosts, action == 'cancel' ? 1 : 0);
+      for (final request in f.wire) {
+        expect(request['model'], f.native.api.model);
+      }
+      for (final request in f.requests) {
+        expect(
+          request.uri.toString(),
+          'https://api.openai.com/v1/chat/completions',
+        );
+      }
       expect(
-        f.wire,
-        hasLength(action == 'stop' || action == 'routeABA' ? 1 : 2),
+        loop.dispatchAuthorizations,
+        List.filled(f.wire.length, 'Bearer ${BackupLoopNative.key}'),
       );
-      expect((await modelSourceRecipe(f, reply.id)).toolDisclosures, isEmpty);
+      // Provenance mapping decrypts real AEAD; join it outside fake async.
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          reply.id,
+          expectedVersion: 2,
+          expectedDisclosureCount: null,
+        ),
+      );
+      expect(recipe.toolDisclosures, isNull);
       expect(f.native.runtime.snapshot.preferences, policy);
       expect(f.native.runtime.epoch, epoch);
       expect(jsonEncode(f.wire), isNot(contains(title)));
@@ -335,6 +363,7 @@ void main() {
         findsNothing,
       );
       loop.noBody();
+      _noPrivateSources(f);
       sourceNoEgress(f, reply.body);
     });
   }
@@ -344,10 +373,25 @@ void main() {
     (tester, f) async {
       await seedModelSources(tester, f, messages: 4);
       await backupLoopReal(tester, () async {
-        await f.native.db.customStatement(
-          '''INSERT INTO studio_preset_rows(preset_id,name,blocks_json,execution_mode)
-        SELECT 'default','LOCAL_FALLBACK_TITLE',blocks_json,execution_mode FROM studio_preset_rows WHERE preset_id = ?''',
-          [sourceStudio],
+        // Fresh DB creation already owns this key. Establish an exact saved
+        // fallback rather than inserting a duplicate or retaining seed fields.
+        final saved = await (f.native.db.select(
+          f.native.db.studioPresetRows,
+        )..where((t) => t.presetId.equals(sourceStudio))).getSingle();
+        final changed =
+            await (f.native.db.update(
+              f.native.db.studioPresetRows,
+            )..where((t) => t.presetId.equals('default'))).write(
+              saved
+                  .copyWith(presetId: 'default', name: 'LOCAL_FALLBACK_TITLE')
+                  .toCompanion(false),
+            );
+        expect(changed, 1);
+        expect(
+          await (f.native.db.select(
+            f.native.db.studioPresetRows,
+          )..where((t) => t.presetId.equals('default'))).getSingle(),
+          saved.copyWith(presetId: 'default', name: 'LOCAL_FALLBACK_TITLE'),
         );
         await f.container
             .read(activeStudioPresetProvider.notifier)
@@ -374,7 +418,12 @@ void main() {
           final rows = await f.native.repo.getMessagesForSession(
             f.native.session,
           );
-          final recipe = await modelSourceRecipe(f, rows.last.id);
+          final recipe = await modelSourceRecipe(
+            f,
+            rows.last.id,
+            expectedVersion: 4,
+            expectedDisclosureCount: round - 2,
+          );
           expect(recipe.toolDisclosures, hasLength(round - 2));
           expect(recipe.toolDisclosures!.map((d) => d.sourceId).toSet(), {
             'default',
@@ -525,7 +574,12 @@ void main() {
             final rows = await f.native.repo.getMessagesForSession(
               f.native.session,
             );
-            final recipe = await modelSourceRecipe(f, rows.last.id);
+            final recipe = await modelSourceRecipe(
+              f,
+              rows.last.id,
+              expectedVersion: 4,
+              expectedDisclosureCount: committed,
+            );
             expect(recipe.toolDisclosures, hasLength(committed));
             expect(recipe.toolDisclosures!.map((d) => d.domain.name).toSet(), {
               domain,
@@ -809,7 +863,12 @@ void main() {
         expect(f.wire, hasLength(5));
         final recipe = await backupLoopReal(
           tester,
-          () => modelSourceRecipe(f, reply.id),
+          () => modelSourceRecipe(
+            f,
+            reply.id,
+            expectedVersion: 4,
+            expectedDisclosureCount: 3,
+          ),
         );
         expect(recipe.toolDisclosures, hasLength(3));
         expect(

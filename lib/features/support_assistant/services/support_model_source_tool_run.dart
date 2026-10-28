@@ -118,8 +118,10 @@ final class _ModelSourceToolRun
 
   void bindOriginalContext(SupportAppActionContext context, Uri destination) {
     if (_context != null ||
-        (run.binding.toolUi?.confirmation != null &&
-            !identical(context.sourceToolAccess, this))) {
+        !identical(
+          context.sourceToolAccess,
+          run.binding.toolUi?.confirmation == null ? null : this,
+        )) {
       throw const SupportAppActionRefused(SupportAppActionCode.denied);
     }
     _context = context;
@@ -150,10 +152,11 @@ final class _ModelSourceToolRun
   }
 
   bool get current => !_closed && run.current();
+  // The exact immutable context owns this run even when native approval UI is
+  // absent. Registry access and body approval remain separate, fail-closed gates.
   bool original(SupportAppActionContext context) =>
       current &&
       identical(context, _context) &&
-      identical(context.sourceToolAccess, this) &&
       identical(context.cancelToken, run.operation.token) &&
       context.current &&
       current;
@@ -176,6 +179,7 @@ final class _ModelSourceToolRun
   ) =>
       SupportSourceToolNames.body.contains(action) &&
       _call?.name == action &&
+      identical(context.sourceToolAccess, this) &&
       context.confirmation != null &&
       original(context);
 

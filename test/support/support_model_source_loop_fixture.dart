@@ -882,10 +882,14 @@ Future<void> seedSavedModelDomains(
 
 /// Read REAL encrypted persisted provenance. Call from onFetch directly, or
 /// wrap with backupLoopReal in the fake-async widget test body.
+/// Expectations come from the scenario; a null count requires an absent stored
+/// disclosure field and a null decoded list, not an empty disclosure list.
 Future<SupportModelProvenance> modelSourceRecipe(
   BackupLoopFixture f,
-  String reply,
-) async {
+  String reply, {
+  required int expectedVersion,
+  required int? expectedDisclosureCount,
+}) async {
   final id = 'support.reply_provenance:$reply';
   final db = f.native.db;
   final stored = await (db.select(
@@ -897,7 +901,15 @@ Future<SupportModelProvenance> modelSourceRecipe(
     block.protectedFactsJson,
   );
   expect(parsed.isValid, isTrue);
-  expect(jsonDecode(block.protectedFactsJson)['version'], 4);
+  final storedRecipe = jsonDecode(block.protectedFactsJson) as Map;
+  expect(storedRecipe['version'], expectedVersion);
+  if (expectedDisclosureCount == null) {
+    expect(storedRecipe.containsKey('toolDisclosures'), isFalse);
+    expect(parsed.recipe!.toolDisclosures, isNull);
+  } else {
+    expect(storedRecipe['toolDisclosures'], hasLength(expectedDisclosureCount));
+    expect(parsed.recipe!.toolDisclosures, hasLength(expectedDisclosureCount));
+  }
   for (final body in [
     sourceGameBody,
     sourceStudioBody,

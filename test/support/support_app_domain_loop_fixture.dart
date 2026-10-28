@@ -187,10 +187,11 @@ final class DomainLoopFixture {
       find.byType(TextField).first,
       'Выполни только точную показанную операцию Astoria.',
     );
-    await configurationAction(
-      tester,
-      () => tester.tap(find.byKey(const ValueKey('support_composer_send_btn'))),
-    );
+    await tester.pump();
+    final send = find.byKey(const ValueKey('support_composer_send_btn'));
+    expect(send.hitTestable(), findsOneWidget);
+    expect(tester.widget<IconButton>(send).onPressed, isNotNull);
+    await configurationAction(tester, () => tester.tap(send));
     if (confirmation) await configurationModal(tester, screen);
   }
 

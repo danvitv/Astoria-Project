@@ -13,6 +13,7 @@ import 'package:glaze_flutter/features/support_assistant/models/support_model_pr
 import 'package:glaze_flutter/features/support_assistant/services/support_model_provenance_codec.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_model_ui_bridge.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_composer_bar.dart';
+import 'package:glaze_flutter/shared/widgets/glaze_action_button.dart';
 
 import 'support_model_source_loop_fixture.dart';
 
@@ -45,17 +46,32 @@ SupportModelMessage _selected(SupportMessage row) => SupportModelMessage(
 );
 
 Future<List<SupportModelConversationMessage>> _visible(
+  WidgetTester tester,
   BackupLoopFixture f,
-) async => [
-  for (final row in await f.native.repo.getMessagesForSession(f.native.session))
-    SupportModelConversationMessage(id: row.id, role: row.role, text: row.body),
-];
+) => backupLoopReal(
+  tester,
+  () async => [
+    for (final row in await f.native.repo.getMessagesForSession(
+      f.native.session,
+    ))
+      SupportModelConversationMessage(
+        id: row.id,
+        role: row.role,
+        text: row.body,
+      ),
+  ],
+);
 
 Future<SupportModelProvenance> _durable(SourceLoop loop, int count) async {
   final rows = await loop.file.native.repo.getMessagesForSession(
     loop.file.native.session,
   );
-  final recipe = await modelSourceRecipe(loop.file, rows.last.id);
+  final recipe = await modelSourceRecipe(
+    loop.file,
+    rows.last.id,
+    expectedVersion: 4,
+    expectedDisclosureCount: count,
+  );
   expect(recipe.toolDisclosures, hasLength(count));
   final outward = jsonEncode(loop.file.wire);
   for (final disclosure in recipe.toolDisclosures!) {
@@ -220,7 +236,15 @@ void main() {
       expect(reply.status, 'complete');
       expect(chunks.length, greaterThan(1));
       expect(chunks.join(), content);
-      final recipe = await modelSourceRecipe(f, reply.id);
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          reply.id,
+          expectedVersion: 4,
+          expectedDisclosureCount: disclosures,
+        ),
+      );
       expect(recipe.toolDisclosures, hasLength(disclosures));
       expect(
         recipe.toolDisclosures!.every(
@@ -245,11 +269,19 @@ void main() {
     backupLoopTest(
       'MODEL $failure retires logical continuation without disclosing the remaining saved text',
       (tester, f) async {
-        final content = await _largeStudio(tester, f, repeats: 2400);
-        expect(utf8.encode(jsonEncode(content)).length, greaterThan(65536));
+        tester.view.physicalSize = const Size(390, 844);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.pump();
+        // Stay inside saved-unit admission, but beyond the escaped partial-read
+        // budget. The continuation must exist, not fail on initial source size.
+        final content = await _largeStudio(tester, f);
+        expect(utf8.encode(jsonEncode(content)).length, lessThan(65536));
         final loop = SourceLoop(f);
         late VoidCallback stopOriginal;
         late String source;
+        var continuationAttempted = false;
         loop.script(
           loop.list('studioPreset', 'partial_catalog'),
           rounds: 5,
@@ -271,6 +303,16 @@ void main() {
             expect(body['complete'], isFalse);
             expect(body['partial'], isTrue);
             final next = body['nextCursor'] as String;
+            final piece = (body['pieces'] as List).single as Map;
+            final firstPart = piece['payload'] as String;
+            expect(piece['complete'], isFalse);
+            expect(firstPart, startsWith('PAGED_HEAD_'));
+            expect(content, startsWith(firstPart));
+            expect(firstPart.length, lessThan(content.length));
+            expect(
+              content.substring(firstPart.length),
+              endsWith('_PAGED_TAIL'),
+            );
             expect(jsonEncode(f.wire), contains('PAGED_HEAD_'));
             expect(jsonEncode(f.wire), isNot(contains('_PAGED_TAIL')));
             if (failure == 'stop') {
@@ -289,6 +331,7 @@ void main() {
                 ),
               );
             }
+            continuationAttempted = true;
             return loop.read(source, next, 'retired_continue');
           },
         );
@@ -298,14 +341,21 @@ void main() {
             .onStop!;
         await loop.apply(tester);
         final reply = await loop.finish(tester);
+        expect(continuationAttempted, isTrue);
         expect(reply.status, failure == 'stop' ? 'stopped' : 'error');
         expect(f.wire, hasLength(5));
         expect(jsonEncode(f.wire), isNot(contains('_PAGED_TAIL')));
         expect(jsonEncode(f.wire), isNot(contains('_CHANGED_TAIL')));
-        expect(
-          (await modelSourceRecipe(f, reply.id)).toolDisclosures,
-          hasLength(3),
+        final recipe = await backupLoopReal(
+          tester,
+          () => modelSourceRecipe(
+            f,
+            reply.id,
+            expectedVersion: 4,
+            expectedDisclosureCount: 3,
+          ),
         );
+        expect(recipe.toolDisclosures, hasLength(3));
         _noExcluded(f);
       },
     );
@@ -361,10 +411,16 @@ void main() {
       );
       expect(jsonEncode(f.wire), contains('${sourceGameBody}0'));
       expect(jsonEncode(f.wire), isNot(contains('PAGED_HEAD_')));
-      expect(
-        (await modelSourceRecipe(f, reply.id)).toolDisclosures,
-        hasLength(2),
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          reply.id,
+          expectedVersion: 4,
+          expectedDisclosureCount: 2,
+        ),
       );
+      expect(recipe.toolDisclosures, hasLength(2));
       _noExcluded(f);
     },
   );
@@ -376,7 +432,11 @@ void main() {
       final loop = SourceLoop(f);
       final bridge = f.bridge;
       final ui = loop.nativeUi(tester);
-      final emitter = loop.emitter(tester, ui: ui, visible: await _visible(f));
+      final emitter = loop.emitter(
+        tester,
+        ui: ui,
+        visible: await _visible(tester, f),
+      );
       loop.script(
         SourceLoop.call('astoria_connection_create', {
           'template': 'openaiChat',
@@ -404,7 +464,10 @@ void main() {
       final row = await (f.native.db.select(
         f.native.db.apiConfigs,
       )..where((t) => t.name.equals('screen-native-create'))).getSingle();
-      final created = await ApiConfigRepo(f.native.db).getById(row.configId);
+      final created = await backupLoopReal(
+        tester,
+        () => ApiConfigRepo(f.native.db).getById(row.configId),
+      );
       expect(created, isNotNull);
       expect(created!.apiKey, isEmpty);
       expect(f.native.runtime.snapshot.preferences, original);
@@ -503,7 +566,15 @@ void main() {
       await loop.apply(tester);
       final reply = await loop.finish(tester);
       expect(reply.status, 'complete');
-      final recipe = await modelSourceRecipe(f, reply.id);
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          reply.id,
+          expectedVersion: 4,
+          expectedDisclosureCount: 5,
+        ),
+      );
       expect(recipe.toolDisclosures!.map((d) => d.domain.name), [
         'game',
         'game',
@@ -617,6 +688,9 @@ void main() {
       final accept = find.byKey(
         const ValueKey('support_tool_confirmation_accept'),
       );
+      final acceptButton = tester.widget<GlazeActionButton>(accept);
+      expect(acceptButton.maxLabelLines, isNull);
+      expect(acceptButton.onTap, isNotNull);
       final render = tester.renderObject<RenderParagraph>(
         find.descendant(
           of: accept,
@@ -625,7 +699,30 @@ void main() {
       );
       expect(render.didExceedMaxLines, isFalse);
       expect(render.maxLines, isNull);
-      expect(render.overflow, TextOverflow.clip);
+      expect(render.overflow, TextOverflow.visible);
+      // The kit deliberately paints an unbounded wrapping label. Its overflow
+      // enum alone proves neither clipping nor fit: check every laid-out glyph
+      // box inside the actual enabled button and mobile viewport.
+      expect(render.text.toPlainText(), acceptButton.label);
+      expect(acceptButton.busy, isFalse);
+      expect(accept.hitTestable(), findsOneWidget);
+      final buttonRect = tester.getRect(accept);
+      final viewport =
+          Offset.zero &
+          (tester.view.physicalSize / tester.view.devicePixelRatio);
+      final boxes = render.getBoxesForSelection(
+        TextSelection(baseOffset: 0, extentOffset: acceptButton.label.length),
+      );
+      expect(boxes, isNotEmpty);
+      for (final box in boxes) {
+        final rect = box.toRect();
+        final topLeft = render.localToGlobal(rect.topLeft);
+        final bottomRight = render.localToGlobal(rect.bottomRight);
+        expect(buttonRect.contains(topLeft), isTrue);
+        expect(buttonRect.contains(bottomRight), isTrue);
+        expect(viewport.contains(topLeft), isTrue);
+        expect(viewport.contains(bottomRight), isTrue);
+      }
       await loop.apply(tester);
       await loop.modal(tester);
       await loop.apply(tester);
@@ -638,7 +735,15 @@ void main() {
         ),
         isFalse,
       );
-      final recipe = await modelSourceRecipe(f, reply.id);
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          reply.id,
+          expectedVersion: 4,
+          expectedDisclosureCount: 5,
+        ),
+      );
       expect(
         recipe.originalRanges.every((r) => r.sessionId == f.native.session),
         isTrue,
@@ -666,7 +771,16 @@ void main() {
       ]) {
         expect(cachedWire, isNot(contains(value)));
       }
-      expect((await modelSourceRecipe(f, cached.id)).toolDisclosures, isEmpty);
+      final cachedRecipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          cached.id,
+          expectedVersion: 2,
+          expectedDisclosureCount: null,
+        ),
+      );
+      expect(cachedRecipe.toolDisclosures, isNull);
       expect(f.native.runtime.snapshot.preferences, originalPolicy);
       expect(f.native.runtime.epoch, epoch);
       for (final request in f.requests) {
@@ -769,7 +883,16 @@ void main() {
           find.byKey(const ValueKey('support_tool_confirmation_accept')),
           findsNothing,
         );
-        expect((await modelSourceRecipe(f, reply.id)).toolDisclosures, isEmpty);
+        final recipe = await backupLoopReal(
+          tester,
+          () => modelSourceRecipe(
+            f,
+            reply.id,
+            expectedVersion: 2,
+            expectedDisclosureCount: null,
+          ),
+        );
+        expect(recipe.toolDisclosures, isNull);
         expect(f.native.runtime.snapshot.preferences, originalPolicy);
         expect(f.native.runtime.epoch, epoch);
         _noExcluded(f);
@@ -784,7 +907,11 @@ void main() {
       final loop = SourceLoop(f);
       final bridge = f.bridge;
       final ui = loop.nativeUi(tester);
-      final emitter = loop.emitter(tester, ui: ui, visible: await _visible(f));
+      final emitter = loop.emitter(
+        tester,
+        ui: ui,
+        visible: await _visible(tester, f),
+      );
       SupportModelUiSend? originalSend;
       final interceptor = _StopAfterSourceCommit(() => originalSend!.stop());
       loop.script(
@@ -808,15 +935,24 @@ void main() {
       await loop.modal(tester, signal: signal);
       await loop.apply(tester);
       await loop.join(tester, signal);
-      final reply = (await f.native.repo.getMessagesForSession(
-        f.native.session,
+      final reply = (await backupLoopReal(
+        tester,
+        () => f.native.repo.getMessagesForSession(f.native.session),
       )).last;
       expect(interceptor.committedSourceWrites, 1);
       expect(reply.status, 'stopped');
       expect(bridge.view.busy, isFalse);
       expect(f.wire, hasLength(2));
       loop.noBody();
-      final recipe = await modelSourceRecipe(f, reply.id);
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          reply.id,
+          expectedVersion: 4,
+          expectedDisclosureCount: 1,
+        ),
+      );
       expect(recipe.toolDisclosures, hasLength(1));
       expect(
         recipe.toolDisclosures!.single.orderedSourceIds,
@@ -866,10 +1002,16 @@ void main() {
       final reply = await loop.finish(tester);
       expect(reply.status, 'error');
       expect(f.wire, hasLength(4));
-      expect(
-        (await modelSourceRecipe(f, reply.id)).toolDisclosures,
-        hasLength(2),
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          reply.id,
+          expectedVersion: 4,
+          expectedDisclosureCount: 2,
+        ),
       );
+      expect(recipe.toolDisclosures, hasLength(2));
       _noExcluded(f);
     },
   );
@@ -929,7 +1071,16 @@ void main() {
         find.byKey(const ValueKey('support_tool_confirmation_accept')),
         findsNothing,
       );
-      expect((await modelSourceRecipe(f, reply.id)).toolDisclosures, isEmpty);
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          reply.id,
+          expectedVersion: 2,
+          expectedDisclosureCount: null,
+        ),
+      );
+      expect(recipe.toolDisclosures, isNull);
       _noExcluded(f);
     },
   );
@@ -940,7 +1091,7 @@ void main() {
       await seedModelSources(tester, f, messages: 4);
       final loop = SourceLoop(f);
       final ui = loop.nativeUi(tester);
-      final emitter = loop.emitter(tester, visible: await _visible(f));
+      final emitter = loop.emitter(tester, visible: await _visible(tester, f));
       loop.script(
         loop.list('game', 'no_ui'),
         rounds: 2,
@@ -967,18 +1118,96 @@ void main() {
       loop.checkScript();
       loop.noBody();
       expect(f.wire, hasLength(2));
-      final reply = (await f.native.repo.getMessagesForSession(
-        f.native.session,
+      final reply = (await backupLoopReal(
+        tester,
+        () => f.native.repo.getMessagesForSession(f.native.session),
       )).last;
       expect(reply.status, 'error');
       expect(f.bridge.view.transportReason.name, 'denied');
+      expect(
+        reply.body,
+        isNot(contains('The original consent UI is unavailable.')),
+      );
       expect(
         reply.body,
         contains(
           'Источник недоступен для этого чтения; текст не передан модели',
         ),
       );
-      expect((await modelSourceRecipe(f, reply.id)).toolDisclosures, isEmpty);
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          reply.id,
+          expectedVersion: 2,
+          expectedDisclosureCount: null,
+        ),
+      );
+      expect(recipe.toolDisclosures, isNull);
+      expect(
+        find.byKey(const ValueKey('support_tool_confirmation_accept')),
+        findsNothing,
+      );
+      _noExcluded(f);
+      ui.dispose();
+    },
+  );
+
+  backupLoopTest(
+    'MODEL missing original native UI refuses body approval without source bodies or grants',
+    (tester, f) async {
+      await seedModelSources(tester, f, messages: 4);
+      final loop = SourceLoop(f);
+      final ui = loop.nativeUi(tester);
+      final emitter = loop.emitter(tester, visible: await _visible(tester, f));
+      loop.script(
+        loop.contents('unissued-source', 'no_ui_body'),
+        rounds: 2,
+        next: (_) {
+          // The registry must refuse absent authority before preparing a source
+          // or asking the engine for a grant, even with valid argument shape.
+          expect(loop.lastResult()['ok'], isFalse);
+          expect(loop.lastResult()['code'], 'unavailable');
+          expect(loop.lastResult()['effect'], 'none');
+          return SourceLoop.answer('No native body approval was available.');
+        },
+      );
+      final signal = await backupLoopReal(
+        tester,
+        () => BackupLoopSignal(
+          emitter
+              .send(
+                text: 'Read the game.',
+                draftRevision: 1,
+                isDraftCurrent: () => true,
+              )
+              .finished,
+        ),
+      );
+      await loop.join(tester, signal);
+      loop.checkScript();
+      loop.noBody();
+      expect(f.wire, hasLength(2));
+      final reply = (await backupLoopReal(
+        tester,
+        () => f.native.repo.getMessagesForSession(f.native.session),
+      )).last;
+      expect(reply.status, 'error');
+      expect(f.bridge.view.transportReason.name, 'denied');
+      expect(
+        reply.body,
+        isNot(contains('No native body approval was available.')),
+      );
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          reply.id,
+          expectedVersion: 2,
+          expectedDisclosureCount: null,
+        ),
+      );
+      expect(recipe.toolDisclosures, isNull);
       expect(
         find.byKey(const ValueKey('support_tool_confirmation_accept')),
         findsNothing,
@@ -1025,7 +1254,10 @@ void main() {
                       (i) => {
                         'id': 'model-source-$i',
                         'role': 'assistant',
-                        'content': '$sourceGameBody${'x' * 20000}',
+                        // Each saved message fits admission, but FOUR ordinary
+                        // complete payloads exceed the engine wire cap.
+                        'content':
+                            '$sourceGameBody${List.filled(17000, 'a').join()}',
                       },
                     ),
                   );
@@ -1034,11 +1266,17 @@ void main() {
               [json, sourceSession],
             );
             if (negative == 'oversizeRange') {
-              final result = await f.native.db.historySourceIndex.maintain(
-                sessionId: sourceSession,
-                isCurrent: () => true,
-              );
-              expect(result.state.name, 'ready');
+              final messages = jsonDecode(json) as List;
+              for (final message in messages) {
+                expect(
+                  utf8.encode(jsonEncode(message)).length,
+                  lessThan(65536),
+                );
+              }
+              final payloads = messages.map((m) => m['content'] as String);
+              // Unclipped bodies alone exceed the engine bound, even before
+              // JSON encoding or host-envelope escaping adds any overhead.
+              expect(utf8.encode(payloads.join()).length, greaterThan(65536));
             }
           });
         }
@@ -1056,9 +1294,23 @@ void main() {
             'DELETE FROM studio_preset_rows WHERE preset_id <> ?',
             [sourceStudio],
           );
+          if (negative == 'oversizeRange') {
+            // Prepare the final saved setup, after all source-row changes.
+            final result = await f.native.db.historySourceIndex.maintain(
+              sessionId: sourceSession,
+              isCurrent: () => true,
+            );
+            expect(result.state.name, 'ready');
+            final indexed = await f.native.db.historySourceIndex.observe(
+              sourceSession,
+            );
+            expect(indexed['status'], 'ready');
+            expect(indexed['activeCount'], 4);
+          }
         });
         final loop = SourceLoop(f);
         late String source;
+        var issuedOversizeRead = false;
         final fake =
             negative == 'forgedNativeId' || negative == 'legacyArgumentAlias';
         final initial = negative == 'legacyArgumentAlias'
@@ -1110,8 +1362,26 @@ void main() {
               );
             }
             if (negative == 'oversizeRange' && round == 3) {
-              await _durable(loop, 1);
+              final recipe = await _durable(loop, 1);
+              final disclosure = recipe.toolDisclosures!.single;
+              expect(disclosure.sourceId, sourceSession);
+              expect(disclosure.domain, SupportModelToolDisclosureDomain.game);
+              expect(
+                disclosure.operation,
+                SupportModelToolDisclosureOperation.contents,
+              );
+              expect(
+                disclosure.extent,
+                SupportModelToolDisclosureExtent.scopeMetadata,
+              );
+              expect(
+                disclosure.orderedSourceIds,
+                List.generate(4, (i) => 'model-source-$i'),
+              );
               final pieces = loop.body()['pieces'] as List;
+              expect(pieces, hasLength(4));
+              loop.noBody();
+              issuedOversizeRead = true;
               return loop.read(
                 source,
                 pieces[1]['selector'] as String,
@@ -1126,7 +1396,9 @@ void main() {
               'unsupportedStudio' ||
               'malformedStudio' ||
               'oversizeRange' => 'unavailable',
-              'legacyArgumentAlias' => 'invalidArguments',
+              'legacyArgumentAlias' ||
+              'historicalStudioSelector' ||
+              'forgedNativeId' => 'invalidArguments',
               _ => 'denied',
             });
             return SourceLoop.answer(
@@ -1141,6 +1413,21 @@ void main() {
         await loop.start(tester, confirmation: needsScope);
         if (needsScope) await loop.apply(tester);
         final reply = await loop.finish(tester);
+        if (negative == 'oversizeRange') {
+          expect(issuedOversizeRead, isTrue);
+          expect(f.wire, hasLength(4));
+          final calls = (f.wire.last['messages'] as List)
+              .where((m) => m['role'] == 'assistant' && m['tool_calls'] != null)
+              .expand((m) => m['tool_calls'] as List);
+          final read = calls.singleWhere(
+            (c) => c['id'] == 'oversize_structured_range',
+          );
+          expect(read['function']['name'], 'astoria_source_read');
+          final arguments =
+              jsonDecode(read['function']['arguments'] as String) as Map;
+          expect(arguments['before'], 1);
+          expect(arguments['after'], 2);
+        }
         expect(reply.status, 'error');
         expect(f.bridge.view.transportReason.name, 'denied');
         final nativeFailure = f.bridge.view.toolActivities.lastWhere(
@@ -1153,10 +1440,18 @@ void main() {
           isNot(contains('The source cannot be read safely;')),
         );
         loop.noBody();
-        expect(
-          (await modelSourceRecipe(f, reply.id)).toolDisclosures,
-          hasLength(negative == 'oversizeRange' || strictStudio ? 1 : 0),
+        // These failures retain accepted scope metadata, but no body. The
+        // other strict refusals never committed a disclosure at all.
+        final recipe = await backupLoopReal(
+          tester,
+          () => modelSourceRecipe(
+            f,
+            reply.id,
+            expectedVersion: needsScope ? 4 : 2,
+            expectedDisclosureCount: needsScope ? 1 : null,
+          ),
         );
+        expect(recipe.toolDisclosures, needsScope ? hasLength(1) : isNull);
         _noExcluded(f);
       },
     );
@@ -1243,7 +1538,7 @@ void main() {
         final emitter = loop.emitter(
           tester,
           ui: ui,
-          visible: await _visible(f),
+          visible: await _visible(tester, f),
         );
         final prefs = f.native.runtime.snapshot.preferences;
         final epoch = f.native.runtime.epoch;
@@ -1304,10 +1599,21 @@ void main() {
         await loop.apply(tester);
         final result = await loop.join(tester, signal);
         expect(result.saved, isTrue);
-        final all = await f.native.repo.getMessagesForSession(f.native.session);
+        final all = await backupLoopReal(
+          tester,
+          () => f.native.repo.getMessagesForSession(f.native.session),
+        );
         final reply = all.last;
         expect(reply.status, 'complete');
-        final next = await modelSourceRecipe(f, reply.id);
+        final next = await backupLoopReal(
+          tester,
+          () => modelSourceRecipe(
+            f,
+            reply.id,
+            expectedVersion: 4,
+            expectedDisclosureCount: operation == 'regenerate' ? 4 : 3,
+          ),
+        );
         expect(
           next.toolDisclosures,
           hasLength(operation == 'regenerate' ? 4 : 3),
@@ -1353,7 +1659,11 @@ void main() {
           isCurrent: () => true,
         ),
       ))!;
-      final emitter = loop.emitter(tester, ui: ui, visible: await _visible(f));
+      final emitter = loop.emitter(
+        tester,
+        ui: ui,
+        visible: await _visible(tester, f),
+      );
       loop.script(
         SourceLoop.call('astoria_preferences_update', {
           'hideTooltips': true,
@@ -1372,7 +1682,10 @@ void main() {
       expect(f.container.exists(supportAppActionRegistryProvider), isFalse);
       expect(f.wire.single['tools'], hasLength(4));
       expect(
-        (await f.container.read(appSettingsProvider.future)).hideTooltips,
+        (await backupLoopReal(
+          tester,
+          () => f.container.read(appSettingsProvider.future),
+        )).hideTooltips,
         isFalse,
       );
       expect(
