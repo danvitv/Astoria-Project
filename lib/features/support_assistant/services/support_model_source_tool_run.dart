@@ -371,11 +371,16 @@ final class _ModelSourceToolRun
 
   /// Actual ROOT validation is distinct from a POST: it must not charge a fake
   /// transmission or use withPost as a synthetic permission/check callback.
-  Future<bool> revalidate(void Function() checkpoint) async {
-    if (!_bound) return _admitted.isEmpty && current;
+  Future<bool> revalidate(
+    void Function() checkpoint, {
+    nav.SourceObservation? additionalSource,
+  }) async {
+    if (!_bound)
+      return additionalSource == null && _admitted.isEmpty && current;
     if (!await engine.revalidateForHost([
       ..._discovered,
       ..._admitted.map((e) => e.source),
+      if (additionalSource != null) additionalSource,
     ], checkpoint))
       return false;
     for (final entry in _admitted) {
@@ -466,7 +471,13 @@ final class _ModelSourceMetadata implements SupportAppMetadataPolicy {
 }
 
 extension _ModelSourceRootValidation on _ModelRun {
-  Future<bool> sourceToolsRevalidate(void Function() checkpoint) async =>
+  Future<bool> sourceToolsRevalidate(
+    void Function() checkpoint, {
+    nav.SourceObservation? additionalSource,
+  }) async =>
       originalSourceTools == null ||
-      await originalSourceTools!.revalidate(checkpoint);
+      await originalSourceTools!.revalidate(
+        checkpoint,
+        additionalSource: additionalSource,
+      );
 }

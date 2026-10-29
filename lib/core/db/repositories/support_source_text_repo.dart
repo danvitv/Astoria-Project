@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 
 import '../../credentials/secret_redactor.dart';
+import '../../models/support_text_context.dart';
 import '../../support/support_payload_cipher.dart';
 import '../../support/source_navigation.dart' as nav;
 import '../app_db.dart';

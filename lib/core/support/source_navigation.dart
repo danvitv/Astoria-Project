@@ -703,6 +703,22 @@ class _Retained {
   _Retained(this.source, this.grant, this.projection, this.entry);
 }
 
+/// Native-only, single-use batch created AFTER the original ROOT excludes
+/// writers. It owns no authorization or cached result. Unknown repositories use
+/// ordinary per-source revalidation instead; this is never a model parameter.
+abstract interface class OriginalRootRevalidation {
+  NavigationRepository get repository;
+  bool get isCurrent;
+  Future<bool> revalidate(List<SourceObservation> originals, WorkBound bound);
+}
+
+/// Implemented only by repositories that can establish their own native ROOT
+/// custody. The engine never accepts a caller-supplied scope or root boolean.
+abstract interface class OriginalRootNavigationRepository
+    implements NavigationRepository {
+  OriginalRootRevalidation? get currentOriginalRootRevalidation;
+}
+
 class SourceNavigationEngine {
   final RunContext run;
   final NavigationRepository repository;
@@ -755,18 +771,57 @@ class SourceNavigationEngine {
     void Function() checkpoint,
   ) async {
     try {
-      final checked = <SourceKey>{};
+      final native = repository;
+      final originalRoot = native is OriginalRootNavigationRepository
+          ? native.currentOriginalRootRevalidation
+          : null;
+      final checked = <SourceObservation>{};
+      final sources = <_SourceRef>[];
       for (final observation in observations) {
         checkpoint();
         _checkpoint();
-        if (!checked.add(observation.key)) continue;
         final source = _sources[observation.key];
         if (source == null || !identical(source.source, observation))
           return false;
-        await _fresh(source, source.grant);
+        if (!checked.add(observation)) continue;
+        sources.add(source);
+      }
+      if (originalRoot == null) {
+        for (final source in sources) {
+          await _fresh(source, source.grant);
+          checkpoint();
+          _checkpoint();
+        }
+        return true;
+      }
+      if (!identical(originalRoot.repository, repository) ||
+          !originalRoot.isCurrent)
+        return false;
+      void leases() {
         checkpoint();
         _checkpoint();
+        for (final source in sources) {
+          _sourceCurrent(source);
+          if (source.grant != null) _grantCurrent(source, source.grant!);
+        }
       }
+
+      leases();
+      if (sources.isNotEmpty) {
+        // ONE actual repository operation: the native fence is database-wide,
+        // with exact observation ownership checked on both sides of its awaits.
+        final valid = await _await(
+          () => originalRoot.revalidate(
+            List.unmodifiable(sources.map((s) => s.source)),
+            const WorkBound(),
+          ),
+          repo: true,
+        );
+        checkpoint();
+        _checkpoint();
+        if (!valid) return false;
+      }
+      leases();
       return true;
     } catch (_) {
       return false;
@@ -954,7 +1009,10 @@ class SourceNavigationEngine {
       'anchor': binding.anchor == null ? null : _anchor(binding.anchor!, key),
       if (binding.savedAnchor case final saved?)
         'savedAnchor': {
-          'message': _alias('${key.domain.name}:${key.nativeId}:message', saved.messageId),
+          'message': _alias(
+            '${key.domain.name}:${key.nativeId}:message',
+            saved.messageId,
+          ),
           'swipe': _alias('${key.nativeId}:swipe', saved.swipe),
           'agentSwipe': _alias('${key.nativeId}:agentSwipe', saved.agentSwipe),
         },
@@ -2053,11 +2111,18 @@ void _descriptor(SectionDescriptor descriptor, SourceDomain domain) {
 
 void _snapshotAnchor(SourceDomain domain, SourceState state, Binding binding) {
   if (domain != SourceDomain.ledgerSnapshot) return;
-  if (((state == SourceState.historicalCommitted || state == SourceState.tentative) &&
-          binding.anchor == null && binding.savedAnchor == null) ||
-      (state == SourceState.bootstrap && (binding.anchor != null || binding.savedAnchor != null)) ||
-      (binding.savedAnchor != null && binding.anchor == null &&
-          !const {EvidenceState.missing, EvidenceState.unknown}.contains(binding.evidence.state))) {
+  if (((state == SourceState.historicalCommitted ||
+              state == SourceState.tentative) &&
+          binding.anchor == null &&
+          binding.savedAnchor == null) ||
+      (state == SourceState.bootstrap &&
+          (binding.anchor != null || binding.savedAnchor != null)) ||
+      (binding.savedAnchor != null &&
+          binding.anchor == null &&
+          !const {
+            EvidenceState.missing,
+            EvidenceState.unknown,
+          }.contains(binding.evidence.state))) {
     throw const _Failure('unavailable');
   }
 }
@@ -2068,9 +2133,10 @@ void _checkBinding(Binding binding) {
     _privateId(saved.swipe);
     _privateId(saved.agentSwipe);
     final active = binding.anchor;
-    if (active != null && (active.messageId != saved.messageId ||
-        (active.swipe ?? '0') != saved.swipe ||
-        (active.agentSwipe ?? '0') != saved.agentSwipe)) {
+    if (active != null &&
+        (active.messageId != saved.messageId ||
+            (active.swipe ?? '0') != saved.swipe ||
+            (active.agentSwipe ?? '0') != saved.agentSwipe)) {
       throw const _Failure('unavailable');
     }
   }

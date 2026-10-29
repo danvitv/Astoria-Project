@@ -5,6 +5,7 @@ import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/ledger_reconciliation_run_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/history_source_index_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/support_source_text_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/support_text_context_repo.dart';
 import 'package:glaze_flutter/core/support/source_navigation.dart' as nav;
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 
@@ -337,6 +338,143 @@ void main() {
     await f.seed();
   });
   tearDown(() => f.close());
+
+  for (final mode in [
+    'fresh',
+    'mutation',
+    'ABA',
+    'forged',
+    'stop',
+    'reentry',
+    'unknown',
+  ]) {
+    test('original ROOT batch is single-use and fail-closed: $mode', () async {
+      await _allDomains(f);
+      await _index(f);
+      var current = true;
+      final repo = _repo(f, current: () => current);
+      final ordinary = (await repo.observe(
+        const nav.SourceKey(nav.SourceDomain.ordinaryPreset, 'same-id'),
+        _bound,
+      ))!;
+      final studio = (await repo.observe(
+        const nav.SourceKey(nav.SourceDomain.studioPreset, 'same-id'),
+        _bound,
+      ))!;
+      final history = SupportTextContextRepo(
+        db: f.db,
+        cipher: f.cipher,
+        currentRedactor: () => f.redactor,
+        admissionContract: mode == 'unknown'
+            ? null
+            : SupportTextAdmissionContract
+                  .auditedRootSingleConnectionNoBusyHandler,
+      );
+      var dispatched = 0, checks = 0;
+      nav.OriginalRootRevalidation? retained;
+      Future<bool> admit({bool attack = false}) => repo.admitOriginalRoot(
+        history: history,
+        snapshots: const [],
+        isCurrent: () => current,
+        checkReadOnly: (checkpoint) async {
+          checks++;
+          final batch = repo.currentOriginalRootRevalidation!;
+          expect(identical(batch, retained), isFalse);
+          retained = batch;
+          if (attack && mode == 'stop') current = false;
+          if (attack && mode == 'reentry') {
+            expect(
+              await repo.admitOriginalRoot(
+                history: history,
+                snapshots: const [],
+                isCurrent: () => current,
+                checkReadOnly: (_) async => true,
+                dispatch: () => dispatched++,
+              ),
+              isFalse,
+            );
+          }
+          final originals = [ordinary, studio, ordinary];
+          if (attack && mode == 'forged') {
+            originals.add(
+              nav.SourceObservation(
+                key: ordinary.key,
+                snapshot: ordinary.snapshot,
+                state: ordinary.state,
+                binding: ordinary.binding,
+                lease: ordinary.lease,
+              ),
+            );
+          }
+          // ROOT already acquired audited writer exclusion. Observe only the
+          // read-only batch, not its constant-false writer acquisition.
+          f.observe();
+          try {
+            final ok = await batch.revalidate(originals, _bound);
+            checkpoint();
+            if (ok) {
+              // Two independent observations share ONE operation and exactly
+              // its BEFORE/AFTER native SQL fences, not per-source calls.
+              expect(
+                f.spy.statements.where((s) => s.contains('schema_revision')),
+                hasLength(2),
+              );
+              final statements = f.spy.statements.length;
+              expect(batch.isCurrent, isFalse);
+              expect(await batch.revalidate(originals, _bound), isFalse);
+              expect(f.spy.statements, hasLength(statements));
+              checkpoint();
+            }
+            expect(f.spy.writes, 0);
+            return ok;
+          } finally {
+            f.stopObserving();
+          }
+        },
+        dispatch: () {
+          expect(repo.currentOriginalRootRevalidation, isNull);
+          expect(retained!.isCurrent, isFalse);
+          dispatched++;
+        },
+      );
+      if (mode == 'unknown') {
+        expect(await admit(), isFalse);
+        expect(checks, 0);
+        expect(dispatched, 0);
+        return;
+      }
+      await f.db.runWithInterceptor(() async {
+        expect(await admit(), isTrue);
+        expect(checks, 1);
+        expect(dispatched, 1);
+        // Retained reuse after ROOT closes must also do no SQL.
+        f.observe();
+        try {
+          expect(await retained!.revalidate([ordinary], _bound), isFalse);
+          expect(f.spy.statements, isEmpty);
+          expect(f.spy.writes, 0);
+        } finally {
+          f.stopObserving();
+        }
+      }, interceptor: f.spy);
+      if (mode == 'mutation' || mode == 'ABA') {
+        await f.db.customStatement(
+          "UPDATE presets SET name='changed' WHERE preset_id='same-id'",
+        );
+        if (mode == 'ABA') {
+          await f.db.customStatement(
+            "UPDATE presets SET name='Saved ordinary' WHERE preset_id='same-id'",
+          );
+        }
+      }
+      await f.db.runWithInterceptor(() async {
+        expect(await admit(attack: true), mode == 'fresh');
+      }, interceptor: f.spy);
+      expect(dispatched, mode == 'fresh' ? 2 : 1);
+      expect(repo.currentOriginalRootRevalidation, isNull);
+      expect(retained!.isCurrent, isFalse);
+    });
+  }
 
   test(
     'missing stored domains are empty, not fabricated current sources',

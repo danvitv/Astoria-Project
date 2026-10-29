@@ -482,6 +482,7 @@ void main() {
   backupLoopTest(
     'MODEL batched catalogs admit exact game and raw Studio dialect under separate real scopes',
     (tester, f) async {
+      const privateAgentId = 'PRIVATE_STUDIO_AGENT_CANARY_7C3E91B4';
       await seedModelSources(
         tester,
         f,
@@ -505,12 +506,16 @@ void main() {
               StudioPresetRowsCompanion(
                 agentsJson: Value(
                   jsonEncode([
-                    {'id': 'continuity', 'name': 'Continuity', 'enabled': true},
+                    {
+                      'id': privateAgentId,
+                      'name': 'Continuity',
+                      'enabled': true,
+                    },
                   ]),
                 ),
                 runtimeSettingsJson: Value(
                   jsonEncode({
-                    'agentEnabledBeforeDependencyOff': {'continuity': false},
+                    'agentEnabledBeforeDependencyOff': {privateAgentId: false},
                   }),
                 ),
               ),
@@ -582,11 +587,12 @@ void main() {
         'studioPreset',
         'studioPreset',
       ]);
+      expect(f.wire, hasLength(7));
       expect(jsonEncode(f.wire), contains(sourceGameBody));
       expect(jsonEncode(f.wire), contains(sourceStudioBody));
       expect(
         jsonEncode(f.wire),
-        isNot(contains('continuity')),
+        isNot(contains(privateAgentId)),
       ); // private reference id
       _noExcluded(f);
     },
@@ -763,7 +769,18 @@ void main() {
       await loop.start(tester, confirmation: false);
       final cached = await loop.finish(tester);
       expect(cached.status, 'complete');
-      final cachedWire = jsonEncode(f.wire.skip(cachedStart).toList());
+      final cachedRequests = f.wire.skip(cachedStart).toList();
+      expect(cachedRequests, hasLength(1));
+      for (final message in cachedRequests.single['messages'] as List) {
+        expect(message['role'], isNot('tool'));
+        expect(message['tool_calls'], isNull);
+      }
+      expect(f.bridge.view.toolActivities, isEmpty);
+      expect(
+        find.byKey(const ValueKey('support_tool_confirmation_accept')),
+        findsNothing,
+      );
+      final cachedWire = jsonEncode(cachedRequests);
       for (final value in [
         sourceGameBody,
         sourceStudioBody,
@@ -776,11 +793,25 @@ void main() {
         () => modelSourceRecipe(
           f,
           cached.id,
-          expectedVersion: 2,
-          expectedDisclosureCount: null,
+          expectedVersion: 4,
+          expectedDisclosureCount: 5,
         ),
       );
-      expect(cachedRecipe.toolDisclosures, isNull);
+      // Cached own-chat input retains historical provenance, not source bodies
+      // or fresh read authority. Preserve every original field and its order.
+      final retainedDisclosures = cachedRecipe.toolDisclosures!;
+      final originalDisclosures = recipe.toolDisclosures!;
+      expect(retainedDisclosures, hasLength(5));
+      for (var i = 0; i < originalDisclosures.length; i++) {
+        final retained = retainedDisclosures[i];
+        final original = originalDisclosures[i];
+        expect(retained.domain, original.domain);
+        expect(retained.sourceId, original.sourceId);
+        expect(retained.orderedSourceIds, original.orderedSourceIds);
+        expect(retained.snapshotDigest, original.snapshotDigest);
+        expect(retained.operation, original.operation);
+        expect(retained.extent, original.extent);
+      }
       expect(f.native.runtime.snapshot.preferences, originalPolicy);
       expect(f.native.runtime.epoch, epoch);
       for (final request in f.requests) {

@@ -237,8 +237,7 @@ final class _ModelSourceProvenance implements nav.ProvenancePort {
     if (!await run.admitOriginalRoot(
       capsuleCurrent: () =>
           entry.grant.lease.isCurrent() && entry.source.lease.isCurrent(),
-      additionalReadOnlyCheck: (checkpoint) =>
-          owner.engine.revalidateForHost([entry.source], checkpoint),
+      additionalSource: entry.source,
       dispatch: () {},
     )) {
       throw const SupportAppActionRefused(SupportAppActionCode.stale);

@@ -238,14 +238,9 @@ void main() {
         rounds: 2,
         next: (_) {
           replayPosts++;
-          // A changed source is rejected by original-ROOT admission before
-          // this callback can observe any replay POST, including a refusal.
-          expect(action, 'cancel');
-          expect(loop.lastResult()['ok'], isFalse);
-          expect(loop.lastResult()['effect'], 'none');
-          expect(loop.lastResult()['code'], 'denied');
-          expect(jsonEncode(f.wire), isNot(contains(title)));
-          return SourceLoop.answer('No local target was read or disclosed.');
+          // Cancel retires the source owner one-way; every terminal case must
+          // reject replay at original-ROOT admission, including a refusal.
+          throw TestFailure('Unexpected LOCAL $action replay POST');
         },
       );
       await loop.start(
@@ -329,8 +324,8 @@ void main() {
           isNot(contains('No local target was read or disclosed.')),
         );
       }
-      expect(f.wire, hasLength(action == 'cancel' ? 2 : 1));
-      expect(replayPosts, action == 'cancel' ? 1 : 0);
+      expect(f.wire, hasLength(1));
+      expect(replayPosts, 0);
       for (final request in f.wire) {
         expect(request['model'], f.native.api.model);
       }

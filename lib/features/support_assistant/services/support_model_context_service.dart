@@ -468,70 +468,84 @@ extension _ModelAdmission on _ModelRun {
   Future<bool> admitOriginalRoot({
     required bool Function() capsuleCurrent,
     required void Function() dispatch,
-    Future<bool> Function(void Function() checkpoint)? additionalReadOnlyCheck,
+    nav.SourceObservation? additionalSource,
   }) {
     final configuration = binding.configuration;
+    Future<bool> checkReadOnly(void Function() checkpoint) async {
+      admissionCheckpoint = checkpoint;
+      try {
+        final latest = await _ModelConfiguration.read(
+          operation,
+          sessionId,
+          checkpoint: checkpoint,
+          original: configuration,
+        );
+        checkpoint();
+        if (!configuration.sameAs(latest)) return false;
+        if (context!.custody.isNotEmpty &&
+            (!service._runtime.recipientConfirmed ||
+                !configuration.recipient.recipient.sameAs(
+                  binding.policy.recipient,
+                ))) {
+          return false;
+        }
+        for (final c in context!.custody) {
+          await authorization.consume(c.local, c.data, (_) {});
+          checkpoint();
+          await authorization.consume(c.model, c.data, (_) {});
+          checkpoint();
+        }
+        final user = await operation.checked(
+          () => operation.reader.getMessageById(userId),
+          checkpoint,
+        );
+        if (user != durableUser) return false;
+        if (isReattempt &&
+            !await operation.checked(
+              () => operation.reader.validateRegenerationPosition(
+                reply: expected!.message,
+                isCurrent: current,
+              ),
+              checkpoint,
+            )) {
+          return false;
+        }
+        final reply = await operation.checked(
+          () => operation.reader.getMessageById(replyId),
+          checkpoint,
+        );
+        final provenance = await operation.checked(
+          () => operation.reader.getContextBlockById(expected!.provenance.id),
+          checkpoint,
+        );
+        if (!await sourceToolsRevalidate(
+          checkpoint,
+          additionalSource: additionalSource,
+        ))
+          return false;
+        checkpoint();
+        return reply == expected!.message && provenance == expected!.provenance;
+      } finally {
+        admissionCheckpoint = null;
+      }
+    }
+
+    final sources = originalSourceTools;
+    if (sources != null) {
+      return sources.repo.admitOriginalRoot(
+        history: history,
+        snapshots: snapshots,
+        isCurrent: () => current() && capsuleCurrent(),
+        checkReadOnly: checkReadOnly,
+        dispatch: dispatch,
+      );
+    }
+    // No native source owner means no batch and no additional source admission.
+    if (additionalSource != null) return Future.value(false);
     return history.admitDispatch(
       snapshots: snapshots,
       isCurrent: () => current() && capsuleCurrent(),
-      checkReadOnly: (checkpoint) async {
-        admissionCheckpoint = checkpoint;
-        try {
-          final latest = await _ModelConfiguration.read(
-            operation,
-            sessionId,
-            checkpoint: checkpoint,
-            original: configuration,
-          );
-          checkpoint();
-          if (!configuration.sameAs(latest)) return false;
-          if (context!.custody.isNotEmpty &&
-              (!service._runtime.recipientConfirmed ||
-                  !configuration.recipient.recipient.sameAs(
-                    binding.policy.recipient,
-                  ))) {
-            return false;
-          }
-          for (final c in context!.custody) {
-            await authorization.consume(c.local, c.data, (_) {});
-            checkpoint();
-            await authorization.consume(c.model, c.data, (_) {});
-            checkpoint();
-          }
-          final user = await operation.checked(
-            () => operation.reader.getMessageById(userId),
-            checkpoint,
-          );
-          if (user != durableUser) return false;
-          if (isReattempt &&
-              !await operation.checked(
-                () => operation.reader.validateRegenerationPosition(
-                  reply: expected!.message,
-                  isCurrent: current,
-                ),
-                checkpoint,
-              )) {
-            return false;
-          }
-          final reply = await operation.checked(
-            () => operation.reader.getMessageById(replyId),
-            checkpoint,
-          );
-          final provenance = await operation.checked(
-            () => operation.reader.getContextBlockById(expected!.provenance.id),
-            checkpoint,
-          );
-          if (!await sourceToolsRevalidate(checkpoint)) return false;
-          if (additionalReadOnlyCheck != null &&
-              !await additionalReadOnlyCheck(checkpoint))
-            return false;
-          checkpoint();
-          return reply == expected!.message &&
-              provenance == expected!.provenance;
-        } finally {
-          admissionCheckpoint = null;
-        }
-      },
+      checkReadOnly: checkReadOnly,
       dispatch: dispatch,
     );
   }

@@ -5,7 +5,8 @@ part of '../support_source_text_repo.dart';
 /// The synchronous lease latches observed invalidation; it is NOT a synchronous
 /// external-writer detector. The host MUST exclude writes in its original ROOT
 /// and final synchronous ownership/POST gate after the last async revalidation.
-final class SupportSourceNavigationRepo implements nav.NavigationRepository {
+final class SupportSourceNavigationRepo
+    implements nav.OriginalRootNavigationRepository {
   SupportSourceNavigationRepo({
     required SupportSourceTextRepo boundary,
     required bool Function() isCurrent,
@@ -35,9 +36,56 @@ final class SupportSourceNavigationRepo implements nav.NavigationRepository {
   final Map<String, _NavCapture> _captures = {};
   int _captureBytes = 0;
   SupportSourceReadFailure? _failure;
+  _NavRootRevalidation? _rootValidation;
+  bool _rootAdmissionPending = false;
   SupportSourceReadFailure? get lastFailure => _failure;
 
   bool usesDatabase(AppDatabase db) => _boundary.usesDatabase(db);
+
+  @override
+  nav.OriginalRootRevalidation? get currentOriginalRootRevalidation =>
+      _rootValidation;
+
+  /// The native owner, not a caller boolean, establishes this batch's ROOT.
+  /// The history boundary rejects unknown/unaudited connections before invoking
+  /// checkReadOnly. No completed fence or permission survives the single batch.
+  Future<bool> admitOriginalRoot({
+    required SupportTextContextRepo history,
+    required List<SupportTextContextSnapshot> snapshots,
+    required bool Function() isCurrent,
+    required SupportTextAdmissionCheck checkReadOnly,
+    required void Function() dispatch,
+  }) async {
+    if (_rootAdmissionPending || _rootValidation != null || _busy) {
+      _retire();
+      return false;
+    }
+    if (!_alive() || !history.retainsNativeDataSource(_native!)) return false;
+    _rootAdmissionPending = true;
+    try {
+      return await history.admitDispatch(
+        snapshots: snapshots,
+        isCurrent: () => _alive() && isCurrent(),
+        checkReadOnly: (checkpoint) async {
+          checkpoint();
+          if (_rootValidation != null) _fail();
+          final validation = _NavRootRevalidation(this, checkpoint);
+          _rootValidation = validation;
+          try {
+            final valid = await checkReadOnly(checkpoint);
+            checkpoint();
+            return valid;
+          } finally {
+            validation._active = false;
+            _rootValidation = null;
+          }
+        },
+        dispatch: dispatch,
+      );
+    } finally {
+      _rootAdmissionPending = false;
+    }
+  }
 
   nav.FrozenScope? approvalScope(nav.SourceObservation observation) {
     final source = _owned(observation);
@@ -66,6 +114,7 @@ final class SupportSourceNavigationRepo implements nav.NavigationRepository {
     SupportReplySourceCommit commit,
   ) async {
     try {
+      if (_rootValidation != null) _fail();
       _guard();
       final previous = _fence;
       if (previous == null) return false;
@@ -194,6 +243,7 @@ final class SupportSourceNavigationRepo implements nav.NavigationRepository {
 
   void _retire() {
     _retired = true;
+    _rootValidation?._active = false;
     _failure ??= SupportSourceReadFailure.unavailable;
   }
 
@@ -212,6 +262,7 @@ final class SupportSourceNavigationRepo implements nav.NavigationRepository {
     _guard();
     final result = await _db.customSelect(sql, variables: variables).get();
     _guard();
+    _rootValidation?._check();
     return result;
   }
 
@@ -219,6 +270,7 @@ final class SupportSourceNavigationRepo implements nav.NavigationRepository {
     if (!_addressAttested) {
       if (!await _db.historySourceIndex.attestNavigation()) _fail();
       _guard();
+      _rootValidation?._check();
       _addressAttested = true;
     }
     final rows = await _sql(
@@ -242,6 +294,7 @@ final class SupportSourceNavigationRepo implements nav.NavigationRepository {
   }
 
   Future<T> _run<T>(nav.WorkBound bound, Future<T> Function() action) async {
+    if (_rootValidation != null && !_rootValidation!._running) _fail();
     if (_busy) _fail();
     _busy = true;
     try {
@@ -255,10 +308,13 @@ final class SupportSourceNavigationRepo implements nav.NavigationRepository {
         _fail();
       await _fresh();
       _guard();
+      _rootValidation?._check();
       final value = await action();
       _guard();
+      _rootValidation?._check();
       await _fresh();
       _guard();
+      _rootValidation?._check();
       return value;
     } on SupportSourceReadException catch (error) {
       _fail(error.failure);
@@ -348,6 +404,65 @@ final class SupportSourceNavigationRepo implements nav.NavigationRepository {
     nav.ReadQuery query,
     nav.WorkBound bound,
   ) => _run(bound, () => _read(_source(source, scope), scope, query, bound));
+}
+
+/// One joined native operation, not a memoization window around a callback.
+/// All observations share this repo's exact global fence; no per-source SQL is
+/// hidden in the loop. The ordinary revalidate API remains independently fresh.
+final class _NavRootRevalidation implements nav.OriginalRootRevalidation {
+  _NavRootRevalidation(this.repository, this._checkpoint);
+  @override
+  final SupportSourceNavigationRepo repository;
+  final void Function() _checkpoint;
+  bool _active = true, _used = false;
+  bool _running = false;
+  List<nav.SourceObservation> _originals = const [];
+
+  void _check() {
+    _checkpoint();
+    repository._guard();
+    if (!_active ||
+        !identical(repository._rootValidation, this) ||
+        _originals.any((o) => repository._owned(o) == null))
+      repository._fail();
+  }
+
+  @override
+  bool get isCurrent =>
+      _active &&
+      !_used &&
+      identical(repository._rootValidation, this) &&
+      repository._alive();
+
+  @override
+  Future<bool> revalidate(
+    List<nav.SourceObservation> originals,
+    nav.WorkBound bound,
+  ) async {
+    if (!isCurrent ||
+        originals.isEmpty ||
+        originals.length > nav.Limits.references)
+      return false;
+    _used = true;
+    _running = true;
+    _originals = List.unmodifiable(originals);
+    try {
+      _check();
+      final valid = await repository._run(bound, () async {
+        _check();
+        return true;
+      });
+      _check();
+      return valid;
+    } catch (_) {
+      repository._retire();
+      return false;
+    } finally {
+      _active = false;
+      _running = false;
+      _originals = const [];
+    }
+  }
 }
 
 final class _NavSource {
