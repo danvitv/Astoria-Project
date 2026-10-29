@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import '../../models/chat_message.dart';
 import '../../utils/cast_helpers.dart';
 import '../app_db.dart';
+import 'lorebook_use_manifest_repo.dart';
 
 /// A versioned, exact projection of one message variation.
 final class ReconciliationAnchor {
@@ -219,6 +220,42 @@ final class ReconciliationHeadInvalidationConflict
   const ReconciliationHeadInvalidationConflict(this.reason);
 
   final String reason;
+}
+
+/// One reconciliation run re-keyed from a source session into a branch.
+final class LedgerReconciliationBranchRunCopy {
+  const LedgerReconciliationBranchRunCopy({
+    required this.source,
+    required this.branch,
+  });
+
+  /// The source session's immutable row the copy was derived from.
+  final LedgerReconciliationSuccessfulRunRow source;
+
+  /// The durable branch row, with session-bound identities and hashes.
+  final LedgerReconciliationSuccessfulRunRow branch;
+}
+
+/// The reconciliation prefix transferred into a branch session, in branch
+/// ordinal order. Derived lanes (collectors, claims, observations) re-key
+/// their references through this mapping.
+final class LedgerReconciliationBranchTransfer {
+  const LedgerReconciliationBranchTransfer(this.copiedRuns);
+
+  final List<LedgerReconciliationBranchRunCopy> copiedRuns;
+
+  bool get isEmpty => copiedRuns.isEmpty;
+
+  /// Source run id -> transferred branch run row.
+  Map<String, LedgerReconciliationSuccessfulRunRow>
+  get branchRunBySourceId => {
+    for (final copy in copiedRuns) copy.source.id: copy.branch,
+  };
+
+  /// Source run ordinal -> branch run ordinal.
+  Map<int, int> get branchOrdinalBySourceOrdinal => {
+    for (final copy in copiedRuns) copy.source.ordinal: copy.branch.ordinal,
+  };
 }
 
 class LedgerReconciliationRunRepo {
@@ -567,68 +604,237 @@ class LedgerReconciliationRunRepo {
   }
 
   /// Rebuilds the transferable reconciliation prefix for a branched session.
-  /// Run identities and hashes bind the session id, so source rows must never
-  /// be copied directly. Runs with accepted lorebook refs remain fail-closed
-  /// until their complete source provenance can be re-keyed for the branch.
-  Future<void> copyForSessionBranch({
+  /// Run identities and hashes bind the session id, so source rows are never
+  /// copied directly: accepted refs are re-keyed to branch acceptance ids
+  /// and every hash is recomputed for the branch chain.
+  ///
+  /// The copied chain is a prefix: the first run whose anchors or accepted
+  /// refs leave [messageIds] (the branch transcript) stops the transfer. The
+  /// lorebook provenance for every copied ref is copied first through
+  /// [LorebookUseManifestRepo], because appended runs validate their refs
+  /// against the branch's durable provenance. Each copied run's exact effect
+  /// is copied with it, re-validated against its own state.
+  ///
+  /// Returns null when the source has no transferable history, otherwise the
+  /// transferred runs paired with their source rows so the caller can re-key
+  /// derived collector, claim, and observation lanes. The caller owns the
+  /// transaction; internal inconsistencies throw so a branch never commits
+  /// half-transferred.
+  Future<LedgerReconciliationBranchTransfer?> copyForSessionBranch({
     required String fromSessionId,
     required String toSessionId,
     required Set<String> messageIds,
   }) async {
-    if (messageIds.isEmpty) return;
+    if (messageIds.isEmpty) return null;
     final rows = await readSession(fromSessionId);
-    if (rows.isEmpty) return;
-    var predecessor = '';
-    var ordinal = 1;
+    if (rows.isEmpty) return null;
+
+    // Plan the copyable prefix first: provenance rows must exist before runs
+    // append, because append validates refs against branch evidence.
+    final planned = <_PlannedBranchRun>[];
+    final refCoordinates = <(String, int, int)>{};
+    final acceptanceIdMap = <String, String>{};
     for (final row in rows) {
       final anchors = _decodeAnchors(row.anchorsJson);
       final refs = _decodeRefs(row.acceptedManifestRefsJson);
-      if (!anchors.every((anchor) => messageIds.contains(anchor.messageId)) ||
-          refs.isNotEmpty) {
-        break;
+      final retained =
+          anchors.every((anchor) => messageIds.contains(anchor.messageId)) &&
+          refs.every(
+            (ref) =>
+                messageIds.contains(ref.messageId) &&
+                messageIds.contains(ref.acceptedByUserMessageId),
+          );
+      if (!retained) break;
+      final newRefs = <AcceptedManifestRef>[];
+      for (final ref in refs) {
+        final acceptanceId = 'variation:$toSessionId:${ref.messageId}';
+        acceptanceIdMap[ref.acceptanceId] = acceptanceId;
+        refCoordinates.add((ref.messageId, ref.swipeId, ref.agentSwipeId));
+        newRefs.add(
+          AcceptedManifestRef(
+            acceptanceId: acceptanceId,
+            sessionId: toSessionId,
+            messageId: ref.messageId,
+            swipeId: ref.swipeId,
+            agentSwipeId: ref.agentSwipeId,
+            manifestHash: ref.manifestHash,
+            acceptedByUserMessageId: ref.acceptedByUserMessageId,
+          ),
+        );
       }
       final result = jsonDecode(row.canonicalResultJson);
       final ops = jsonDecode(row.opsAppliedJson);
-      if (result is! Map<Object?, Object?> || ops is! List) break;
-      var run = LedgerReconciliationRun(
-        id: '',
-        sessionId: toSessionId,
-        ordinal: ordinal,
-        anchors: anchors,
-        acceptedManifestRefs: const [],
-        effectiveCanonStamp: row.effectiveCanonStamp,
-        effectiveCanonRevision: row.effectiveCanonRevision,
-        effectiveCanonHash: row.effectiveCanonHash,
-        canonicalResult: Map<String, dynamic>.from(result),
-        predecessorChainHash: predecessor,
-        contractVersion: row.contractVersion,
-        opsApplied: List<String>.from(ops),
-        createdAt: row.createdAt,
+      if (result is! Map<Object?, Object?> || ops is! List) {
+        throw StateError('source reconciliation run is malformed');
+      }
+      planned.add(
+        _PlannedBranchRun(
+          source: row,
+          anchors: anchors,
+          refs: newRefs,
+          result: Map<String, dynamic>.from(result),
+          ops: List<String>.from(ops),
+        ),
       );
-      run = LedgerReconciliationRun(
-        id: await allocateId(toSessionId, run.contentHash),
-        sessionId: run.sessionId,
-        ordinal: run.ordinal,
-        anchors: run.anchors,
-        acceptedManifestRefs: run.acceptedManifestRefs,
-        effectiveCanonStamp: run.effectiveCanonStamp,
-        effectiveCanonRevision: run.effectiveCanonRevision,
-        effectiveCanonHash: run.effectiveCanonHash,
-        canonicalResult: run.canonicalResult,
-        predecessorChainHash: run.predecessorChainHash,
-        contractVersion: run.contractVersion,
-        opsApplied: run.opsApplied,
-        createdAt: run.createdAt,
+    }
+    if (planned.isEmpty) return const LedgerReconciliationBranchTransfer([]);
+
+    await LorebookUseManifestRepo(_db).copyForSessionBranch(
+      fromSessionId: fromSessionId,
+      toSessionId: toSessionId,
+      coordinates: refCoordinates,
+      acceptanceIdMap: acceptanceIdMap,
+    );
+
+    final head = await _physicalHead(toSessionId);
+    var ordinal = head == null ? 1 : head.ordinal + 1;
+    var predecessor = head?.chainHash ?? '';
+    final copied = <LedgerReconciliationBranchRunCopy>[];
+    for (final plan in planned) {
+      final run = _withId(
+        LedgerReconciliationRun(
+          id: '',
+          sessionId: toSessionId,
+          ordinal: ordinal,
+          anchors: plan.anchors,
+          acceptedManifestRefs: plan.refs,
+          effectiveCanonStamp: plan.source.effectiveCanonStamp,
+          effectiveCanonRevision: plan.source.effectiveCanonRevision,
+          effectiveCanonHash: plan.source.effectiveCanonHash,
+          canonicalResult: plan.result,
+          predecessorChainHash: predecessor,
+          contractVersion: plan.source.contractVersion,
+          opsApplied: plan.ops,
+          createdAt: plan.source.createdAt,
+        ),
+        await allocateId(toSessionId, _contentHashOf(toSessionId, plan)),
       );
       final appended = await append(run);
       if (appended is! ReconciliationRunAppended &&
           appended is! ReconciliationRunIdempotent) {
-        break;
+        throw StateError(
+          'branch reconciliation transfer failed: '
+          '${_integrityReason(appended)}',
+        );
       }
-      predecessor = run.chainHash;
-      ordinal++;
+      final branch = await getByContentHash(
+        toSessionId,
+        run.contentHash,
+      );
+      if (branch == null) {
+        throw StateError('branch reconciliation transfer lost its head');
+      }
+      await _copyEffectForBranch(
+        source: plan.source,
+        branchRunId: branch.id,
+        toSessionId: toSessionId,
+      );
+      copied.add(
+        LedgerReconciliationBranchRunCopy(source: plan.source, branch: branch),
+      );
+      predecessor = branch.chainHash;
+      ordinal = branch.ordinal + 1;
     }
+    return LedgerReconciliationBranchTransfer(copied);
   }
+
+  /// The content hash a planned run will carry in the branch session. The id
+  /// is allocated from the content hash, which does not depend on the id.
+  String _contentHashOf(String toSessionId, _PlannedBranchRun plan) =>
+      LedgerReconciliationRun(
+        id: '',
+        sessionId: toSessionId,
+        ordinal: 1,
+        anchors: plan.anchors,
+        acceptedManifestRefs: plan.refs,
+        effectiveCanonStamp: plan.source.effectiveCanonStamp,
+        effectiveCanonRevision: plan.source.effectiveCanonRevision,
+        effectiveCanonHash: plan.source.effectiveCanonHash,
+        canonicalResult: plan.result,
+        predecessorChainHash: '',
+        contractVersion: plan.source.contractVersion,
+        opsApplied: plan.ops,
+        createdAt: plan.source.createdAt,
+      ).contentHash;
+
+  Future<void> _copyEffectForBranch({
+    required LedgerReconciliationSuccessfulRunRow source,
+    required String branchRunId,
+    required String toSessionId,
+  }) async {
+    final validation = await validateEffect(source);
+    if (validation is! ReconciliationEffectValid) {
+      throw StateError(
+        'branch transfer requires a valid effect for run ${source.id}',
+      );
+    }
+    final effect = (await readEffect(source.id))!;
+    final existing = await readEffect(branchRunId);
+    if (existing != null) {
+      final same =
+          existing.sessionId == toSessionId &&
+          existing.beforeLedgerJson == effect.beforeLedgerJson &&
+          existing.afterLedgerJson == effect.afterLedgerJson &&
+          existing.beforeKnowledgeJson == effect.beforeKnowledgeJson &&
+          existing.afterKnowledgeJson == effect.afterKnowledgeJson &&
+          existing.actualEffectsJson == effect.actualEffectsJson &&
+          existing.beforeStateHash == effect.beforeStateHash &&
+          existing.afterStateHash == effect.afterStateHash &&
+          existing.effectsHash == effect.effectsHash &&
+          existing.createdAt == effect.createdAt;
+      if (!same) {
+        throw StateError(
+          'branch effect replay differs from the source effect',
+        );
+      }
+      return;
+    }
+    await _db
+        .into(_db.ledgerReconciliationEffects)
+        .insert(
+          LedgerReconciliationEffectsCompanion.insert(
+            runId: branchRunId,
+            sessionId: toSessionId,
+            beforeLedgerJson: effect.beforeLedgerJson,
+            afterLedgerJson: effect.afterLedgerJson,
+            beforeKnowledgeJson: effect.beforeKnowledgeJson,
+            afterKnowledgeJson: effect.afterKnowledgeJson,
+            actualEffectsJson: effect.actualEffectsJson,
+            beforeStateHash: effect.beforeStateHash,
+            afterStateHash: effect.afterStateHash,
+            effectsHash: effect.effectsHash,
+            createdAt: effect.createdAt,
+          ),
+        );
+  }
+
+  static LedgerReconciliationRun _withId(
+    LedgerReconciliationRun run,
+    String id,
+  ) => LedgerReconciliationRun(
+    id: id,
+    sessionId: run.sessionId,
+    ordinal: run.ordinal,
+    anchors: run.anchors,
+    acceptedManifestRefs: run.acceptedManifestRefs,
+    effectiveCanonStamp: run.effectiveCanonStamp,
+    effectiveCanonRevision: run.effectiveCanonRevision,
+    effectiveCanonHash: run.effectiveCanonHash,
+    canonicalResult: run.canonicalResult,
+    predecessorChainHash: run.predecessorChainHash,
+    contractVersion: run.contractVersion,
+    opsApplied: run.opsApplied,
+    createdAt: run.createdAt,
+  );
+
+  static String _integrityReason(ReconciliationRunIntegrity integrity) =>
+      switch (integrity) {
+        ReconciliationRunMalformed(reason: final reason) => reason,
+        ReconciliationRunChainGap(reason: final reason) => reason,
+        ReconciliationRunConcurrencyConflict(reason: final reason) => reason,
+        ReconciliationRunConflict(reason: final reason) => reason,
+        _ => integrity.runtimeType.toString(),
+      };
 
   /// A head is authoritative only if the whole durable chain is canonical and
   /// the latest run remains valid in the public read projection.
@@ -1349,6 +1555,23 @@ final class _ReconciliationEvidence {
         user.$1 == assistant.$1 + 1 &&
         user.$2['role'] == 'user';
   }
+}
+
+/// A source run selected for branch transfer, fully decoded and re-keyed.
+final class _PlannedBranchRun {
+  const _PlannedBranchRun({
+    required this.source,
+    required this.anchors,
+    required this.refs,
+    required this.result,
+    required this.ops,
+  });
+
+  final LedgerReconciliationSuccessfulRunRow source;
+  final List<ReconciliationAnchor> anchors;
+  final List<AcceptedManifestRef> refs;
+  final Map<String, dynamic> result;
+  final List<String> ops;
 }
 
 bool _validAnchors(List<ReconciliationAnchor> anchors) =>

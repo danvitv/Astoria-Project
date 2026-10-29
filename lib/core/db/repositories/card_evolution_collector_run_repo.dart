@@ -496,4 +496,148 @@ class CardEvolutionCollectorRunRepo {
     }
     return rows;
   }
+
+  /// Transfers the completed collector journal and the delivered writer
+  /// boundary it proves into a branch session, so the automated writer does
+  /// not reset to zero and re-fire a duplicate card rewrite.
+  ///
+  /// A source collector is transferable when its boundary run was
+  /// transferred and that boundary still ends a complete branch batch: the
+  /// collector ordinal is the boundary ordinal divided by the batch size, so
+  /// a journal whose cadence no longer aligns is left for re-collection
+  /// instead of corrupting the lane. A native branch collector wins its
+  /// ordinal; an incompatible native row fails the branch transaction
+  /// because the collector lane would be wiped by the next batch read
+  /// anyway.
+  ///
+  /// Completed writer claims follow their boundary collector: the cursor is
+  /// re-keyed to the branch collector's chain hash. A branch claim already
+  /// holding the same input hash wins. The caller owns the transaction.
+  Future<void> copyForSessionBranch({
+    required String fromSessionId,
+    required String toSessionId,
+    required String toCharacterId,
+    required LedgerReconciliationBranchTransfer transfer,
+  }) async {
+    if (transfer.isEmpty) return;
+    final branchRuns = await LedgerReconciliationRunRepo(
+      db,
+    ).readSession(toSessionId);
+    final batchByBoundaryOrdinal = <int, CardEvolutionCollectorBatch>{};
+    for (
+      var index = 0;
+      index + collectorReconciliationBatchSize <= branchRuns.length;
+      index += collectorReconciliationBatchSize
+    ) {
+      final batch = CardEvolutionCollectorBatch(
+        branchRuns.sublist(index, index + collectorReconciliationBatchSize),
+      );
+      batchByBoundaryOrdinal[batch.boundary.ordinal] = batch;
+    }
+    final branchCollectorByOrdinal = {
+      for (final row in await (db.select(db.cardEvolutionCollectorRuns)
+            ..where((row) => row.sessionId.equals(toSessionId)))
+          .get())
+        row.collectorOrdinal: row,
+    };
+    final boundaryBySourceOrdinal = <int, CardEvolutionCollectorRunRow>{};
+    final sourceCollectors = await (db.select(db.cardEvolutionCollectorRuns)
+          ..where((row) => row.sessionId.equals(fromSessionId)))
+        .get();
+    for (final source in sourceCollectors) {
+      if (source.status != 'completed') continue;
+      final boundaryRun = transfer.branchRunBySourceId[
+          source.reconciliationRunId];
+      if (boundaryRun == null) continue;
+      final batch = batchByBoundaryOrdinal[boundaryRun.ordinal];
+      if (batch == null ||
+          batch.boundary.id != boundaryRun.id ||
+          boundaryRun.ordinal % collectorReconciliationBatchSize != 0) {
+        continue;
+      }
+      final collectorOrdinal =
+          boundaryRun.ordinal ~/ collectorReconciliationBatchSize;
+      final native = branchCollectorByOrdinal[collectorOrdinal];
+      if (native != null) {
+        if (native.reconciliationRunId != batch.boundary.id ||
+            native.reconciliationRunOrdinal != batch.boundary.ordinal ||
+            native.reconciliationChainHash != batch.boundary.chainHash ||
+            native.rangeHash != batch.rangeHash) {
+          throw StateError(
+            'native branch collector $collectorOrdinal is incompatible with '
+            'the transferred batch',
+          );
+        }
+        if (native.status == 'completed') {
+          boundaryBySourceOrdinal[source.collectorOrdinal] = native;
+        }
+        continue;
+      }
+      final id = 'evolution-collector-${generateId()}';
+      await db
+          .into(db.cardEvolutionCollectorRuns)
+          .insert(
+            CardEvolutionCollectorRunsCompanion.insert(
+              id: id,
+              sessionId: toSessionId,
+              characterId: toCharacterId,
+              collectorOrdinal: collectorOrdinal,
+              reconciliationRunId: batch.boundary.id,
+              reconciliationRunOrdinal: batch.boundary.ordinal,
+              reconciliationChainHash: batch.boundary.chainHash,
+              rangeHash: batch.rangeHash,
+              inputHash: source.inputHash,
+              ownerId: 'cloud-sync',
+              status: 'completed',
+              leaseExpiresAt: 0,
+              modelOutputHash: Value(source.modelOutputHash),
+              lastCallId: Value(source.lastCallId),
+              createdAt: source.createdAt,
+              completedAt: Value(source.completedAt),
+            ),
+          );
+      boundaryBySourceOrdinal[source.collectorOrdinal] =
+          (await getById(id))!;
+    }
+    final sourceClaims = await (db.select(db.cardEvolutionClaims)
+          ..where((row) => row.sessionId.equals(fromSessionId)))
+        .get();
+    for (final source in sourceClaims) {
+      if (source.status != 'completed' || source.predecessorRunOrdinal <= 0) {
+        continue;
+      }
+      final boundary = boundaryBySourceOrdinal[source.predecessorRunOrdinal];
+      if (boundary == null) continue;
+      final existing =
+          await (db.select(db.cardEvolutionClaims)..where(
+                (row) =>
+                    row.sessionId.equals(toSessionId) &
+                    row.inputHash.equals(source.inputHash),
+              ))
+              .getSingleOrNull();
+      if (existing != null) continue; // branch-native idempotency record wins
+      await db
+          .into(db.cardEvolutionClaims)
+          .insert(
+            CardEvolutionClaimsCompanion.insert(
+              id: 'evolution-claim-${generateId()}',
+              sessionId: toSessionId,
+              characterId: toCharacterId,
+              ownerId: source.ownerId,
+              status: 'completed',
+              leaseExpiresAt: 0,
+              chatHistoryHash: source.chatHistoryHash,
+              effectiveCanonIdentity: source.effectiveCanonIdentity,
+              predecessorCursorHash: boundary.reconciliationChainHash,
+              predecessorRunOrdinal: boundary.collectorOrdinal,
+              inputHash: source.inputHash,
+              selectedInputJson: Value(source.selectedInputJson),
+              writerOptionsJson: Value(source.writerOptionsJson),
+              rewriteJobId: Value(source.rewriteJobId),
+              createdAt: source.createdAt,
+              completedAt: Value(source.completedAt),
+            ),
+          );
+    }
+  }
 }

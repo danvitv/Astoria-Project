@@ -314,6 +314,161 @@ class LorebookUseManifestRepo {
             expected[i].evidenceJson == supplied[i].evidenceJson,
       );
 
+  /// Copies the immutable provenance rows for the referenced variation
+  /// coordinates into a branch session: the manifest, every derived entry,
+  /// and the authoritative variation acceptance, re-keyed to the branch.
+  ///
+  /// [acceptanceIdMap] carries the source acceptance id -> branch acceptance
+  /// id re-keying computed by the reconciliation transfer that selected these
+  /// coordinates. A row already present at a branch coordinate must be
+  /// exactly equal, otherwise the branch transaction fails closed. Selection
+  /// acceptances are supplemental source-side evidence and stay behind.
+  ///
+  /// Composes into the caller's transaction; this method never starts one.
+  Future<void> copyForSessionBranch({
+    required String fromSessionId,
+    required String toSessionId,
+    required Set<(String, int, int)> coordinates,
+    required Map<String, String> acceptanceIdMap,
+  }) async {
+    for (final (messageId, swipeId, agentSwipeId) in coordinates) {
+      final identity = LorebookUseGenerationIdentity(
+        sessionId: fromSessionId,
+        messageId: messageId,
+        swipeId: swipeId,
+        agentSwipeId: agentSwipeId,
+      );
+      final manifest = await manifestFor(identity);
+      if (manifest == null) {
+        throw const LorebookUseManifestIntegrityConflict(
+          'branch transfer requires the source manifest',
+        );
+      }
+      final branchIdentity = LorebookUseGenerationIdentity(
+        sessionId: toSessionId,
+        messageId: messageId,
+        swipeId: swipeId,
+        agentSwipeId: agentSwipeId,
+      );
+      final existingManifest = await manifestFor(branchIdentity);
+      if (existingManifest != null) {
+        if (existingManifest.manifestJson != manifest.manifestJson ||
+            existingManifest.manifestHash != manifest.manifestHash ||
+            existingManifest.manifestSchemaVersion !=
+                manifest.manifestSchemaVersion ||
+            existingManifest.finalPromptHash != manifest.finalPromptHash ||
+            existingManifest.presetSnapshotHash !=
+                manifest.presetSnapshotHash ||
+            existingManifest.createdAt != manifest.createdAt) {
+          throw const LorebookUseManifestIntegrityConflict(
+            'branch manifest replay differs from the immutable anchor',
+          );
+        }
+      } else {
+        await _db
+            .into(_db.lorebookUseManifests)
+            .insert(
+              LorebookUseManifestsCompanion.insert(
+                sessionId: toSessionId,
+                messageId: messageId,
+                swipeId: swipeId,
+                agentSwipeId: agentSwipeId,
+                manifestJson: Value(manifest.manifestJson),
+                manifestHash: Value(manifest.manifestHash),
+                manifestSchemaVersion: Value(manifest.manifestSchemaVersion),
+                finalPromptHash: Value(manifest.finalPromptHash),
+                presetSnapshotHash: Value(manifest.presetSnapshotHash),
+                createdAt: manifest.createdAt,
+              ),
+            );
+      }
+      final branchEntryByKey = {
+        for (final row in await getEvidence(branchIdentity))
+          (row.lorebookId, row.entryId, row.entryOrder): row,
+      };
+      for (final entry in await getEvidence(identity)) {
+        final existing =
+            branchEntryByKey[(entry.lorebookId, entry.entryId, entry.entryOrder)];
+        if (existing != null) {
+          if (existing.evidenceJson != entry.evidenceJson) {
+            throw const LorebookUseManifestIntegrityConflict(
+              'branch manifest entry replay differs from the manifest',
+            );
+          }
+          continue;
+        }
+        await _db
+            .into(_db.lorebookUseManifestEntries)
+            .insert(
+              LorebookUseManifestEntriesCompanion.insert(
+                sessionId: toSessionId,
+                messageId: messageId,
+                swipeId: swipeId,
+                agentSwipeId: agentSwipeId,
+                lorebookId: entry.lorebookId,
+                entryId: entry.entryId,
+                entryOrder: entry.entryOrder,
+                evidenceJson: Value(entry.evidenceJson),
+              ),
+            );
+      }
+      final acceptances =
+          await (_db.select(_db.lorebookUseAcceptanceRecords)
+                ..where((row) => row.sessionId.equals(fromSessionId))
+                ..where((row) => row.messageId.equals(messageId))
+                ..where((row) => row.swipeId.equals(swipeId))
+                ..where((row) => row.agentSwipeId.equals(agentSwipeId)))
+              .get();
+      for (final acceptance in acceptances) {
+        if (acceptance.acceptanceKind != 'variation') continue;
+        final newAcceptanceId = acceptanceIdMap[acceptance.acceptanceId];
+        if (newAcceptanceId == null) {
+          throw LorebookUseManifestIntegrityConflict(
+            'acceptance ${acceptance.acceptanceId} is not referenced by the '
+            'transferred runs',
+          );
+        }
+        final existing =
+            await (_db.select(_db.lorebookUseAcceptanceRecords)
+                  ..where((row) => row.acceptanceId.equals(newAcceptanceId)))
+                .getSingleOrNull();
+        if (existing != null) {
+          if (existing.sessionId != toSessionId ||
+              existing.messageId != messageId ||
+              existing.swipeId != swipeId ||
+              existing.agentSwipeId != agentSwipeId ||
+              existing.acceptanceKind != 'variation' ||
+              existing.acceptedByUserMessageId !=
+                  acceptance.acceptedByUserMessageId ||
+              existing.evidenceJson != acceptance.evidenceJson ||
+              existing.acceptedAt != acceptance.acceptedAt) {
+            throw const LorebookUseManifestIntegrityConflict(
+              'branch acceptance replay differs from immutable history',
+            );
+          }
+          continue;
+        }
+        await _db
+            .into(_db.lorebookUseAcceptanceRecords)
+            .insert(
+              LorebookUseAcceptanceRecordsCompanion.insert(
+                acceptanceId: newAcceptanceId,
+                sessionId: toSessionId,
+                messageId: messageId,
+                swipeId: swipeId,
+                agentSwipeId: agentSwipeId,
+                acceptanceKind: 'variation',
+                acceptedByUserMessageId: Value(
+                  acceptance.acceptedByUserMessageId,
+                ),
+                evidenceJson: Value(acceptance.evidenceJson),
+                acceptedAt: acceptance.acceptedAt,
+              ),
+            );
+      }
+    }
+  }
+
   Future<void> deleteBySessionId(String sessionId) async {
     await (_db.delete(
       _db.lorebookUseAcceptanceRecords,

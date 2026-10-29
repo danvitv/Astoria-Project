@@ -117,6 +117,16 @@ void main() {
       );
       final source = _run();
       expect(await repo.append(source), isA<ReconciliationRunAppended>());
+      // The transfer carries each run's exact effect, so the source needs a
+      // valid effect record before its run can cross into the branch.
+      final state = await repo.captureState('session');
+      await repo.recordEffect(
+        runId: source.id,
+        sessionId: 'session',
+        before: state,
+        after: state,
+        createdAt: 1,
+      );
 
       await repo.copyForSessionBranch(
         fromSessionId: 'session',
@@ -135,6 +145,269 @@ void main() {
       );
       expect(branchRows.single.sessionId, 'branch');
       expect(await repo.validateChain('branch'), isA<ReconciliationRunValid>());
+    },
+  );
+
+  test(
+    'branch copy re-keys accepted refs with complete provenance and hashes',
+    () async {
+      await _seedMultiMessageSession(db);
+      await _seedVariationAt(db, assistantId: 'a1', userId: 'u1');
+      await _seedVariationAt(db, assistantId: 'a2', userId: 'u2');
+      final refs1 = await repo.readAcceptedManifestRefs(
+        sessionId: 'session',
+        anchors: [_multiAnchor('a1', 'one')],
+      );
+      final refs2 = await repo.readAcceptedManifestRefs(
+        sessionId: 'session',
+        anchors: [_multiAnchor('a2', 'two')],
+      );
+      final run1 = await _appendMultiRun(db, 1, 'a1', 'one', '', refs: refs1);
+      final run2 = await _appendMultiRun(
+        db,
+        2,
+        'a2',
+        'two',
+        run1.chainHash,
+        refs: refs2,
+      );
+      await _appendMultiRun(db, 3, 'a3', 'three', run2.chainHash);
+      await _recordMultiRunEffect(db, run1);
+      await _recordMultiRunEffect(db, run2);
+      // The branch transcript keeps a1..u2; run 3 anchors a3, which leaves
+      // the retained set, so the copied chain must stop after run 2.
+      await _insertBranchSession(db, 'branch', _multiMessages.take(4).toList());
+
+      final transfer = await repo.copyForSessionBranch(
+        fromSessionId: 'session',
+        toSessionId: 'branch',
+        messageIds: const {'a1', 'u1', 'a2', 'u2'},
+      );
+
+      expect(transfer, isNotNull);
+      final copied = transfer!;
+      expect(copied.copiedRuns, hasLength(2));
+      expect(copied.copiedRuns.first.source.id, run1.id);
+      expect(copied.copiedRuns.last.source.id, run2.id);
+      expect(copied.branchOrdinalBySourceOrdinal, {1: 1, 2: 2});
+      final branchRows = await repo.readSession('branch');
+      expect(branchRows, hasLength(2));
+      expect(
+        jsonDecode(branchRows[0].acceptedManifestRefsJson),
+        [
+          {
+            'acceptanceId': 'variation:branch:a1',
+            'sessionId': 'branch',
+            'messageId': 'a1',
+            'swipeId': 0,
+            'agentSwipeId': 0,
+            'manifestHash': 'manifest-a1',
+            'acceptedByUserMessageId': 'u1',
+          },
+        ],
+      );
+      expect(
+        jsonDecode(branchRows[1].acceptedManifestRefsJson),
+        [
+          {
+            'acceptanceId': 'variation:branch:a2',
+            'sessionId': 'branch',
+            'messageId': 'a2',
+            'swipeId': 0,
+            'agentSwipeId': 0,
+            'manifestHash': 'manifest-a2',
+            'acceptedByUserMessageId': 'u2',
+          },
+        ],
+      );
+
+      // Complete provenance exists at the branch coordinates.
+      final branchManifests =
+          await (db.select(db.lorebookUseManifests)
+                ..where((row) => row.sessionId.equals('branch')))
+              .get();
+      expect(
+        branchManifests.map((row) => (row.messageId, row.manifestHash)),
+        containsAll(const [('a1', 'manifest-a1'), ('a2', 'manifest-a2')]),
+      );
+      final branchEntries =
+          await (db.select(db.lorebookUseManifestEntries)
+                ..where((row) => row.sessionId.equals('branch')))
+              .get();
+      expect(branchEntries, hasLength(2));
+      expect(
+        branchEntries.every((row) => row.evidenceJson == '{}'),
+        isTrue,
+      );
+      final branchAcceptances =
+          await (db.select(db.lorebookUseAcceptanceRecords)
+                ..where((row) => row.sessionId.equals('branch')))
+              .get();
+      expect(
+        branchAcceptances
+            .map(
+              (row) => (
+                row.acceptanceId,
+                row.acceptanceKind,
+                row.acceptedByUserMessageId,
+              ),
+            )
+            .toSet(),
+        {
+          ('variation:branch:a1', 'variation', 'u1'),
+          ('variation:branch:a2', 'variation', 'u2'),
+        },
+      );
+
+      // Chain hashes recompute exactly from the branch-bound projections.
+      var predecessor = '';
+      for (final (index, row) in branchRows.indexed) {
+        final anchors = jsonDecode(row.anchorsJson);
+        final refs = jsonDecode(row.acceptedManifestRefsJson);
+        final result = jsonDecode(row.canonicalResultJson);
+        final ops = jsonDecode(row.opsAppliedJson);
+        final rangeHash = computeHash(_canonicalJson(anchors));
+        final contentHash = computeHash(
+          _canonicalJson({
+            'anchorSchemaVersion': 1,
+            'sessionId': 'branch',
+            'anchors': anchors,
+            'rangeHash': rangeHash,
+            'acceptedManifestRefs': refs,
+            'effectiveCanonStamp': row.effectiveCanonStamp,
+            'effectiveCanonRevision': row.effectiveCanonRevision,
+            'effectiveCanonHash': row.effectiveCanonHash,
+            'canonicalResult': result,
+            'cleanupOps': ops,
+            'contractVersion': row.contractVersion,
+          }),
+        );
+        final chainHash = computeHash(
+          _canonicalJson({
+            'sessionId': 'branch',
+            'ordinal': row.ordinal,
+            'predecessorChainHash': predecessor,
+            'contentHash': contentHash,
+          }),
+        );
+        expect(row.rangeHash, rangeHash);
+        expect(row.contentHash, contentHash);
+        expect(row.chainHash, chainHash);
+        expect(row.predecessorChainHash, predecessor);
+        expect(row.id, 'reconciliation-$contentHash');
+        expect(row.createdAt, index == 0 ? run1.createdAt : run2.createdAt);
+        predecessor = chainHash;
+      }
+      expect(await repo.validateChain('branch'), isA<ReconciliationRunValid>());
+      // The source session keeps its own immutable history.
+      expect((await repo.readSession('session')).map((r) => r.id), [
+        run1.id,
+        run2.id,
+        'multi-run-3',
+      ]);
+    },
+  );
+
+  test(
+    'branch copy stops at the first run whose refs leave the branch',
+    () async {
+      await _seedMultiMessageSession(db);
+      await _seedVariationAt(db, assistantId: 'a1', userId: 'u1');
+      await _seedVariationAt(db, assistantId: 'a2', userId: 'u2');
+      final refs1 = await repo.readAcceptedManifestRefs(
+        sessionId: 'session',
+        anchors: [_multiAnchor('a1', 'one')],
+      );
+      final refs2 = await repo.readAcceptedManifestRefs(
+        sessionId: 'session',
+        anchors: [_multiAnchor('a2', 'two')],
+      );
+      final run1 = await _appendMultiRun(db, 1, 'a1', 'one', '', refs: refs1);
+      await _appendMultiRun(db, 2, 'a2', 'two', run1.chainHash, refs: refs2);
+      await _recordMultiRunEffect(db, run1);
+      // The branch transcript keeps a1, u1 and a2 but drops u2, the accepting
+      // user message of run 2's ref: run 2 is the first run that cannot be
+      // proven inside the branch.
+      await _insertBranchSession(db, 'branch', _multiMessages.take(3).toList());
+
+      final transfer = await repo.copyForSessionBranch(
+        fromSessionId: 'session',
+        toSessionId: 'branch',
+        messageIds: const {'a1', 'u1', 'a2'},
+      );
+
+      expect(transfer, isNotNull);
+      expect(transfer!.copiedRuns, hasLength(1));
+      expect(transfer.copiedRuns.single.source.id, run1.id);
+      final branchRows = await repo.readSession('branch');
+      expect(branchRows, hasLength(1));
+      expect(branchRows.single.startMessageId, 'a1');
+    },
+  );
+
+  test(
+    'branch copy carries exact effects and fails closed without one',
+    () async {
+      await _seedMultiMessageSession(db);
+      await _seedVariationAt(db, assistantId: 'a1', userId: 'u1');
+      final refs1 = await repo.readAcceptedManifestRefs(
+        sessionId: 'session',
+        anchors: [_multiAnchor('a1', 'one')],
+      );
+      final run1 = await _appendMultiRun(db, 1, 'a1', 'one', '', refs: refs1);
+      final run2 = await _appendMultiRun(db, 2, 'a2', 'two', run1.chainHash);
+      final run3 = await _appendMultiRun(db, 3, 'a3', 'three', run2.chainHash);
+      await _recordMultiRunEffect(db, run1);
+      await _recordMultiRunEffect(db, run2);
+      // run 3 has no exact effect: the whole transfer must fail closed.
+      await _insertBranchSession(db, 'branch', _multiMessages);
+
+      await expectLater(
+        db.transaction(() => repo.copyForSessionBranch(
+              fromSessionId: 'session',
+              toSessionId: 'branch',
+              messageIds: const {'a1', 'u1', 'a2', 'u2', 'a3', 'u3'},
+            )),
+        throwsStateError,
+      );
+      expect(await repo.readPhysicalSession('branch'), isEmpty);
+      expect(
+        await (db.select(db.lorebookUseManifests)
+              ..where((row) => row.sessionId.equals('branch')))
+            .get(),
+        isEmpty,
+      );
+
+      // With every effect present the copies validate against their state.
+      await _recordMultiRunEffect(db, run3);
+      final transfer = await repo.copyForSessionBranch(
+        fromSessionId: 'session',
+        toSessionId: 'branch',
+        messageIds: const {'a1', 'u1', 'a2', 'u2', 'a3', 'u3'},
+      );
+      expect(transfer, isNotNull);
+      final copied = transfer!;
+      expect(copied.copiedRuns, hasLength(3));
+      final branchRows = await repo.readSession('branch');
+      final sourceRows = await repo.readPhysicalSession('session');
+      for (final (index, branchRow) in branchRows.indexed) {
+        final sourceRow = sourceRows.singleWhere(
+          (row) => row.id == copied.copiedRuns[index].source.id,
+        );
+        final sourceEffect = (await repo.readEffect(sourceRow.id))!;
+        final branchEffect = await repo.readEffect(branchRow.id);
+        expect(branchEffect, isNotNull);
+        expect(branchEffect!.sessionId, 'branch');
+        expect(branchEffect.beforeLedgerJson, sourceEffect.beforeLedgerJson);
+        expect(branchEffect.afterLedgerJson, sourceEffect.afterLedgerJson);
+        expect(branchEffect.beforeStateHash, sourceEffect.beforeStateHash);
+        expect(branchEffect.afterStateHash, sourceEffect.afterStateHash);
+        expect(branchEffect.effectsHash, sourceEffect.effectsHash);
+        expect(
+          await repo.validateEffect(branchRow),
+          isA<ReconciliationEffectValid>(),
+        );
+      }
     },
   );
 
@@ -711,6 +984,158 @@ Future<void> _seedSession(AppDatabase db) => db.customStatement(
   "INSERT INTO chat_sessions (session_id, character_id, session_index, messages_json) "
   "VALUES ('session', 'character', 0, '[{\"id\":\"message\",\"role\":\"assistant\",\"content\":\"canonical\",\"swipes\":[\"canonical\"],\"agentSwipes\":[]},{\"id\":\"user\",\"role\":\"user\",\"content\":\"accepted\"}]')",
 );
+
+/// A six-message transcript: three accepted assistant variations.
+const _multiMessages = [
+  {
+    'id': 'a1',
+    'role': 'assistant',
+    'content': 'one',
+    'swipes': ['one'],
+    'agentSwipes': <Object>[],
+  },
+  {'id': 'u1', 'role': 'user', 'content': 'accept one'},
+  {
+    'id': 'a2',
+    'role': 'assistant',
+    'content': 'two',
+    'swipes': ['two'],
+    'agentSwipes': <Object>[],
+  },
+  {'id': 'u2', 'role': 'user', 'content': 'accept two'},
+  {
+    'id': 'a3',
+    'role': 'assistant',
+    'content': 'three',
+    'swipes': ['three'],
+    'agentSwipes': <Object>[],
+  },
+  {'id': 'u3', 'role': 'user', 'content': 'accept three'},
+];
+
+Future<void> _seedMultiMessageSession(AppDatabase db) => db.customStatement(
+  'INSERT INTO chat_sessions (session_id, character_id, session_index, '
+  'messages_json) VALUES (?, ?, 0, ?)',
+  ['session', 'character', jsonEncode(_multiMessages)],
+);
+
+Future<void> _insertBranchSession(
+  AppDatabase db,
+  String sessionId,
+  List<Map<String, Object?>> messages,
+) => db.customStatement(
+  'INSERT INTO chat_sessions (session_id, character_id, session_index, '
+  'messages_json) VALUES (?, ?, 1, ?)',
+  [sessionId, 'character', jsonEncode(messages)],
+);
+
+Future<void> _seedVariationAt(
+  AppDatabase db, {
+  required String assistantId,
+  required String userId,
+}) async {
+  await db.customStatement(
+    'INSERT INTO lorebook_use_manifests '
+    '(session_id, message_id, swipe_id, agent_swipe_id, manifest_json, '
+    'manifest_hash, manifest_schema_version, final_prompt_hash, '
+    'preset_snapshot_hash, created_at) '
+    "VALUES ('session', ?, 0, 0, '{}', ?, 1, 'prompt', 'preset', 1)",
+    [assistantId, 'manifest-$assistantId'],
+  );
+  await db.customStatement(
+    'INSERT INTO lorebook_use_manifest_entries '
+    '(session_id, message_id, swipe_id, agent_swipe_id, lorebook_id, '
+    'entry_id, entry_order, evidence_json) '
+    "VALUES ('session', ?, 0, 0, 'book', 'entry', 0, '{}')",
+    [assistantId],
+  );
+  await db.customStatement(
+    'INSERT INTO lorebook_use_acceptance_records '
+    '(acceptance_id, session_id, message_id, swipe_id, agent_swipe_id, '
+    'acceptance_kind, accepted_by_user_message_id, evidence_json, '
+    'accepted_at) '
+    "VALUES (?, 'session', ?, 0, 0, 'variation', ?, '{}', 1)",
+    ['variation:session:$userId', assistantId, userId],
+  );
+}
+
+ReconciliationAnchor _multiAnchor(String messageId, String content) =>
+    ReconciliationAnchor(
+      messageId: messageId,
+      swipeId: 0,
+      agentSwipeId: 0,
+      role: 'assistant',
+      contentHash: computeHash(content),
+    );
+
+Future<LedgerReconciliationRun> _appendMultiRun(
+  AppDatabase db,
+  int ordinal,
+  String anchorId,
+  String content,
+  String predecessor, {
+  List<AcceptedManifestRef>? refs,
+}) async {
+  final run = LedgerReconciliationRun(
+    id: 'multi-run-$ordinal',
+    sessionId: 'session',
+    ordinal: ordinal,
+    anchors: [_multiAnchor(anchorId, content)],
+    acceptedManifestRefs: refs ?? const [],
+    effectiveCanonStamp: 'stamp-$ordinal',
+    effectiveCanonRevision: 1,
+    effectiveCanonHash: 'canon-$ordinal',
+    canonicalResult: {'facts': ['fact-$ordinal']},
+    predecessorChainHash: predecessor,
+    contractVersion: 1,
+    opsApplied: const [],
+    createdAt: ordinal,
+  );
+  expect(
+    await LedgerReconciliationRunRepo(db).append(run),
+    isA<ReconciliationRunAppended>(),
+  );
+  return run;
+}
+
+Future<void> _recordMultiRunEffect(
+  AppDatabase db,
+  LedgerReconciliationRun run,
+) async {
+  final repo = LedgerReconciliationRunRepo(db);
+  final before = await repo.captureState('session');
+  await db
+      .into(db.trackerRows)
+      .insert(
+        TrackerRowsCompanion.insert(
+          sessionId: 'session',
+          name: 'world:entry-${run.ordinal}',
+          value: Value('value-${run.ordinal}'),
+          scope: const Value('ledger'),
+        ),
+      );
+  await repo.recordEffect(
+    runId: run.id,
+    sessionId: 'session',
+    before: before,
+    after: await repo.captureState('session'),
+    createdAt: run.createdAt,
+  );
+}
+
+/// Independently mirrors the repo's canonical JSON: sorted keys recursively,
+/// compact separators, so hash recomputation in tests does not reuse the
+/// production implementation.
+String _canonicalJson(Object? value) {
+  if (value is Map) {
+    final keys = value.keys.cast<String>().toList()..sort();
+    return '{${keys.map((key) => '${jsonEncode(key)}:${_canonicalJson(value[key])}').join(',')}}';
+  }
+  if (value is List) {
+    return '[${value.map(_canonicalJson).join(',')}]';
+  }
+  return jsonEncode(value);
+}
 
 Future<void> _seedVariationEvidence(
   AppDatabase db, {

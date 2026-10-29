@@ -409,13 +409,35 @@ class ChatSessionService {
             toSessionId: branch.id,
             messageIds: messageIds,
           );
-      await _ref
+      final reconciliationTransfer = await _ref
           .read(ledgerReconciliationRunRepoProvider)
           .copyForSessionBranch(
             fromSessionId: current.id,
             toSessionId: branch.id,
             messageIds: messageIds,
           );
+      if (reconciliationTransfer != null) {
+        // The branch inherits the collector journal and the delivered writer
+        // boundary the transferred runs prove, so the automated writer cannot
+        // re-fire a duplicate rewrite at boundary zero.
+        await _ref
+            .read(cardEvolutionCollectorRunRepoProvider)
+            .copyForSessionBranch(
+              fromSessionId: current.id,
+              toSessionId: branch.id,
+              toCharacterId: branch.characterId,
+              transfer: reconciliationTransfer,
+            );
+        await _ref
+            .read(cardEvolutionObservationRepoProvider)
+            .copyForSessionBranch(
+              fromSessionId: current.id,
+              toSessionId: branch.id,
+              toCharacterId: branch.characterId,
+              messageIds: messageIds,
+              transfer: reconciliationTransfer,
+            );
+      }
       await _ref
           .read(infoBlocksRepoProvider)
           .copyForSessionBranch(

@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 
 import '../../models/card_evolution_observation.dart';
+import '../../utils/cast_helpers.dart';
 import '../app_db.dart';
+import 'ledger_reconciliation_run_repo.dart';
 
 /// Repository for the Card Rewriter observation journal. Observations are
 /// session-scoped candidate durable changes recorded by the observation pass.
@@ -284,6 +286,95 @@ class CardEvolutionObservationRepo {
             .get();
     return [for (final row in rows) _toModel(row)];
   });
+
+  /// Copies observation journal rows whose evidence stays inside the branch
+  /// transcript into the branch session. Run ordinals are re-keyed through
+  /// the reconciliation transfer; ordinals beyond the transferred prefix
+  /// clamp to the nearest lower transferred run. Rows whose ordinals cannot
+  /// be mapped, and scope keys already occupied by a native branch
+  /// observation, are left behind — the observation journal is re-derivable
+  /// by later collector passes. New ids use the sync normalization, so the
+  /// branch row is byte-identical to what a sync merge would produce.
+  ///
+  /// The caller owns the transaction; this method never starts one.
+  Future<void> copyForSessionBranch({
+    required String fromSessionId,
+    required String toSessionId,
+    required String toCharacterId,
+    required Set<String> messageIds,
+    required LedgerReconciliationBranchTransfer transfer,
+  }) async {
+    final rows = await (db.select(db.cardEvolutionObservations)
+          ..where((row) => row.sessionId.equals(fromSessionId)))
+        .get();
+    if (rows.isEmpty) return;
+    final occupiedScopes = {
+      for (final row in await (db.select(db.cardEvolutionObservations)
+              ..where((row) => row.sessionId.equals(toSessionId)))
+          .get())
+        row.semanticScopeKey,
+    };
+    for (final row in rows) {
+      if (occupiedScopes.contains(row.semanticScopeKey)) continue;
+      final evidence = _decodeStringList(row.evidenceMessageIds);
+      if (evidence.isEmpty || !evidence.every(messageIds.contains)) continue;
+      final runOrdinal = _clampSourceOrdinal(transfer, row.runOrdinal);
+      final firstSeenRun = _clampSourceOrdinal(transfer, row.firstSeenRun);
+      final lastConfirmedRun = row.lastConfirmedRun == null
+          ? null
+          : _clampSourceOrdinal(transfer, row.lastConfirmedRun!);
+      if (runOrdinal == null || firstSeenRun == null) continue;
+      await db
+          .into(db.cardEvolutionObservations)
+          .insert(
+            CardEvolutionObservationsCompanion.insert(
+              id:
+                  'cloud-observation-'
+                  '${computeHash('$toSessionId\u001f${row.semanticScopeKey}')}',
+              sessionId: toSessionId,
+              characterId: toCharacterId,
+              runOrdinal: runOrdinal,
+              semanticScopeKey: row.semanticScopeKey,
+              observedChange: row.observedChange,
+              canonicalClaim: Value(row.canonicalClaim),
+              evidenceMessageIds: row.evidenceMessageIds,
+              evidenceClustersJson: Value(row.evidenceClustersJson),
+              retrievalKeysJson: Value(row.retrievalKeysJson),
+              targetKind: Value(row.targetKind),
+              cardFieldPath: Value(row.cardFieldPath),
+              lorebookEntryId: Value(row.lorebookEntryId),
+              confidence: row.confidence,
+              status: row.status,
+              firstSeenRun: firstSeenRun,
+              repeatCount: Value(row.repeatCount),
+              lastConfirmedRun: Value(lastConfirmedRun),
+              createdAt: row.createdAt,
+              updatedAt: row.updatedAt,
+            ),
+          );
+      occupiedScopes.add(row.semanticScopeKey);
+    }
+  }
+
+  /// Direct map when the source ordinal transferred; otherwise the nearest
+  /// lower transferred source ordinal's branch ordinal, mirroring the
+  /// bounded journal repair the reference branch surgery performs.
+  static int? _clampSourceOrdinal(
+    LedgerReconciliationBranchTransfer transfer,
+    int sourceOrdinal,
+  ) {
+    final mapping = transfer.branchOrdinalBySourceOrdinal;
+    final direct = mapping[sourceOrdinal];
+    if (direct != null) return direct;
+    int? nearestLower;
+    for (final source in mapping.keys) {
+      if (source < sourceOrdinal &&
+          (nearestLower == null || source > nearestLower)) {
+        nearestLower = source;
+      }
+    }
+    return nearestLower == null ? null : mapping[nearestLower];
+  }
 
   static CardEvolutionObservation _toModel(CardEvolutionObservationRow row) {
     final evidenceClusters = _decodeClusters(row.evidenceClustersJson);
