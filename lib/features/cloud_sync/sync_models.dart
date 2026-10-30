@@ -216,6 +216,7 @@ const String cloudRootFolderName = astoriaDataFolderName;
 /// — see `_channelSubfolder` in `dropbox_adapter.dart`.
 const String cloudBase = '/$cloudRootFolderName';
 
+/// Maximum UTF-8 size of a physical JSON sync file, not of a chunked aggregate.
 const int maxSyncPayloadBytes = 30 * 1024 * 1024;
 
 String cloudPath(String type, String id) {

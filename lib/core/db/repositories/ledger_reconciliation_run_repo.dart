@@ -247,8 +247,7 @@ final class LedgerReconciliationBranchTransfer {
   bool get isEmpty => copiedRuns.isEmpty;
 
   /// Source run id -> transferred branch run row.
-  Map<String, LedgerReconciliationSuccessfulRunRow>
-  get branchRunBySourceId => {
+  Map<String, LedgerReconciliationSuccessfulRunRow> get branchRunBySourceId => {
     for (final copy in copiedRuns) copy.source.id: copy.branch,
   };
 
@@ -259,8 +258,98 @@ final class LedgerReconciliationBranchTransfer {
 }
 
 class LedgerReconciliationRunRepo {
-  LedgerReconciliationRunRepo(this._db);
+  LedgerReconciliationRunRepo(this._db) : _syncSessionId = null;
+  LedgerReconciliationRunRepo._withSyncEvidence(
+    this._db,
+    this._syncSessionId,
+    this._syncMessages,
+  );
   final AppDatabase _db;
+  final String? _syncSessionId;
+  Map<String, (int, Map<Object?, Object?>)>? _syncMessages;
+
+  /// A caller-owned import transaction may reuse only transcript evidence.
+  /// Provenance is queried per run so newly merged acceptances are visible and
+  /// large manifest payloads are never retained across runs. The scoped repo
+  /// becomes unusable after the callback; no cache crosses a transaction.
+  Future<T> withSyncEvidence<T>(
+    String sessionId,
+    Future<T> Function(LedgerReconciliationRunRepo repo) consume,
+  ) async {
+    final scoped = LedgerReconciliationRunRepo._withSyncEvidence(
+      _db,
+      sessionId,
+      await _ReconciliationEvidence._loadMessages(_db, sessionId),
+    );
+    try {
+      return await consume(scoped);
+    } finally {
+      scoped._syncMessages = null;
+    }
+  }
+
+  Future<_ReconciliationEvidence> _evidenceForRun(
+    LedgerReconciliationRun run,
+  ) async {
+    if (_syncSessionId == null) {
+      return _ReconciliationEvidence.load(_db, run.sessionId);
+    }
+    if (_syncSessionId != run.sessionId || _syncMessages == null) {
+      throw StateError('Reconciliation evidence escaped its import scope');
+    }
+    final manifests = <(String, int, int), String>{};
+    final acceptances = <String, _ReconciliationAcceptanceEvidence>{};
+    final manifestTable = _db.lorebookUseManifests;
+    final acceptanceTable = _db.lorebookUseAcceptanceRecords;
+    for (final ref in run.acceptedManifestRefs) {
+      final manifest =
+          await (_db.selectOnly(manifestTable)
+                ..addColumns([manifestTable.manifestHash])
+                ..where(
+                  manifestTable.sessionId.equals(run.sessionId) &
+                      manifestTable.messageId.equals(ref.messageId) &
+                      manifestTable.swipeId.equals(ref.swipeId) &
+                      manifestTable.agentSwipeId.equals(ref.agentSwipeId),
+                ))
+              .getSingleOrNull();
+      if (manifest != null) {
+        manifests[(ref.messageId, ref.swipeId, ref.agentSwipeId)] = manifest
+            .read(manifestTable.manifestHash)!;
+      }
+      final acceptance =
+          await (_db.selectOnly(acceptanceTable)
+                ..addColumns([
+                  acceptanceTable.sessionId,
+                  acceptanceTable.messageId,
+                  acceptanceTable.swipeId,
+                  acceptanceTable.agentSwipeId,
+                  acceptanceTable.acceptanceKind,
+                  acceptanceTable.acceptedByUserMessageId,
+                ])
+                ..where(
+                  acceptanceTable.sessionId.equals(run.sessionId) &
+                      acceptanceTable.acceptanceId.equals(ref.acceptanceId),
+                ))
+              .getSingleOrNull();
+      if (acceptance != null) {
+        acceptances[ref.acceptanceId] = (
+          sessionId: acceptance.read(acceptanceTable.sessionId)!,
+          messageId: acceptance.read(acceptanceTable.messageId)!,
+          swipeId: acceptance.read(acceptanceTable.swipeId)!,
+          agentSwipeId: acceptance.read(acceptanceTable.agentSwipeId)!,
+          acceptanceKind: acceptance.read(acceptanceTable.acceptanceKind)!,
+          acceptedByUserMessageId: acceptance.read(
+            acceptanceTable.acceptedByUserMessageId,
+          ),
+        );
+      }
+    }
+    return _ReconciliationEvidence(
+      messages: _syncMessages!,
+      manifests: manifests,
+      acceptances: acceptances,
+    );
+  }
 
   Future<bool> anchorsMatchSession(LedgerReconciliationRun run) =>
       _anchorsMatchSession(run);
@@ -717,10 +806,7 @@ class LedgerReconciliationRunRepo {
           '${_integrityReason(appended)}',
         );
       }
-      final branch = await getByContentHash(
-        toSessionId,
-        run.contentHash,
-      );
+      final branch = await getByContentHash(toSessionId, run.contentHash);
       if (branch == null) {
         throw StateError('branch reconciliation transfer lost its head');
       }
@@ -783,9 +869,7 @@ class LedgerReconciliationRunRepo {
           existing.effectsHash == effect.effectsHash &&
           existing.createdAt == effect.createdAt;
       if (!same) {
-        throw StateError(
-          'branch effect replay differs from the source effect',
-        );
+        throw StateError('branch effect replay differs from the source effect');
       }
       return;
     }
@@ -1085,7 +1169,9 @@ class LedgerReconciliationRunRepo {
       );
     }
     final invalidatedIds = invalidated.map((row) => row.runId).toSet();
-    final evidence = await _ReconciliationEvidence.load(_db, sessionId);
+    final evidence = _syncSessionId == null
+        ? await _ReconciliationEvidence.load(_db, sessionId)
+        : null;
     final visible = <LedgerReconciliationSuccessfulRunRow>[];
     for (final row in rows) {
       if (invalidatedIds.contains(row.id)) continue;
@@ -1194,7 +1280,7 @@ class LedgerReconciliationRunRepo {
   ) async {
     final shape = _validateShape(run);
     if (shape is! ReconciliationRunValid) return shape;
-    final evidence = await _ReconciliationEvidence.load(_db, run.sessionId);
+    final evidence = await _evidenceForRun(run);
     if (!_anchorsMatchEvidence(run, evidence)) {
       return const ReconciliationRunMalformed(
         'message anchors do not match the current transcript',
@@ -1288,7 +1374,7 @@ class LedgerReconciliationRunRepo {
 
   Future<bool> _storedRowMatchesCurrentEvidence(
     LedgerReconciliationSuccessfulRunRow row, {
-    required _ReconciliationEvidence evidence,
+    required _ReconciliationEvidence? evidence,
   }) async {
     try {
       final anchors = _decodeAnchors(row.anchorsJson);
@@ -1311,8 +1397,9 @@ class LedgerReconciliationRunRepo {
         opsApplied: List<String>.from(ops),
         createdAt: row.createdAt,
       );
-      return _anchorsMatchEvidence(run, evidence) &&
-          _refsMatchEvidence(run, evidence, allowRetiredAcceptance: true);
+      final current = evidence ?? await _evidenceForRun(run);
+      return _anchorsMatchEvidence(run, current) &&
+          _refsMatchEvidence(run, current, allowRetiredAcceptance: true);
     } catch (_) {
       return false;
     }
@@ -1320,6 +1407,19 @@ class LedgerReconciliationRunRepo {
 
   Future<bool> _anchorsMatchSession(LedgerReconciliationRun run) async {
     try {
+      if (_syncSessionId != null) {
+        if (_syncSessionId != run.sessionId || _syncMessages == null) {
+          throw StateError('Reconciliation evidence escaped its import scope');
+        }
+        return _anchorsMatchEvidence(
+          run,
+          _ReconciliationEvidence(
+            messages: _syncMessages!,
+            manifests: const {},
+            acceptances: const {},
+          ),
+        );
+      }
       return _anchorsMatchEvidence(
         run,
         await _ReconciliationEvidence.messagesOnly(_db, run.sessionId),
@@ -1392,7 +1492,7 @@ class LedgerReconciliationRunRepo {
     for (final ref in run.acceptedManifestRefs) {
       final manifest =
           evidence.manifests[(ref.messageId, ref.swipeId, ref.agentSwipeId)];
-      if (manifest == null || manifest.manifestHash != ref.manifestHash) {
+      if (manifest == null || manifest != ref.manifestHash) {
         return false;
       }
       final accepted = evidence.acceptances[ref.acceptanceId];
@@ -1475,6 +1575,15 @@ class LedgerReconciliationRunRepo {
       row.createdAt == run.createdAt;
 }
 
+typedef _ReconciliationAcceptanceEvidence = ({
+  String sessionId,
+  String messageId,
+  int swipeId,
+  int agentSwipeId,
+  String acceptanceKind,
+  String? acceptedByUserMessageId,
+});
+
 final class _ReconciliationEvidence {
   const _ReconciliationEvidence({
     required this.messages,
@@ -1483,8 +1592,8 @@ final class _ReconciliationEvidence {
   });
 
   final Map<String, (int, Map<Object?, Object?>)> messages;
-  final Map<(String, int, int), LorebookUseManifestRow> manifests;
-  final Map<String, LorebookUseAcceptanceRecordRow> acceptances;
+  final Map<(String, int, int), String> manifests;
+  final Map<String, _ReconciliationAcceptanceEvidence> acceptances;
 
   static Future<_ReconciliationEvidence> load(
     AppDatabase db,
@@ -1507,9 +1616,19 @@ final class _ReconciliationEvidence {
       messages: indexedMessages,
       manifests: {
         for (final row in manifests)
-          (row.messageId, row.swipeId, row.agentSwipeId): row,
+          (row.messageId, row.swipeId, row.agentSwipeId): row.manifestHash,
       },
-      acceptances: {for (final row in acceptances) row.acceptanceId: row},
+      acceptances: {
+        for (final row in acceptances)
+          row.acceptanceId: (
+            sessionId: row.sessionId,
+            messageId: row.messageId,
+            swipeId: row.swipeId,
+            agentSwipeId: row.agentSwipeId,
+            acceptanceKind: row.acceptanceKind,
+            acceptedByUserMessageId: row.acceptedByUserMessageId,
+          ),
+      },
     );
   }
 

@@ -9,6 +9,7 @@ import 'sync_serialization.dart';
 import 'sync_character_hash.dart';
 import '../sync_models.dart';
 import '../sync_repo_interfaces.dart';
+import '../../../core/application/sync_reconciliation_source.dart';
 
 class SyncManifestBuilder implements SyncManifestProvider {
   final SyncCharacterStore _characterRepo;
@@ -498,11 +499,19 @@ class SyncManifestBuilder implements SyncManifestProvider {
     }
 
     if (_reconciliationStateStore != null) {
-      final sessionIds = await _reconciliationStateStore.getAllSessionIds();
+      final store = _reconciliationStateStore;
+      final sessionIds = await store.getAllSessionIds();
       for (final sessionId in sessionIds) {
-        final state = await _reconciliationStateStore.getBySessionId(sessionId);
-        if (state == null) continue;
-        final hash = SyncSerialization.computeSyncHash(state);
+        final String? hash;
+        if (store is SyncPagedReconciliationStateStore) {
+          hash = (await store.fingerprintBySessionId(sessionId))?.hash;
+        } else {
+          final state = await store.getBySessionId(sessionId);
+          hash = state == null
+              ? null
+              : SyncSerialization.computeSyncHash(state);
+        }
+        if (hash == null) continue;
         final key = entryKey('reconciliation_state', sessionId);
         final prevEntry = previous.entries[key];
         final cloudEntry = cloudManifest?.entries[key];

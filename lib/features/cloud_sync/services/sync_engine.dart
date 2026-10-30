@@ -11,6 +11,8 @@ import 'sync_conflict_diagnostics.dart';
 import 'sync_queue.dart';
 import 'sync_image_stripper.dart';
 import 'sync_serialization.dart';
+import 'sync_payload_transport.dart';
+import 'reconciliation_page_transport.dart';
 import 'sync_character_hash.dart';
 import 'sync_character_world_equivalence.dart';
 import 'sync_unordered_aggregate_bridge.dart';
@@ -32,6 +34,7 @@ import '../../../core/models/studio_agent_codec.dart';
 import '../../../core/models/studio_preset_codec.dart';
 import '../../../core/application/session_deletion_store.dart';
 import '../../../core/application/character_deletion_store.dart';
+import '../../../core/application/sync_reconciliation_source.dart';
 import '../../../shared/theme/theme_preset.dart';
 import '../sync_repo_interfaces.dart';
 import '../../../features/extensions/models/extension_preset.dart';
@@ -372,7 +375,7 @@ class SyncEngine {
             '__singleton': true,
             'items': apiPushSnapshot,
           });
-          if (payload.length > maxSyncPayloadBytes) {
+          if (utf8.encode(payload).length > maxSyncPayloadBytes) {
             throw StateError('API presets exceed sync payload limit');
           }
           await _adapter.upload(entry.path, payload);
@@ -954,8 +957,7 @@ class SyncEngine {
   Future<bool> _dependentStateMissing(SyncManifestEntry entry) async {
     switch (entry.type) {
       case 'reconciliation_state':
-        return await _reconciliationStateStore?.getBySessionId(entry.id) ==
-            null;
+        return !await _hasReconciliationState(entry.id);
       case 'session_lorebook_overlays':
         return await _sessionLorebookOverlayStore?.getBySessionId(entry.id) ==
             null;
@@ -1064,13 +1066,17 @@ class SyncEngine {
   }
 
   Future<void> _pushEntry(SyncManifestEntry entry) async {
+    final reconciliation = _reconciliationStateStore;
+    if (entry.type == 'reconciliation_state' &&
+        reconciliation is SyncPagedReconciliationStateStore) {
+      await ReconciliationPageTransport(
+        checkActive: _queue.captureActiveGuard(),
+      ).upload(_adapter, entry, reconciliation);
+      return;
+    }
     final data = await _readLocalEntity(entry.type, entry.id);
     if (data == null) return;
-    final json = jsonEncode(data);
-    if (json.length > maxSyncPayloadBytes) {
-      throw Exception('Payload exceeds limit for ${entry.key}');
-    }
-    await _adapter.upload(entry.path, json);
+    await SyncPayloadTransport.upload(_adapter, entry, data);
 
     if (entry.type == 'character') {
       await _binarySyncer.pushCharacterAvatar(entry.id);
@@ -1089,6 +1095,12 @@ class SyncEngine {
   Future<void> _pullEntry(SyncManifestEntry entry) async {
     if (entry.deleted) {
       await _deleteLocalEntity(entry.type, entry.id);
+      return;
+    }
+
+    if (entry.type == 'reconciliation_state' &&
+        _reconciliationStateStore is SyncPagedReconciliationStateStore) {
+      await _mergeReconciliationEntry(entry);
       return;
     }
 
@@ -1237,11 +1249,7 @@ class SyncEngine {
       case 'reconciliation_state':
         final store = _reconciliationStateStore;
         if (store == null) return false;
-        final cloudData = await SyncSerialization.readRequiredCloudEntity(
-          _adapter,
-          cloudEntry,
-        );
-        await store.mergeBySessionId(cloudEntry.id, cloudData);
+        await _mergeReconciliationEntry(cloudEntry);
         // This aggregate intentionally normalizes or discards stale derived
         // provenance. A successful merge is therefore semantic equality even
         // when the resulting canonical payload no longer has the cloud hash.
@@ -2149,7 +2157,7 @@ class SyncEngine {
           previouslyAccepted != null &&
           !previouslyAccepted.deleted &&
           previouslyAccepted.hash == entry.hash &&
-          (await store.getBySessionId(entry.id) != null ||
+          (await _hasReconciliationState(entry.id) ||
               previousManifest.acceptedLocalHashes[entry.key] == '') &&
           !await _manifestBuilder.isDeleted('chat', entry.id)) {
         continue;
@@ -2171,11 +2179,35 @@ class SyncEngine {
         );
         await _chatRepo.put(ChatSession.fromJson(chatData));
       }
-      final cloudData = await SyncSerialization.readRequiredCloudEntity(
+      await _mergeReconciliationEntry(entry);
+    }
+  }
+
+  Future<bool> _hasReconciliationState(String sessionId) async {
+    final store = _reconciliationStateStore;
+    if (store is SyncPagedReconciliationStateStore) {
+      return store.hasBySessionId(sessionId);
+    }
+    return await store?.getBySessionId(sessionId) != null;
+  }
+
+  Future<void> _mergeReconciliationEntry(SyncManifestEntry entry) async {
+    final store = _reconciliationStateStore;
+    if (store == null) return;
+    if (store is SyncPagedReconciliationStateStore) {
+      await ReconciliationPageTransport(
+        checkActive: _queue.captureActiveGuard(),
+      ).withDownloadedSource(
+        _adapter,
+        entry,
+        (source) => store.mergeFromSource(entry.id, source),
+      );
+    } else {
+      final data = await SyncSerialization.readRequiredCloudEntity(
         _adapter,
         entry,
       );
-      await store.mergeBySessionId(entry.id, cloudData);
+      await store.mergeBySessionId(entry.id, data);
     }
   }
 

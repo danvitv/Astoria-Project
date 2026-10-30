@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/application/sync_reconciliation_source.dart';
 import '../../../core/db/app_db.dart';
 import '../../../core/db/repositories/character_folder_repo.dart';
 import '../../../core/db/repositories/extension_presets_repository.dart';
@@ -21,6 +22,8 @@ import '../../extensions/models/extension_preset.dart';
 import '../../extensions/models/extensions_settings.dart';
 import '../../extensions/models/info_block.dart';
 import '../sync_repo_interfaces.dart';
+
+part 'reconciliation_paged_source.dart';
 
 // ---------------------------------------------------------------------------
 // ExtensionPresetSyncStore
@@ -820,10 +823,37 @@ class SessionLorebookOverlaySyncStore
 /// Merge-only adapter for immutable reconciliation history and its derived
 /// Card Evolution collector lane. Stale devices may contribute a prefix, but
 /// can never truncate or replace a chain that reaches farther in the chat.
-class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
+class ReconciliationStateSyncStore
+    implements SyncPagedReconciliationStateStore {
   ReconciliationStateSyncStore(this._db);
 
   final AppDatabase _db;
+
+  @override
+  Future<bool> hasBySessionId(String sessionId) async =>
+      await (_db.select(_db.ledgerReconciliationSuccessfulRuns)
+            ..where((row) => row.sessionId.equals(sessionId))
+            ..limit(1))
+          .getSingleOrNull() !=
+      null;
+
+  @override
+  Future<ReconciliationFingerprint?> fingerprintBySessionId(String sessionId) =>
+      withExportSnapshot(sessionId, ReconciliationJsonCodec.fingerprint);
+
+  @override
+  Future<T?> withExportSnapshot<T>(
+    String sessionId,
+    Future<T> Function(ReconciliationStateSource source) consume,
+  ) => _db.transaction(() async {
+    if (!await hasBySessionId(sessionId)) return null;
+    final source = _ReconciliationDatabaseSource(_db, sessionId);
+    try {
+      return await consume(source);
+    } finally {
+      source.close();
+    }
+  });
 
   @override
   Future<List<String>> getAllSessionIds() async {
@@ -930,66 +960,169 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
         data['sessionId'] != sessionId) {
       throw const FormatException('Invalid reconciliation sync payload');
     }
+    await mergeFromSource(sessionId, MapReconciliationStateSource(data));
+    return await getBySessionId(sessionId) ?? _emptyPayload(sessionId);
+  }
+
+  @override
+  Future<void> mergeFromSource(
+    String sessionId,
+    ReconciliationStateSource source,
+  ) async {
+    if (source.sessionId != sessionId ||
+        (source.schemaVersion != 1 && source.schemaVersion != 2)) {
+      throw const FormatException('Invalid reconciliation sync source');
+    }
+    final bounded = _BoundedReconciliationSource(source);
     await _db.transaction(() async {
-      final normalized = await _normalizeIncomingRuns(
-        sessionId,
-        _maps(data['runs']),
-        _maps(data['invalidations']),
-      );
-      final runDecision = await _resolveRunMerge(
-        sessionId,
-        normalized.runs,
-        normalized.invalidations,
-      );
-      if (runDecision == _RunMergeDecision.keepLocal) return;
-      if (runDecision == _RunMergeDecision.replaceLocal) {
-        await _clearReconciliationLane(sessionId);
-      }
-      await _mergeSourceRows(sessionId, data);
-      final importedComplete = await _mergeRuns(
-        sessionId,
-        normalized.runs,
-        normalized.invalidations,
-      );
-      if (importedComplete) {
-        await _mergeEffects(
+      final ReconciliationSourceGuard? guard =
+          source is ReconciliationSourceGuard
+          ? source as ReconciliationSourceGuard
+          : null;
+      guard?.checkCurrent();
+      await _checkLocalMetadataBudget(sessionId);
+      await LedgerReconciliationRunRepo(_db).withSyncEvidence(sessionId, (
+        repo,
+      ) async {
+        final normalized = await _normalizeIncomingRuns(
           sessionId,
-          schemaVersion == 2 ? _maps(data['effects']) : const [],
-          normalized.idMap,
+          await _readReconciliationMetadata(
+            bounded,
+            ReconciliationSection.runs,
+          ),
+          await _readReconciliationMetadata(
+            bounded,
+            ReconciliationSection.invalidations,
+          ),
+        );
+        final runDecision = await _resolveRunMerge(
+          sessionId,
+          normalized.runs,
+          normalized.invalidations,
+          repo,
+        );
+        if (runDecision == _RunMergeDecision.keepLocal) return;
+        if (runDecision == _RunMergeDecision.replaceLocal) {
+          await _clearReconciliationLane(sessionId);
+        }
+        await _mergeSourceRows(
+          sessionId,
+          bounded,
+          await _readAcceptingUsers(sessionId),
+        );
+        final importedComplete = await _mergeRuns(
+          sessionId,
+          normalized.runs,
+          normalized.invalidations,
+          repo,
+        );
+        if (importedComplete) {
+          await _mergeEffects(
+            sessionId,
+            source.schemaVersion == 2
+                ? bounded.readSection(ReconciliationSection.effects)
+                : const Stream<Map<String, dynamic>>.empty(),
+            normalized.idMap,
+          );
+        }
+        await _mergeInvalidations(
+          sessionId,
+          normalized.invalidations,
+          ignoreUnknown: !importedComplete,
+        );
+        await _checkLocalMetadataBudget(sessionId);
+        final collectors = normalized.identitiesChanged
+            ? <Map<String, dynamic>>[]
+            : await _readReconciliationMetadata(
+                bounded,
+                ReconciliationSection.collectors,
+              );
+        final resetDerivedLane = await _resetDerivedLaneForInvalidations(
+          sessionId,
+          collectors,
+          repo,
+        );
+        if (importedComplete) {
+          final mergeableCollectors = resetDerivedLane
+              ? await _withoutInvalidatedCollectors(sessionId, collectors, repo)
+              : collectors;
+          final collectorsValid = await _mergeCollectors(
+            sessionId,
+            mergeableCollectors,
+            repo,
+          );
+          if (collectorsValid) {
+            await _checkLocalMetadataBudget(sessionId);
+            if (!resetDerivedLane && !normalized.identitiesChanged) {
+              await _mergeObservations(
+                sessionId,
+                bounded.readSection(ReconciliationSection.observations),
+              );
+              await _mergeCompletedClaims(
+                sessionId,
+                bounded.readSection(ReconciliationSection.completedClaims),
+              );
+            }
+          }
+        }
+      });
+      // Compatible inputs can form a union larger than either input. Enforce
+      // the exact exported record/count/byte budgets BEFORE committing that
+      // union, reusing the same streaming encoder instead of a second schema.
+      guard?.checkCurrent();
+      final resultSource = _ReconciliationDatabaseSource(_db, sessionId);
+      try {
+        await ReconciliationJsonCodec.fingerprint(
+          resultSource,
+          onRow: (_, _) async => guard?.checkCurrent(),
+        );
+      } finally {
+        resultSource.close();
+      }
+      guard?.checkCurrent();
+    });
+  }
+
+  Future<void> _checkLocalMetadataBudget(String sessionId) async {
+    for (final table in [
+      _db.ledgerReconciliationSuccessfulRuns.actualTableName,
+      _db.ledgerReconciliationRunInvalidations.actualTableName,
+      _db.cardEvolutionCollectorRuns.actualTableName,
+    ]) {
+      final row = await _db
+          .customSelect(
+            'SELECT COUNT(*) AS count FROM $table WHERE session_id = ?',
+            variables: [Variable.withString(sessionId)],
+          )
+          .getSingle();
+      if (row.read<int>('count') > ReconciliationJsonCodec.maxRunRows) {
+        throw const FormatException(
+          'Reconciliation metadata exceeds row budget',
         );
       }
-      await _mergeInvalidations(
-        sessionId,
-        normalized.invalidations,
-        ignoreUnknown: !importedComplete,
-      );
-      final collectors = normalized.identitiesChanged
-          ? <Map<String, dynamic>>[]
-          : _maps(data['collectors']);
-      final resetDerivedLane = await _resetDerivedLaneForInvalidations(
-        sessionId,
-        collectors,
-      );
-      if (importedComplete) {
-        final mergeableCollectors = resetDerivedLane
-            ? await _withoutInvalidatedCollectors(sessionId, collectors)
-            : collectors;
-        final collectorsValid = await _mergeCollectors(
-          sessionId,
-          mergeableCollectors,
-        );
-        if (collectorsValid) {
-          if (!resetDerivedLane && !normalized.identitiesChanged) {
-            await _mergeObservations(sessionId, _maps(data['observations']));
-            await _mergeCompletedClaims(
-              sessionId,
-              _maps(data['completedClaims']),
+    }
+    var bytes = 0;
+    final source = _ReconciliationDatabaseSource(_db, sessionId);
+    try {
+      // Raw SQL string lengths miss JSON escaping. Stream one local record at
+      // a time to check the EXACT encoded budget before any bulk metadata read.
+      for (final section in [
+        ReconciliationSection.runs,
+        ReconciliationSection.invalidations,
+        ReconciliationSection.collectors,
+      ]) {
+        await for (final row in source.readLocalMetadata(section)) {
+          bytes += ReconciliationJsonCodec.encodeRow(row).length;
+          if (bytes > ReconciliationJsonCodec.maxMetadataBytes) {
+            throw const FormatException(
+              'Reconciliation metadata exceeds memory budget',
             );
           }
         }
       }
-    });
-    return await getBySessionId(sessionId) ?? _emptyPayload(sessionId);
+    } finally {
+      source.close();
+    }
   }
 
   Future<_NormalizedReconciliationPayload> _normalizeIncomingRuns(
@@ -1091,6 +1224,7 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
     String sessionId,
     List<Map<String, dynamic>> incoming,
     List<Map<String, dynamic>> incomingInvalidations,
+    LedgerReconciliationRunRepo repo,
   ) async {
     incoming.sort(
       (a, b) => (a['ordinal'] as int).compareTo(b['ordinal'] as int),
@@ -1114,9 +1248,7 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
     }
     if (!divergent) return _RunMergeDecision.merge;
 
-    final localVisible = await LedgerReconciliationRunRepo(
-      _db,
-    ).readSession(sessionId);
+    final localVisible = await repo.readSession(sessionId);
     final incomingInvalidatedIds = incomingInvalidations
         .map((row) => row['runId'] as String)
         .toSet();
@@ -1124,14 +1256,12 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
         .map(LedgerReconciliationSuccessfulRunRow.fromJson)
         .where((run) => !incomingInvalidatedIds.contains(run.id))
         .toList();
-    final repo = LedgerReconciliationRunRepo(_db);
-    final incomingMatchesChat = await Future.wait(
-      incomingVisible.map((row) => repo.anchorsMatchSession(_runFromRow(row))),
-    );
-    if (incomingMatchesChat.any((matches) => !matches)) {
-      return localVisible.isNotEmpty
-          ? _RunMergeDecision.keepLocal
-          : _RunMergeDecision.replaceLocal;
+    for (final row in incomingVisible) {
+      if (!await repo.anchorsMatchSession(_runFromRow(row))) {
+        return localVisible.isNotEmpty
+            ? _RunMergeDecision.keepLocal
+            : _RunMergeDecision.replaceLocal;
+      }
     }
     if (localVisible.isEmpty || incomingVisible.isEmpty) {
       if (incomingVisible.isNotEmpty) return _RunMergeDecision.replaceLocal;
@@ -1214,9 +1344,12 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
 
   Future<void> _mergeSourceRows(
     String sessionId,
-    Map<String, dynamic> data,
+    ReconciliationStateSource source,
+    Map<String, String?> acceptingUsers,
   ) async {
-    for (final json in _maps(data['manifests'])) {
+    await for (final json in source.readSection(
+      ReconciliationSection.manifests,
+    )) {
       final row = LorebookUseManifestRow.fromJson(json);
       _requireSession(sessionId, row.sessionId);
       final existing =
@@ -1233,7 +1366,9 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
         await _db.into(_db.lorebookUseManifests).insert(row);
       }
     }
-    for (final json in _maps(data['manifestEntries'])) {
+    await for (final json in source.readSection(
+      ReconciliationSection.manifestEntries,
+    )) {
       final row = LorebookUseManifestEntryRow.fromJson(json);
       _requireSession(sessionId, row.sessionId);
       final existing =
@@ -1253,75 +1388,75 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
         await _db.into(_db.lorebookUseManifestEntries).insert(row);
       }
     }
-    final acceptances = _maps(data['acceptances'])
-      ..sort((a, b) {
-        final aVariation = a['acceptanceKind'] == 'variation' ? 0 : 1;
-        final bVariation = b['acceptanceKind'] == 'variation' ? 0 : 1;
-        return aVariation.compareTo(bVariation);
-      });
-    for (final json in acceptances) {
-      final row = LorebookUseAcceptanceRecordRow.fromJson(json);
-      _requireSession(sessionId, row.sessionId);
-      final existingById =
-          await (_db.select(_db.lorebookUseAcceptanceRecords)
-                ..where((table) => table.acceptanceId.equals(row.acceptanceId)))
-              .getSingleOrNull();
-      _requireExact(existingById, row);
-
-      if (row.acceptanceKind == 'variation') {
-        final acceptingUserId = await _acceptingUserMessageId(
-          sessionId,
-          row.messageId,
-        );
-        final incomingValid = row.acceptedByUserMessageId == acceptingUserId;
-        if (existingById != null) {
-          if (incomingValid) continue;
-          await (_db.delete(_db.lorebookUseAcceptanceRecords)
-                ..where((table) => table.acceptanceId.equals(row.acceptanceId)))
-              .go();
-          await _deleteSelectionsAtCoordinate(row);
-          continue;
-        }
-        final existingAtCoordinate =
+    // Replaying the complete section twice guarantees that every variation
+    // exists before any selection, irrespective of physical page boundaries.
+    for (final variations in [true, false]) {
+      await for (final json in source.readSection(
+        ReconciliationSection.acceptances,
+      )) {
+        if ((json['acceptanceKind'] == 'variation') != variations) continue;
+        final row = LorebookUseAcceptanceRecordRow.fromJson(json);
+        _requireSession(sessionId, row.sessionId);
+        final existingById =
             await (_db.select(_db.lorebookUseAcceptanceRecords)..where(
-                  (table) =>
-                      table.sessionId.equals(row.sessionId) &
-                      table.messageId.equals(row.messageId) &
-                      table.swipeId.equals(row.swipeId) &
-                      table.agentSwipeId.equals(row.agentSwipeId) &
-                      table.acceptanceKind.equals('variation'),
+                  (table) => table.acceptanceId.equals(row.acceptanceId),
                 ))
                 .getSingleOrNull();
-        if (existingAtCoordinate != null) {
-          final localValid =
-              existingAtCoordinate.acceptedByUserMessageId == acceptingUserId;
-          if (localValid && !incomingValid) continue;
-          if (localValid &&
-              incomingValid &&
-              existingAtCoordinate.acceptanceId.compareTo(row.acceptanceId) <=
-                  0) {
-            continue;
-          }
-          await (_db.delete(_db.lorebookUseAcceptanceRecords)..where(
-                (table) => table.acceptanceId.equals(
-                  existingAtCoordinate.acceptanceId,
-                ),
-              ))
-              .go();
-          if (!incomingValid) {
+        _requireExact(existingById, row);
+
+        if (row.acceptanceKind == 'variation') {
+          final acceptingUserId = acceptingUsers[row.messageId];
+          final incomingValid = row.acceptedByUserMessageId == acceptingUserId;
+          if (existingById != null) {
+            if (incomingValid) continue;
+            await (_db.delete(_db.lorebookUseAcceptanceRecords)..where(
+                  (table) => table.acceptanceId.equals(row.acceptanceId),
+                ))
+                .go();
             await _deleteSelectionsAtCoordinate(row);
             continue;
           }
-        } else if (!incomingValid) {
-          await _deleteSelectionsAtCoordinate(row);
+          final existingAtCoordinate =
+              await (_db.select(_db.lorebookUseAcceptanceRecords)..where(
+                    (table) =>
+                        table.sessionId.equals(row.sessionId) &
+                        table.messageId.equals(row.messageId) &
+                        table.swipeId.equals(row.swipeId) &
+                        table.agentSwipeId.equals(row.agentSwipeId) &
+                        table.acceptanceKind.equals('variation'),
+                  ))
+                  .getSingleOrNull();
+          if (existingAtCoordinate != null) {
+            final localValid =
+                existingAtCoordinate.acceptedByUserMessageId == acceptingUserId;
+            if (localValid && !incomingValid) continue;
+            if (localValid &&
+                incomingValid &&
+                existingAtCoordinate.acceptanceId.compareTo(row.acceptanceId) <=
+                    0) {
+              continue;
+            }
+            await (_db.delete(_db.lorebookUseAcceptanceRecords)..where(
+                  (table) => table.acceptanceId.equals(
+                    existingAtCoordinate.acceptanceId,
+                  ),
+                ))
+                .go();
+            if (!incomingValid) {
+              await _deleteSelectionsAtCoordinate(row);
+              continue;
+            }
+          } else if (!incomingValid) {
+            await _deleteSelectionsAtCoordinate(row);
+            continue;
+          }
+        } else if (existingById != null) {
+          continue;
+        } else if (!await _hasVariationAtCoordinate(row)) {
           continue;
         }
-      } else if (existingById != null) {
-        continue;
-      } else if (!await _hasVariationAtCoordinate(row)) {
-        continue;
+        await _db.into(_db.lorebookUseAcceptanceRecords).insert(row);
       }
-      await _db.into(_db.lorebookUseAcceptanceRecords).insert(row);
     }
   }
 
@@ -1352,36 +1487,35 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
           ))
           .go();
 
-  Future<String?> _acceptingUserMessageId(
-    String sessionId,
-    String assistantMessageId,
-  ) async {
+  Future<Map<String, String?>> _readAcceptingUsers(String sessionId) async {
+    final result = <String, String?>{};
     final session = await (_db.select(
       _db.chatSessions,
     )..where((row) => row.sessionId.equals(sessionId))).getSingleOrNull();
-    if (session == null) return null;
+    if (session == null) return result;
     try {
       final messages = jsonDecode(session.messagesJson);
-      if (messages is! List) return null;
-      final assistantIndex = messages.indexWhere(
-        (message) => message is Map && message['id'] == assistantMessageId,
-      );
-      if (assistantIndex < 0 || assistantIndex + 1 >= messages.length) {
-        return null;
+      if (messages is! List) return result;
+      for (var i = 0; i < messages.length; i++) {
+        final message = messages[i];
+        if (message is! Map || message['id'] is! String) continue;
+        final id = message['id'] as String;
+        if (result.containsKey(id)) continue;
+        final next = i + 1 < messages.length ? messages[i + 1] : null;
+        result[id] =
+            next is Map && next['role'] == 'user' && next['id'] is String
+            ? next['id'] as String
+            : null;
       }
-      final next = messages[assistantIndex + 1];
-      return next is Map && next['role'] == 'user' && next['id'] is String
-          ? next['id'] as String
-          : null;
-    } catch (_) {
-      return null;
-    }
+    } catch (_) {}
+    return result;
   }
 
   Future<bool> _mergeRuns(
     String sessionId,
     List<Map<String, dynamic>> incoming,
     List<Map<String, dynamic>> incomingInvalidations,
+    LedgerReconciliationRunRepo repo,
   ) async {
     incoming.sort(
       (a, b) => (a['ordinal'] as int).compareTo(b['ordinal'] as int),
@@ -1400,7 +1534,6 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
         throw StateError('Divergent reconciliation chains for $sessionId');
       }
     }
-    final repo = LedgerReconciliationRunRepo(_db);
     final invalidations = {
       for (final json in incomingInvalidations)
         json['runId'] as String:
@@ -1426,20 +1559,22 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
 
   Future<void> _mergeEffects(
     String sessionId,
-    List<Map<String, dynamic>> incoming,
+    Stream<Map<String, dynamic>> incoming,
     Map<String, String> runIdMap,
   ) async {
-    final runs = {
-      for (final run in await (_db.select(
-        _db.ledgerReconciliationSuccessfulRuns,
-      )..where((row) => row.sessionId.equals(sessionId))).get())
-        run.id: run,
-    };
-    for (final json in incoming) {
+    await for (final json in incoming) {
       final original = LedgerReconciliationEffectRow.fromJson(json);
       _requireSession(sessionId, original.sessionId);
       final mappedRunId = runIdMap[original.runId];
-      if (mappedRunId == null || !runs.containsKey(mappedRunId)) {
+      final run = mappedRunId == null
+          ? null
+          : await (_db.select(_db.ledgerReconciliationSuccessfulRuns)..where(
+                  (row) =>
+                      row.sessionId.equals(sessionId) &
+                      row.id.equals(mappedRunId),
+                ))
+                .getSingleOrNull();
+      if (mappedRunId == null || run == null) {
         throw StateError('Reconciliation effect references an unknown run');
       }
       final row = original.copyWith(runId: mappedRunId);
@@ -1452,7 +1587,7 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
       }
       final validation = await LedgerReconciliationRunRepo(
         _db,
-      ).validateEffect(runs[mappedRunId]!);
+      ).validateEffect(run);
       if (validation is! ReconciliationEffectValid) {
         throw StateError('Invalid reconciliation effect payload');
       }
@@ -1495,12 +1630,13 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
   Future<bool> _resetDerivedLaneForInvalidations(
     String sessionId,
     List<Map<String, dynamic>> incomingCollectors,
+    LedgerReconciliationRunRepo repo,
   ) async {
     final invalidations = await (_db.select(
       _db.ledgerReconciliationRunInvalidations,
     )..where((row) => row.sessionId.equals(sessionId))).get();
     if (invalidations.isEmpty) return false;
-    final batches = await _currentCollectorBatches(sessionId);
+    final batches = await _currentCollectorBatches(sessionId, repo);
     final localCollectors = await (_db.select(
       _db.cardEvolutionCollectorRuns,
     )..where((row) => row.sessionId.equals(sessionId))).get();
@@ -1524,8 +1660,9 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
   Future<List<Map<String, dynamic>>> _withoutInvalidatedCollectors(
     String sessionId,
     List<Map<String, dynamic>> incoming,
+    LedgerReconciliationRunRepo repo,
   ) async {
-    final batches = await _currentCollectorBatches(sessionId);
+    final batches = await _currentCollectorBatches(sessionId, repo);
     return incoming
         .where(
           (row) =>
@@ -1537,8 +1674,9 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
 
   Future<Map<String, CardEvolutionCollectorBatch>> _currentCollectorBatches(
     String sessionId,
+    LedgerReconciliationRunRepo repo,
   ) async {
-    final runs = await LedgerReconciliationRunRepo(_db).readSession(sessionId);
+    final runs = await repo.readSession(sessionId);
     final result = <String, CardEvolutionCollectorBatch>{};
     for (
       var index = 0;
@@ -1556,8 +1694,8 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
   Future<bool> _mergeCollectors(
     String sessionId,
     List<Map<String, dynamic>> incoming,
+    LedgerReconciliationRunRepo runRepo,
   ) async {
-    final runRepo = LedgerReconciliationRunRepo(_db);
     final runs = await runRepo.readSession(sessionId);
     final batches = <String, CardEvolutionCollectorBatch>{};
     for (
@@ -1619,9 +1757,9 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
 
   Future<void> _mergeObservations(
     String sessionId,
-    List<Map<String, dynamic>> incoming,
+    Stream<Map<String, dynamic>> incoming,
   ) async {
-    for (final json in incoming) {
+    await for (final json in incoming) {
       final cloud = CardEvolutionObservationRow.fromJson(json);
       _requireSession(sessionId, cloud.sessionId);
       final local =
@@ -1686,44 +1824,44 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
         ..._strings(local.retrievalKeysJson),
         ..._strings(cloud.retrievalKeysJson),
       }.toList()..sort();
-      await (_db.update(
-        _db.cardEvolutionObservations,
-      )..where((row) => row.id.equals(local.id))).write(
-        CardEvolutionObservationsCompanion(
-          evidenceClustersJson: Value(jsonEncode(clusters)),
-          evidenceMessageIds: Value(jsonEncode(evidence.toList()..sort())),
-          retrievalKeysJson: Value(jsonEncode(retrievalKeys)),
-          runOrdinal: Value(
-            local.runOrdinal < cloud.runOrdinal
-                ? local.runOrdinal
-                : cloud.runOrdinal,
-          ),
-          repeatCount: Value(clusters.length),
-          firstSeenRun: Value(local.firstSeenRun),
-          lastConfirmedRun: Value(
-            _maxNullable(local.lastConfirmedRun, cloud.lastConfirmedRun),
-          ),
-          confidence: Value(
-            local.confidence > cloud.confidence
-                ? local.confidence
-                : cloud.confidence,
-          ),
-          status: Value(_mergedObservationStatus(local.status, cloud.status)),
-          updatedAt: Value(
-            local.updatedAt > cloud.updatedAt
-                ? local.updatedAt
-                : cloud.updatedAt,
-          ),
+      final update = CardEvolutionObservationsCompanion(
+        evidenceClustersJson: Value(jsonEncode(clusters)),
+        evidenceMessageIds: Value(jsonEncode(evidence.toList()..sort())),
+        retrievalKeysJson: Value(jsonEncode(retrievalKeys)),
+        runOrdinal: Value(
+          local.runOrdinal < cloud.runOrdinal
+              ? local.runOrdinal
+              : cloud.runOrdinal,
+        ),
+        repeatCount: Value(clusters.length),
+        firstSeenRun: Value(local.firstSeenRun),
+        lastConfirmedRun: Value(
+          _maxNullable(local.lastConfirmedRun, cloud.lastConfirmedRun),
+        ),
+        confidence: Value(
+          local.confidence > cloud.confidence
+              ? local.confidence
+              : cloud.confidence,
+        ),
+        status: Value(_mergedObservationStatus(local.status, cloud.status)),
+        updatedAt: Value(
+          local.updatedAt > cloud.updatedAt ? local.updatedAt : cloud.updatedAt,
         ),
       );
+      ReconciliationJsonCodec.encodeRow(
+        _observationForSync(local.copyWithCompanion(update)),
+      );
+      await (_db.update(
+        _db.cardEvolutionObservations,
+      )..where((row) => row.id.equals(local.id))).write(update);
     }
   }
 
   Future<void> _mergeCompletedClaims(
     String sessionId,
-    List<Map<String, dynamic>> incoming,
+    Stream<Map<String, dynamic>> incoming,
   ) async {
-    for (final json in incoming) {
+    await for (final json in incoming) {
       final row = CardEvolutionClaimRow.fromJson({
         ...json,
         'selectedInputJson': json['selectedInputJson'],
@@ -1887,9 +2025,6 @@ class ReconciliationStateSyncStore implements SyncReconciliationStateStore {
       createdAt: row.createdAt,
     );
   }
-
-  static List<Map<String, dynamic>> _maps(Object? value) =>
-      (value as List? ?? const []).cast<Map<String, dynamic>>();
 
   static List<String> _strings(String value) =>
       (jsonDecode(value) as List).cast<String>();

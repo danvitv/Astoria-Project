@@ -9,6 +9,7 @@ import '../../../features/extensions/models/info_block.dart';
 import '../../../features/image_gen/services/image_tag_markup.dart';
 import '../cloud_adapter.dart';
 import '../sync_models.dart';
+import 'sync_payload_transport.dart';
 
 class SyncSerialization {
   static const pipelineSettingsKey = 'pipelineSettings';
@@ -229,6 +230,15 @@ class SyncSerialization {
     try {
       await adapter.deleteFile(entry.path);
     } catch (_) {}
+    if (entry.type == 'reconciliation_state') {
+      // Only the owning entity's explicit tombstone deletes history parts.
+      // Ordinary updates retain parts so concurrent older readers stay valid.
+      for (final suffix in ['.pages', '.parts']) {
+        try {
+          await adapter.deleteFolder('${entry.path}$suffix');
+        } catch (_) {}
+      }
+    }
   }
 
   static Future<Map<String, dynamic>?> readCloudEntity(
@@ -236,14 +246,7 @@ class SyncSerialization {
     SyncManifestEntry entry,
   ) async {
     try {
-      final raw = await adapter.download(entry.path);
-      if (raw.isEmpty) return null;
-      if (raw.length > maxSyncPayloadBytes) {
-        throw Exception(
-          'Payload exceeds ${maxSyncPayloadBytes ~/ 1024 ~/ 1024}MB limit',
-        );
-      }
-      return jsonDecode(raw) as Map<String, dynamic>;
+      return await SyncPayloadTransport.download(adapter, entry);
     } catch (_) {
       return null;
     }
@@ -253,15 +256,6 @@ class SyncSerialization {
     CloudAdapter adapter,
     SyncManifestEntry entry,
   ) async {
-    final raw = await adapter.download(entry.path);
-    if (raw.isEmpty) {
-      throw StateError('Empty cloud entity: ${entry.key}');
-    }
-    if (raw.length > maxSyncPayloadBytes) {
-      throw Exception(
-        'Payload exceeds ${maxSyncPayloadBytes ~/ 1024 ~/ 1024}MB limit',
-      );
-    }
-    return jsonDecode(raw) as Map<String, dynamic>;
+    return SyncPayloadTransport.download(adapter, entry);
   }
 }

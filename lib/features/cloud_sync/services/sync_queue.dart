@@ -8,21 +8,35 @@ class SyncQueue {
   int _pendingCount = 0;
   bool _isPaused = false;
   bool _isAborted = false;
+  int _generation = 0;
 
   int get pendingCount => _pendingCount;
 
+  /// Multipart work must stop after Abort/Reset even when a newer sync has
+  /// already cleared the aborted flag. This guard owns one queue generation.
+  void Function() captureActiveGuard() {
+    final generation = _generation;
+    return () {
+      if (_isAborted || generation != _generation) {
+        throw StateError('Sync queue aborted');
+      }
+    };
+  }
+
   Future<T> enqueue<T>(Future<T> Function() operation, {String? label}) async {
+    final generation = _generation;
+    final checkActive = captureActiveGuard();
     while (_isPaused) {
       await Future<void>.delayed(const Duration(milliseconds: 100));
+      checkActive();
     }
-
-    if (_isAborted) throw Exception('Sync queue aborted');
+    checkActive();
 
     _pendingCount++;
     try {
-      return await _retryWithBackoff(operation, label);
+      return await _retryWithBackoff(operation, label, checkActive);
     } finally {
-      _pendingCount--;
+      if (generation == _generation) _pendingCount--;
     }
   }
 
@@ -33,13 +47,15 @@ class SyncQueue {
   }) async {
     final results = <int, T>{};
     final errors = <Object>[];
+    final checkActive = captureActiveGuard();
     var index = 0;
 
     Future<void> worker() async {
       while (index < tasks.length) {
-        if (_isAborted) throw Exception('Sync queue aborted');
+        checkActive();
         while (_isPaused) {
           await Future<void>.delayed(const Duration(milliseconds: 100));
+          checkActive();
         }
         final i = index++;
         if (i >= tasks.length) break;
@@ -49,6 +65,7 @@ class SyncQueue {
         } catch (e) {
           errors.add(e);
         }
+        checkActive();
         if (delayMs > 0 && index < tasks.length) {
           await Future<void>.delayed(Duration(milliseconds: delayMs));
         }
@@ -69,19 +86,24 @@ class SyncQueue {
   Future<T> _retryWithBackoff<T>(
     Future<T> Function() operation,
     String? label,
+    void Function() checkActive,
   ) async {
     var attempt = 0;
     while (true) {
       try {
-        if (_isAborted) throw Exception('Sync queue aborted');
-        return await operation();
+        checkActive();
+        final result = await operation();
+        checkActive();
+        return result;
       } catch (e) {
         attempt++;
         if (attempt >= _maxRetries || !_isRetryableError(e)) {
           rethrow;
         }
+        checkActive();
         final delay = _calculateDelay(attempt);
         await Future<void>.delayed(Duration(milliseconds: delay));
+        checkActive();
       }
     }
   }
@@ -110,8 +132,14 @@ class SyncQueue {
 
   void pause() => _isPaused = true;
   void resume() => _isPaused = false;
-  void abort() => _isAborted = true;
+  void abort() {
+    _isAborted = true;
+    _generation++;
+    _pendingCount = 0;
+  }
+
   void reset() {
+    _generation++;
     _isPaused = false;
     _isAborted = false;
     _pendingCount = 0;
