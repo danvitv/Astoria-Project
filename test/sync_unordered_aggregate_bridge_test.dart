@@ -402,25 +402,72 @@ void main() {
   });
 
   test(
-    'valid cloud payload hash mismatch blocks engine before uploads',
+    'torn cloud payload hash mismatch heals instead of blocking push',
     () async {
       final rig = _Rig();
       addTearDown(rig.db.close);
       await rig.seed();
-      await rig.publishLegacy();
+      final remote = await rig.publishLegacy();
       final path = cloudPath('character_knowledge', _session);
-      final payload =
-          jsonDecode(rig.cloud.files[path]!) as Map<String, dynamic>;
-      (payload['facts'] as List).removeLast();
-      rig.cloud.files[path] = jsonEncode(payload);
-      await expectLater(
-        rig.engine.pushEntities(onProgress: (_) {}),
-        throwsStateError,
+      // Simulate a torn push: this device's raw payload was already uploaded
+      // (as a real upload would), but the cloud manifest was never
+      // republished, so the manifest hash still describes the old payload.
+      rig.cloud.files[path] = jsonEncode(
+        await rig.payload('character_knowledge'),
       );
-      expect(rig.cloud.uploads, isEmpty);
+      await rig.engine.pushEntities(onProgress: (_) {});
+      // The push must heal the cloud instead of failing: the local entry stays
+      // authoritative and the republished manifest hash describes the
+      // uploaded payload. Acceptance markers, if any, must anchor this
+      // device's own local payload hash, never the stale cloud hash.
+      final localKnowledge = await rig.payload('character_knowledge');
+      final localGraph = await rig.payload('memory_graph');
+      final publishedAccepted =
+          (await rig.builder.readLocalManifest()).acceptedLocalHashes;
+      for (final key in [
+        entryKey('character_knowledge', _session),
+        entryKey('memory_graph', _session),
+      ]) {
+        final anchor = publishedAccepted[key];
+        if (anchor != null) {
+          expect(anchor != remote.entries[key]!.hash, isTrue);
+        }
+      }
       expect(
-        (await rig.builder.readLocalManifest()).acceptedLocalHashes,
-        isEmpty,
+        publishedAccepted.values.every(
+          (anchor) =>
+              anchor == SyncSerialization.computeSyncHash(localKnowledge) ||
+              anchor == SyncSerialization.computeSyncHash(localGraph),
+        ),
+        isTrue,
+      );
+      final manifest = SyncManifest.fromJson(
+        jsonDecode(rig.cloud.files[cloudPath('manifest', 'manifest')]!)
+            as Map<String, dynamic>,
+      );
+      final entry = manifest.entries[entryKey('character_knowledge', _session)]!;
+      expect(entry.hash, SyncSerialization.computeSyncHash(localKnowledge));
+      expect(
+        SyncSerialization.computeSyncHash(
+          jsonDecode(rig.cloud.files[entry.path]!),
+        ),
+        entry.hash,
+      );
+      // The healed cloud must survive repeat cycles unchanged: convergence
+      // behavior itself is covered by the permutation cycle tests above.
+      final publishedFile = rig.cloud.files[entry.path];
+      await rig.engine.pushEntities(onProgress: (_) {});
+      await rig.engine.pullEntities(
+        onProgress: (_) {},
+        onConflict: (_) => fail('conflict'),
+      );
+      expect(rig.cloud.files[entry.path], publishedFile);
+      expect(
+        SyncManifest.fromJson(
+          jsonDecode(rig.cloud.files[cloudPath('manifest', 'manifest')]!)
+              as Map<String, dynamic>,
+        ).entries[entry.key]!.hash,
+        entry.hash,
       );
     },
   );
@@ -778,12 +825,11 @@ void main() {
         readLocal: (type, id) async => rig.payload(type),
         isDeleted: (_, _) async => false,
       );
-      if (invalid == 'hash') {
-        await expectLater(bridge.bridge(local, cloud), throwsStateError);
-      } else {
-        final result = await bridge.bridge(local, cloud);
-        expect(result.acceptedLocalHashes.containsKey(entry.key), isFalse);
-      }
+      // The manifest hash can disagree with the payload bytes ('hash'):
+      // the bridge must refuse representation acceptance without failing
+      // the whole sync, so a torn push can heal on the next attempt.
+      final result = await bridge.bridge(local, cloud);
+      expect(result.acceptedLocalHashes.containsKey(entry.key), isFalse);
     });
   }
 }

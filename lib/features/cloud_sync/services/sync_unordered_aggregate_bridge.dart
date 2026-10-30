@@ -47,7 +47,11 @@ class SyncUnorderedAggregateBridge {
       try {
         raw = await download(remote.path);
       } on CloudFileNotFoundException {
-        throw StateError('Required aggregate cloud payload is missing');
+        // A manifest without its payload is the canonical torn-push state:
+        // the previous upload stopped between the payload and the manifest.
+        // Refuse representation acceptance and let the local entry publish,
+        // so the next push re-uploads the payload and heals the cloud.
+        continue;
       } catch (_) {
         throw StateError('Aggregate cloud payload download failed');
       }
@@ -67,7 +71,14 @@ class SyncUnorderedAggregateBridge {
       final remoteCanonical = _canonical(payload, remote);
       if (remoteCanonical == null) continue;
       if (SyncSerialization.computeSyncHash(payload) != remote.hash) {
-        throw StateError('Aggregate cloud payload fingerprint mismatch');
+        // The payload disagrees with the hash the cloud manifest claims. That
+        // is either genuine tampering or - far more commonly - a torn push:
+        // this device already uploaded its payload, but the manifest was not
+        // published. Both are resolved the same way: never accept the cloud
+        // entry as a representation match, keep the local hash authoritative,
+        // and let the push republish payload plus manifest. Failing the whole
+        // sync here would instead turn every torn push into a deadlock.
+        continue;
       }
       if (canonical != remoteCanonical) continue;
       entries[remote.key] = remote;
