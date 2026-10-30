@@ -120,7 +120,19 @@ class TrackerSnapshotSyncStore implements SyncAtomicTrackerSnapshotStore {
   @override
   Future<List<Map<String, dynamic>>> getBySessionId(String sessionId) async {
     final snapshots = await _repo.getBySessionId(sessionId);
-    return snapshots.map((s) => s.toJson()).toList();
+    // Generated snapshot.toJson() leaves Tracker objects in its nested list.
+    // The sync store exposes JSON values that can be decoded directly as well
+    // as encoded for upload/fingerprinting, without an implicit JSON roundtrip.
+    return snapshots
+        .map(
+          (snapshot) => {
+            ...snapshot.toJson(),
+            'trackers': snapshot.trackers
+                .map((tracker) => tracker.toJson())
+                .toList(),
+          },
+        )
+        .toList();
   }
 
   @override
