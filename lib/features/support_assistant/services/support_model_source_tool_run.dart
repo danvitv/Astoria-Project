@@ -265,46 +265,126 @@ final class _ModelSourceToolRun
     if (pieces.length != observations.length || pieces.length > 16) {
       throw const SupportAppActionRefused(SupportAppActionCode.denied);
     }
-    if (pieces.isEmpty) return result.wire;
-    var index = 0;
-    if (pieces.length > 1) {
+    if (pieces.isEmpty && result.wire['nextCursor'] == null) return result.wire;
+    var selectedResult = result;
+    Object? selectedPiece = pieces.isEmpty ? null : pieces.first;
+    nav.SourceObservation? observation = observations.isEmpty
+        ? null
+        : observations.first;
+    final needsSelection =
+        pieces.length > 1 || result.wire['nextCursor'] != null;
+    if (needsSelection) {
       final port = run.binding.toolUi?.sourceTargetSelection;
       if (port == null) {
         throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
       }
       final redactor = run.service._redaction.redactor;
-      final candidates = [
-        for (final observation in observations)
-          SupportSourceTargetCandidate(
-            observation: observation,
-            label: _safeText(
-              redactor,
-              repo.nativeLabel(observation) ?? observation.key.domain.name,
-              256,
-            ),
-            hint: _safeText(
-              redactor,
-              repo.nativeIdentityHint(observation),
-              256,
-            ),
-          ),
-      ];
-      final request = SupportSourceTargetSelectionRequest(
+      final issued =
+          Map<
+            SupportSourceTargetCandidate,
+            (nav.NavigationResult, Object?, nav.SourceObservation)
+          >.identity();
+      final pages =
+          Map<SupportSourceTargetPage, nav.NavigationResult>.identity();
+      List<SupportSourceTargetCandidate> candidatesFor(
+        nav.NavigationResult pageResult,
+      ) {
+        final native = repo.nativeDiscoveryCandidates;
+        final wirePieces = pageResult.wire['pieces'] as List;
+        if (wirePieces.length != native.length || native.length > 16) {
+          throw const SupportAppActionRefused(SupportAppActionCode.denied);
+        }
+        return [
+          for (var i = 0; i < native.length; i++)
+            () {
+              final observation = native[i];
+              final candidate = SupportSourceTargetCandidate(
+                observation: observation,
+                label: _safeText(
+                  redactor,
+                  repo.nativeLabel(observation) ?? observation.key.domain.name,
+                  256,
+                ),
+                hint: _safeText(
+                  redactor,
+                  repo.nativeIdentityHint(observation),
+                  256,
+                ),
+              );
+              issued[candidate] = (pageResult, wirePieces[i], observation);
+              return candidate;
+            }(),
+        ];
+      }
+
+      final candidates = candidatesFor(result);
+      var loading = false;
+      var closed = false;
+      late final SupportSourceTargetSelectionRequest request;
+      request = SupportSourceTargetSelectionRequest(
         context: context,
         callId: call.id,
         candidates: candidates,
+        hasNext: result.wire['nextCursor'] != null,
         isOriginalCurrent: () =>
-            original(context) && observations.every((o) => o.lease.isCurrent()),
+            !closed &&
+            original(context) &&
+            issued.values.every((v) => v.$3.lease.isCurrent()),
+        loadNext: (page) async {
+          check(context);
+          final previous = pages[page];
+          if (loading ||
+              closed ||
+              !request.current ||
+              previous == null ||
+              previous.wire['nextCursor'] is! String) {
+            throw const SupportAppActionRefused(SupportAppActionCode.denied);
+          }
+          loading = true;
+          try {
+            final next = await engine.invoke(
+              SupportSourceToolNames.list,
+              {...call.arguments, 'cursor': previous.wire['nextCursor']},
+              retryOrRegeneration: context.readOnlySources,
+            );
+            check(context);
+            if (closed || !request.current) {
+              throw const SupportAppActionRefused(SupportAppActionCode.stale);
+            }
+            if (next.wire['status'] != 'ok') {
+              _refuseNavigation(next.wire['status']);
+              return null;
+            }
+            final nativePage = SupportSourceTargetPage(
+              candidates: candidatesFor(next),
+              hasNext: next.wire['nextCursor'] != null,
+            );
+            pages[nativePage] = next;
+            return nativePage;
+          } finally {
+            loading = false;
+          }
+        },
       );
-      final selected = await port.selectSource(request);
-      check(context);
-      index = candidates.indexWhere((c) => identical(c, selected));
-      if (index < 0 || !request.current) {
-        repo.retire();
-        throw const SupportAppActionRefused(SupportAppActionCode.denied);
+      pages[request.initialPage] = result;
+      try {
+        final selected = await port.selectSource(request);
+        check(context);
+        final retained = issued[selected];
+        if (retained == null || !request.current || loading) {
+          repo.retire();
+          throw const SupportAppActionRefused(SupportAppActionCode.denied);
+        }
+        selectedResult = retained.$1;
+        selectedPiece = retained.$2;
+        observation = retained.$3;
+      } finally {
+        closed = true;
       }
     }
-    final observation = observations[index];
+    if (observation == null || selectedPiece == null) {
+      throw const SupportAppActionRefused(SupportAppActionCode.denied);
+    }
     if (!await engine.revalidateForHost([observation], () => check(context))) {
       throw const SupportAppActionRefused(SupportAppActionCode.conflict);
     }
@@ -313,10 +393,10 @@ final class _ModelSourceToolRun
     // Return the engine's original pointer unchanged. Never retarget a body
     // handle, expose private labels, or mark an omitted catalog as complete.
     return {
-      ...result.wire,
-      'pieces': [pieces[index]],
+      ...selectedResult.wire,
+      'pieces': [selectedPiece],
       'count': 1,
-      if (pieces.length > 1) ...{
+      if (needsSelection) ...{
         'complete': false,
         'incompleteReason': 'localTargetSelection',
       },

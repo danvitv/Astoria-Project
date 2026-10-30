@@ -10,6 +10,7 @@ import '../../../shared/widgets/glaze_bottom_sheet.dart';
 import '../models/support_app_action_context.dart';
 import '../models/support_model_tool_ui_ports.dart';
 import '../models/support_source_tool_names.dart';
+import 'support_source_target_picker.dart';
 
 /// Actual original-screen UI. Route changes latch a revision, including A→B→A.
 /// No model-selected path, generic approval callback or Send confirmation.
@@ -62,7 +63,8 @@ final class SupportModelToolNativeUi
   Future<SupportSourceTargetCandidate?> selectSource(
     SupportSourceTargetSelectionRequest request,
   ) async {
-    if (request.candidates.length < 2 || request.candidates.length > 16) {
+    if (request.candidates.length > 16 ||
+        (request.candidates.length < 2 && !request.initialPage.hasNext)) {
       return null;
     }
     final native = SupportAppConfirmationRequest(
@@ -217,54 +219,37 @@ final class SupportModelToolNativeUi
                         ),
                       ),
                       Expanded(
-                        child: SingleChildScrollView(
-                          key: const ValueKey(
-                            'support_tool_confirmation_preview',
-                          ),
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: selection != null
-                              ? Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    const Text(
-                                      'Названия остаются на этом экране. Выбор возвращает только ссылку на источник; чтение и передача модели требуют отдельного согласия.',
-                                    ),
-                                    const SizedBox(height: 12),
-                                    for (
-                                      var i = 0;
-                                      i < selection.candidates.length;
-                                      i++
-                                    )
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 12,
-                                        ),
-                                        child: GlazeActionButton(
-                                          key: ValueKey(
-                                            'support_source_target_$i',
-                                          ),
-                                          label:
-                                              '${selection.candidates[i].label}\n${selection.candidates[i].hint}',
-                                          maxLabelLines: null,
-                                          icon: Icons.source_outlined,
-                                          onTap: () {
-                                            if (!open ||
-                                                decided ||
-                                                !original() ||
-                                                !request.current) {
-                                              return;
-                                            }
-                                            decided = true;
-                                            selected = selection.candidates[i];
-                                            // Deliberately NO confirmation lease/body grant.
-                                            close();
-                                          },
-                                        ),
-                                      ),
-                                  ],
-                                )
-                              : Text(
+                        child: selection != null
+                            ? SupportSourceTargetPicker(
+                                request: selection,
+                                isCurrent: () =>
+                                    open &&
+                                    !decided &&
+                                    original() &&
+                                    route.isCurrent &&
+                                    identical(route.navigator, navigator),
+                                onInvalid: close,
+                                onSelected: (candidate) {
+                                  if (!open ||
+                                      decided ||
+                                      !original() ||
+                                      !request.current ||
+                                      !route.isCurrent)
+                                    return;
+                                  decided = true;
+                                  selected = candidate;
+                                  // Deliberately NO confirmation lease/body grant.
+                                  close();
+                                },
+                              )
+                            : SingleChildScrollView(
+                                key: const ValueKey(
+                                  'support_tool_confirmation_preview',
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                ),
+                                child: Text(
                                   sourceRead
                                       ? _sourceReadPreview(request)
                                       : 'Действие: ${request.action}\nЦель: ${request.target}\n'
@@ -272,7 +257,7 @@ final class SupportModelToolNativeUi
                                             'Последствия: ${jsonEncode(request.preview)}\n'
                                             '${request.action.startsWith('astoria_connection_') ? 'Ключ не вводится, активное подключение не выбирается, сеть не проверяется.' : 'Применяется только показанная операция и её последствия. Доступ к существующему приватному содержимому не выдаётся.'}',
                                 ),
-                        ),
+                              ),
                       ),
                       SafeArea(
                         top: false,

@@ -339,6 +339,193 @@ void main() {
   });
   tearDown(() => f.close());
 
+  test(
+    'session activity merge is indexed bounded read-only and pages mixed units without gaps',
+    () async {
+      // Insertion runs newest -> oldest: rowid order is deliberately wrong.
+      final stamps = <String, int>{};
+      for (var i = 0; i < 38; i++) {
+        final id = 'recency-$i';
+        final seconds = 1785750440 - i ~/ 2;
+        final raw = i >= 36
+            ? 0
+            : i.isEven
+            ? seconds
+            : seconds * 1000;
+        stamps[id] = raw;
+        await f.roleplay(id, '[]', index: i + 2);
+        await f.db.customStatement(
+          'UPDATE chat_sessions SET updated_at=? WHERE session_id=?',
+          [raw, id],
+        );
+        await f.db.customStatement(
+          'INSERT INTO chat_summaries(session_id,content,message_count) VALUES(?,?,?)',
+          [id, 'PRIVATE_BODY_NOT_METADATA', 0],
+        );
+      }
+      // Old milliseconds must not outrank recent seconds.
+      await f.db.customStatement(
+        'UPDATE chat_sessions SET updated_at=? WHERE session_id=?',
+        [1776257389182, 'recency-35'],
+      );
+      stamps['recency-35'] = 1776257389182;
+      final rowids = {
+        for (final row in f.handle.select(
+          'SELECT session_id,rowid AS incarnation FROM chat_sessions',
+        ))
+          row['session_id'] as String: row['incarnation'] as int,
+      };
+      int activity(int raw) => raw <= 0
+          ? 0
+          : raw < 100000000000
+          ? raw * 1000
+          : raw;
+      final expected = stamps.keys.toList()
+        ..sort((a, b) {
+          final normalized = activity(
+            stamps[b]!,
+          ).compareTo(activity(stamps[a]!));
+          if (normalized != 0) return normalized;
+          final raw = stamps[b]!.compareTo(stamps[a]!);
+          return raw != 0 ? raw : rowids[b]!.compareTo(rowids[a]!);
+        });
+      final before = f.handle.select('SELECT total_changes() AS n').single['n'];
+      final repo = _repo(f);
+      final actual = <String>[];
+      final hints = <String>[];
+      await f.db.runWithInterceptor(() async {
+        f.observe();
+        Object? cursor;
+        var complete = false;
+        for (var step = 0; step < 8; step++) {
+          final page = await repo.discover(
+            nav.SourceDomain.savedSummary,
+            null,
+            cursor,
+            _bound,
+          );
+          expect(page.items.length, lessThanOrEqualTo(16));
+          expect(page.candidatesExamined, lessThanOrEqualTo(32));
+          actual.addAll(page.items.map((o) => o.key.nativeId));
+          hints.addAll(page.items.map(repo.nativeIdentityHint));
+          if (page.complete) {
+            complete = true;
+            break;
+          }
+          expect(page.next, isNotNull);
+          cursor = page.next;
+        }
+        expect(complete, isTrue);
+        expect(f.spy.writes, 0);
+        expect(
+          f.spy.values.any(
+            (row) =>
+                row.containsKey('messages_json') || row.containsKey('content'),
+          ),
+          isFalse,
+        );
+        f.stopObserving();
+      }, interceptor: f.spy);
+      expect(actual, expected);
+      expect(actual.toSet(), hasLength(actual.length));
+      final local = DateTime.fromMillisecondsSinceEpoch(
+        1785750440000,
+      ).toLocal();
+      String two(int n) => n.toString().padLeft(2, '0');
+      expect(
+        hints.first,
+        contains(
+          '${two(local.day)}.${two(local.month)}.${local.year} ${two(local.hour)}:${two(local.minute)} (местное время)',
+        ),
+      );
+      expect(hints.last, contains('Дата активности неизвестна'));
+      final streams = f.spy.statements
+          .where((s) => s.contains('AS candidate_rowid'))
+          .toList();
+      expect(streams, isNotEmpty);
+      for (final sql in streams) {
+        expect(sql, contains('INDEXED BY idx_chat_sessions_updated_at'));
+        expect(sql, contains('LIMIT ?'));
+        final keyset = sql.contains('(updated_at,rowid)');
+        final plan = f.handle
+            .select('EXPLAIN QUERY PLAN $sql', [
+              100000000000,
+              if (keyset) ...[1785750440000, 100],
+              16,
+            ])
+            .map((r) => r['detail'])
+            .join(' ');
+        expect(
+          plan,
+          contains(
+            'SEARCH chat_sessions USING COVERING INDEX idx_chat_sessions_updated_at',
+          ),
+        );
+        expect(plan, isNot(contains('TEMP B-TREE')));
+      }
+      expect(
+        f.handle.select('SELECT total_changes() AS n').single['n'],
+        before,
+      );
+      expect({
+        for (final row in f.handle.select(
+          "SELECT session_id,updated_at FROM chat_sessions WHERE session_id LIKE 'recency-%'",
+        ))
+          row['session_id']: row['updated_at'],
+      }, stamps);
+    },
+  );
+
+  test(
+    'empty eligible session pages advance past hidden and absent saved domains',
+    () async {
+      await f.db.customStatement(
+        "INSERT INTO characters(char_id,name,hidden) VALUES('hidden-recency','Hidden',1)",
+      );
+      for (var i = 0; i < 35; i++) {
+        await f.roleplay('filtered-$i', '[]', index: i + 2);
+        await f.db.customStatement(
+          'UPDATE chat_sessions SET updated_at=?,character_id=? WHERE session_id=?',
+          [
+            1785750440 - i,
+            i < 16 ? 'hidden-recency' : 'synthetic-character',
+            'filtered-$i',
+          ],
+        );
+        if (i < 16 || i == 34)
+          await f.db.customStatement(
+            'INSERT INTO chat_summaries(session_id,content,message_count) VALUES(?,?,?)',
+            ['filtered-$i', 'PRIVATE', 0],
+          );
+      }
+      final repo = _repo(f);
+      Object? cursor;
+      final found = <String>[];
+      var completed = false;
+      for (var step = 0; step < 6; step++) {
+        final page = await repo.discover(
+          nav.SourceDomain.savedSummary,
+          null,
+          cursor,
+          _bound,
+        );
+        if (step < 2) {
+          expect(page.items, isEmpty);
+          expect(page.complete, isFalse);
+          expect(page.next, isNotNull);
+        }
+        found.addAll(page.items.map((o) => o.key.nativeId));
+        if (page.complete) {
+          completed = true;
+          break;
+        }
+        cursor = page.next;
+      }
+      expect(completed, isTrue);
+      expect(found, ['filtered-34']);
+    },
+  );
+
   for (final mode in [
     'fresh',
     'mutation',

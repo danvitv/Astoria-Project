@@ -35,16 +35,34 @@ final class SupportSourceTargetCandidate {
   final String label, hint;
 }
 
+/// Exact host-issued LOCAL page. No selectors or observations are made by UI.
+final class SupportSourceTargetPage {
+  SupportSourceTargetPage({
+    required List<SupportSourceTargetCandidate> candidates,
+    required this.hasNext,
+  }) : candidates = List.unmodifiable(candidates);
+  final List<SupportSourceTargetCandidate> candidates;
+  final bool hasNext;
+}
+
 final class SupportSourceTargetSelectionRequest {
   SupportSourceTargetSelectionRequest({
     required this.context,
     required this.callId,
     required this.isOriginalCurrent,
     required List<SupportSourceTargetCandidate> candidates,
-  }) : candidates = List.unmodifiable(candidates);
+    bool hasNext = false,
+    this.loadNext,
+  }) : initialPage = SupportSourceTargetPage(
+         candidates: candidates,
+         hasNext: hasNext,
+       );
   final SupportAppActionContext context;
   final String callId;
   final bool Function() isOriginalCurrent;
-  final List<SupportSourceTargetCandidate> candidates;
+  final SupportSourceTargetPage initialPage;
+  List<SupportSourceTargetCandidate> get candidates => initialPage.candidates;
+  final Future<SupportSourceTargetPage?> Function(SupportSourceTargetPage)?
+  loadNext;
   bool get current => context.current && isOriginalCurrent() && context.current;
 }

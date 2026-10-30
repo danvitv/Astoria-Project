@@ -1,12 +1,29 @@
 part of '../support_source_text_repo.dart';
 
 final class _NavListCursor {
-  _NavListCursor(this.repo, this.domain, this.parent, this.rowid);
+  _NavListCursor(
+    this.repo,
+    this.domain,
+    this.parent,
+    this.rowid, {
+    this.seconds,
+    this.milliseconds,
+  });
   final SupportSourceNavigationRepo repo;
   final nav.SourceDomain domain;
   final nav.SourceKey? parent;
   final int rowid;
+  final (int, int)? seconds, milliseconds;
 }
+
+// Projection only: imported epoch seconds and milliseconds coexist. Values at
+// least 1e11 are milliseconds; non-positive values have unknown activity.
+const _navMillisecondFloor = 100000000000;
+int _navActivity(int raw) => raw <= 0
+    ? 0
+    : raw < _navMillisecondFloor
+    ? raw * 1000
+    : raw;
 
 const _navRoots = <nav.SourceDomain, Map<String, nav.SectionKind>>{
   nav.SourceDomain.ordinaryPreset: {
@@ -102,6 +119,7 @@ extension _NavCatalog on SupportSourceNavigationRepo {
   ) async {
     if (parent != null && !_sources.containsKey(parent)) _fail();
     var after = 0;
+    _NavListCursor? issued;
     if (cursor != null) {
       if (cursor is! _NavListCursor ||
           !identical(cursor.repo, this) ||
@@ -109,6 +127,7 @@ extension _NavCatalog on SupportSourceNavigationRepo {
           cursor.parent != parent)
         _fail();
       after = cursor.rowid;
+      issued = cursor;
     }
     final sessionDomain =
         domain != nav.SourceDomain.ordinaryPreset &&
@@ -120,25 +139,16 @@ extension _NavCatalog on SupportSourceNavigationRepo {
       return nav.Page(const []);
     // Freeze a bounded keyset BEFORE eligibility/EXISTS filtering. LIMIT after
     // such filters alone could inspect every absent/hidden session in the DB.
-    final candidates = sessionDomain && parent == null
-        ? await _sql(
-            'SELECT rowid AS candidate_rowid FROM chat_sessions WHERE rowid>? ORDER BY rowid LIMIT ?',
-            [
-              Variable.withInt(after),
-              Variable.withInt(min(bound.pageSize, bound.candidateLimit)),
-            ],
-          )
-        : null;
-    if (candidates != null && candidates.isEmpty) return nav.Page(const []);
+    if (sessionDomain && parent == null) {
+      return _discoverSessions(domain, bound, issued);
+    }
     final rows = await _sql(
       '${_catalogSql(domain)} '
       '${parent != null ? 'AND s.session_id = ?' : ''} '
-      '${candidates != null ? 'AND s.rowid<=?' : ''} ORDER BY incarnation LIMIT ?',
+      'ORDER BY incarnation LIMIT ?',
       [
         Variable.withInt(after),
         if (parent != null) Variable.withString(parent.nativeId),
-        if (candidates != null)
-          Variable.withInt(candidates.last.read<int>('candidate_rowid')),
         Variable.withInt(bound.pageSize),
       ],
     );
@@ -151,7 +161,7 @@ extension _NavCatalog on SupportSourceNavigationRepo {
       );
       _guard();
     }
-    final examined = candidates?.length ?? rows.length;
+    final examined = rows.length;
     final complete =
         parent != null || examined < min(bound.pageSize, bound.candidateLimit);
     return nav.Page(
@@ -163,10 +173,110 @@ extension _NavCatalog on SupportSourceNavigationRepo {
               this,
               domain,
               parent,
-              candidates?.last.read<int>('candidate_rowid') ??
-                  rows.last.read<int>('incarnation'),
+              rows.last.read<int>('incarnation'),
             ),
       candidatesExamined: examined,
+      exhaustedWork: !complete && observations.isEmpty,
+    );
+  }
+
+  Future<nav.Page<nav.SourceObservation>> _discoverSessions(
+    nav.SourceDomain domain,
+    nav.WorkBound bound,
+    _NavListCursor? cursor,
+  ) async {
+    // Each ordered range walks the existing (updated_at,rowid) index backwards.
+    // Bound *both* streams before joins/EXISTS. Peeks not consumed by the merge
+    // are re-read next time, and count against this operation's work bound.
+    final take = min(bound.pageSize, bound.candidateLimit ~/ 2);
+    if (take < 1) _fail(SupportSourceReadFailure.tooLarge);
+    Future<List<QueryRow>> stream(bool milliseconds, (int, int)? key) => _sql(
+      'SELECT rowid AS candidate_rowid, updated_at FROM chat_sessions '
+      'INDEXED BY idx_chat_sessions_updated_at WHERE updated_at '
+      '${milliseconds ? '>=' : '<'} ? '
+      '${key == null ? '' : 'AND (updated_at,rowid)<(?,?) '} '
+      'ORDER BY updated_at DESC,rowid DESC LIMIT ?',
+      [
+        Variable.withInt(_navMillisecondFloor),
+        if (key != null) ...[
+          Variable.withInt(key.$1),
+          Variable.withInt(key.$2),
+        ],
+        Variable.withInt(take),
+      ],
+    );
+    final seconds = await stream(false, cursor?.seconds);
+    _guard();
+    final milliseconds = await stream(true, cursor?.milliseconds);
+    _guard();
+    final candidates = [...seconds, ...milliseconds]
+      ..sort((a, b) {
+        final ar = a.read<int>('updated_at'), br = b.read<int>('updated_at');
+        final activity = _navActivity(br).compareTo(_navActivity(ar));
+        if (activity != 0) return activity;
+        final raw = br.compareTo(ar);
+        return raw != 0
+            ? raw
+            : b
+                  .read<int>('candidate_rowid')
+                  .compareTo(a.read<int>('candidate_rowid'));
+      });
+    final selected = candidates.take(take).toList();
+    if (selected.isEmpty) return nav.Page(const []);
+    var sk = cursor?.seconds, mk = cursor?.milliseconds;
+    for (final row in selected) {
+      final raw = row.read<int>('updated_at');
+      final key = (raw, row.read<int>('candidate_rowid'));
+      if (raw < _navMillisecondFloor) {
+        sk = key;
+      } else {
+        mk = key;
+      }
+    }
+    final rows = await _sql(
+      '${_catalogSql(domain)} AND s.rowid IN (${List.filled(selected.length, '?').join(',')}) LIMIT ?',
+      [
+        Variable.withInt(0),
+        ...selected.map(
+          (r) => Variable.withInt(r.read<int>('candidate_rowid')),
+        ),
+        Variable.withInt(take),
+      ],
+    );
+    _guard();
+    final byId = {for (final row in rows) row.read<int>('incarnation'): row};
+    final observations = <nav.SourceObservation>[];
+    for (final candidate in selected) {
+      final row = byId[candidate.read<int>('candidate_rowid')];
+      if (row == null) continue;
+      observations.add(
+        await _fromHeader(
+          nav.SourceKey(domain, _shape.id(row.data['source_id'])),
+          row,
+          null,
+          bound,
+        ),
+      );
+      _guard();
+    }
+    final complete =
+        candidates.length <= take &&
+        seconds.length < take &&
+        milliseconds.length < take;
+    return nav.Page(
+      observations,
+      complete: complete,
+      next: complete
+          ? null
+          : _NavListCursor(
+              this,
+              domain,
+              null,
+              0,
+              seconds: sk,
+              milliseconds: mk,
+            ),
+      candidatesExamined: candidates.length,
       exhaustedWork: !complete && observations.isEmpty,
     );
   }

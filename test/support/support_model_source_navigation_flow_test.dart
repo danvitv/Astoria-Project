@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:drift/drift.dart' show Value, Variable;
@@ -11,6 +12,7 @@ import 'package:glaze_flutter/features/support_assistant/state/support_source_pr
 import 'package:glaze_flutter/features/support_assistant/widgets/support_source_preparation_sheet.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_composer_bar.dart';
 import 'package:glaze_flutter/shared/widgets/menu_group.dart';
+import 'package:glaze_flutter/shared/widgets/glaze_action_button.dart';
 import 'package:glaze_flutter/shared/widgets/sheet_view.dart';
 
 import 'support_model_source_loop_fixture.dart';
@@ -213,8 +215,275 @@ void _noPrivateSources(BackupLoopFixture f) {
   sourceNoEgress(f);
 }
 
+Future<void> _seedPickerPages(
+  WidgetTester tester,
+  BackupLoopFixture f,
+) => backupLoopReal(tester, () async {
+  await f.native.db.customStatement(
+    "INSERT INTO characters(char_id,name) VALUES('private-picker-character','PRIVATE_PAGED_TITLE')",
+  );
+  for (var i = 0; i < 34; i++) {
+    final seconds = 1785750440 - i * 60;
+    await f.native.db.customStatement(
+      'INSERT INTO chat_sessions(session_id,character_id,session_index,messages_json,updated_at) VALUES(?,?,?,?,?)',
+      [
+        'private-picker-$i',
+        'private-picker-character',
+        i + 10,
+        '[]',
+        i.isEven ? seconds : seconds * 1000,
+      ],
+    );
+    await f.native.db.customStatement(
+      'INSERT INTO chat_summaries(session_id,content,message_count) VALUES(?,?,?)',
+      ['private-picker-$i', 'PAGED_APPROVED_BODY_$i', 0],
+    );
+  }
+});
+
+Future<void> _pickerPage(WidgetTester tester, String direction) async {
+  final button = find.byKey(ValueKey('support_source_$direction'));
+  expect(button.hitTestable(), findsOneWidget);
+  expect(tester.widget<GlazeActionButton>(button).onTap, isNotNull);
+  await backupLoopReal(tester, () => tester.tap(button));
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  backupLoopTest(
+    'MODEL LOCAL paged next previous selects exact beyond16 source with no selection grant',
+    (tester, f) async {
+      await _seedPickerPages(tester, f);
+      final loop = SourceLoop(f);
+      late String handle;
+      loop.script(
+        loop.list('savedSummary', 'paged_list'),
+        rounds: 5,
+        next: (round) async {
+          if (round == 2) {
+            loop.noBody();
+            final data = loop.lastData();
+            expect(data['count'], 1);
+            expect(data['complete'], isFalse);
+            expect(data['incompleteReason'], 'localTargetSelection');
+            handle = loop.handle();
+            return loop.contents(handle, 'paged_contents');
+          }
+          // Top-level contents issues section selectors only; read needs an
+          // issued record selector from a search within the chosen source.
+          if (round == 3)
+            return loop.search(
+              handle,
+              'PAGED_APPROVED_BODY_16',
+              'paged_search',
+            );
+          if (round == 4)
+            return loop.read(handle, loop.selector(), 'paged_read');
+          expect(jsonEncode(loop.body()), contains('PAGED_APPROVED_BODY_16'));
+          expect(
+            jsonEncode(loop.body()),
+            isNot(contains('PAGED_APPROVED_BODY_0"')),
+          );
+          return SourceLoop.answer(
+            'Read only the locally chosen saved summary.',
+          );
+        },
+      );
+      await loop.start(
+        tester,
+        confirmation: false,
+        text: 'Choose a saved summary locally.',
+      );
+      final target = find.byKey(const ValueKey('support_source_target_0'));
+      await backupLoopUntil(
+        tester,
+        () => target.evaluate().isNotEmpty,
+        signal: f.settlement,
+      );
+      final route = await sourceLoopReadyRoute(tester, target);
+      String label() => tester.widget<GlazeActionButton>(target).label;
+      final first = label();
+      expect(first, contains('Сессия 11 ·'));
+      expect(first, contains('(местное время)'));
+      expect(first, isNot(contains('1785750440')));
+      await _pickerPage(tester, 'next');
+      await backupLoopUntil(
+        tester,
+        () => label().contains('Сессия 27 ·'),
+        signal: f.settlement,
+      );
+      expect(ModalRoute.of(tester.element(target)), same(route));
+      final second = label();
+      await _pickerPage(tester, 'previous');
+      await tester.pump();
+      expect(label(), first);
+      await _pickerPage(tester, 'next');
+      await tester.pump();
+      expect(label(), second);
+      expect(f.wire, hasLength(1));
+      loop.noBody();
+      await tester.ensureVisible(target);
+      await tester.pump();
+      expect(target.hitTestable(), findsOneWidget);
+      await backupLoopReal(tester, () => tester.tap(target));
+      await sourceLoopRouteClosed(tester, route);
+      await loop.modal(tester);
+      await loop.apply(tester);
+      final reply = await loop.finish(tester);
+      expect(reply.status, 'complete');
+      expect(f.wire, hasLength(5));
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          reply.id,
+          expectedVersion: 4,
+          expectedDisclosureCount: 3,
+        ),
+      );
+      for (final disclosure in recipe.toolDisclosures!) {
+        expect(disclosure.sourceId, 'private-picker-16');
+        expect(jsonEncode(f.wire), isNot(contains(disclosure.snapshotDigest)));
+      }
+      for (final secret in [
+        'PRIVATE_PAGED_TITLE',
+        'private-picker-',
+        second,
+        '(местное время)',
+        '1785750440',
+      ]) {
+        expect(jsonEncode(f.wire), isNot(contains(secret)));
+      }
+      sourceNoEgress(f);
+    },
+  );
+
+  for (final action in ['cancel', 'stop', 'routeABA', 'sourceABA']) {
+    backupLoopTest('MODEL LOCAL pending-page $action fails closed', (
+      tester,
+      f,
+    ) async {
+      await _seedPickerPages(tester, f);
+      final loop = SourceLoop(f);
+      loop.script(
+        loop.list('savedSummary', 'pending_page'),
+        rounds: 2,
+        next: (_) => throw TestFailure('Pending page must not produce a POST'),
+      );
+      await loop.start(
+        tester,
+        confirmation: false,
+        text: 'Choose a saved summary locally.',
+      );
+      final target = find.byKey(const ValueKey('support_source_target_0'));
+      await backupLoopUntil(
+        tester,
+        () => target.evaluate().isNotEmpty,
+        signal: f.settlement,
+      );
+      final route = await sourceLoopReadyRoute(tester, target);
+      final stop = tester
+          .widget<SupportComposerBar>(find.byType(SupportComposerBar))
+          .onStop!;
+      // The gate completers live inside the runAsync zone. Completing a
+      // completer created in the fake-async test body parks its microtask in
+      // the fake queue that only tester.pump() flushes, so an await inside
+      // tester.runAsync would never resume there. runAsync forks real
+      // root-zone scheduling, so these completions reach the held transaction
+      // without any pump.
+      Future<void>? blocked;
+      Completer<void>? releaseGate;
+      // Hold the actual original DB executor, not a replacement page callback.
+      await backupLoopReal(tester, () async {
+        final entered = Completer<void>();
+        final release = Completer<void>();
+        releaseGate = release;
+        blocked = f.native.db.transaction(() async {
+          entered.complete();
+          await release.future;
+          if (action == 'sourceABA') {
+            await f.native.db.customStatement(
+              "UPDATE chat_sessions SET draft='ABA' WHERE session_id='private-picker-16'",
+            );
+            await f.native.db.customStatement(
+              "UPDATE chat_sessions SET draft='' WHERE session_id='private-picker-16'",
+            );
+          }
+        });
+        await entered.future;
+      });
+      try {
+        await _pickerPage(tester, 'next');
+        await tester.pump();
+        expect(
+          tester
+              .widget<GlazeActionButton>(
+                find.byKey(const ValueKey('support_source_next')),
+              )
+              .busy,
+          isTrue,
+        );
+        expect(tester.widget<GlazeActionButton>(target).onTap, isNull);
+        if (action == 'cancel') {
+          await loop.cancel(tester);
+        } else if (action != 'sourceABA') {
+          await backupLoopReal(tester, () async {
+            if (action == 'stop') {
+              stop();
+            } else {
+              f.router.go('/characters');
+              f.router.go('/support');
+            }
+          });
+          await sourceLoopRouteClosed(tester, route);
+        }
+      } finally {
+        final gate = releaseGate;
+        final held = blocked;
+        await backupLoopReal(tester, () async {
+          gate?.complete();
+          if (held != null) await held;
+        });
+      }
+      if (action == 'sourceABA') {
+        // Opening the gate lets the queued page fetch settle into the repo's
+        // change fence: the transaction's own session writes moved the stamp,
+        // the repo retires, its leases die and the picker invalidates this
+        // original route. That pop runs on a real event-loop turn, so first
+        // wait until the invalidation has actually popped this exact route:
+        // the finite loop pumps zero-duration frames, which alone never let
+        // the real reverse transition finish, and joining route.completed
+        // before the pop would exhaust its frame budget without a pop.
+        await backupLoopUntil(
+          tester,
+          () => !route.isCurrent,
+          signal: f.settlement,
+        );
+        await sourceLoopRouteClosed(tester, route);
+      }
+      final reply = await loop.finish(tester);
+      expect(
+        reply.status,
+        action == 'stop' || action == 'routeABA' ? 'stopped' : 'error',
+      );
+      expect(f.wire, hasLength(1));
+      expect(target, findsNothing);
+      loop.noBody();
+      final recipe = await backupLoopReal(
+        tester,
+        () => modelSourceRecipe(
+          f,
+          reply.id,
+          expectedVersion: 2,
+          expectedDisclosureCount: null,
+        ),
+      );
+      expect(recipe.toolDisclosures, isNull);
+      expect(jsonEncode(f.wire), isNot(contains('PRIVATE_PAGED_TITLE')));
+      expect(jsonEncode(f.wire), isNot(contains('PAGED_APPROVED_BODY_')));
+      sourceNoEgress(f);
+    });
+  }
   for (final action in ['cancel', 'stop', 'routeABA', 'sourceABA']) {
     backupLoopTest('MODEL LOCAL named-target $action returns no title/body/grant', (
       tester,

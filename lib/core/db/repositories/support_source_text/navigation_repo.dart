@@ -102,9 +102,23 @@ final class SupportSourceNavigationRepo
     if (source == null || !_alive()) return '';
     final index = source.header['session_index'];
     final activity = source.header['updated_at'];
+    String date = 'Дата активности неизвестна';
+    if (activity is int && activity > 0) {
+      try {
+        final local = DateTime.fromMillisecondsSinceEpoch(
+          _navActivity(activity),
+        ).toLocal();
+        String two(int n) => n.toString().padLeft(2, '0');
+        date =
+            'Сохранённая активность: ${two(local.day)}.${two(local.month)}.${local.year} '
+            '${two(local.hour)}:${two(local.minute)} (местное время)';
+      } on ArgumentError {
+        /* Out-of-range imported dates stay unknown. */
+      }
+    }
     return '${index is int ? 'Сессия ${index + 1} · ' : ''}'
         '${observation.activeAtListing == true ? 'Выбран сейчас · ' : ''}'
-        '${activity is int ? 'Сохранённая активность: $activity' : observation.state.name}';
+        '$date';
   }
 
   /// Only call immediately after the host's successful ORIGINAL CAS append.
