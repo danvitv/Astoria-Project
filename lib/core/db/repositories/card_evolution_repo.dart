@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../../models/character.dart';
 import '../../models/tracker.dart';
 import '../../services/card_rewriter/card_rewrite_operation_parser.dart';
+import '../../services/card_rewriter/card_evolution_target_policy.dart';
 import '../../services/card_rewriter/card_rewriter_contracts.dart';
 import '../../services/card_rewriter/effective_canon_assembler.dart';
 import '../../services/card_rewriter/effective_canon_read_repository.dart';
@@ -720,15 +721,16 @@ class CardEvolutionRepo {
         ),
       );
     }
-    final loreOnlyObservationKeys = _loreOnlyObservationKeys(selected);
-    if (cardOperations.any(
-      (operation) => {
-        operation.transition.scopeKey,
-        ...operation.transition.affectedTrackerKeys,
-        ...operation.patches.map((patch) => patch.scopeKey),
-      }.any((key) => loreOnlyObservationKeys.contains(_ledgerGroupKey(key))),
-    )) {
-      return const CardEvolutionFinalizeOutcome('invalidCardObservationTarget');
+    final targetFailure = CardEvolutionTargetPolicy.explainFailure(
+      cardOperations,
+      selected,
+    );
+    if (targetFailure != null) {
+      return CardEvolutionFinalizeOutcome(
+        'invalidCardObservationTarget',
+        null,
+        targetFailure,
+      );
     }
     final values = {
       for (final field in CardRewriteField.values)
@@ -1119,7 +1121,7 @@ class CardEvolutionRepo {
         // Never infer a Ledger snapshot from today's mutable transcript tail.
         reconciliationRunIds = validRuns
             .skip(
-                  (validRuns.length - _writerReconciliationRunCount).clamp(
+              (validRuns.length - _writerReconciliationRunCount).clamp(
                 0,
                 validRuns.length,
               ),
@@ -1475,19 +1477,8 @@ class CardEvolutionRepo {
     return groups;
   }
 
-  static String? _ledgerGroupKey(String key) {
-    if (key.startsWith('npc:') || key.startsWith('arc:')) {
-      final dot = key.lastIndexOf('.');
-      final group = dot > key.indexOf(':') + 1 ? key.substring(0, dot) : key;
-      return CardRewriteScope.tryParse(group)?.key;
-    }
-    if (key.startsWith('relationship:')) {
-      final dot = key.lastIndexOf('.');
-      final group = dot > 'relationship:'.length ? key.substring(0, dot) : key;
-      return CardRewriteScope.tryParse(group)?.key;
-    }
-    return CardRewriteScope.tryParse(key)?.key;
-  }
+  static String? _ledgerGroupKey(String key) =>
+      CardEvolutionTargetPolicy.normalizeGroup(key);
 
   static Iterable<String> _presentEntityGroups(String value) sync* {
     for (final raw in value.split(RegExp(r'[;,\n]+'))) {
@@ -2003,24 +1994,6 @@ Map<String, (String, String)>? _loreTargetsFromInput(String selectedInputJson) {
     return result;
   } catch (_) {
     return null;
-  }
-}
-
-Set<String> _loreOnlyObservationKeys(String selectedInputJson) {
-  try {
-    final input = jsonDecode(selectedInputJson) as Map;
-    final observations = input['accumulatedObservations'];
-    if (observations is! List) return const {};
-    return {
-      for (final observation in observations)
-        if (observation is Map &&
-            observation['targetKind'] == 'injected_lorebook_entry' &&
-            observation['retrievalKeys'] is List)
-          for (final key in observation['retrievalKeys'] as List)
-            if (key is String) key,
-    };
-  } catch (_) {
-    return const {};
   }
 }
 

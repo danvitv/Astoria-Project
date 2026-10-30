@@ -13,6 +13,7 @@ import '../../utils/cast_helpers.dart';
 import '../../utils/id_generator.dart';
 import '../../utils/time_helpers.dart';
 import 'card_evolution_diagnostics.dart';
+import 'card_evolution_target_policy.dart';
 import 'card_rewrite_operation_parser.dart';
 import 'card_rewriter_contracts.dart';
 import 'manual_rewrite_service.dart';
@@ -92,6 +93,7 @@ final class DurableWriterCallRunner {
     required String prompt,
     required String? parentCallId,
     required String cardContext,
+    required String targetContext,
     Set<CardRewriteField>? allowedCardFields,
     required String? manualCallId,
     required String? manualResponse,
@@ -106,6 +108,7 @@ final class DurableWriterCallRunner {
       stageOrdinal: 1,
       prompt: prompt,
       parentCallId: parentCallId,
+      cardTargetContext: allowedCardFields == null ? null : targetContext,
     );
     if (prepared.failure != null) return prepared;
     if (prepared.call!.status == 'completed') {
@@ -151,10 +154,14 @@ final class DurableWriterCallRunner {
                     )
             : allowedCardFields == null
             ? null
-            : CardRewriteOperationParser.explainEvolutionEvidenceFailure(
-                parsed.whereType<CardRewriteOperationSnapshot>(),
-                cardContext,
-              );
+            : CardEvolutionTargetPolicy.explainFailure(
+                    parsed.whereType<CardRewriteOperationSnapshot>(),
+                    targetContext,
+                  ) ??
+                  CardRewriteOperationParser.explainEvolutionEvidenceFailure(
+                    parsed.whereType<CardRewriteOperationSnapshot>(),
+                    cardContext,
+                  );
         if (parsed == null || detail != null) {
           return ParsedWriterCallResult.rejected(detail ?? 'invalid output');
         }
@@ -176,6 +183,7 @@ final class DurableWriterCallRunner {
     required int stageOrdinal,
     required String prompt,
     required String? parentCallId,
+    String? cardTargetContext,
   }) async {
     final outcome = await writerCallRepo.prepareNextCall(
       claimId: claim.row.id,
@@ -190,6 +198,29 @@ final class DurableWriterCallRunner {
     final call = outcome.row;
     if (call == null) {
       return failClosed(claim, owner, outcome.kind, 'Unable to prepare $stage');
+    }
+    // Recheck immutable accepted card results before request matching: a legacy
+    // repair may have an older prompt as well as an invalid destination. Never
+    // alter that checkpoint or silently replay its forbidden operations.
+    if (cardTargetContext != null &&
+        call.status == 'completed' &&
+        (call.stage == 'card_writer' || call.stage == 'card_repair')) {
+      final operations = _decodeOperations(call.resultJson);
+      final detail = operations == null
+          ? null
+          : CardEvolutionTargetPolicy.explainFailure(
+              operations.whereType<CardRewriteOperationSnapshot>(),
+              cardTargetContext,
+            );
+      if (detail != null) {
+        return failClosed(
+          claim,
+          owner,
+          'invalidCardObservationTarget',
+          'Stored completed ${call.stage} checkpoint ${call.id}: $detail '
+              'The immutable checkpoint is retained; explicit recovery is required.',
+        );
+      }
     }
     if (call.ordinal != ordinal ||
         call.stage != stage ||

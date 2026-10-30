@@ -9,6 +9,7 @@ import '../../llm/card_rewrite_slot_resolver.dart';
 import '../../utils/id_generator.dart';
 import '../../utils/time_helpers.dart';
 import 'card_evolution_diagnostics.dart';
+import 'card_evolution_target_policy.dart';
 import 'card_rewrite_prompt_builder.dart';
 import 'card_rewriter_contracts.dart';
 import 'durable_writer_call_runner.dart';
@@ -236,6 +237,7 @@ final class CardEvolutionWriterCoordinator {
           parentCallId: parentCallId,
           allowedCardFields: allowedCardFields,
           cardContext: cardContext,
+          targetContext: sharedContext,
           manualCallId: manualCallId,
           manualResponse: manualResponse,
         );
@@ -252,7 +254,7 @@ final class CardEvolutionWriterCoordinator {
           final repairPrompt = _cardRepairPrompt(
             originalPrompt: cardPrompt,
             failure: card.call!.parserDetail ?? 'invalid output',
-            selectedInputJson: cardContext,
+            selectedInputJson: sharedContext,
           );
           final repair = await writerCallRunner.runOperationCall(
             claim: claim,
@@ -268,6 +270,7 @@ final class CardEvolutionWriterCoordinator {
             parentCallId: parentCallId,
             allowedCardFields: allowedCardFields,
             cardContext: cardContext,
+            targetContext: sharedContext,
             manualCallId: manualCallId,
             manualResponse: manualResponse,
           );
@@ -313,6 +316,7 @@ final class CardEvolutionWriterCoordinator {
           prompt: lorebookPrompt,
           parentCallId: parentCallId,
           cardContext: sharedContext,
+          targetContext: sharedContext,
           manualCallId: manualCallId,
           manualResponse: manualResponse,
         );
@@ -486,17 +490,37 @@ final class CardEvolutionWriterCoordinator {
     required String failure,
     required String selectedInputJson,
   }) {
+    final forbidden = CardEvolutionTargetPolicy.targetKeys(selectedInputJson);
     final allowed =
         (_retrievalTargets(selectedInputJson)?.keys ?? const [])
             .where(_isCardScopeTarget)
+            .where(
+              (key) => !forbidden.contains(
+                CardEvolutionTargetPolicy.normalizeGroup(key),
+              ),
+            )
             .toList()
           ..sort();
     final scopeCorrection = allowed.isEmpty
-        ? 'Every patch and transition scopeKey MUST follow the advertised scope '
-              'grammar exactly.'
+        ? forbidden.isEmpty
+              ? 'Every patch and transition scopeKey MUST follow the advertised scope '
+                    'grammar exactly.'
+              : 'No available scope key is permitted for card operations; return '
+                    '{"operations":[]}.'
         : 'Every patch and transition scopeKey MUST equal one of these exact '
               'available keys: ${jsonEncode(allowed)}. Do not shorten, combine, '
               'translate, or derive a scope key.';
+    final forbiddenKeys = forbidden.toList()..sort();
+    final targetCorrection = forbidden.isEmpty
+        ? ''
+        : ' These exact retrieval targets are lore-only and forbidden in card '
+              'patch scopeKey, transition.scopeKey, and affectedTrackerKeys '
+              '(including their dotted Ledger tracker keys): '
+              '${jsonEncode(forbiddenKeys)}. Remove lore-only card operations; '
+              'do not retarget or rename them to an allowed key. Return '
+              '{"operations":[]} if no allowed card operations remain, even '
+              'for a confirmed contradiction. Leave those facts for the '
+              'lorebook writer.';
     final destinationCorrection =
         failure.contains('missingPromotionDestination')
         ? 'Your rejected transition omitted or emptied the required '
@@ -509,7 +533,7 @@ final class CardEvolutionWriterCoordinator {
         '# Required correction\n'
         'Your previous response was rejected: $failure. Return a fresh complete '
         'response containing exactly one valid JSON object with no prose before '
-        'or after it. $destinationCorrection$scopeCorrection Every replacement value MUST preserve '
+        'or after it. $destinationCorrection$scopeCorrection$targetCorrection Every replacement value MUST preserve '
         'the exact macro-token multiset from its anchor. Never add, remove, rename, '
         'or substitute tokens such as {{user}}.';
   }

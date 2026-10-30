@@ -7,7 +7,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/applied_canon_transition_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/canon_transition_fact_ref_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/card_evolution_observation_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/card_evolution_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/card_evolution_writer_call_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/character_knowledge_fact_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/character_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/character_revision_repo.dart';
@@ -15,16 +17,22 @@ import 'package:glaze_flutter/core/db/repositories/character_session_baseline_re
 import 'package:glaze_flutter/core/db/repositories/ledger_raw_tracker_state_reader.dart';
 import 'package:glaze_flutter/core/db/repositories/lorebook_use_manifest_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/manual_rewrite_job_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/tracker_snapshot_repo.dart';
 import 'package:glaze_flutter/core/llm/aux_llm_client.dart';
 import 'package:glaze_flutter/core/llm/aux_retry_runner.dart';
 import 'package:glaze_flutter/core/llm/prompt/exact_lorebook_manifest.dart';
 import 'package:glaze_flutter/core/llm/transport/llm_capture_context.dart';
 import 'package:glaze_flutter/core/models/agent_operation_record.dart';
+import 'package:glaze_flutter/core/models/card_evolution_observation.dart';
 import 'package:glaze_flutter/core/models/character.dart';
 import 'package:glaze_flutter/core/models/lorebook.dart';
+import 'package:glaze_flutter/core/models/tracker.dart';
+import 'package:glaze_flutter/core/models/tracker_snapshot.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/automated_card_evolution_service.dart';
+import 'package:glaze_flutter/core/services/card_rewriter/card_rewrite_operation_parser.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/card_rewriter_contracts.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/effective_canon_read_repository.dart';
+import 'package:glaze_flutter/core/utils/time_helpers.dart';
 
 void main() {
   late _Fixture fixture;
@@ -538,6 +546,365 @@ void main() {
     expect(debug.map((row) => row.stage), containsAll(['card', 'lorebook']));
   });
 
+  test(
+    'lore-only card target gets one repair then a pending lore job',
+    () async {
+      await fixture.seedLoreOnlyObservation();
+      final contexts = <LlmCaptureContext>[];
+      final prompts = <String>[];
+      final result = await fixture
+          .service((_, prompt) async {
+            prompts.add(prompt);
+            if (prompt.contains('Astoria lorebook rewriter')) {
+              expect(prompt, contains('lore-only-observation'));
+              expect(prompt, contains('npc:alice.attitude'));
+              expect(
+                prompt,
+                contains('# Proposed card operations (read-only)\n[]'),
+              );
+              return _ok(fixture.lorebookBatchOutput);
+            }
+            // The card evidence projection still retains Ledger facts but omits
+            // lore observations. The destination fence must use the full input.
+            expect(prompt, isNot(contains('lore-only-observation')));
+            expect(prompt, contains('npc:alice.attitude'));
+            return _ok(
+              prompts.length == 1
+                  ? fixture.cardBatchOutput
+                  : '{"operations":[]}',
+            );
+          }, onCaptureContext: contexts.add)
+          .runOneBatch('session');
+
+      expect(result.kind, 'persisted', reason: result.detail);
+      expect(contexts.map((context) => context.stage), [
+        'card.writer',
+        'card.writer_repair',
+        'card.lorebook_writer',
+      ]);
+      final correction = prompts[1].split('# Required correction').last;
+      expect(correction, contains('invalidCardObservationTarget'));
+      expect(correction, contains('transition.scopeKey "npc:alice"'));
+      expect(correction, contains('No available scope key is permitted'));
+      expect(correction, contains('Remove lore-only card operations'));
+      expect(correction, contains('Leave those facts for the lorebook writer'));
+      expect(correction, isNot(contains('available keys: ["npc:alice"]')));
+      final calls = await CardEvolutionWriterCallRepo(fixture.db).readChain(
+        (await fixture.db.select(fixture.db.cardEvolutionClaims).getSingle())
+            .id,
+      );
+      expect(calls.map((row) => row.status), [
+        'completed',
+        'completed',
+        'completed',
+      ]);
+      expect(calls.first.parserCode, 'invalidOutput');
+      expect(calls.first.responseText, fixture.cardBatchOutput);
+      expect(calls[1].parserCode, 'accepted');
+      expect(calls[1].resultJson, '[]');
+      final operations = await fixture.db
+          .select(fixture.db.rewriteOperations)
+          .get();
+      expect(operations, hasLength(1));
+      expect(jsonDecode(operations.single.operationJson)['target'], 'lorebook');
+      expect(
+        (await fixture.db.select(fixture.db.rewriteJobs).getSingle()).status,
+        'pending',
+      );
+      await fixture.expectCanonRowsUnchanged();
+      expect(
+        await fixture.db.select(fixture.db.sessionLorebookEvolutionRows).get(),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'forbidden repair fails before lore and retains both responses',
+    () async {
+      await fixture.seedLoreOnlyObservation();
+      var calls = 0;
+      final invalidMacro = jsonDecode(fixture.cardBatchOutput) as Map;
+      final operation = (invalidMacro['operations'] as List).single as Map;
+      ((operation['patches'] as List).single as Map)['value'] =
+          'Alice is increasingly trusting {{user}}.';
+      final rejected = jsonEncode(invalidMacro);
+      final result = await fixture
+          .service((_, prompt) async {
+            calls++;
+            expect(prompt, isNot(contains('Astoria lorebook rewriter')));
+            return _ok(calls == 1 ? rejected : fixture.cardBatchOutput);
+          })
+          .runOneBatch('session');
+
+      expect(result.kind, 'invalidCardOutput');
+      expect(result.detail, contains('invalidCardObservationTarget'));
+      expect(calls, 2);
+      final claim = await fixture.db
+          .select(fixture.db.cardEvolutionClaims)
+          .getSingle();
+      final chain = await CardEvolutionWriterCallRepo(
+        fixture.db,
+      ).readChain(claim.id);
+      expect(claim.status, 'failed');
+      expect(chain.map((row) => row.stage), ['card_writer', 'card_repair']);
+      expect(chain.map((row) => row.status), ['completed', 'failed']);
+      expect(chain.first.parserDetail, contains('macroTokensChanged'));
+      expect(chain.first.responseText, rejected);
+      expect(chain.last.responseText, fixture.cardBatchOutput);
+      expect(chain.last.parserDetail, contains('invalidCardObservationTarget'));
+      expect(chain.last.completedAt, isNull);
+      await fixture.expectNoProposalOrCanonWrites();
+    },
+  );
+
+  test(
+    'unrelated valid card scope remains writable beside lore-only scope',
+    () async {
+      await fixture.seedLoreOnlyObservation(
+        scope: 'npc:bob',
+        additionalTrackers: const {
+          'npc:alice.attitude': 'increasingly trusting',
+        },
+      );
+      var calls = 0;
+      final result = await fixture
+          .service((_, prompt) async {
+            calls++;
+            return _ok(
+              prompt.contains('Astoria lorebook rewriter')
+                  ? fixture.lorebookBatchOutput
+                  : fixture.cardBatchOutput,
+            );
+          })
+          .runOneBatch('session');
+
+      expect(result.kind, 'persisted', reason: result.detail);
+      expect(calls, 2);
+      final operations = await fixture.db
+          .select(fixture.db.rewriteOperations)
+          .get();
+      expect(operations, hasLength(2));
+      await fixture.expectCanonRowsUnchanged();
+    },
+  );
+
+  test(
+    'repair advertises only permitted scope keys without discarding lore facts',
+    () async {
+      await fixture.seedLoreOnlyObservation(
+        additionalTrackers: const {'npc:bob.attitude': 'observant'},
+      );
+      var calls = 0;
+      final result = await fixture
+          .service((_, prompt) async {
+            calls++;
+            if (calls == 1) return _ok(fixture.cardBatchOutput);
+            if (calls == 2) {
+              final correction = prompt.split('# Required correction').last;
+              expect(correction, contains('available keys: ["npc:bob"]'));
+              expect(
+                correction,
+                isNot(contains('available keys: ["npc:alice"')),
+              );
+              expect(correction, contains('do not retarget or rename'));
+              expect(
+                correction,
+                contains(
+                  '{"operations":[]} if no allowed card operations remain',
+                ),
+              );
+              return _ok('{"operations":[]}');
+            }
+            expect(prompt, contains('lore-only-observation'));
+            expect(prompt, contains('npc:alice.attitude'));
+            return _ok(fixture.lorebookBatchOutput);
+          })
+          .runOneBatch('session');
+
+      expect(result.kind, 'persisted', reason: result.detail);
+      expect(calls, 3);
+      await fixture.expectCanonRowsUnchanged();
+    },
+  );
+
+  test(
+    'legacy completed forbidden repair is not replayed or overwritten',
+    () async {
+      await fixture.seedLoreOnlyObservation();
+      var calls = 0;
+      final service = fixture.service((_, _) async {
+        calls++;
+        return _ok(fixture.cardBatchOutput);
+      });
+      expect((await service.runOneBatch('session')).kind, 'invalidCardOutput');
+      final failed = await fixture.db
+          .select(fixture.db.cardEvolutionClaims)
+          .getSingle();
+      const owner = 'legacy-fixture-owner';
+      final now = currentTimestampSeconds();
+      final claimed = await fixture.repo.claimFailedWriter(
+        claimId: failed.id,
+        ownerId: owner,
+        now: now,
+        leaseSeconds: 600,
+      );
+      expect(claimed.isClaimed, isTrue);
+      final checkpoints = CardEvolutionWriterCallRepo(fixture.db);
+      final repair = (await checkpoints.readChain(failed.id)).last;
+      expect(
+        await checkpoints.retryFailed(
+          id: repair.id,
+          claimId: failed.id,
+          ownerId: owner,
+          now: now,
+        ),
+        isTrue,
+      );
+      // Emulate a legacy version that accepted this structurally valid repair,
+      // then completed lore, before finalization rejected the card destination.
+      final cardOperations = CardRewriteOperationParser.parseEvolutionBatch(
+        fixture.cardBatchOutput,
+      )!;
+      expect(
+        await checkpoints.completeCall(
+          id: repair.id,
+          claimId: failed.id,
+          ownerId: owner,
+          now: now,
+          responseText: fixture.cardBatchOutput,
+          resultJson: _encodedOperations(cardOperations),
+          source: 'model',
+          parserCode: 'accepted',
+          lastCallId: 'legacy-card-repair-call',
+        ),
+        isTrue,
+      );
+      final lore = await checkpoints.prepareNextCall(
+        claimId: failed.id,
+        ownerId: owner,
+        now: now,
+        ordinal: 3,
+        stage: 'lorebook_writer',
+        stageOrdinal: 1,
+        prompt: 'saved legacy lorebook request',
+        parentCallId: 'legacy-card-repair-call',
+      );
+      expect(
+        await checkpoints.completeCall(
+          id: lore.row!.id,
+          claimId: failed.id,
+          ownerId: owner,
+          now: now,
+          responseText: fixture.lorebookBatchOutput,
+          resultJson: _encodedOperations(
+            CardRewriteOperationParser.parseLorebookEvolutionBatch(
+              fixture.lorebookBatchOutput,
+            )!,
+          ),
+          source: 'model',
+          parserCode: 'accepted',
+          lastCallId: 'legacy-lore-call',
+        ),
+        isTrue,
+      );
+      await fixture.repo.markWriterFailed(
+        claimId: failed.id,
+        ownerId: owner,
+        now: now,
+        code: 'invalidCardObservationTarget',
+      );
+      final before = await checkpoints.readChain(failed.id);
+
+      final replay = await service.resumeFailedWriter(failed.id);
+
+      expect(replay.kind, 'invalidCardObservationTarget');
+      expect(
+        replay.detail,
+        contains('Stored completed card_repair checkpoint ${repair.id}'),
+      );
+      expect(replay.detail, contains('immutable checkpoint is retained'));
+      expect(calls, 2);
+      expect(await checkpoints.readChain(failed.id), before);
+      expect((await fixture.repo.getClaimById(failed.id))!.status, 'failed');
+      await fixture.expectNoProposalOrCanonWrites();
+    },
+  );
+
+  test(
+    'legacy accepted card checkpoint fails replay without another model call',
+    () async {
+      await fixture.seedLoreOnlyObservation();
+      var calls = 0;
+      final service = fixture.service((_, _) async {
+        calls++;
+        return const AuxCallOutcome(status: AgentOperationStatus.httpError);
+      });
+      expect((await service.runOneBatch('session')).kind, 'cardModelFailed');
+      final failed = await fixture.db
+          .select(fixture.db.cardEvolutionClaims)
+          .getSingle();
+      const owner = 'legacy-card-fixture-owner';
+      final now = currentTimestampSeconds();
+      expect(
+        (await fixture.repo.claimFailedWriter(
+          claimId: failed.id,
+          ownerId: owner,
+          now: now,
+          leaseSeconds: 600,
+        )).isClaimed,
+        isTrue,
+      );
+      final checkpoints = CardEvolutionWriterCallRepo(fixture.db);
+      final card = (await checkpoints.readChain(failed.id)).single;
+      expect(
+        await checkpoints.retryFailed(
+          id: card.id,
+          claimId: failed.id,
+          ownerId: owner,
+          now: now,
+        ),
+        isTrue,
+      );
+      expect(
+        await checkpoints.completeCall(
+          id: card.id,
+          claimId: failed.id,
+          ownerId: owner,
+          now: now,
+          responseText: fixture.cardBatchOutput,
+          resultJson: _encodedOperations(
+            CardRewriteOperationParser.parseEvolutionBatch(
+              fixture.cardBatchOutput,
+            )!,
+          ),
+          source: 'model',
+          parserCode: 'accepted',
+          lastCallId: 'legacy-card-call',
+        ),
+        isTrue,
+      );
+      await fixture.repo.markWriterFailed(
+        claimId: failed.id,
+        ownerId: owner,
+        now: now,
+        code: 'invalidCardObservationTarget',
+      );
+      final before = await checkpoints.readChain(failed.id);
+
+      final replay = await service.resumeFailedWriter(failed.id);
+
+      expect(replay.kind, 'invalidCardObservationTarget');
+      expect(
+        replay.detail,
+        contains('Stored completed card_writer checkpoint ${card.id}'),
+      );
+      expect(calls, 1);
+      expect(await checkpoints.readChain(failed.id), before);
+      await fixture.expectNoProposalOrCanonWrites();
+    },
+  );
+
   test('evolved lorebook entries keep their diverged base', () async {
     await _seedManifest(fixture.db, 'a1', 'entry one');
     await fixture.db
@@ -879,6 +1246,98 @@ final class _Fixture {
     timeoutMs: timeoutMs,
   );
 
+  Future<void> seedLoreOnlyObservation({
+    String scope = 'npc:alice',
+    Map<String, String> additionalTrackers = const {},
+  }) async {
+    await _seedManifest(db, 'a1', 'entry one');
+    final trackers = [
+      for (final entry in {
+        '$scope.attitude': 'increasingly trusting',
+        ...additionalTrackers,
+      }.entries)
+        Tracker(
+          sessionId: 'session',
+          name: entry.key,
+          value: entry.value,
+          scope: 'ledger',
+          provenance: 'ledger',
+          updatedAt: 1,
+        ),
+    ];
+    for (final tracker in trackers) {
+      await db.customStatement(
+        'INSERT INTO tracker_rows (session_id, name, value, scope, provenance, updated_at) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          tracker.sessionId,
+          tracker.name,
+          tracker.value,
+          tracker.scope,
+          tracker.provenance,
+          tracker.updatedAt,
+        ],
+      );
+    }
+    await CardEvolutionObservationRepo(db).insertObservation(
+      CardEvolutionObservation(
+        id: 'lore-only-observation',
+        sessionId: 'session',
+        characterId: 'character',
+        runOrdinal: 1,
+        semanticScopeKey: scope,
+        observedChange: 'The injected entry needs an update.',
+        canonicalClaim: 'A durable lore-only update.',
+        evidenceClusters: const [
+          ['a1'],
+        ],
+        retrievalKeys: [scope],
+        targetKind: 'injected_lorebook_entry',
+        lorebookEntryId: 'entry-a1-0',
+        confidence: 0.9,
+        status: 'active',
+        firstSeenRun: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      ),
+    );
+    // Writer selection reads the committed historical state before a2, not
+    // live NPC rows. Seed one complete snapshot on the included a1 anchor,
+    // before any writer claim fixes its immutable selected input.
+    await TrackerSnapshotRepo(db).upsert(
+      TrackerSnapshot(
+        sessionId: 'session',
+        messageId: 'a1',
+        swipeId: 0,
+        agentSwipeId: 0,
+        trackers: trackers,
+        committed: true,
+        createdAt: 1,
+      ),
+    );
+    final snapshot = await repo.buildObservationSnapshot('session');
+    expect(snapshot, isNotNull);
+    final selected = jsonDecode(snapshot!.selectedInputJson) as Map;
+    expect(
+      (selected['accumulatedObservations'] as List).map(
+        (observation) => (observation as Map)['id'],
+      ),
+      contains('lore-only-observation'),
+    );
+    expect(
+      ((selected['effectiveCanon'] as Map)['trackers'] as List).map(
+        (tracker) => (tracker as Map)['name'],
+      ),
+      containsAll(trackers.map((tracker) => tracker.name)),
+    );
+    expect(
+      (selected['availableObservationRetrievalTargets'] as List).map(
+        (target) => (target as Map)['key'],
+      ),
+      contains(scope),
+    );
+  }
+
   Future<void> expectNoProposalOrCanonWrites() async {
     expect(await db.select(db.rewriteJobs).get(), isEmpty);
     expect(await db.select(db.cardEvolutionProposalRuns).get(), isEmpty);
@@ -964,3 +1423,9 @@ Future<void> _seedManifestEntries(
 
 AuxCallOutcome _ok(String text) =>
     AuxCallOutcome(status: AgentOperationStatus.ok, text: text);
+
+String _encodedOperations(Iterable<RewriteOperationSnapshot> operations) =>
+    jsonEncode([
+      for (final operation in operations)
+        jsonDecode(RewriteOperationSnapshotCodec.encode(operation)),
+    ]);
