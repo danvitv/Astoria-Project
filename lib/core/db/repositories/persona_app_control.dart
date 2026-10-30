@@ -24,8 +24,9 @@ extension PersonaAppControl on PersonaRepo {
       _db.transaction(() async {
         if (!current()) return false;
         await _ensureDisplayNameColumn();
-        if (!current() || await getById(value.id) != null || !current())
+        if (!current() || await getById(value.id) != null || !current()) {
           return false;
+        }
         await _db.customStatement(
           '''
         INSERT INTO personas (persona_id, name, display_name, prompt, created_at)

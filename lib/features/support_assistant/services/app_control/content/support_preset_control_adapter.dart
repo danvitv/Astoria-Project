@@ -142,8 +142,9 @@ final class SupportPresetControlAdapter implements SupportAppActionAdapter {
         {'operation', 'id', 'name', 'text', 'clearText', 'role'},
         {'name'},
       );
-      if (a.containsKey('text') || a.containsKey('clearText'))
+      if (a.containsKey('text') || a.containsKey('clearText')) {
         text = SupportContentTextArguments.selected(a);
+      }
     } else if (op == SupportPresetBlockOperation.editText) {
       SupportContentArguments.shape(
         a,
@@ -157,10 +158,11 @@ final class SupportPresetControlAdapter implements SupportAppActionAdapter {
         {'operation', 'id', 'blockId', 'enabled', 'role', 'depth'},
         {'blockId'},
       );
-      if (a.length < 4)
+      if (a.length < 4) {
         throw const SupportAppActionRefused(
           SupportAppActionCode.invalidArguments,
         );
+      }
     }
     final before = await repo.getById(a['id']! as String);
     if (!context.current || before == null) return null;
@@ -170,8 +172,9 @@ final class SupportPresetControlAdapter implements SupportAppActionAdapter {
     if (op != SupportPresetBlockOperation.create) {
       final block = before.blocks.where((b) => b.id == id).firstOrNull;
       if (block == null) return null;
-      if (block.isStatic)
+      if (block.isStatic) {
         throw const SupportAppActionRefused(SupportAppActionCode.denied);
+      }
     }
     return mutations.prepare(
       domain: SupportContentDomain.preset,

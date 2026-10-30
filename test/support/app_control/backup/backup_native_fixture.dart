@@ -430,7 +430,7 @@ final class BackupNativeFixture {
     if (routerReady) await failure.run(router.dispose);
     if (databaseReady) await failure.run(closeDatabase);
     if (opened) await failure.run(writer.close);
-    if (created)
+    if (created) {
       await failure.run(() async {
         await for (final entry in directory.list(followLinks: false)) {
           expect(p.dirname(entry.path), directory.path);
@@ -442,6 +442,7 @@ final class BackupNativeFixture {
         }
         await directory.delete();
       });
+    }
     failure.throwIfAny();
   }
 }
@@ -500,8 +501,9 @@ final class BackupOriginalReadRoot
     if (retired ||
         !identical(context, original) ||
         !context.current ||
-        !selection.belongsToOriginalDatabase(db))
+        !selection.belongsToOriginalDatabase(db)) {
       return null;
+    }
     SupportBackupRootLease? lease;
     final admitted = await reader.admitDispatch(
       snapshots: [snapshot],
@@ -549,8 +551,9 @@ final class BackupSyntheticFileDialog implements SupportBackupFileDialog {
 
   void choose(String? syntheticPath) {
     final pending = _pending;
-    if (pending == null || pending.isCompleted)
+    if (pending == null || pending.isCompleted) {
       throw StateError('No original picker');
+    }
     pending.complete(syntheticPath);
   }
 
@@ -819,8 +822,9 @@ final class BackupNativePhaseProbe {
     );
     // Auxiliary frame/I/O observations must not overwrite the actual original
     // native modal/picker/ROOT phase while it is pending (or hide its error).
-    if (retain)
+    if (retain) {
       _signals.putIfAbsent(phase, () => (done: () => done, check: check));
+    }
     return (
       original: original,
       done: () => done,

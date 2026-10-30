@@ -179,7 +179,7 @@ final class SessionMemoryFixture {
       (_) {
         _pendingCalls.remove(operation);
       },
-      onError: (Object _, StackTrace __) {
+      onError: (Object _, StackTrace _) {
         _pendingCalls.remove(operation);
       },
     );
@@ -316,8 +316,9 @@ final class SessionMemoryFixture {
       'tracker_snapshots',
       'llm_request_capture_rows',
     };
-    if (!tables.contains(table))
+    if (!tables.contains(table)) {
       throw StateError('Unknown synthetic evidence table.');
+    }
     return jsonEncode(
       (await db.customSelect('SELECT * FROM $table').get())
           .map((r) => r.data)
@@ -335,7 +336,7 @@ final class _SessionMemoryDatabase extends AppDatabase {
 
 /// Deterministic scheduling seam, followed by the REAL conditional DB method.
 final class DelayedControlBookRepo extends MemoryBookRepo {
-  DelayedControlBookRepo(AppDatabase database, Ref ref) : super(database, ref);
+  DelayedControlBookRepo(super.database, super.ref);
   SessionMemoryBarrier? beforePatch;
   void Function()? afterPatch;
   @override
@@ -358,7 +359,7 @@ final class DelayedControlBookRepo extends MemoryBookRepo {
 /// The production catalog builder/DB replacement runs, then the original source
 /// can retire before its enclosing Memory Book transaction commits.
 final class DelayedControlCatalogRepo extends MemoryCatalogRepo {
-  DelayedControlCatalogRepo(AppDatabase database) : super(database);
+  DelayedControlCatalogRepo(super.database);
   void Function()? afterRebuild;
   @override
   Future<List<MemoryCatalogRow>> rebuildForMemoryBook(MemoryBook book) async {

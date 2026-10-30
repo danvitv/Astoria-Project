@@ -84,8 +84,9 @@ final class KeylessTerminalEffectPermit {
   }
 
   Future<void> admitAtMutationStart() async {
-    if (_dispatched || _consumed || !current)
+    if (_dispatched || _consumed || !current) {
       throw const KeylessApiConfigException();
+    }
     await _plan._owner._admission.admit(KeylessTerminalEffectDispatch._(this));
     if (!_dispatched || !current) throw const KeylessApiConfigException();
   }
@@ -99,8 +100,9 @@ final class KeylessTerminalEffectPermit {
         _consumed ||
         !current ||
         !custody.isRootCurrent ||
-        !current)
+        !current) {
       return false;
+    }
     _consumed = true;
     _custody = custody;
     return current;

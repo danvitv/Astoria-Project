@@ -99,8 +99,9 @@ final class SupportAppIntegrityAdapter implements SupportAppActionAdapter {
                 : DatabaseMaintenancePhysicalCheck.quick,
             rowsPerTable: arguments['rowsPerTable'] as int? ?? 256,
           );
-          if (!live())
+          if (!live()) {
             return SupportAppActionOutcome(SupportAppActionCode.stale);
+          }
           final offset = arguments['offset'] as int? ?? 0;
           final tables = report.tables.skip(offset).take(16).toList();
           // Registry list <=32/depth <=4; the core's all61 report is deliberately
@@ -193,16 +194,18 @@ final class SupportAppIntegrityAdapter implements SupportAppActionAdapter {
               context.domainEffectForOperation(
                 SupportAppDomainOperation.databaseUndo,
               )) ||
-          !admitted())
+          !admitted()) {
         retired = true;
+      }
       return !retired;
     }
 
     if (!live()) return SupportAppActionOutcome(SupportAppActionCode.stale);
     try {
       final receipt = await write(live);
-      if (receipt == null)
+      if (receipt == null) {
         return SupportAppActionOutcome(SupportAppActionCode.conflict);
+      }
       // Do not erase actual commit when Stop lands during acknowledgement.
       if (consumedReceipt != null) _receipts.remove(consumedReceipt);
       final conflict =
@@ -228,7 +231,7 @@ final class SupportAppIntegrityAdapter implements SupportAppActionAdapter {
           'outcome': receipt.outcome.name,
           'affectedRows': conflict ? 0 : 1,
           'refreshPending': !conflict && !refreshed,
-          if (handle != null) 'receipt': handle,
+          'receipt': ?handle,
         },
       );
     } on DatabaseMaintenanceException {

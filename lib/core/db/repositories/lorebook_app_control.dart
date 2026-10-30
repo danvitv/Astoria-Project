@@ -43,8 +43,9 @@ extension LorebookAppControl on LorebookRepo {
       _db.transaction(() async {
         if (!current() ||
             value.activationScope != 'global' ||
-            value.activationTargetId != null)
+            value.activationTargetId != null) {
           return false;
+        }
         if (await getById(value.id) != null || !current()) return false;
         await _db.into(_db.lorebooks).insert(_toCompanion(value));
         return true;
@@ -75,8 +76,9 @@ extension LorebookAppControl on LorebookRepo {
     if (!current() ||
         row == null ||
         _toModel(row) != expected ||
-        row.activationScope == 'chat')
+        row.activationScope == 'chat') {
       return false;
+    }
     String? entriesJson;
     if (entryId != null) {
       final entries = (jsonDecode(row.entriesJson) as List)
@@ -95,8 +97,10 @@ extension LorebookAppControl on LorebookRepo {
           ).toJson(),
         );
       } else {
-        if (index == -1 || entries.where((e) => e['id'] == entryId).length != 1)
+        if (index == -1 ||
+            entries.where((e) => e['id'] == entryId).length != 1) {
           return false;
+        }
         final entry = entries[index];
         if (entryContent != null) entry['content'] = entryContent;
         if (entryComment != null) entry['comment'] = entryComment;
@@ -113,8 +117,9 @@ extension LorebookAppControl on LorebookRepo {
           ? <String, dynamic>{}
           : Map<String, dynamic>.from(jsonDecode(row.settingsJson) as Map);
       if (scanDepth != null) settings['scanDepth'] = scanDepth;
-      if (maxInjectedEntries != null)
+      if (maxInjectedEntries != null) {
         settings['maxInjectedEntries'] = maxInjectedEntries;
+      }
       settingsJson = jsonEncode(settings);
     }
     if (!current()) return false;

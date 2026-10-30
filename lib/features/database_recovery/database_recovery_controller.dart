@@ -186,8 +186,9 @@ final class DatabaseRecoveryController extends Notifier<DatabaseRecoveryState> {
         operation.retired ||
         state.phase != DatabaseRecoveryPhase.proposal ||
         !identical(state.proposal, proposal) ||
-        operation.confirmed)
+        operation.confirmed) {
       return Future<void>.value();
+    }
     _publish(
       DatabaseRecoveryState(
         phase: DatabaseRecoveryPhase.restoring,
@@ -227,8 +228,9 @@ final class DatabaseRecoveryController extends Notifier<DatabaseRecoveryState> {
 
   Future<void> cancel() {
     final operation = _operation;
-    if (operation == null || _cancelWork != null)
+    if (operation == null || _cancelWork != null) {
       return _cancelWork ?? Future<void>.value();
+    }
     _publish(
       const DatabaseRecoveryState(phase: DatabaseRecoveryPhase.cancelling),
     );

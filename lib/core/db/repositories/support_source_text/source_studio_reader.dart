@@ -31,11 +31,13 @@ extension _SourceStudioReader on SupportSourceTextRepo {
         .getSingleOrNull();
     guard();
     if (row == null) _deny(SupportSourceReadFailure.notFound);
-    if (row.read<int>('valid') != 1)
+    if (row.read<int>('valid') != 1) {
       _deny(SupportSourceReadFailure.unsupportedFormat);
+    }
     if (row.read<int>('bytes') > SupportSourceTextRepo.maxStudioStoredBytes ||
-        row.read<int>('chars') > SupportSourceTextRepo.maxStudioStoredBytes)
+        row.read<int>('chars') > SupportSourceTextRepo.maxStudioStoredBytes) {
       _deny(SupportSourceReadFailure.tooLarge);
+    }
     return (row.read<int>('chars'), row.read<int>('bytes'));
   }
 
@@ -45,8 +47,9 @@ extension _SourceStudioReader on SupportSourceTextRepo {
   ) async {
     final extent = await _studioExtent(observation.sourceId, guard);
     guard();
-    if (extent != (observation.textCharacters, observation.textBytes))
+    if (extent != (observation.textCharacters, observation.textBytes)) {
       _deny(SupportSourceReadFailure.changed);
+    }
     final row = await _db
         .customSelect(
           '''SELECT blocks_json, agents_json, agent_enabled_json,
@@ -61,8 +64,9 @@ extension _SourceStudioReader on SupportSourceTextRepo {
     final raw = row.data;
     final decoded = <String, Object?>{};
     for (final key in _definitionColumns) {
-      if (raw[key] is! String)
+      if (raw[key] is! String) {
         _deny(SupportSourceReadFailure.unsupportedFormat);
+      }
       decoded[key] = SupportSourceJson.decode(
         raw[key] as String,
         maxBytes: SupportSourceTextRepo.maxStudioStoredBytes,
@@ -76,8 +80,9 @@ extension _SourceStudioReader on SupportSourceTextRepo {
       'ledger_api_config_id',
     ]) {
       if (raw[key] is! String ||
-          ((raw[key] as String).isNotEmpty && !_identity(raw[key])))
+          ((raw[key] as String).isNotEmpty && !_identity(raw[key]))) {
         _deny(SupportSourceReadFailure.unsupportedFormat);
+      }
     }
     final definition = <String, Object?>{
       'blocks': decoded['blocks_json'],
@@ -102,15 +107,17 @@ extension _SourceStudioReader on SupportSourceTextRepo {
     var safeBytes = 0;
     void bound(int bytes) {
       safeBytes += bytes;
-      if (safeBytes > SupportSourceTextRepo.maxStudioDefinitionBytes)
+      if (safeBytes > SupportSourceTextRepo.maxStudioDefinitionBytes) {
         _deny(SupportSourceReadFailure.tooLarge);
+      }
     }
 
     Object? safe(Object? value) {
       if (value is String) {
         final result = redactor.redactText(value);
-        if (result.contains(SecretRedactor.limited))
+        if (result.contains(SecretRedactor.limited)) {
           _deny(SupportSourceReadFailure.tooLarge);
+        }
         bound(_studioJsonStringBytes(result));
         return result;
       }
@@ -147,11 +154,13 @@ extension _SourceStudioReader on SupportSourceTextRepo {
     }
     final definitionJson = jsonEncode(safeDefinition);
     if (utf8.encode(definitionJson).length >
-        SupportSourceTextRepo.maxStudioDefinitionBytes)
+        SupportSourceTextRepo.maxStudioDefinitionBytes) {
       _deny(SupportSourceReadFailure.tooLarge);
+    }
     final parts = _studioParts(definitionJson);
-    if (observation.studioPage >= parts.length)
+    if (observation.studioPage >= parts.length) {
       _deny(SupportSourceReadFailure.notFound);
+    }
     final part = parts[observation.studioPage];
     result.addAll({
       'definitionChunk': definitionJson.substring(part.$1, part.$2),
@@ -261,8 +270,9 @@ final class _StudioSourceShape {
           (integers.contains(key) &&
               item is int &&
               item.abs() <= 8640000000000000) ||
-          (numbers.contains(key) && item is num && item.isFinite))
+          (numbers.contains(key) && item is num && item.isFinite)) {
         continue;
+      }
       bad();
     }
   }
@@ -270,8 +280,9 @@ final class _StudioSourceShape {
   void choice(Map<String, Object?> value, String key, Set<String> choices) {
     if (value.containsKey(key) &&
         value[key] != null &&
-        !choices.contains(value[key]))
+        !choices.contains(value[key])) {
       bad();
+    }
   }
 
   void stringList(Object? value) {
@@ -317,8 +328,9 @@ final class _StudioSourceShape {
       if (!repo._identity(block['id']) ||
           !ids.add(block['id'] as String) ||
           (block['type'] is! String && block['kind'] is! String) ||
-          block['content'] is! String)
+          block['content'] is! String) {
         bad();
+      }
       if (block['locked'] == true) repo._deny(SupportSourceReadFailure.locked);
       choice(block, 'type', const {
         'instruction',
@@ -413,8 +425,9 @@ final class _StudioSourceShape {
         booleans: const {'enabled'},
         integers: const {'order', 'maxParallelJobs'},
       );
-      if (!repo._identity(agent['id']) || !ids.add(agent['id'] as String))
+      if (!repo._identity(agent['id']) || !ids.add(agent['id'] as String)) {
         bad();
+      }
       choice(agent, 'refreshPolicy', const {'static', 'scene', 'turn'});
       choice(agent, 'phase', const {'pre_generation', 'post_processing'});
       choice(agent, 'reasoningMode', const {'normal', 'think-replacement'});
@@ -470,13 +483,15 @@ final class _StudioSourceShape {
       'gapFiller',
       'disabled',
     });
-    if (runtime.containsKey('broadcastBlocks'))
+    if (runtime.containsKey('broadcastBlocks')) {
       stringList(runtime['broadcastBlocks']);
+    }
     // Native controlAgentToggle persists this separate boolean restoration
     // map. Unlike the list-valued block restoration state, do not reinterpret
     // its values or let tolerant controlObserve discard malformed entries.
-    if (runtime.containsKey('agentEnabledBeforeDependencyOff'))
+    if (runtime.containsKey('agentEnabledBeforeDependencyOff')) {
       booleanMap(runtime['agentEnabledBeforeDependencyOff']);
+    }
     for (final key in [
       'agentBlockRestoreState',
       'controllerAlternativeBlockIds',
@@ -508,7 +523,7 @@ final class _StudioSourceShape {
         'disabled',
       });
     }
-    if (runtime['cardRewriter'] != null)
+    if (runtime['cardRewriter'] != null) {
       fields(
         map(runtime['cardRewriter']),
         strings: const {'apiConfigId', 'modelOverride'},
@@ -520,6 +535,7 @@ final class _StudioSourceShape {
         },
         numbers: const {'observationMinConfidence'},
       );
+    }
     if (runtime['cleaner'] != null) {
       final cleaner = Map<String, Object?>.of(map(runtime['cleaner']));
       final hasExtra = cleaner.containsKey('postCleanerExtraRequestParameters');

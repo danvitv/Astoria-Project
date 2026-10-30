@@ -513,8 +513,9 @@ class SupportWorkspaceNotifier extends Notifier<SupportWorkspaceState> {
         message.isLocked ||
         body.trim().isEmpty ||
         body.length > 8192 ||
-        body == message.body)
+        body == message.body) {
       return Future.value(false);
+    }
     final owner = _owner, writes = _writes;
     // The original response cannot finish against a question changed beneath it.
     writes.invalidateMessage(message.sessionId, message.id);

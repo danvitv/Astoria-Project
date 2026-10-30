@@ -91,8 +91,9 @@ final class SupportNativeDomainAdapter implements SupportAppActionAdapter {
           return SupportAppActionOutcome(SupportAppActionCode.stale);
         }
         final custody = dispatch.consume();
-        if (custody == null)
+        if (custody == null) {
           return SupportAppActionOutcome(SupportAppActionCode.stale);
+        }
         final scope = observed.begin(
           custody,
         ); // synchronous BEFORE any effect await
@@ -103,8 +104,9 @@ final class SupportNativeDomainAdapter implements SupportAppActionAdapter {
         }
         try {
           Future<SupportAppActionOutcome> effect() async {
-            if (!scope.isCurrent)
+            if (!scope.isCurrent) {
               return SupportAppActionOutcome(SupportAppActionCode.stale);
+            }
             if (queued == null && !fresh) {
               // Resolve the latest related session inventory in the native owner
               // before effect. New/removed sessions change confirmed collateral;
@@ -123,8 +125,9 @@ final class SupportNativeDomainAdapter implements SupportAppActionAdapter {
 
           // Repair runtime already uses this ORIGINAL queue. Never nest run().
           final outcome = await (isRepair ? effect() : scope.run(effect));
-          if (outcome.effect != SupportAppActionEffect.persisted)
+          if (outcome.effect != SupportAppActionEffect.persisted) {
             return outcome;
+          }
           var refreshed = false;
           try {
             refreshed = await scope.refreshLatest();

@@ -234,8 +234,9 @@ void main() {
             if (sql.contains('support_context_blocks')) wrote = true;
           };
           f.sql.afterSelect = (sql) async {
-            if (wrote && sql.contains('support_context_blocks'))
+            if (wrote && sql.contains('support_context_blocks')) {
               f.current = false;
+            }
           };
         }
         expect(await extend(observation), isNull);

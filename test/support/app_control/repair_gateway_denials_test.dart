@@ -136,8 +136,9 @@ void main() {
         f.base.hook = (event) async {
           if (triggered ||
               !event.startsWith('encrypt:') ||
-              !event.contains('before_ciphertext'))
+              !event.contains('before_ciphertext')) {
             return;
+          }
           triggered = true;
           switch (retirement) {
             case 'cancel':

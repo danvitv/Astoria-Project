@@ -125,8 +125,9 @@ final class SupportAppSessionRepairAdapter implements SupportAppActionAdapter {
         if (owner == null ||
             checkpoint == null ||
             owners == null ||
-            jobsCurrent == null)
+            jobsCurrent == null) {
           return null;
+        }
         bool current() =>
             context.current &&
             runtime.current &&
@@ -395,7 +396,7 @@ final class SupportAppSessionRepairAdapter implements SupportAppActionAdapter {
           'outcome': receipt.outcome.name,
           'affectedRecords': receipt.affectedRecords,
           'refreshPending': !conflict && !refreshed,
-          if (handle != null) 'receipt': handle,
+          'receipt': ?handle,
         },
       );
     } on SessionRepairStorageException {

@@ -48,8 +48,9 @@ extension PresetAppControl on PresetRepo {
 
   Future<bool> controlCreate(Preset value, bool Function() current) =>
       _db.transaction(() async {
-        if (!current() || await getById(value.id) != null || !current())
+        if (!current() || await getById(value.id) != null || !current()) {
           return false;
+        }
         await _db.into(_db.presets).insert(_toCompanion(value));
         return true;
       });
@@ -95,8 +96,9 @@ extension PresetAppControl on PresetRepo {
             blocks.where((b) => b['id'] == blockId).length != 1 ||
             expected.blocks
                 .where((b) => b.id == blockId)
-                .any((b) => b.isStatic))
+                .any((b) => b.isStatic)) {
           return false;
+        }
         final block = blocks[index];
         if (value != null) block['content'] = value;
         if (enabled != null) block['enabled'] = enabled;

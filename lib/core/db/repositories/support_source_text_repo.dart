@@ -114,8 +114,9 @@ final class SupportSourceTextRepo {
       final snapshot = await _db.transaction(() async {
         _authority(observation, authority);
         final stamp = await _stamp(() => _authority(observation, authority));
-        if (stamp != observation._stamp)
+        if (stamp != observation._stamp) {
           _deny(SupportSourceReadFailure.changed);
+        }
         final value = await _materialize(observation, authority);
         _authority(observation, authority);
         final after = await _stamp(() => _authority(observation, authority));
@@ -157,8 +158,9 @@ final class SupportSourceTextRepo {
         return result;
       });
       _authority(snapshot._observation, authority);
-      if (next._digest != snapshot._digest || next._json != snapshot._json)
+      if (next._digest != snapshot._digest || next._json != snapshot._json) {
         _deny(SupportSourceReadFailure.changed);
+      }
       return true;
     } on SupportSourceReadException catch (error) {
       snapshot._refusal = error.failure;
@@ -179,8 +181,9 @@ final class SupportSourceTextRepo {
     required SupportSourceSnapshot snapshot,
     required SupportSourceReadAuthority authority,
   }) async {
-    if (!await revalidate(snapshot: snapshot, authority: authority))
+    if (!await revalidate(snapshot: snapshot, authority: authority)) {
       _deny(snapshot._refusal ?? SupportSourceReadFailure.unavailable);
+    }
     _authority(snapshot._observation, authority);
     return snapshot._json;
   }
@@ -197,8 +200,9 @@ final class SupportSourceTextRepo {
       guard,
     );
     guard();
-    if (!_equal(header, observation._header))
+    if (!_equal(header, observation._header)) {
       _deny(SupportSourceReadFailure.changed);
+    }
     return observation.domain == SupportSourceDomain.game
         ? _game(observation, guard)
         : _studio(observation, guard);
@@ -210,8 +214,9 @@ final class SupportSourceTextRepo {
     Map<String, Object?> result,
   ) {
     final json = jsonEncode(result);
-    if (utf8.encode(json).length > maxToolResultBytes)
+    if (utf8.encode(json).length > maxToolResultBytes) {
       _deny(SupportSourceReadFailure.tooLarge);
+    }
     final digest = sha256
         .convert(utf8.encode(jsonEncode(privateMaterial)))
         .toString();
@@ -227,8 +232,9 @@ final class SupportSourceTextRepo {
         !identical(authority.observation, observation) ||
         !authority.isCurrent ||
         source == null ||
-        !_text.retainsNativeDataSource(source))
+        !_text.retainsNativeDataSource(source)) {
       _deny();
+    }
   }
 
   Future<(int, int)> _stamp(void Function() guard) async {

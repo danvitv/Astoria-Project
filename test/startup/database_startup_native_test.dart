@@ -125,14 +125,16 @@ void main() {
         );
         NativeDatabaseStartupOwner? startup;
         try {
-          if (markerBeforeAcquisition)
+          if (markerBeforeAcquisition) {
             marker.writeAsStringSync('fixture marker');
+          }
           startup = NativeDatabaseStartupOwner.acquire(
             existingStartupDirectory: anchor,
             target: paths.target,
           );
-          if (!markerBeforeAcquisition)
+          if (!markerBeforeAcquisition) {
             marker.writeAsStringSync('fixture marker');
+          }
           expect(
             () => startup!.claimNormalOpening(),
             throwsA(

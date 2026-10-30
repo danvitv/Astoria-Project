@@ -77,8 +77,9 @@ extension StudioPresetAppControl on StudioPresetRepo {
     if (latest != expected) return false;
     if (await getById(id) != null || !current()) return false;
     final next = latest.copyWith(id: id, name: name, updatedAt: timestamp);
-    if (StudioPresetValidator.hasErrors(StudioPresetValidator.validate(next)))
+    if (StudioPresetValidator.hasErrors(StudioPresetValidator.validate(next))) {
       return false;
+    }
     if (!current()) return false;
     await db
         .into(db.studioPresetRows)
@@ -134,8 +135,9 @@ extension StudioPresetAppControl on StudioPresetRepo {
             block.locked ||
             block.isStatic ||
             block.type != StudioBlockType.instruction ||
-            block.mode != 'direct')
+            block.mode != 'direct') {
           return false;
+        }
         blocks.add(block.toJson());
       } else {
         if (index == -1 ||
@@ -144,18 +146,23 @@ extension StudioPresetAppControl on StudioPresetRepo {
             before.locked ||
             before.isStatic ||
             before.type != StudioBlockType.instruction ||
-            before.mode != 'direct')
+            before.mode != 'direct') {
           return false;
+        }
         // Only editable fields change; preserve raw routing/import fields.
         final raw = blocks[index];
-        if (blockFields.contains(StudioControlBlockField.content))
+        if (blockFields.contains(StudioControlBlockField.content)) {
           raw['content'] = block.content;
-        if (blockFields.contains(StudioControlBlockField.enabled))
+        }
+        if (blockFields.contains(StudioControlBlockField.enabled)) {
           raw['enabled'] = block.enabled;
-        if (blockFields.contains(StudioControlBlockField.role))
+        }
+        if (blockFields.contains(StudioControlBlockField.role)) {
           raw['role'] = block.role;
-        if (blockFields.contains(StudioControlBlockField.order))
+        }
+        if (blockFields.contains(StudioControlBlockField.order)) {
           raw['order'] = block.order;
+        }
         if (blockFields.contains(StudioControlBlockField.depth)) {
           raw['depth'] = block.depth;
           raw['insertionMode'] = 'depth';
@@ -166,8 +173,9 @@ extension StudioPresetAppControl on StudioPresetRepo {
       );
       if (StudioPresetValidator.hasErrors(
         StudioPresetValidator.validate(proposed),
-      ))
+      )) {
         return false;
+      }
       blocksJson = jsonEncode(blocks);
     }
     if (!current()) return false;
@@ -208,8 +216,9 @@ extension StudioPresetAppControl on StudioPresetRepo {
     if (!current() ||
         latest == null ||
         latest != expected ||
-        toggled.id != latest.id)
+        toggled.id != latest.id) {
       return false;
+    }
     final row = await (db.select(
       db.studioPresetRows,
     )..where((t) => t.presetId.equals(latest.id))).getSingle();
@@ -228,8 +237,9 @@ extension StudioPresetAppControl on StudioPresetRepo {
       if (before.enabled != after.enabled &&
           (before.locked ||
               before.isStatic ||
-              before.type != StudioBlockType.instruction))
+              before.type != StudioBlockType.instruction)) {
         return false;
+      }
       if (before.enabled != after.enabled) block['enabled'] = after.enabled;
     }
     final runtime =
@@ -285,12 +295,14 @@ extension StudioPresetAppControl on StudioPresetRepo {
     if (cleaner) {
       if (temperature != null) settings['postCleanerTemperature'] = temperature;
       if (maxTokens != null) settings['postCleanerMaxTokens'] = maxTokens;
-      if (historyMessages != null)
+      if (historyMessages != null) {
         settings['postCleanerHistoryMessages'] = historyMessages;
+      }
       if (enabled != null) settings['postCleanerEnabled'] = enabled;
     } else {
-      if (temperature != null)
+      if (temperature != null) {
         settings['studioLedgerTemperature'] = temperature;
+      }
       if (maxTokens != null) settings['studioLedgerMaxTokens'] = maxTokens;
       if (interval != null) settings['studioLedgerIntervalN'] = interval;
     }

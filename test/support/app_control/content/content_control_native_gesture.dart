@@ -64,8 +64,9 @@ final class ContentNativeGesture
         !identical(lease.request.context, context) ||
         !identical(lease.request.observation, observation) ||
         lease.request.target != '${domain.name}:$target' ||
-        registry.isDisposed)
+        registry.isDisposed) {
       return null;
+    }
     // Synthetic native source target from THIS test gesture, never a tool arg
     // or fabricated sourceAccess grant. This exercises the real primitive fence.
     const sourceId = 'synthetic-native-content-source';

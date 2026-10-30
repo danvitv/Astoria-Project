@@ -4,8 +4,9 @@ import 'dart:convert';
 /// overwrite, arbitrary serialization, or executable values.
 abstract final class SupportSourceJson {
   static Object? decode(String raw, {int maxBytes = 65536}) {
-    if (maxBytes < 1 || utf8.encode(raw).length > maxBytes)
+    if (maxBytes < 1 || utf8.encode(raw).length > maxBytes) {
       throw const FormatException();
+    }
     final parser = _SourceJsonParser(raw);
     final value = parser.value(0);
     parser.space();
@@ -25,8 +26,9 @@ abstract final class SupportSourceJson {
           (rune >= 0x205f && rune <= 0x206f) ||
           rune == 0x3000 ||
           rune == 0xfeff ||
-          (rune >= 0xd800 && rune <= 0xdfff))
+          (rune >= 0xd800 && rune <= 0xdfff)) {
         return false;
+      }
     }
     return true;
   }
@@ -61,8 +63,11 @@ final class _SourceJsonParser {
       do {
         space();
         final key = text();
-        if (key.length > 128 || result.length >= 512 || result.containsKey(key))
+        if (key.length > 128 ||
+            result.length >= 512 ||
+            result.containsKey(key)) {
           bad();
+        }
         space();
         if (!take(':')) bad();
         result[key] = value(depth + 1);
@@ -112,8 +117,9 @@ final class _SourceJsonParser {
           if (unit >= 0xd800 && unit <= 0xdbff) {
             if (++i == decoded.length ||
                 decoded.codeUnitAt(i) < 0xdc00 ||
-                decoded.codeUnitAt(i) > 0xdfff)
+                decoded.codeUnitAt(i) > 0xdfff) {
               bad();
+            }
           } else if (unit >= 0xdc00 && unit <= 0xdfff) {
             bad();
           }

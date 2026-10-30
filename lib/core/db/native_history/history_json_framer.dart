@@ -13,8 +13,9 @@ final class HistoryJsonFramer {
     for (final byte in bytes) {
       offset++;
       if (_depth != 0) {
-        if (_unit.length == maxUnitBytes)
+        if (_unit.length == maxUnitBytes) {
           throw const FormatException('Oversized unit');
+        }
         _unit.add(byte);
         if (_string) {
           if (_escape) {
@@ -61,7 +62,8 @@ final class HistoryJsonFramer {
   }
 
   void finish() {
-    if (!complete || _depth != 0 || _string)
+    if (!complete || _depth != 0 || _string) {
       throw const FormatException('Incomplete history');
+    }
   }
 }

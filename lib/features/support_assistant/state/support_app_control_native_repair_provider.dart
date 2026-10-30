@@ -68,8 +68,9 @@ bool Function()? _captureNativeJobInventory(Ref ref) {
     if (generating?.isNotEmpty == true ||
         activeDrafts?.isNotEmpty == true ||
         drafts?.jobs.isNotEmpty == true ||
-        agentOps?.isNotEmpty == true)
+        agentOps?.isNotEmpty == true) {
       return null;
+    }
     return () {
       if (!ref.mounted) return false;
       try {

@@ -27,12 +27,14 @@ final class _RestoreSqlite implements _RestoreNativePort {
         windows.symbol(module, 'sqlite3_backup_init').address !=
             backup.address ||
         windows.symbol(module, 'sqlite3_get_autocommit').address !=
-            autocommit.address)
+            autocommit.address) {
       _refuse(DatabaseRestoreCode.unsupported);
+    }
     final control = windows.symbol(module, 'sqlite3_file_control');
     final transaction = windows.symbol(module, 'sqlite3_txn_state');
-    if (control == nullptr || transaction == nullptr)
+    if (control == nullptr || transaction == nullptr) {
       _refuse(DatabaseRestoreCode.unsupported);
+    }
     _control = control
         .cast<NativeFunction<_RestoreFileControlNative>>()
         .asFunction<_RestoreFileControl>();
@@ -46,11 +48,14 @@ final class _RestoreSqlite implements _RestoreNativePort {
   late final _RestoreFileControl _control;
   late final _RestoreTxn _txn;
   late final Pointer<nsql.sqlite3_char> main;
+  @override
   bool closed = false;
+  @override
   void check() {
     if (closed) _refuse(DatabaseRestoreCode.closed);
   }
 
+  @override
   _RestoreRaw open(String path, OpenMode mode, {bool immutable = false}) {
     check();
     windows.requirePath(path);
@@ -59,16 +64,19 @@ final class _RestoreSqlite implements _RestoreNativePort {
     return _RestoreRaw(sqlite3.open(uri, uri: true, mode: mode));
   }
 
+  @override
   void idle(_RestoreRaw raw) {
     check();
     final handle = raw.database.handle.cast<nsql.sqlite3>();
     if (nsql.sqlite3_get_autocommit(handle) != 1 ||
-        _txn(handle, main.cast()) != 0)
+        _txn(handle, main.cast()) != 0) {
       _refuse(DatabaseRestoreCode.unsupported);
+    }
   }
 
   /// Main DB physical handle identity, NOT sqlite3_db_filename equivalence.
   /// GET_HANDLE and module are borrowed; they never acquire CloseHandle rights.
+  @override
   void verify(_RestoreRaw raw, _RestorePin pin) {
     idle(raw);
     pin.check();
@@ -79,21 +87,25 @@ final class _RestoreSqlite implements _RestoreNativePort {
     try {
       final handle = raw.database.handle.cast<nsql.sqlite3>();
       if (_control(handle, main.cast(), 12, vfs.cast()) != 0 ||
-          vfs.value == nullptr)
+          vfs.value == nullptr) {
         _refuse(DatabaseRestoreCode.unsupported);
+      }
       const expected = [119, 105, 110, 51, 50, 0];
       for (var i = 0; i < expected.length; i++) {
-        if (vfs.value.cast<Uint8>()[i] != expected[i])
+        if (vfs.value.cast<Uint8>()[i] != expected[i]) {
           _refuse(DatabaseRestoreCode.unsupported);
+        }
       }
       if (_control(handle, main.cast(), 29, slot.cast()) != 0 ||
-          !windows._valid(slot.value))
+          !windows._valid(slot.value)) {
         _refuse(DatabaseRestoreCode.unsupported);
+      }
       final info = windows.information(slot.value);
       if ((info[7], info[11], info[12]) != pin.identity ||
           info[10] != 1 ||
-          (info[0] & 0x410) != 0)
+          (info[0] & 0x410) != 0) {
         _refuse(DatabaseRestoreCode.unsupported);
+      }
     } finally {
       if (vfs.value != nullptr) nsql.sqlite3_free(vfs.value.cast());
       windows.free(vfs.cast());
@@ -103,6 +115,7 @@ final class _RestoreSqlite implements _RestoreNativePort {
 
   /// SAME stock-win32 public HANDLE proof inside the real Drift read fence.
   /// Strict idle verification is unchanged; READ/NONE is not WRITE admission.
+  @override
   void verifyReadFence(_RestoreRaw raw, _RestorePin pin) {
     check();
     final db = raw.database;
@@ -125,8 +138,9 @@ final class _RestoreSqlite implements _RestoreNativePort {
         .cast<Pointer<Void>>();
     try {
       if (_control(handle, main.cast(), 12, vfs.cast()) != 0 ||
-          vfs.value == nullptr)
+          vfs.value == nullptr) {
         _refuse(DatabaseRestoreCode.unsupported);
+      }
       const expected = [119, 105, 110, 51, 50, 0];
       for (var i = 0; i < expected.length; i++) {
         if (vfs.value.cast<Uint8>()[i] != expected[i]) {
@@ -134,8 +148,9 @@ final class _RestoreSqlite implements _RestoreNativePort {
         }
       }
       if (_control(handle, main.cast(), 29, slot.cast()) != 0 ||
-          !windows._valid(slot.value))
+          !windows._valid(slot.value)) {
         _refuse(DatabaseRestoreCode.unsupported);
+      }
       final info = windows.information(slot.value);
       if ((info[7], info[11], info[12]) != pin.identity ||
           info[10] != 1 ||
@@ -149,6 +164,7 @@ final class _RestoreSqlite implements _RestoreNativePort {
     }
   }
 
+  @override
   void acquireExclusive(_RestoreRaw raw, _RestorePin pin) {
     // These settings precede FIRST access to pages or WAL. A failed BEGIN may
     // already have performed ordinary bootstrap/recovery: no untouched claim.
@@ -156,8 +172,9 @@ final class _RestoreSqlite implements _RestoreNativePort {
     db.execute('PRAGMA main.locking_mode = EXCLUSIVE');
     db.execute('PRAGMA busy_timeout = 0');
     if (db.select('PRAGMA main.locking_mode').single.values.single !=
-        'exclusive')
+        'exclusive') {
       _refuse(DatabaseRestoreCode.unsupported);
+    }
     // Public controls inspect this opened main HANDLE without reading DB pages.
     // Physical identity and actual locking mode precede the first BEGIN/access.
     verify(raw, pin);
@@ -167,13 +184,15 @@ final class _RestoreSqlite implements _RestoreNativePort {
     db.execute('PRAGMA synchronous = FULL');
     db.execute('PRAGMA trusted_schema = OFF');
     final mode = db.select('PRAGMA main.journal_mode').single.values.single;
-    if (mode != 'delete' && mode != 'wal')
+    if (mode != 'delete' && mode != 'wal') {
       _refuse(DatabaseRestoreCode.unsupported);
+    }
     final locking = db.select('PRAGMA main.locking_mode').single.values.single;
     if (locking != 'exclusive') _refuse(DatabaseRestoreCode.unsupported);
     verify(raw, pin);
   }
 
+  @override
   void durableOriginal(_RestoreRaw raw) {
     raw.database.execute('PRAGMA main.locking_mode = EXCLUSIVE');
     raw.database.execute('PRAGMA busy_timeout = 0');
@@ -184,9 +203,11 @@ final class _RestoreSqlite implements _RestoreNativePort {
     idle(raw);
   }
 
+  @override
   Future<void> copy(_RestoreRaw source, _RestoreRaw destination) =>
       _RestoreNativeBackup.copy(main, source, destination, idle);
 
+  @override
   void close() {
     if (closed) return;
     windows.free(main.cast());
@@ -225,18 +246,20 @@ abstract final class _RestoreNativeBackup {
           pointer,
           _RestoreLimits.stepPages,
         );
-        if (nsql.sqlite3_backup_pagecount(pointer) > _RestoreLimits.maxPages)
+        if (nsql.sqlite3_backup_pagecount(pointer) > _RestoreLimits.maxPages) {
           _refuse(DatabaseRestoreCode.tooLarge);
+        }
         if (code == 101) {
           done = true;
           break;
         }
-        if (code != 0)
+        if (code != 0) {
           _refuse(
             code == 5 || code == 6
                 ? DatabaseRestoreCode.busy
                 : DatabaseRestoreCode.bootstrapUnknown,
           );
+        }
         await Future<void>.delayed(Duration.zero);
       }
       if (!done) _refuse(DatabaseRestoreCode.tooLarge);
@@ -263,12 +286,7 @@ abstract final class _RestoreNativeBackup {
 }
 
 final class _RestoreRaw {
-  _RestoreRaw(
-    this._database, {
-    void Function()? beforeClose,
-    void Function()? afterClose,
-  }) : _beforeClose = beforeClose,
-       _afterClose = afterClose;
+  _RestoreRaw(this._database, {this._beforeClose, this._afterClose});
   final Database _database;
   final void Function()? _beforeClose;
   final void Function()? _afterClose;

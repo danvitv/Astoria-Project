@@ -148,14 +148,18 @@ final class _HistoryIndexWorker {
         throw StateError('Fixed clock address index unavailable');
       }
       final storage = actual['history_message_units'];
-      final columns = db.select("SELECT name,type FROM pragma_table_info('history_message_units') ORDER BY cid LIMIT 13");
+      final columns = db.select(
+        "SELECT name,type FROM pragma_table_info('history_message_units') ORDER BY cid LIMIT 13",
+      );
       final types = {for (final row in columns) row['name']: row['type']};
       if (storage is! String ||
           !normalizeHistorySchema(
             storage,
           ).contains('check (octet_length(raw_json) <= 65536)') ||
-          columns.length != 12 || types['swipe_id'] != 'INTEGER' ||
-          types['agent_swipe_id'] != 'INTEGER' || types['role'] != 'TEXT' ||
+          columns.length != 12 ||
+          types['swipe_id'] != 'INTEGER' ||
+          types['agent_swipe_id'] != 'INTEGER' ||
+          types['role'] != 'TEXT' ||
           types['anchor_integrity'] != 'TEXT') {
         throw StateError('History physical bounds unavailable');
       }
@@ -203,8 +207,9 @@ final class _HistoryIndexWorker {
           args[1] is! String ||
           args[2] is! String ||
           (args[1] as String).length > 256 ||
-          (args[2] as String).length > 64)
+          (args[2] as String).length > 64) {
         throw StateError('Invalid command');
+      }
       final operation = args[0],
           session = args[1] as String,
           token = args[2] as String;
@@ -215,16 +220,18 @@ final class _HistoryIndexWorker {
         'resume',
         'step',
         'abort',
-      }.contains(operation))
+      }.contains(operation)) {
         throw StateError('Invalid command');
+      }
       deadline = HistoryNativeDeadline(
         db.handle.cast(),
         const Duration(milliseconds: 250),
       );
       _fence();
       if (operation == 'attest') {
-        if (session.isNotEmpty || token.isNotEmpty)
+        if (session.isNotEmpty || token.isNotEmpty) {
           throw StateError('Invalid command');
+        }
         return jsonEncode({'status': 'ready'});
       }
       if (operation == 'observe') {
@@ -242,12 +249,14 @@ final class _HistoryIndexWorker {
       }
       // These commands are local maintenance ONLY. The owning repo rejects an
       // ambient transaction and reserves the original executor before invoking.
-      if (db.autocommit || !RegExp(r'^[0-9a-f]{64}$').hasMatch(token))
+      if (db.autocommit || !RegExp(r'^[0-9a-f]{64}$').hasMatch(token)) {
         throw StateError('Unreserved maintenance');
+      }
       _writing = true;
       if (operation == 'abort') {
-        if (_build?.token == token && _build?.session == session)
+        if (_build?.token == token && _build?.session == session) {
           _discardBuild();
+        }
         if (_ready[session]?.token == token) {
           _ready.remove(session);
           db.execute(
@@ -260,8 +269,9 @@ final class _HistoryIndexWorker {
       if (operation == 'start') {
         if (_build != null) throw StateError('Maintenance busy');
         final generation = _generation(session);
-        if (generation == null || generation['source_type'] != 'text')
+        if (generation == null || generation['source_type'] != 'text') {
           throw const FormatException();
+        }
         _ready.remove(session);
         db.execute(
           "UPDATE history_source_generations SET state='incomplete',checkpoint=0,"
@@ -296,8 +306,9 @@ final class _HistoryIndexWorker {
         });
       }
       final build = _build;
-      if (build == null || build.token != token || build.session != session)
+      if (build == null || build.token != token || build.session != session) {
         throw StateError('Invalid maintenance');
+      }
       final result = _step(build, deadline);
       deadline.check();
       return jsonEncode(result);
@@ -341,8 +352,9 @@ final class _HistoryIndexWorker {
           args[5] is! String ||
           args[6] is! String ||
           args[7] is! String ||
-          utf8.encode(args[6] as String).length > 65536)
+          utf8.encode(args[6] as String).length > 65536) {
         return 0;
+      }
       _fence();
       final session = args[0] as String,
           seal = _ready[session],
@@ -352,8 +364,9 @@ final class _HistoryIndexWorker {
           !_matches(seal, generation) ||
           args[1] != seal.incarnation ||
           args[2] != seal.revision ||
-          _mac(args.take(7).toList()) != args[7])
+          _mac(args.take(7).toList()) != args[7]) {
         return 0;
+      }
       return 1;
     } catch (_) {
       return 0;
@@ -365,19 +378,34 @@ final class _HistoryIndexWorker {
   int verifyAnchor(List<Object?> args) {
     try {
       if (args.length != 11 ||
-          args[0] is! String || args[5] is! String ||
+          args[0] is! String ||
+          args[5] is! String ||
           utf8.encode(args[5] as String).length > 256 ||
-          args[1] is! int || args[2] is! int || args[3] is! int ||
+          args[1] is! int ||
+          args[2] is! int ||
+          args[3] is! int ||
           (args[4] != null && (args[4] is! int || (args[4] as int) < 0)) ||
-          [args[6], args[7]].any((v) => v != null && (v is! int || v < 0 || v > 1000000)) ||
-          !const ['user','assistant','system'].contains(args[8]) ||
-          args[9] is! String || (args[9] as String).length != 64 ||
-          args[10] is! String || (args[10] as String).length != 64) return 0;
+          [
+            args[6],
+            args[7],
+          ].any((v) => v != null && (v is! int || v < 0 || v > 1000000)) ||
+          !const ['user', 'assistant', 'system'].contains(args[8]) ||
+          args[9] is! String ||
+          (args[9] as String).length != 64 ||
+          args[10] is! String ||
+          (args[10] as String).length != 64) {
+        return 0;
+      }
       _fence();
       final seal = _ready[args[0]], generation = _generation(args[0] as String);
-      if (seal == null || generation == null || !_matches(seal, generation) ||
-          args[1] != seal.incarnation || args[2] != seal.revision ||
-          _mac(['anchor-v1', ...args.take(10)]) != args[10]) return 0;
+      if (seal == null ||
+          generation == null ||
+          !_matches(seal, generation) ||
+          args[1] != seal.incarnation ||
+          args[2] != seal.revision ||
+          _mac(['anchor-v1', ...args.take(10)]) != args[10]) {
+        return 0;
+      }
       return 1;
     } catch (_) {
       return 0;

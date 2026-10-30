@@ -84,8 +84,9 @@ final class _MaintenanceTableReader {
           column.$nullable ? '($c IS NOT NULL AND ($bad))' : '($bad)',
         );
         if (!column.name.endsWith('_json') &&
-            !_maintenanceJsonRoots.containsKey('$name.${column.name}'))
+            !_maintenanceJsonRoots.containsKey('$name.${column.name}')) {
           continue;
+        }
         jsonColumns++;
         final root = _maintenanceJsonRoots['$name.${column.name}'];
         if (root == null) unknownShapes++;
@@ -261,12 +262,13 @@ final class _MaintenanceTableReader {
                 "WHERE typeof(s.kind) != 'text' OR s.kind NOT IN ('normal', 'agentic')",
               )).single['n']
               as int;
-      if (bad > 0)
+      if (bad > 0) {
         health.issue(
           DatabaseMaintenanceIssueCode.unsupportedPresetKind,
           table: name,
           count: bad,
         );
+      }
       if (bad > 0) return DatabaseMaintenanceCheck.issues;
     } else {
       return DatabaseMaintenanceCheck.notChecked;

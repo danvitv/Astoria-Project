@@ -11,15 +11,17 @@ final class _RepairLedgerValidation {
   bool key(String name) {
     if (name.length > 256 ||
         name != name.trim() ||
-        name.contains(RegExp(r'[\x00-\x1f]')))
+        name.contains(RegExp(r'[\x00-\x1f]'))) {
       return false;
+    }
     if (RegExp(
           r'^world:(location|time|date|day|active_threats|current_conditions)$',
         ).hasMatch(name) ||
         RegExp(
           r'^scene\.(present_entities|absent_backstory_entities|immediate_thread|active_tensions)$',
-        ).hasMatch(name))
+        ).hasMatch(name)) {
       return true;
+    }
     if (RegExp(
           r'^npc:([^.:][^.]*?)\.(relationship_to_user|attitude_to_user|trust_to_user|boundaries|card_overrides|location|current_emotional_residue|current_goal|persistent_condition)$',
         ).hasMatch(name) ||
@@ -41,8 +43,9 @@ final class _RepairLedgerValidation {
     final name = row['name'] as String;
     if (row['scope'] != 'ledger' ||
         name.startsWith('canon_') ||
-        name.startsWith('__'))
+        name.startsWith('__')) {
       return SessionRepairIssue.protectedTarget;
+    }
     if (!key(name)) return SessionRepairIssue.unsupportedTarget;
     final rows = image.rows(db.trackerRows);
     if (rows.any(
@@ -52,22 +55,26 @@ final class _RepairLedgerValidation {
               r['scope'] != 'ledger' ||
               (r['provenance'] as String).isEmpty ||
               (r['updated_at'] as int) < 0),
-    ))
+    )) {
       return SessionRepairIssue.lockedTarget;
-    if (rows.any((r) => r['name'] == 'canon_override:$name'))
+    }
+    if (rows.any((r) => r['name'] == 'canon_override:$name')) {
       return SessionRepairIssue.protectedTarget;
+    }
     final rev = row['basis_revision'] as int;
     final hash = row['basis_revision_hash'] as String;
     if (rev < 0 ||
         (rev == 0 ? hash.isNotEmpty : hash.isEmpty) ||
         (row['updated_at'] as int) < 0 ||
-        (row['provenance'] as String).isEmpty)
+        (row['provenance'] as String).isEmpty) {
       return SessionRepairIssue.invalidShape;
+    }
     if (rev > 0 &&
         !image
             .rows(db.characterRevisionRows)
-            .any((r) => r['revision'] == rev && r['revision_hash'] == hash))
+            .any((r) => r['revision'] == rev && r['revision_hash'] == hash)) {
       return SessionRepairIssue.missingReference;
+    }
     final provenanceIssue = provenance(image, row);
     if (provenanceIssue != null) return provenanceIssue;
     return null;
@@ -76,10 +83,11 @@ final class _RepairLedgerValidation {
   SessionRepairIssue? provenance(_RepairImage image, Map<String, Object?> row) {
     final raw = row['provenance'] as String;
     if (raw == 'manual_session_repair') return null;
-    if (raw == 'game_time_seed')
+    if (raw == 'game_time_seed') {
       return clockKeys.contains(row['name'])
           ? null
           : SessionRepairIssue.invalidShape;
+    }
     // Actual LedgerOpApplier/buildLedgerProvenance tuple. Unknown legacy formats
     // are not guessed into ownership, nor is private evidence prose returned.
     final match = RegExp(
@@ -90,8 +98,9 @@ final class _RepairLedgerValidation {
       final decoded = jsonDecode(
         image.rows(db.chatSessions).single['messages_json'] as String,
       );
-      if (decoded is! List || decoded.any((m) => m is! Map<String, dynamic>))
+      if (decoded is! List || decoded.any((m) => m is! Map<String, dynamic>)) {
         return SessionRepairIssue.malformedPayload;
+      }
       final found = decoded
           .where((m) => (m as Map<String, dynamic>)['id'] == match[1])
           .toList();
@@ -100,8 +109,9 @@ final class _RepairLedgerValidation {
         found.single as Map<String, dynamic>,
       );
       if ('${message.swipeId}' != match[2] ||
-          '${message.agentSwipeId}' != match[3])
+          '${message.agentSwipeId}' != match[3]) {
         return SessionRepairIssue.missingReference;
+      }
       return null;
     } catch (_) {
       return SessionRepairIssue.malformedPayload;

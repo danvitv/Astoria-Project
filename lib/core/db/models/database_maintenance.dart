@@ -172,19 +172,16 @@ final class DatabaseMaintenanceTarget {
       presetKind = null;
   const DatabaseMaintenanceTarget.characterMembership({
     required String characterId,
-    required String folderId,
+    required String this.folderId,
   }) : kind = DatabaseMaintenanceRepairKind.removeDanglingCharacterMembership,
        id = characterId,
-       folderId = folderId,
        presetKind = null;
   const DatabaseMaintenanceTarget.presetMembership({
     required String presetId,
-    required String folderId,
-    required DatabaseMaintenancePresetKind presetKind,
+    required String this.folderId,
+    required DatabaseMaintenancePresetKind this.presetKind,
   }) : kind = DatabaseMaintenanceRepairKind.removeDanglingPresetMembership,
-       id = presetId,
-       folderId = folderId,
-       presetKind = presetKind;
+       id = presetId;
   final DatabaseMaintenanceRepairKind kind;
   final String id;
   final String? folderId;

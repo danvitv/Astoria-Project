@@ -12,8 +12,9 @@ extension _NavLedger on SupportSourceNavigationRepo {
       nullable: const {'prompt'},
     );
     if ((row['enabled'] != 0 && row['enabled'] != 1) ||
-        (row['message_count'] as int) < 0)
+        (row['message_count'] as int) < 0) {
       _shape.bad();
+    }
     final prefix = 'summary:${row['native_rowid']}';
     return [
       _unit(
@@ -110,8 +111,9 @@ extension _NavLedger on SupportSourceNavigationRepo {
         if (tracker['scope'] != 'ledger' ||
             !const {'world:time', 'world:date', 'world:day'}.contains(name) ||
             (tracker['value'] as String).trim().isEmpty ||
-            clock.containsKey(name))
+            clock.containsKey(name)) {
           _shape.bad();
+        }
         clock[name] = tracker['value'];
       }
       if (clock.length != 3) _shape.bad();
@@ -172,8 +174,9 @@ extension _NavLedger on SupportSourceNavigationRepo {
     if (bootstrap &&
         (row['committed'] != 1 ||
             row['swipe_id'] != 0 ||
-            row['agent_swipe_id'] != 0))
+            row['agent_swipe_id'] != 0)) {
       _shape.bad();
+    }
     final anchor = bootstrap
         ? null
         : await _savedAnchor(
@@ -192,10 +195,18 @@ extension _NavLedger on SupportSourceNavigationRepo {
       sessionId: source.observation.key.nativeId,
       characterId: source.observation.binding.characterId,
       anchor: anchor,
-      savedAnchor: bootstrap ? null : nav.SavedAnchor(
-        row['message_id'] as String, '${row['swipe_id']}', '${row['agent_swipe_id']}',
+      savedAnchor: bootstrap
+          ? null
+          : nav.SavedAnchor(
+              row['message_id'] as String,
+              '${row['swipe_id']}',
+              '${row['agent_swipe_id']}',
+            ),
+      evidence: nav.Evidence(
+        !bootstrap && anchor == null
+            ? nav.EvidenceState.missing
+            : nav.EvidenceState.unknown,
       ),
-      evidence: nav.Evidence(!bootstrap && anchor == null ? nav.EvidenceState.missing : nav.EvidenceState.unknown),
     );
     final trackers = _shape.list(_decode(row['trackers_json']));
     final records = <nav.DataRecord>[];
@@ -208,8 +219,10 @@ extension _NavLedger on SupportSourceNavigationRepo {
         native: false,
       );
       if (!seen.add(m['name'] as String)) _shape.bad();
-      if (m['scope'] != 'ledger' || (m['name'] as String).startsWith('canon_'))
+      if (m['scope'] != 'ledger' ||
+          (m['name'] as String).startsWith('canon_')) {
         continue;
+      }
       records.addAll(
         _fields(
           source,
@@ -318,7 +331,9 @@ extension _NavLedger on SupportSourceNavigationRepo {
       },
     );
     if (m['chat_session_id'] != session) _shape.bad();
-    for (final key in ['id', 'knower_key', 'subject_key']) _shape.id(m[key]);
+    for (final key in ['id', 'knower_key', 'subject_key']) {
+      _shape.id(m[key]);
+    }
     if (m['supersedes_id'] != null) _shape.id(m['supersedes_id']);
     _shape.id(m['source_message_id'], empty: true);
     _shape.choice(m, 'fact_class', const {
@@ -350,8 +365,9 @@ extension _NavLedger on SupportSourceNavigationRepo {
         (m['importance'] as num) < 0 ||
         (m['importance'] as num) > 1 ||
         (m['source_swipe_id'] as int) < 0 ||
-        (m['source_agent_swipe_id'] as int) < 0)
+        (m['source_agent_swipe_id'] as int) < 0) {
       _shape.bad();
+    }
     for (final key in ['entities_json', 'topics_json']) {
       if (!m.containsKey(key)) continue;
       final values = _decode(m[key]);

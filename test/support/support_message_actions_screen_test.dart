@@ -272,8 +272,9 @@ Future<void> _edited(ModelScreenFixture f, String id, String body) {
   final done = Completer<void>();
   final subscription = f.container.listen(supportWorkspaceProvider, (_, state) {
     if (!done.isCompleted &&
-        state.activeMessages.any((m) => m.id == id && m.body == body))
+        state.activeMessages.any((m) => m.id == id && m.body == body)) {
       done.complete();
+    }
   });
   addTearDown(subscription.close);
   return done.future;

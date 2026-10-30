@@ -34,8 +34,9 @@ final class _RestoreSchema {
       // is memory-only; no historical upgrades or shared preferences run.
       await work.run(ChatRepo(wrapper).countByCharacterId(''));
       final tables = wrapper.allTables.map((t) => t.actualTableName).toSet();
-      if (tables.isEmpty || tables.length > _RestoreLimits.maxTables)
+      if (tables.isEmpty || tables.length > _RestoreLimits.maxTables) {
         _refuse(DatabaseRestoreCode.unsupported);
+      }
       final objects = _schemaObjects(memory);
       return _RestoreSchema(
         wrapper.schemaVersion,
@@ -83,8 +84,9 @@ final class _RestoreSchema {
     }
     final actual = _schemaObjects(db);
     final actualTables = _ordinaryTables(db);
-    if (!tables.every(actualTables.contains))
+    if (!tables.every(actualTables.contains)) {
       _refuse(DatabaseRestoreCode.invalidCandidate);
+    }
     for (final entry in objects.entries) {
       final expected = entry.value;
       // SQLite internal objects are checked by whole digest/integrity. Their
@@ -104,8 +106,9 @@ final class _RestoreSchema {
           !_rowsEqual(
             foreignKeys[name]!,
             _metadata(db, 'foreign_key_list', name),
-          ))
+          )) {
         _refuse(DatabaseRestoreCode.invalidCandidate);
+      }
       final observed = _metadata(db, 'index_list', name);
       for (final expected in indexes[name]!) {
         // sequence is incidental; compare name/unique/origin/partial semantics.
@@ -117,13 +120,15 @@ final class _RestoreSchema {
       }
     }
     for (final index in indexColumns.entries) {
-      if (!_rowsEqual(index.value, _metadata(db, 'index_xinfo', index.key)))
+      if (!_rowsEqual(index.value, _metadata(db, 'index_xinfo', index.key))) {
         _refuse(DatabaseRestoreCode.invalidCandidate);
+      }
     }
     for (final entry in actual.entries) {
       if (objects.containsKey(entry.key) ||
-          (entry.value[1] as String).startsWith('sqlite_'))
+          (entry.value[1] as String).startsWith('sqlite_')) {
         continue;
+      }
       final row = entry.value;
       final type = row[0];
       final table = row[2] as String;
@@ -143,11 +148,13 @@ final class _RestoreSchema {
       } else if (type == 'view') {
         if (sql.contains('(') ||
             sql.contains(';') ||
-            !sql.contains(' as select '))
+            !sql.contains(' as select ')) {
           _refuse(DatabaseRestoreCode.unsupported);
+        }
       } else if (type == 'trigger') {
-        if (tables.contains(table) || !sql.endsWith('begin select 1 ; end'))
+        if (tables.contains(table) || !sql.endsWith('begin select 1 ; end')) {
           _refuse(DatabaseRestoreCode.unsupported);
+        }
       } else {
         _refuse(DatabaseRestoreCode.unsupported);
       }
@@ -155,8 +162,9 @@ final class _RestoreSchema {
     _integrity(db);
     final fk = db.prepare('PRAGMA main.foreign_key_check');
     try {
-      if (fk.iterateWith(const StatementParameters.empty()).moveNext())
+      if (fk.iterateWith(const StatementParameters.empty()).moveNext()) {
         _refuse(DatabaseRestoreCode.invalidCandidate);
+      }
     } finally {
       fk.close();
     }
@@ -182,18 +190,22 @@ int _scalar(Database db, String sql) {
   final rows = db.select(sql);
   if (rows.length != 1 ||
       rows.single.values.length != 1 ||
-      rows.single.values.single is! int)
+      rows.single.values.single is! int) {
     _refuse(DatabaseRestoreCode.unsupported);
+  }
   return rows.single.values.single as int;
 }
 
 void _requireBounds(Database db) {
   final pages = _scalar(db, 'PRAGMA main.page_count');
   final size = _scalar(db, 'PRAGMA main.page_size');
-  if (pages <= 0 || size < 512 || size > 65536 || (size & (size - 1)) != 0)
+  if (pages <= 0 || size < 512 || size > 65536 || (size & (size - 1)) != 0) {
     _refuse(DatabaseRestoreCode.unsupported);
-  if (pages > _RestoreLimits.maxPages || pages * size > _RestoreLimits.maxBytes)
+  }
+  if (pages > _RestoreLimits.maxPages ||
+      pages * size > _RestoreLimits.maxBytes) {
     _refuse(DatabaseRestoreCode.tooLarge);
+  }
   if (_scalar(db, 'SELECT count(*) FROM main.sqlite_schema') >
           _RestoreLimits.maxEntities ||
       _scalar(
@@ -210,8 +222,9 @@ List<String> _ordinaryTables(Database db) {
     "SELECT name,type FROM pragma_table_list WHERE schema='main' ORDER BY name LIMIT ${_RestoreLimits.maxTables + 1}",
   );
   if (rows.length > _RestoreLimits.maxTables ||
-      rows.any((r) => r['type'] != 'table' && r['type'] != 'view'))
+      rows.any((r) => r['type'] != 'table' && r['type'] != 'view')) {
     _refuse(DatabaseRestoreCode.unsupported);
+  }
   return rows
       .where((r) => r['type'] == 'table')
       .map((r) => r['name'] as String)
@@ -223,8 +236,9 @@ Map<String, List<Object?>> _schemaObjects(Database db) {
   final rows = db.select(
     'SELECT type,name,tbl_name,rootpage,sql FROM main.sqlite_schema ORDER BY type,name LIMIT ${_RestoreLimits.maxEntities + 1}',
   );
-  if (rows.length > _RestoreLimits.maxEntities)
+  if (rows.length > _RestoreLimits.maxEntities) {
     _refuse(DatabaseRestoreCode.tooLarge);
+  }
   return {
     for (final row in rows)
       '${row['type']}\u0000${row['name']}': List<Object?>.of(row.values),
@@ -233,8 +247,9 @@ Map<String, List<Object?>> _schemaObjects(Database db) {
 
 List<List<Object?>> _metadata(Database db, String pragma, String name) {
   final rows = db.select('PRAGMA main.$pragma(${_quote(name)})');
-  if (rows.length > _RestoreLimits.maxColumns)
+  if (rows.length > _RestoreLimits.maxColumns) {
     _refuse(DatabaseRestoreCode.tooLarge);
+  }
   return rows.map((row) => List<Object?>.of(row.values)).toList();
 }
 
@@ -257,8 +272,9 @@ String _sqlTokens(String? sql) {
     final token = match.group(0)!;
     if (token.trim().isEmpty ||
         token.startsWith('--') ||
-        token.startsWith('/*'))
+        token.startsWith('/*')) {
       continue;
+    }
     if (token.startsWith("'")) {
       tokens.add(token);
     } else if (token.startsWith('"') ||
@@ -290,8 +306,9 @@ bool _safeExtraTable(String sql) {
   ).firstMatch(sql);
   if (match == null) return false;
   final columns = match.group(1)!.split(' , ');
-  if (columns.isEmpty || columns.length > _RestoreLimits.maxColumns)
+  if (columns.isEmpty || columns.length > _RestoreLimits.maxColumns) {
     return false;
+  }
   final column = RegExp(
     r'^[a-z_][a-z_0-9]* (integer|int|text|blob|real|double|float|boolean|bool)(?: not null)?(?: primary key)?$',
   );
@@ -300,6 +317,7 @@ bool _safeExtraTable(String sql) {
 
 void _integrity(Database db) {
   final rows = db.select('PRAGMA main.integrity_check(2)');
-  if (rows.length != 1 || rows.single.values.single != 'ok')
+  if (rows.length != 1 || rows.single.values.single != 'ok') {
     _refuse(DatabaseRestoreCode.invalidCandidate);
+  }
 }

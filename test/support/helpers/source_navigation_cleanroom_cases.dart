@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import '../../../lib/core/support/source_navigation.dart';
+import 'package:glaze_flutter/core/support/source_navigation.dart';
 
 void expect(bool condition, String message) {
   if (!condition) throw StateError(message);
@@ -41,8 +41,9 @@ class FakeSnapshotLease implements SnapshotLease {
   @override
   bool isCurrent() {
     if (repository.deleted.contains(key) ||
-        !repository.snapshot(key).same(snapshot))
+        !repository.snapshot(key).same(snapshot)) {
       latched = false;
+    }
     return latched;
   }
 }
@@ -109,11 +110,13 @@ class FakeProjection implements ProjectionPort {
   bool badWireMetadata = false;
   String Function(String)? transform;
   Object? redact(Object? value) {
-    if (value is String)
+    if (value is String) {
       return transform?.call(value) ??
           value.replaceAll('SECRET-CROSS-BOUNDARY', '[redacted]');
-    if (value is Map)
+    }
+    if (value is Map) {
       return value.map((k, v) => MapEntry(k as String, redact(v)));
+    }
     if (value is List) return value.map(redact).toList();
     return value;
   }
@@ -387,13 +390,14 @@ class FakeRepository implements NavigationRepository {
     WorkBound bound,
   ) async {
     await enter('contents', bound);
-    if (exhausted)
+    if (exhausted) {
       return Page(
         [],
         complete: false,
         exhaustedWork: true,
         candidatesExamined: 4096,
       );
+    }
     if (source.key.domain == SourceDomain.game) {
       return page([
         SectionDescriptor(
@@ -426,13 +430,14 @@ class FakeRepository implements NavigationRepository {
     WorkBound bound,
   ) async {
     await enter('search', bound);
-    if (exhausted)
+    if (exhausted) {
       return Page(
         [],
         complete: false,
         exhaustedWork: true,
         candidatesExamined: 4096,
       );
+    }
     if (source.key.domain != SourceDomain.game) {
       final items = saved(source.key)
           .where(
@@ -444,12 +449,14 @@ class FakeRepository implements NavigationRepository {
     }
     // A synthetic indexed repository over FIVE MILLION logical messages.
     // It constructs only the one page returned; there is no backing history list.
-    if (literal != 'needle' && literal != 'SECRET-CROSS-BOUNDARY')
+    if (literal != 'needle' && literal != 'SECRET-CROSS-BOUNDARY') {
       return page([]);
+    }
     final ordinal = cursor == null ? hit : hit + 5;
     if (ordinal < scope.messages!.start.ordinal ||
-        ordinal > scope.messages!.end.ordinal)
+        ordinal > scope.messages!.end.ordinal) {
       return page([]);
+    }
     return page(
       [message(ordinal)],
       next: cursor == null ? const PrivateCursor(1) : null,
@@ -467,13 +474,14 @@ class FakeRepository implements NavigationRepository {
   ) async {
     await enter('read', bound);
     reads.add(query);
-    if (exhausted)
+    if (exhausted) {
       return Page(
         [],
         complete: false,
         exhaustedWork: true,
         candidatesExamined: 4096,
       );
+    }
     if (source.key.domain != SourceDomain.game) {
       return page(
         saved(
@@ -527,7 +535,7 @@ class Harness {
   }) => engine.invoke('astoria_source_search', {
     'source': source,
     'literal': literal,
-    if (cursor != null) 'cursor': cursor,
+    'cursor': ?cursor,
   });
   Future<NavigationResult> read(
     String source,
@@ -1024,16 +1032,18 @@ Future<void> main() async {
             final h = Harness();
             String? source;
             String? section;
-            if (stage != 'discover')
+            if (stage != 'discover') {
               source = sourceHandle(await h.list(SourceDomain.ordinaryPreset));
+            }
             if ([
               'read',
               'project',
               'provenance',
               'stamp',
               'wire',
-            ].contains(stage))
+            ].contains(stage)) {
               section = selector(await h.contents(source!));
+            }
             var settled = false;
             Future<void> stopWork() async {
               h.engine.stop();
@@ -1041,9 +1051,9 @@ Future<void> main() async {
               settled = true;
             }
 
-            if (stage == 'approval')
+            if (stage == 'approval') {
               h.approval.hook = stopWork;
-            else if (stage == 'project')
+            } else if (stage == 'project')
               h.projection.projectHook = stopWork;
             else if (stage == 'stamp')
               h.projection.stampHook = stopWork;
@@ -1080,18 +1090,21 @@ Future<void> main() async {
             final h = Harness();
             final (source, section) = await h.selected();
             final key = h.repository.key(SourceDomain.ordinaryPreset);
-            if (stage == 'query')
+            if (stage == 'query') {
               h.repository.hooks['read'] = () async {
                 h.repository.mutate(key);
               };
-            if (stage == 'project')
+            }
+            if (stage == 'project') {
               h.projection.projectHook = () async {
                 h.repository.mutate(key);
               };
-            if (stage == 'provenance')
+            }
+            if (stage == 'provenance') {
               h.provenance.hook = (_) async {
                 h.repository.mutate(key);
               };
+            }
             if (stage == 'last-stamp') {
               var calls = 0;
               h.projection.stampHook = () async {
@@ -1126,19 +1139,24 @@ Future<void> main() async {
       ]) {
         final h = Harness();
         final (source, section) = await h.selected();
-        if (stage == 'owner')
+        if (stage == 'owner') {
           h.owner.onCheck = () => throw StateError('PRIVATE exception');
-        if (stage == 'lease')
+        }
+        if (stage == 'lease') {
           h.approval.leases.values.single.hook = () =>
               throw StateError('PRIVATE lease');
-        if (stage == 'repository')
+        }
+        if (stage == 'repository') {
           h.repository.hooks['read'] = () async =>
               throw StateError('PRIVATE SQL/path');
-        if (stage == 'projection')
+        }
+        if (stage == 'projection') {
           h.projection.projectHook = () async =>
               throw StateError('PRIVATE redactor');
-        if (stage == 'provenance')
+        }
+        if (stage == 'provenance') {
           h.provenance.hook = (_) async => throw StateError('PRIVATE DB');
+        }
         if (stage == 'approval') {
           final second = sourceHandle(await h.list(SourceDomain.studioPreset));
           h.approval.hook = () async => throw StateError('PRIVATE UI');
@@ -1147,11 +1165,12 @@ Future<void> main() async {
             'throwing approval',
           );
         }
-        if (stage == 'reentrant')
+        if (stage == 'reentrant') {
           h.repository.hooks['read'] = () async {
             final nested = await h.contents(source);
             expect(status(nested) == 'stopped', 'reentrancy denied');
           };
+        }
         final result = await h.read(source, section);
         expect(
           status(result) == 'stopped' && !result.encoded.contains('PRIVATE'),
@@ -1274,10 +1293,11 @@ Future<void> main() async {
           final body = await h.read(ss, sx);
           var checked = 0;
           h.repository.hooks['revalidate'] = () async {
-            if (++checked == 2)
+            if (++checked == 2) {
               h.repository.mutate(
                 h.repository.key(SourceDomain.ordinaryPreset),
               );
+            }
           };
           expect(
             !await h.engine.withPost([body], (_) async {
@@ -1476,7 +1496,7 @@ Future<void> main() async {
               continue;
             }
             final key = h.repository.key(SourceDomain.ordinaryPreset);
-            if (mode == 'structured' || mode == 'raw')
+            if (mode == 'structured' || mode == 'raw') {
               h.repository.records[key] = [
                 DataRecord(
                   selection: const Selection.record('root', 'record'),
@@ -1487,6 +1507,7 @@ Future<void> main() async {
                       : 'x' * (Limits.rawBytes + 1),
                 ),
               ];
+            }
             final source = sourceHandle(
               await h.list(SourceDomain.ordinaryPreset),
             );
@@ -1600,11 +1621,12 @@ Future<void> main() async {
             final h = Harness();
             final key = h.repository.key(SourceDomain.ledgerSnapshot);
             h.repository.states[key] = state;
-            if (state == SourceState.bootstrap)
+            if (state == SourceState.bootstrap) {
               h.repository.bindings[key] = const Binding(
                 sessionId: 'session',
                 evidence: Evidence(EvidenceState.missing),
               );
+            }
             final (source, section) = await h.selected(
               SourceDomain.ledgerSnapshot,
             );
@@ -1680,8 +1702,9 @@ Future<void> main() async {
     },
     'fixed handle/call/repository budgets': () async {
       final calls = Harness();
-      for (var i = 0; i < 32; i++)
+      for (var i = 0; i < 32; i++) {
         expect(status(await calls.list()) == 'ok', 'call within limit');
+      }
       expect(
         status(await calls.list()) == 'budgetExceeded',
         'fixed run call cap',
@@ -1852,6 +1875,7 @@ Future<void> main() async {
     }
   }
   print('$passed/${tests.length} synthetic groups passed');
-  if (failures.isNotEmpty)
+  if (failures.isNotEmpty) {
     throw StateError('Failed groups: ${failures.join('; ')}');
+  }
 }

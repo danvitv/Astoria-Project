@@ -171,8 +171,9 @@ extension SupportModelNativeRegeneration on SupportModelService {
       if (input < 0 ||
           input != visible.length - 2 ||
           visible[input].role != 'user' ||
-          visible[input].text != user.body)
+          visible[input].text != user.body) {
         _refuse(SupportModelRefusal.stale);
+      }
       final binding = _ModelBinding(
         this,
         config,
@@ -221,12 +222,14 @@ extension SupportModelNativeRegeneration on SupportModelService {
       if (!pendingReleased) _regenerationPending = false;
     }
     if (!accepted.isCompleted) accepted.complete(false);
-    if (!prepared.isCompleted)
+    if (!prepared.isCompleted) {
       prepared.complete(SupportModelPreparation._(null, failure));
-    if (!finished.isCompleted)
+    }
+    if (!finished.isCompleted) {
       finished.complete(
         SupportModelRunResult(accepted: false, saved: false, reason: failure),
       );
+    }
   }
 }
 

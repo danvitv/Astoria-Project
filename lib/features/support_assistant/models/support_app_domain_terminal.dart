@@ -67,8 +67,9 @@ final class SupportAppDomainDispatch {
         _consumed ||
         !context.current ||
         context._confirmation?.current != true ||
-        !_nativeCurrent!())
+        !_nativeCurrent!()) {
       return null;
+    }
     _consumed =
         true; // BEFORE the first source fence, callback or effect await.
     _open = false;
@@ -124,8 +125,9 @@ extension SupportAppDomainContext on SupportAppActionContext {
         !lease.current ||
         lease.request.action != operation.action ||
         lease.request.target != target ||
-        !identical(lease.request.observation, observation))
+        !identical(lease.request.observation, observation)) {
       return null;
+    }
     _domainRequested = true;
     final dispatch = SupportAppDomainDispatch._(this, lease.request, operation);
     try {
@@ -149,8 +151,9 @@ extension SupportAppDomainContext on SupportAppActionContext {
     if (_domainCustody != null ||
         !identical(custody.request.context, this) ||
         !custody.isCurrent ||
-        !source.isCurrent)
+        !source.isCurrent) {
       return false;
+    }
     _domainCustody = custody;
     _domainSource = source;
     return true;

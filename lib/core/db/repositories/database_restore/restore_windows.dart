@@ -189,12 +189,14 @@ final class _RestoreWindows implements _RestoreFilePort {
         Pointer<Void> Function(Pointer<Void>, Pointer<Uint8>)
       >('GetProcAddress');
 
+  @override
   Pointer<Void> allocate(int bytes) {
     final result = _alloc(0x40, bytes);
     if (result == nullptr) _refuse(DatabaseRestoreCode.unsupported);
     return result;
   }
 
+  @override
   void free(Pointer<Void> pointer) => _free(pointer);
   T text<T>(String value, T Function(Pointer<Uint16>) action) {
     final memory = allocate((value.length + 1) * 2).cast<Uint16>();
@@ -260,6 +262,7 @@ final class _RestoreWindows implements _RestoreFilePort {
     });
   }
 
+  @override
   bool exists(String path) => text(path, (name) {
     final attributes = _attributes;
     final error = _error;
@@ -272,6 +275,7 @@ final class _RestoreWindows implements _RestoreFilePort {
     return false;
   });
 
+  @override
   _RestorePin pin(
     String path, {
     bool directory = false,
@@ -297,24 +301,28 @@ final class _RestoreWindows implements _RestoreFilePort {
       0x00200000 | (directory ? 0x02000000 : 0),
       nullptr,
     );
-    if (!_valid(handle))
+    if (!_valid(handle)) {
       _refuse(
         lock ? DatabaseRestoreCode.busy : DatabaseRestoreCode.unsupported,
       );
+    }
     try {
       final info = information(handle);
       if ((info[0] & 0x400) != 0 ||
           (((info[0] & 0x10) != 0) != directory) ||
-          (!directory && info[10] != 1))
+          (!directory && info[10] != 1)) {
         _refuse(DatabaseRestoreCode.unsupported);
+      }
       final output = allocate(1024).cast<Uint16>();
       try {
         final length = _finalName(handle, output, 512, 0);
-        if (length == 0 || length >= 512)
+        if (length == 0 || length >= 512) {
           _refuse(DatabaseRestoreCode.unsupported);
+        }
         final actual = String.fromCharCodes(output.asTypedList(length));
-        if (!p.windows.equals(actual, '\\\\?\\$path'))
+        if (!p.windows.equals(actual, '\\\\?\\$path')) {
           _refuse(DatabaseRestoreCode.unsupported);
+        }
       } finally {
         free(output.cast());
       }
@@ -335,8 +343,9 @@ final class _RestoreWindows implements _RestoreFilePort {
   List<int> information(Pointer<Void> handle) {
     final memory = allocate(52).cast<Uint32>();
     try {
-      if (_info(handle, memory.cast()) == 0)
+      if (_info(handle, memory.cast()) == 0) {
         _refuse(DatabaseRestoreCode.unsupported);
+      }
       return List<int>.of(memory.asTypedList(13));
     } finally {
       free(memory.cast());
@@ -365,6 +374,7 @@ final class _RestoreWindows implements _RestoreFilePort {
   Pointer<Void> symbol(Pointer<Void> module, String name) =>
       ascii(name, (text) => _symbol(module, text));
 
+  @override
   String createStage(String parent) {
     final random = Random.secure();
     final nonce = List.generate(
@@ -373,20 +383,24 @@ final class _RestoreWindows implements _RestoreFilePort {
     ).join();
     final path = p.windows.join(parent, '.restore-$nonce');
     requirePath(path);
-    if (text(path, (name) => _mkdir(name, nullptr)) == 0)
+    if (text(path, (name) => _mkdir(name, nullptr)) == 0) {
       _refuse(DatabaseRestoreCode.unsupported);
+    }
     return path;
   }
 
+  @override
   void deleteOwnedFile(String path) {
     if (text(path, _delete) == 0) _refuse(DatabaseRestoreCode.recoveryRequired);
   }
 
+  @override
   void deleteOwnedDirectory(String path) {
     if (text(path, _rmdir) == 0) _refuse(DatabaseRestoreCode.recoveryRequired);
   }
 
   /// All bytes come from THIS native pin, never a path-reopened Dart reader.
+  @override
   Future<Digest> copyOrHash(
     _RestorePin input,
     void Function() check, {
@@ -403,22 +417,25 @@ final class _RestoreWindows implements _RestoreFilePort {
     final digest = _RestoreDigestSink();
     final sink = sha256.startChunkedConversion(digest);
     try {
-      if (_seek(input.handle, 0, position, 0) == 0 || position.value != 0)
+      if (_seek(input.handle, 0, position, 0) == 0 || position.value != 0) {
         _refuse(DatabaseRestoreCode.unsupported);
+      }
       var offset = 0;
       while (offset < length) {
         check();
         final n = min(_RestoreLimits.chunk, length - offset);
         count.value = 0;
         if (_read(input.handle, memory, n, count, nullptr) == 0 ||
-            count.value != n)
+            count.value != n) {
           _refuse(DatabaseRestoreCode.unsupported);
+        }
         sink.add(Uint8List.sublistView(bytes.asTypedList(n), 0, n));
         if (output != null) {
           written.value = 0;
           if (_write(output.handle, memory, n, written, nullptr) == 0 ||
-              written.value != n)
+              written.value != n) {
             _refuse(DatabaseRestoreCode.unsupported);
+          }
         }
         offset += n;
         await Future<void>.delayed(Duration.zero);
@@ -431,8 +448,9 @@ final class _RestoreWindows implements _RestoreFilePort {
         _refuse(DatabaseRestoreCode.stale);
       }
       input.check();
-      if (output != null && _flush(output.handle) == 0)
+      if (output != null && _flush(output.handle) == 0) {
         _refuse(DatabaseRestoreCode.recoveryRequired);
+      }
     } finally {
       sink.close();
       free(memory);
@@ -440,6 +458,7 @@ final class _RestoreWindows implements _RestoreFilePort {
     return digest.value!;
   }
 
+  @override
   void writeMarker(_RestorePin marker, String stageBasename) {
     // Bounded locator ONLY; no approval, command, source path or model data.
     final data = utf8.encode('restore-interrupted-v1\n$stageBasename\n');
@@ -468,17 +487,24 @@ final class _RestoreWindowsPin implements _RestorePin {
     this.directory,
   );
   final _RestoreWindows api;
+  @override
   final Pointer<Void> handle;
+  @override
   final String path;
+  @override
   final (int, int, int) identity;
+  @override
   final bool directory;
+  @override
   bool closed = false;
+  @override
   int get length {
     if (closed) _refuse(DatabaseRestoreCode.closed);
     final info = api.information(handle);
     return info[8] * 0x100000000 + info[9];
   }
 
+  @override
   void check() {
     if (closed) _refuse(DatabaseRestoreCode.stale);
     final info = api.information(handle);
@@ -490,6 +516,7 @@ final class _RestoreWindowsPin implements _RestorePin {
     // A no-delete-share retained handle protects this canonical namespace.
   }
 
+  @override
   void close() {
     if (closed) return;
     api.closeHandle(handle);

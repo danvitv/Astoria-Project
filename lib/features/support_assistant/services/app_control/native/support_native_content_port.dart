@@ -12,8 +12,9 @@ final class SupportNativeContentPort implements SupportContentMutationPort {
     required Object observation,
     required SupportAppActionContext context,
   }) {
-    if (!context.domainEffectMatches('${domain.name}:$target', observation))
+    if (!context.domainEffectMatches('${domain.name}:$target', observation)) {
       return null;
+    }
     return _ContentFence(context);
   }
 }

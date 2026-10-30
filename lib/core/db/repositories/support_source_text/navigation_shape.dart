@@ -23,7 +23,8 @@ Object _bindingMaterial(nav.Binding b) => [
   b.knowerId,
   b.subjectId,
   b.evidence.state.name,
-  if (b.savedAnchor case final saved?) [saved.messageId, saved.swipe, saved.agentSwipe],
+  if (b.savedAnchor case final saved?)
+    [saved.messageId, saved.swipe, saved.agentSwipe],
   if (b.anchor != null)
     [
       b.anchor!.messageId,
@@ -62,8 +63,10 @@ final class _NavShape {
 
   String id(Object? v, {bool empty = false}) {
     if (empty && v == '') return '';
-    if (!SupportSourceJson.identity(v) || utf8.encode(v as String).length > 256)
+    if (!SupportSourceJson.identity(v) ||
+        utf8.encode(v as String).length > 256) {
       bad();
+    }
     return v;
   }
 
@@ -85,8 +88,9 @@ final class _NavShape {
           (bools.contains(k) && v is bool) ||
           (ints.contains(k) && v is int && v.abs() <= 8640000000000000) ||
           (nums.contains(k) && v is num && v.isFinite) ||
-          nested.contains(k))
+          nested.contains(k)) {
         continue;
+      }
       bad();
     }
   }
@@ -147,8 +151,9 @@ extension _NavShapes on SupportSourceNavigationRepo {
               (id) =>
                   id == selected.range!.start.messageId ||
                   id == selected.range!.end.messageId,
-            )))
+            ))) {
       return false;
+    }
     return scope.messages != null
         ? selected.range != null && scope.messages!.contains(selected.range!)
         : scope.sections.contains(selected.sectionId);
@@ -163,8 +168,9 @@ extension _NavShapes on SupportSourceNavigationRepo {
     final key = _selectionKey(record.selection);
     final previous = source.captures[key];
     if (previous != null &&
-        !(previous.record?.payload == null && record.payload != null))
+        !(previous.record?.payload == null && record.payload != null)) {
       return;
+    }
     final encoded = jsonEncode(raw);
     final digest = sha256.convert(utf8.encode(encoded)).toString();
     final cacheKey = '${source.observation.snapshot.incarnation}:$digest';
@@ -172,14 +178,16 @@ extension _NavShapes on SupportSourceNavigationRepo {
     if (capture == null) {
       final bytes = utf8.encode(encoded).length;
       if (_captureBytes + bytes > nav.Limits.retainedBytes ||
-          _captures.length >= 128)
+          _captures.length >= 128) {
         _fail(SupportSourceReadFailure.tooLarge);
+      }
       _captureBytes += bytes;
       capture = _NavCapture(raw, List.unmodifiable(ids), null);
       _captures[cacheKey] = capture;
     }
-    if (previous == null && source.captures.length >= 128)
+    if (previous == null && source.captures.length >= 128) {
       _fail(SupportSourceReadFailure.tooLarge);
+    }
     source.captures[key] = _NavCapture(
       capture.raw,
       List.unmodifiable(ids),
@@ -266,13 +274,17 @@ extension _NavShapes on SupportSourceNavigationRepo {
           visit(e.value, '$path.$field', e.key);
         }
       } else if (value is List) {
-        for (var i = 0; i < value.length; i++) visit(value[i], '$path.$i', key);
+        for (var i = 0; i < value.length; i++) {
+          visit(value[i], '$path.$i', key);
+        }
       } else {
         settings[path] = value;
       }
     }
 
-    for (final e in values.entries) visit(e.value, e.key, e.key);
+    for (final e in values.entries) {
+      visit(e.value, e.key, e.key);
+    }
     if (settings.isNotEmpty) {
       // Long/larger schemas remain separate finite field records, not JSON chunks.
       for (final e in settings.entries) {
@@ -323,8 +335,9 @@ extension _NavShapes on SupportSourceNavigationRepo {
       if (private.contains(e.key)) continue;
       if (e.value is bool ||
           e.value is num ||
-          (e.value is String && enumFields.contains(e.key)))
+          (e.value is String && enumFields.contains(e.key))) {
         typed[e.key] = e.value;
+      }
     }
     final entries = typed.entries.toList();
     for (var i = 0; i < entries.length; i += 16) {

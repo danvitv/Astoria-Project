@@ -49,8 +49,9 @@ final class SupportDatabaseBackupAdapter implements SupportAppActionAdapter {
         !identical(context.confirmation, host) ||
         !_current ||
         !context.current ||
-        _attempted[context] == true)
+        _attempted[context] == true) {
       return null;
+    }
     final source = originalSource();
     if (source == null || !source.isCurrent) return null;
     var retired = false;
@@ -64,8 +65,9 @@ final class SupportDatabaseBackupAdapter implements SupportAppActionAdapter {
             !identical(originalSource(), source) ||
             !root.retainsBackupSource(source, context) ||
             !_current ||
-            !context.current)
+            !context.current) {
           retired = true;
+        }
       } catch (_) {
         retired = true;
       }
@@ -103,8 +105,9 @@ final class SupportDatabaseBackupAdapter implements SupportAppActionAdapter {
       try {
         final admittedCustody = await root.admitBackupFile(selection, context);
         custody = admittedCustody;
-        if (admittedCustody == null || !current())
+        if (admittedCustody == null || !current()) {
           return _outcome('unavailable');
+        }
         bool live() => current() && admittedCustody.isCurrent && current();
         final owner = selection.consume(
           custody: admittedCustody,

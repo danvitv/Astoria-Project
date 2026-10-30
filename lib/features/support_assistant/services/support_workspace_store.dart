@@ -217,8 +217,9 @@ class SupportWorkspaceStore {
             _settings.decode(latest);
             throw StateError('Settings do not need recovery');
           } on SupportSettingsUnavailable catch (error) {
-            if (error.availability != SupportSettingsAvailability.corrupt)
+            if (error.availability != SupportSettingsAvailability.corrupt) {
               rethrow;
+            }
           }
           return _settings.encodeGlobal(
             const SupportAssistantSettings(),
@@ -434,8 +435,9 @@ class SupportWorkspaceStore {
         message.cards.isNotEmpty ||
         body.trim().isEmpty ||
         body.length > 8192 ||
-        redactor.redactText(message.body) != message.body)
+        redactor.redactText(message.body) != message.body) {
       return null;
+    }
     final observation = await repo.readUserForEditing(
       expectedUser: db.SupportMessage(
         id: message.id,

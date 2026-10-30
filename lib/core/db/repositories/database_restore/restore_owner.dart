@@ -44,13 +44,15 @@ final class NativeDatabaseRestoreOwner {
     required SupportPayloadCipher payloadCipher,
     @visibleForTesting void Function(DatabaseRestoreTestBoundary)? testFault,
   }) {
-    if (!Platform.isWindows || sizeOf<UintPtr>() != 8)
+    if (!Platform.isWindows || sizeOf<UintPtr>() != 8) {
       _refuse(DatabaseRestoreCode.unsupported);
+    }
     final windows = _RestoreWindows();
     windows.requirePath(target.path);
     windows.requirePath(candidate.path);
-    if (p.windows.equals(target.path, candidate.path))
+    if (p.windows.equals(target.path, candidate.path)) {
       _refuse(DatabaseRestoreCode.unsupported);
+    }
     final native = _RestoreSqlite(windows);
     final owner = NativeDatabaseRestoreOwner._(
       windows,
@@ -73,8 +75,9 @@ final class NativeDatabaseRestoreOwner {
         lock: true,
       );
       owner._targetPin = windows.pin(target.path);
-      if (windows.exists(owner._markerPath))
+      if (windows.exists(owner._markerPath)) {
         owner._state = _RestoreState.blocked;
+      }
       return owner;
     } catch (error, stack) {
       owner._work.remember(error, stack);
@@ -177,8 +180,9 @@ final class NativeDatabaseRestoreOwner {
         path = next;
       }
       for (final path in chain.reversed) {
-        if (_directories.any((pin) => p.windows.equals(pin.path, path)))
+        if (_directories.any((pin) => p.windows.equals(pin.path, path))) {
           continue;
+        }
         files.requirePath(path);
         _directories.add(files.pin(path, directory: true));
       }
@@ -225,18 +229,21 @@ final class NativeDatabaseRestoreOwner {
     } else if (_kernel == null || _kernel!.closed) {
       _refuse(DatabaseRestoreCode.stale);
     }
-    if (_targetPin == null || _targetPin!.closed)
+    if (_targetPin == null || _targetPin!.closed) {
       _refuse(DatabaseRestoreCode.stale);
+    }
     _kernel?.check();
     _targetPin!.check();
     for (final pin in _directories) {
       pin.check();
     }
-    if (!settling && (_retired || _cancelled))
+    if (!settling && (_retired || _cancelled)) {
       _refuse(DatabaseRestoreCode.cancelled);
+    }
     if (!settling &&
-        (_clock?.elapsed ?? Duration.zero) > const Duration(seconds: 15))
+        (_clock?.elapsed ?? Duration.zero) > const Duration(seconds: 15)) {
       _refuse(DatabaseRestoreCode.tooLarge);
+    }
   }
 
   Future<T> _track<T>(Future<T> operation) {
@@ -251,10 +258,12 @@ final class NativeDatabaseRestoreOwner {
   }
 
   Future<DatabaseRestoreProposal> _prepare() {
-    if (_state == _RestoreState.blocked)
+    if (_state == _RestoreState.blocked) {
       _refuse(DatabaseRestoreCode.interruptedRequiresFreshConfirmation);
-    if (_state != _RestoreState.idle || _retired)
+    }
+    if (_state != _RestoreState.idle || _retired) {
       _refuse(DatabaseRestoreCode.stale);
+    }
     _check();
     if (_windows.exists(_markerPath)) {
       _state = _RestoreState.blocked;
@@ -287,8 +296,9 @@ final class NativeDatabaseRestoreOwner {
       // On Android these are ONLY the FilePicker copy's neighbors; the external
       // original is neither inspected nor asserted to have had no WAL.
       for (final suffix in ['-wal', '-shm', '-journal']) {
-        if (_windows.exists('$_candidatePath$suffix'))
+        if (_windows.exists('$_candidatePath$suffix')) {
           _refuse(DatabaseRestoreCode.unsupported);
+        }
       }
       candidate.raw = _native.open(
         _candidatePath,
@@ -372,8 +382,9 @@ final class NativeDatabaseRestoreOwner {
         !identical(proposal._owner, this) ||
         !identical(proposal._candidate, _candidate) ||
         proposal._retired ||
-        proposal._confirmed)
+        proposal._confirmed) {
       _refuse(DatabaseRestoreCode.stale);
+    }
     proposal._confirmed = true;
     return DatabaseRestoreConfirmation._(proposal);
   }
@@ -456,8 +467,9 @@ final class _RestoreCandidate {
   _RestoreLogicalDigest? digest;
   Digest? fileHash;
   void close() {
-    if (wrapper != null && !wrapper!.closed)
+    if (wrapper != null && !wrapper!.closed) {
       _refuse(DatabaseRestoreCode.recoveryRequired);
+    }
     raw?.close();
     pin.close();
   }

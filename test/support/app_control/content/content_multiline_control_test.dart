@@ -6,7 +6,6 @@ import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/character_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/preset_repo.dart';
 import 'package:glaze_flutter/core/llm/character_tokens.dart';
-import 'package:glaze_flutter/features/support_assistant/services/app_control/content/support_content_mutation.dart';
 import 'package:glaze_flutter/features/support_assistant/services/app_control/content/support_persona_control_adapter.dart';
 
 import 'content_control_fixture.dart';
@@ -761,8 +760,9 @@ Map<String, dynamic> _withoutSelected(
   if (target.action == 'astoria_character_manage') row.remove('tokenCount');
   if (target.action == 'astoria_lorebook_manage' ||
       target.action == 'astoria_lorebook_entry_manage' ||
-      target.action == 'astoria_studio_block_manage')
+      target.action == 'astoria_studio_block_manage') {
     row.remove('updatedAt');
+  }
   if (target.path.isEmpty) {
     row.remove(target.column);
   } else {

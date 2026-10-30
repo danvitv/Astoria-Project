@@ -9,16 +9,14 @@ import '../database_transaction_guard.dart';
 /// Only fixed native control SQL, on the exact original Drift connection.
 final class DatabaseBackgroundSnapshotSourceRepo {
   DatabaseBackgroundSnapshotSourceRepo({
-    required DatabaseConnectionUser database,
+    required this._database,
     required AndroidSnapshotNamespace namespace,
     required String sourcePath,
     required Set<String> registeredTables,
     required bool Function() isCurrent,
-    required Future<void> Function(Future<void> Function()) joinLifetime,
+    required this._joinLifetime,
     required void Function(Object) retainUnsettled,
-  }) : _database = database,
-       _joinLifetime = joinLifetime,
-       source = NativeBackgroundDatabaseSnapshotSource(
+  }) : source = NativeBackgroundDatabaseSnapshotSource(
          namespace: namespace,
          sourcePath: sourcePath,
          registeredTableNames: registeredTables,

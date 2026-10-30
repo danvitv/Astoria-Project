@@ -188,8 +188,9 @@ final class _RepairRecordedHashReader {
       return value.map((v) {
         if (v is! Map<String, dynamic> ||
             v.length != keys.length ||
-            !keys.every(v.containsKey))
+            !keys.every(v.containsKey)) {
           throw const FormatException();
+        }
         return v;
       }).toList();
     }

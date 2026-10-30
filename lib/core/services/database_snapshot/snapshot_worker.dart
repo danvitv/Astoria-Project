@@ -59,8 +59,9 @@ final class _BackgroundSnapshotWorker {
     if (args.length != 3 ||
         args[0] is! String ||
         args[1] is! String ||
-        args[2] is! String)
+        args[2] is! String) {
       return _reply('invalid', false);
+    }
     final command = args[0] as String;
     final token = args[1] as String;
     final metadata = args[2] as String;
@@ -94,8 +95,9 @@ final class _BackgroundSnapshotWorker {
     }
     if (command == 'start'
         ? active != null || closedToken == token
-        : active?.token != token)
+        : active?.token != token) {
       return _reply('unavailable', false);
+    }
     try {
       if (source.autocommit || !_sameSource()) {
         throw const _SnapshotFailure(DatabaseSnapshotStatus.unavailable);
@@ -307,8 +309,9 @@ final class _WorkerSnapshotMemory {
           >('LocalFree');
       _allocate = () => allocate(0x40, 5);
       _free = (name) {
-        if (release(name.cast()) != nullptr)
+        if (release(name.cast()) != nullptr) {
           throw StateError('Native release failed');
+        }
       };
     } else {
       final allocate = library

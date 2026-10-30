@@ -119,8 +119,9 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     };
     if (fields.isEmpty ||
         fields.keys.any((k) => !allowed.contains(k)) ||
-        !isCurrent())
+        !isCurrent()) {
       return false;
+    }
     final settings = Map<String, dynamic>.from(
       jsonDecode(expected._row.settingsJson) as Map,
     )..addAll(fields);
@@ -155,8 +156,9 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
           'pending_approval',
           'error',
           'needs_regeneration',
-        }.contains(matches.single['status']))
+        }.contains(matches.single['status'])) {
       return false;
+    }
     matches.single['vectorSearch'] = vectorSearch;
     return await (update(
           memoryBookRows,
@@ -178,8 +180,9 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
   }) async {
     try {
       return await transaction(() async {
-        if (!identical(catalog.db, attachedDatabase) || !isCurrent())
+        if (!identical(catalog.db, attachedDatabase) || !isCurrent()) {
           return false;
+        }
         final row = await (select(
           memoryBookRows,
         )..where((t) => _controlPredicate(t, expected._row))).getSingleOrNull();

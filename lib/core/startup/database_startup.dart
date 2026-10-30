@@ -38,11 +38,10 @@ DatabaseStartupSelection parseDatabaseStartupArguments(List<String> args) {
 final class ProcessDatabaseStartup {
   ProcessDatabaseStartup.windows({
     required NativeDatabaseStartupOwner owner,
-    required File target,
+    required File this.target,
     required Map<String, String> environment,
     AppDatabase Function(File)? openNormal,
   }) : startupOwner = owner,
-       target = target,
        environment = Map.unmodifiable(environment),
        _openNormal = openNormal ?? _openFixedNormal;
 
@@ -123,8 +122,9 @@ final class ProcessDatabaseStartup {
 
   Future<void> _openAfterBootstrap(Future<void> Function() bootstrap) async {
     await bootstrap();
-    if (_fixtureClosed)
+    if (_fixtureClosed) {
       throw const DatabaseRestoreException(DatabaseRestoreCode.closed);
+    }
     _install(target == null ? AppDatabase() : _openNormal!(target!));
   }
 

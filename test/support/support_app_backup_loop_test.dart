@@ -326,8 +326,9 @@ void main() {
         // Read-only native pointer observation of THIS opened handle: this is
         // an actual ROOT transaction, not a synthetic root/Boolean callback.
         if (held ||
-            nsql.sqlite3_get_autocommit(f.native.handle.handle.cast()) != 0)
+            nsql.sqlite3_get_autocommit(f.native.handle.handle.cast()) != 0) {
           return;
+        }
         held = true;
         entered.complete();
         await release.future;

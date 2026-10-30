@@ -221,8 +221,9 @@ final class SupportNativeRepairDiscovery implements SupportAppActionAdapter {
     }
     final input = Map<String, Object?>.of(arguments);
     if (action == 'astoria_database_health') input.remove('operation');
-    if (action == 'astoria_session_integrity' && input['session'] is! String)
+    if (action == 'astoria_session_integrity' && input['session'] is! String) {
       return null;
+    }
     final analysis =
         action == 'astoria_session_integrity' &&
         input['operation'] == 'analyzeLedger';

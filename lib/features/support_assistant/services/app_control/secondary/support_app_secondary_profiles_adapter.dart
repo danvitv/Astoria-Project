@@ -60,8 +60,9 @@ final class SupportAppSecondaryProfilesAdapter
     Map<String, Object?> arguments,
     SupportAppActionContext context,
   ) async {
-    if (action != 'astoria_secondary_profiles_read' || !context.current)
+    if (action != 'astoria_secondary_profiles_read' || !context.current) {
       return null;
+    }
     if (!definitions.single.accepts(arguments)) {
       throw const SupportAppActionRefused(
         SupportAppActionCode.invalidArguments,
@@ -71,8 +72,9 @@ final class SupportAppSecondaryProfilesAdapter
       (v) => v.name == arguments['domain'],
     );
     final facts = native.observe(domain);
-    if (facts == null || facts.domain != domain || !context.current)
+    if (facts == null || facts.domain != domain || !context.current) {
       return null;
+    }
     return SupportAppPreparedAction(
       target: 'secondary-${domain.name}-metadata',
       observation: facts.nativeObservation,

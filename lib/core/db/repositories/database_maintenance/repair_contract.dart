@@ -61,8 +61,9 @@ final class _MaintenanceRawGuard {
 }
 
 bool _maintenanceSafeId(String value) {
-  if (!RegExp(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$').hasMatch(value))
+  if (!RegExp(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$').hasMatch(value)) {
     return false;
+  }
   // Fail closed on credential-looking identities instead of smuggling them
   // through the native evidence scalar allowlist. No key/endpoint decoding.
   return !RegExp(

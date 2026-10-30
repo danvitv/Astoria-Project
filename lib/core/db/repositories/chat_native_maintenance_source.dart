@@ -51,8 +51,9 @@ final class _ChatNativeMaintenanceReader {
       if (!current() ||
           size.length != 1 ||
           size.single.data['bytes'] is! int ||
-          (size.single.data['bytes'] as int) > 65536)
+          (size.single.data['bytes'] as int) > 65536) {
         return null;
+      }
       final rows = await db
           .customSelect(
             'SELECT * FROM chat_sessions WHERE session_id IS ? COLLATE BINARY '
@@ -74,8 +75,9 @@ final class _ChatNativeMaintenanceReader {
             : value is! int ||
                   (column.type == DriftSqlType.bool &&
                       value != 0 &&
-                      value != 1))
+                      value != 1)) {
           return null;
+        }
       }
       final char = session['character_id'];
       if (session['session_id'] != id ||
@@ -86,8 +88,9 @@ final class _ChatNativeMaintenanceReader {
           (session['session_index'] as int) < 0 ||
           session['updated_at'] is! int ||
           (session['updated_at'] as int) < 0 ||
-          session['messages_json'] is! String)
+          session['messages_json'] is! String) {
         return null;
+      }
       final messages = jsonDecode(session['messages_json'] as String);
       if (messages is! List) return null;
       final ids = <String>{};
@@ -97,8 +100,9 @@ final class _ChatNativeMaintenanceReader {
             (message['id'] as String).isEmpty ||
             !ids.add(message['id'] as String) ||
             message['role'] is! String ||
-            message['content'] is! String)
+            message['content'] is! String) {
           return null;
+        }
       }
       for (final field in [
         'session_vars_json',
@@ -107,8 +111,9 @@ final class _ChatNativeMaintenanceReader {
       ]) {
         final raw = session[field];
         if (raw != null &&
-            (raw is! String || jsonDecode(raw) is! Map<String, dynamic>))
+            (raw is! String || jsonDecode(raw) is! Map<String, dynamic>)) {
           return null;
+        }
       }
       final characters = await db
           .customSelect(
@@ -166,8 +171,9 @@ final class _ChatNativeMaintenanceReader {
             (data['lease_expires_at'] as int) < 0 ||
             data['collector_ordinal'] is! int ||
             (data['collector_ordinal'] as int) <= 0 ||
-            (data['status'] == 'failed' && data['lease_expires_at'] != 0))
+            (data['status'] == 'failed' && data['lease_expires_at'] != 0)) {
           return null;
+        }
       }
       final blocks = await db
           .customSelect(
@@ -185,8 +191,9 @@ final class _ChatNativeMaintenanceReader {
               'error',
               'stopped',
             }.contains(row.data['status']),
-          ))
+          )) {
         return null;
+      }
       return ChatNativeMaintenanceSource._(
         db,
         id,

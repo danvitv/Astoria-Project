@@ -79,8 +79,9 @@ final class HistorySourceIndexRepo {
         )
         .watch()
         .map((rows) {
-          if (!_current())
+          if (!_current()) {
             throw StateError('Original native owner unavailable');
+          }
           final items = <HistoryIndexLocalCandidate>[];
           for (final row in rows) {
             final id = row.data['source_id'],
@@ -88,11 +89,13 @@ final class HistorySourceIndexRepo {
             if (id is! String ||
                 id.isEmpty ||
                 observation is! String ||
-                observation.length > 512)
+                observation.length > 512) {
               continue;
+            }
             final value = jsonDecode(observation);
-            if (value is! Map<String, dynamic>)
+            if (value is! Map<String, dynamic>) {
               throw StateError('Invalid native history status');
+            }
             final state = switch (value['status']) {
               'ready' => HistoryIndexMaintenanceState.ready,
               'unsupported' => HistoryIndexMaintenanceState.unsupported,
@@ -186,8 +189,9 @@ final class HistorySourceIndexRepo {
             if (startedResult['continuable'] == false) return;
             while (current() && steps < maxSteps) {
               final result = await _db.transaction(() async {
-                if (!current())
+                if (!current()) {
                   return <String, Object?>{'status': 'incomplete'};
+                }
                 return _command('step', sessionId, token);
               });
               // COMMIT has settled before any Stop check. Do not race original futures.

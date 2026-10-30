@@ -21,26 +21,22 @@ final class NativeDatabaseSnapshotOwner {
   /// executor's transaction fence. No new SQLite source connection is opened.
   NativeDatabaseSnapshotOwner.borrowed({
     required Database source,
-    required String sourcePath,
-    required String destinationPath,
+    required this._sourcePath,
+    required this._destinationPath,
     required Iterable<String> registeredTableNames,
-    required bool Function() isSourceCurrent,
+    required this._isSourceCurrent,
     required void Function() checkSource,
-    required Future<void> Function(Future<void> Function()) inReadTransaction,
-  }) : _sourcePath = sourcePath,
-       _destinationPath = destinationPath,
-       _registeredTables = Set.unmodifiable(registeredTableNames),
-       _isSourceCurrent = isSourceCurrent,
+    required Future<void> Function(Future<void> Function())
+    this._inReadTransaction,
+  }) : _registeredTables = Set.unmodifiable(registeredTableNames),
        _borrowedSource = source,
        _checkBorrowedSource = checkSource,
-       _inReadTransaction = inReadTransaction,
        _backgroundSource = null;
 
   NativeDatabaseSnapshotOwner.androidPrivate({
     required NativeBackgroundDatabaseSnapshotSource source,
-    required String destinationPath,
+    required this._destinationPath,
   }) : _sourcePath = source.sourcePath,
-       _destinationPath = destinationPath,
        _registeredTables = source.registeredTableNames,
        _isSourceCurrent = source.isCurrent,
        _borrowedSource = null,

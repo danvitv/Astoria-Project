@@ -156,8 +156,9 @@ final class SupportStudioPresetControlAdapter
         {'operation', 'id', 'title', 'text', 'clearText', 'section', 'role'},
         {'title', 'section'},
       );
-      if (a.containsKey('text') || a.containsKey('clearText'))
+      if (a.containsKey('text') || a.containsKey('clearText')) {
         text = SupportContentTextArguments.selected(a);
+      }
     } else if (op == SupportStudioBlockOperation.editText) {
       SupportContentArguments.shape(
         a,
@@ -171,10 +172,11 @@ final class SupportStudioPresetControlAdapter
         {'operation', 'id', 'blockId', 'enabled', 'role', 'order', 'depth'},
         {'blockId'},
       );
-      if (a.length < 4)
+      if (a.length < 4) {
         throw const SupportAppActionRefused(
           SupportAppActionCode.invalidArguments,
         );
+      }
     }
     final before = await repo.getById(a['id']! as String);
     if (!context.current || before == null) return null;
@@ -249,8 +251,9 @@ final class SupportStudioPresetControlAdapter
     final spec = StudioControllerOntology.specs.firstWhere(
       (s) => s.id == a['controller'],
     );
-    if (spec.lockedOn)
+    if (spec.lockedOn) {
       throw const SupportAppActionRefused(SupportAppActionCode.denied);
+    }
     final before = await repo.controlObserve(a['id']! as String);
     if (!context.current || before == null) return null;
     final next = applyStudioAgentToggle(before, spec.id, a['enabled']! as bool);

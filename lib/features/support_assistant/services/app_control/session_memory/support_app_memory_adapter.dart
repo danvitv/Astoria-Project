@@ -42,8 +42,11 @@ final class SupportAppMemoryAdapter implements SupportAppActionAdapter {
     final reading = action == 'astoria_memory_inspect';
     // The existing ROOT terminal port admits keyless connection plans only.
     // Never mutate a rooted model's source through a forged connection dispatch.
-    if (!reading && context.terminalRoot != null && context.domainRoot == null)
+    if (!reading &&
+        context.terminalRoot != null &&
+        context.domainRoot == null) {
       return null;
+    }
     if (action == 'astoria_memory_settings' && arguments.length == 1) {
       throw const SupportAppActionRefused(
         SupportAppActionCode.invalidArguments,
@@ -215,8 +218,9 @@ final class SupportAppMemoryAdapter implements SupportAppActionAdapter {
         );
       }
     }
-    if (!isCurrent())
+    if (!isCurrent()) {
       return SessionMemoryGuard.interrupted(context, persisted: changed);
+    }
     return SupportAppActionOutcome(
       changed ? SupportAppActionCode.completed : SupportAppActionCode.conflict,
       effect: changed

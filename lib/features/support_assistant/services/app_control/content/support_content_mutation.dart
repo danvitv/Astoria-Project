@@ -56,16 +56,18 @@ final class SupportContentMutation {
         SupportContentMutationLease? lease;
         if (!createsNew) {
           final source = sources;
-          if (source == null)
+          if (source == null) {
             return SupportAppActionOutcome(SupportAppActionCode.unavailable);
+          }
           lease = source.begin(
             domain: domain,
             target: target,
             observation: observation,
             context: context,
           );
-          if (lease == null)
+          if (lease == null) {
             return SupportAppActionOutcome(SupportAppActionCode.unavailable);
+          }
         }
         bool current() =>
             admitted() &&
@@ -73,15 +75,17 @@ final class SupportContentMutation {
             (lease == null || lease.isCurrent) &&
             admitted();
         try {
-          if (!current())
+          if (!current()) {
             return SupportAppActionOutcome(SupportAppActionCode.stale);
+          }
           final changed = await persist(current);
-          if (!changed)
+          if (!changed) {
             return SupportAppActionOutcome(
               current()
                   ? SupportAppActionCode.conflict
                   : SupportAppActionCode.stale,
             );
+          }
           // Refresh the captured owner only, never a replacement run/Ref graph.
           var refreshPending = !isOwnerCurrent();
           if (!refreshPending) {

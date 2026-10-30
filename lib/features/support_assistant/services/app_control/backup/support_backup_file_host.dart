@@ -136,8 +136,9 @@ final class SupportBackupNativeFileHost implements SupportAppConfirmationPort {
     if (!selection.isCurrent ||
         !request.current ||
         lease == null ||
-        !identical(lease.request, request))
+        !identical(lease.request, request)) {
       return null;
+    }
     selection._lease = lease; // Registry consumes the exact returned UI lease.
     return lease;
   }
@@ -182,8 +183,9 @@ final class SupportBackupFileSelection {
         _request == null ||
         !identical(_lease!.request, _request) ||
         !_request!.current ||
-        !belongsToOriginalDatabase(originalDatabase))
+        !belongsToOriginalDatabase(originalDatabase)) {
       return null;
+    }
     _rootAdmitted = true;
     return SupportBackupRootLease._(this);
   }
@@ -197,8 +199,9 @@ final class SupportBackupFileSelection {
         !custody.isCurrent ||
         !identical(custody._selection, this) ||
         !_rootAdmitted ||
-        !isCurrent())
+        !isCurrent()) {
       return null;
+    }
     _consumed = true; // BEFORE native construction or source/file access.
     _host._selections.remove(this);
     return _source.ownerForApprovedLocalFile(

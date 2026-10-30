@@ -36,8 +36,9 @@ final class SupportPermissionCodec {
         'owner',
         'policy',
       });
-      if (m['version'] != 1 || m['version'] is! int)
+      if (m['version'] != 1 || m['version'] is! int) {
         throw const FormatException();
+      }
       final owner = m['owner'] as String;
       requireSupportPermissionId(owner);
       final source = decode(

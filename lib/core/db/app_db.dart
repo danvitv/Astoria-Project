@@ -161,8 +161,7 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
-  AppDatabase._openedNative(QueryExecutor executor, this._nativeFile)
-    : super(executor);
+  AppDatabase._openedNative(super.executor, this._nativeFile);
 
   final _AppDatabaseNativeFile? _nativeFile;
   NativeDataSourceIdentity? _nativeIdentity;
@@ -179,8 +178,9 @@ class AppDatabase extends _$AppDatabase {
         hasCompletedOpening && !isClosing && nativeDataSourceIdentity != null,
     joinLifetime: (work) {
       final native = _nativeFile;
-      if (native == null)
+      if (native == null) {
         return Future.error(StateError('Native history unavailable'));
+      }
       return native.borrow(work);
     },
   );

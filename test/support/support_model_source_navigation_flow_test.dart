@@ -271,14 +271,16 @@ void main() {
           }
           // Top-level contents issues section selectors only; read needs an
           // issued record selector from a search within the chosen source.
-          if (round == 3)
+          if (round == 3) {
             return loop.search(
               handle,
               'PAGED_APPROVED_BODY_16',
               'paged_search',
             );
-          if (round == 4)
+          }
+          if (round == 4) {
             return loop.read(handle, loop.selector(), 'paged_read');
+          }
           expect(jsonEncode(loop.body()), contains('PAGED_APPROVED_BODY_16'));
           expect(
             jsonEncode(loop.body()),
@@ -692,10 +694,12 @@ void main() {
           expect(recipe.toolDisclosures!.map((d) => d.sourceId).toSet(), {
             'default',
           });
-          if (round == 3)
+          if (round == 3) {
             return loop.search(source, sourceStudioBody, 'fallback_search');
-          if (round == 4)
+          }
+          if (round == 4) {
             return loop.read(source, loop.selector(), 'fallback_read');
+          }
           expect(jsonEncode(_body(loop)), contains(sourceStudioBody));
           return SourceLoop.answer(
             'The selected SAVED default text was read, not its historical prompt use.',
@@ -878,11 +882,12 @@ void main() {
             }
             for (final request in f.wire) {
               for (final message in request['messages'] as List) {
-                if (message['role'] == 'tool')
+                if (message['role'] == 'tool') {
                   expect(
                     utf8.encode(message['content'] as String).length,
                     lessThanOrEqualTo(65536),
                   );
+                }
               }
             }
             final body = _body(loop);
@@ -1033,12 +1038,14 @@ void main() {
           'reconciliation',
           'characterKnowledge',
         ]) {
-          if (other != domain)
+          if (other != domain) {
             expect(outward, isNot(contains('MODEL_NINE_${other}_BODY')));
+          }
         }
         if (domain != 'game') expect(outward, isNot(contains(sourceGameBody)));
-        if (domain != 'studioPreset')
+        if (domain != 'studioPreset') {
           expect(outward, isNot(contains(sourceStudioBody)));
+        }
         sourceNoEgress(f, reply.body);
       },
     );
@@ -1164,10 +1171,11 @@ void main() {
         }, id: 'private-list'),
         rounds: 3,
         next: (round) {
-          if (round == 2)
+          if (round == 2) {
             return SourceLoop.call('astoria_source_contents', {
               'source': _readyGame(loop),
             }, id: 'private-contents');
+          }
           expect(loop.lastResult()['ok'], isFalse);
           expect(loop.lastResult()['code'], 'denied');
           expect(loop.lastResult()['effect'], 'none');

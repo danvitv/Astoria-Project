@@ -49,8 +49,9 @@ final class SupportReplySourceCommit {
         current != after ||
         after.$1 != before.$1 + 1 ||
         after.$2 != before.$2 ||
-        reservation.message != original.reservation.message)
+        reservation.message != original.reservation.message) {
       return false;
+    }
     _consumed = true;
     return true;
   }
@@ -266,8 +267,9 @@ abstract final class _ReplySourceHeader {
   static Map<String, Object?> object(Object? value, Set<String> keys) {
     if (value is! Map<String, Object?> ||
         value.length != keys.length ||
-        value.keys.any((key) => !keys.contains(key)))
+        value.keys.any((key) => !keys.contains(key))) {
       bad();
+    }
     return value;
   }
 
@@ -313,8 +315,9 @@ abstract final class _ReplySourceHeader {
           root['supportSessionId'] != expected.message.sessionId ||
           root['replyMessageId'] != expected.message.id ||
           root['runId'] != expected.message.runId ||
-          root['currentUserMessageId'] != userId)
+          root['currentUserMessageId'] != userId) {
         bad();
+      }
       for (final key in [
         'supportSessionId',
         'replyMessageId',
@@ -326,11 +329,13 @@ abstract final class _ReplySourceHeader {
       ids(root['currentConversationMessageIds'], empty: true);
       final conversation = root['currentConversationMessageIds'] as List;
       if (conversation.contains(userId) ||
-          conversation.contains(expected.message.id))
+          conversation.contains(expected.message.id)) {
         bad();
+      }
       if (checkpoint &&
-          !SupportSourceJson.identity(root['compactedThroughMessageId']))
+          !SupportSourceJson.identity(root['compactedThroughMessageId'])) {
         bad();
+      }
       final ranges = array(root['originalRanges'], 128),
           references = array(root['directReplies'], 128);
       if (ranges.length + references.length > 128) bad();
@@ -344,8 +349,9 @@ abstract final class _ReplySourceHeader {
         });
         if (!const ['support', 'game'].contains(range['domain']) ||
             !SupportSourceJson.identity(range['sessionId']) ||
-            !rangeKeys.add(jsonEncode([range['domain'], range['sessionId']])))
+            !rangeKeys.add(jsonEncode([range['domain'], range['sessionId']]))) {
           bad();
+        }
         ids(range['orderedMessageIds']);
         occurrences += (range['orderedMessageIds'] as List).length;
         if (occurrences > 4096) bad();
@@ -355,8 +361,9 @@ abstract final class _ReplySourceHeader {
         if (ref.values.any((v) => !SupportSourceJson.identity(v)) ||
             !referenceKeys.add(
               jsonEncode([ref['sessionId'], ref['messageId']]),
-            ))
+            )) {
           bad();
+        }
       }
       if (v == 4) {
         final seen = <String>{};
@@ -420,8 +427,9 @@ abstract final class _ReplySourceHeader {
               disclosure['sourceId'],
               disclosure['snapshotDigest'],
             ]),
-          ))
+          )) {
             bad();
+          }
         }
       }
       return root;
@@ -456,7 +464,8 @@ abstract final class _ReplySourceHeader {
           (key) =>
               !nextHeader.containsKey(key) ||
               jsonEncode(oldHeader[key]) != jsonEncode(nextHeader[key]),
-        ))
+        )) {
       bad();
+    }
   }
 }

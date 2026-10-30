@@ -58,8 +58,9 @@ final class DatabaseSnapshotService {
   Future<DatabaseSnapshotResult> _create(
     DatabaseSnapshotControl control,
   ) async {
-    if (_native._backgroundSource != null)
+    if (_native._backgroundSource != null) {
       return _createAndroidSnapshot(control);
+    }
     final fence = _native._inReadTransaction;
     if (fence == null) return _createSnapshot(control);
     try {

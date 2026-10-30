@@ -8,14 +8,16 @@ final class HistoryMessageUnit {
   HistoryMessageUnit(String raw) {
     final value = SupportSourceJson.decode(raw);
     if (value is! Map<String, Object?> ||
-        !SupportSourceJson.identity(value['id']))
+        !SupportSourceJson.identity(value['id'])) {
       bad();
+    }
     object = value;
     id = value['id'] as String;
     if (utf8.encode(id).length > 256) bad();
     if (value['content'] is! String ||
-        !const ['user', 'assistant', 'system'].contains(value['role']))
+        !const ['user', 'assistant', 'system'].contains(value['role'])) {
       bad();
+    }
     for (final key in [
       'isHidden',
       'isError',
@@ -30,8 +32,9 @@ final class HistoryMessageUnit {
     if (value['timestamp'] != null &&
         (value['timestamp'] is! int ||
             (value['timestamp'] as int) < 0 ||
-            (value['timestamp'] as int) > 8640000000000000))
+            (value['timestamp'] as int) > 8640000000000000)) {
       bad();
+    }
     eligible =
         ![
           'isHidden',
@@ -47,14 +50,16 @@ final class HistoryMessageUnit {
     if (value['role'] == 'assistant') {
       final swipes = value['swipes'], agents = value['agentSwipes'];
       if (swipes != null &&
-          (swipes is! List || swipes.any((s) => s is! String)))
+          (swipes is! List || swipes.any((s) => s is! String))) {
         bad();
+      }
       if (agents != null && agents is! List) bad();
       if (eligible) {
         final s = swipes as List? ?? const [], a = agents as List? ?? const [];
         if ((s.isEmpty ? swipe != 0 : swipe >= s.length) ||
-            (a.isEmpty ? agentSwipe != 0 : agentSwipe >= a.length))
+            (a.isEmpty ? agentSwipe != 0 : agentSwipe >= a.length)) {
           bad();
+        }
         if (a.isNotEmpty) {
           final active = a[agentSwipe];
           if (active is! Map<String, Object?> ||
@@ -62,8 +67,9 @@ final class HistoryMessageUnit {
               (active['kind'] != null &&
                   !const ['final', 'cleaned'].contains(active['kind'])) ||
               (active['parentSwipeId'] != null &&
-                  active['parentSwipeId'] != swipe))
+                  active['parentSwipeId'] != swipe)) {
             bad();
+          }
         } else if (s.isNotEmpty && s[swipe] != value['content']) {
           bad();
         }

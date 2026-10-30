@@ -146,11 +146,12 @@ void main() {
         jsonEncode({...base, 'compactedThroughMessageId': null}),
         jsonEncode({...base, 'version': 5}),
       ];
-      for (final raw in bad)
+      for (final raw in bad) {
         expect(
           SupportModelProvenanceCodec.decodeFromEncryptedStorage(raw).isValid,
           isFalse,
         );
+      }
       expect(
         () => _recipe(direct: false, disclosures: [_disclosure()]),
         throwsA(isA<SupportModelProvenanceException>()),

@@ -9,8 +9,9 @@ final class _ModelSourceApproval implements nav.ApprovalPort {
     if (context == null ||
         call == null ||
         context.confirmation == null ||
-        !identical(request.run, owner.navigationRun))
+        !identical(request.run, owner.navigationRun)) {
       return null;
+    }
     owner.check(context);
     final plan = await owner.scopeForApproval(request.source);
     owner.check(context);
@@ -77,8 +78,9 @@ final class _ModelSourceApproval implements nav.ApprovalPort {
     if (lease == null ||
         !lease.accept(native) ||
         !lease.current ||
-        !native.current)
+        !native.current) {
       return null;
+    }
     owner.run.toolActivity(
       SupportModelToolStage.executing,
       detail: 'Точное нативное согласие принято; область чтения заморожена',
@@ -109,8 +111,9 @@ final class _ModelSourceScopeLease implements nav.ApprovalLease {
         !native.current ||
         !native.request.current ||
         !approval.source.lease.isCurrent() ||
-        !owner.current)
+        !owner.current) {
       _retired = true;
+    }
     return !_retired;
   }
 }
@@ -136,14 +139,16 @@ final class _ModelSourceProjection implements nav.ProjectionPort {
   Future<nav.ProjectedRecord> project(nav.DataRecord record) async {
     final stamp = _stamp();
     Object? project(Object? value) {
-      if (value is String)
+      if (value is String) {
         return _safeText(_redactor!, value, nav.Limits.rawBytes);
+      }
       if (value is List) return value.map(project).toList(growable: false);
       if (value is Map<String, Object?>) {
-        if (!record.schemaKeysAttested)
+        if (!record.schemaKeysAttested) {
           throw const SupportAppActionRefused(
             SupportAppActionCode.unsafeMetadata,
           );
+        }
         return {for (final e in value.entries) e.key: project(e.value)};
       }
       return value;
@@ -151,8 +156,9 @@ final class _ModelSourceProjection implements nav.ProjectionPort {
 
     final payload = project(record.payload);
     owner.check(owner._context!);
-    if (!stamp.same(_stamp()))
+    if (!stamp.same(_stamp())) {
       throw const SupportAppActionRefused(SupportAppActionCode.stale);
+    }
     return nav.ProjectedRecord(payload, stamp);
   }
 
@@ -309,16 +315,18 @@ final class _ModelSourceProvenance implements nav.ProvenancePort {
             owner.original(context) && entry.grant.lease.isCurrent(),
       );
       owner.check(context);
-      if (pending == null)
+      if (pending == null) {
         throw const SupportAppActionRefused(SupportAppActionCode.conflict);
+      }
       final actual = await run.service._writer.extendReplySourcesAttested(
         expected: pending,
         provenanceJson: encoded,
         isCurrent: () =>
             owner.original(context) && entry.grant.lease.isCurrent(),
       );
-      if (actual == null)
+      if (actual == null) {
         throw const SupportAppActionRefused(SupportAppActionCode.conflict);
+      }
       // Preserve OUR durable reservation for Stop settlement before checking
       // publication lifetime; commit success must not be erased by cancellation.
       run.expected = actual.reservation;

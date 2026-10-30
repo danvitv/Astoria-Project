@@ -24,8 +24,9 @@ final class _SupportAssistantSettingsStore {
     }
     SupportContextBlock? legacy;
     for (final sessionId in legacySessionIds) {
-      if (sessionId.isEmpty)
+      if (sessionId.isEmpty) {
         throw StateError('Invalid legacy settings parent.');
+      }
       final found = await context.get('workspace-settings-v1:$sessionId');
       if (!current()) return null;
       if (found == null) continue;

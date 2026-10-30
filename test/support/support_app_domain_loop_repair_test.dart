@@ -256,8 +256,9 @@ void main() {
       'MODEL ${collector ? 'Collector deletion' : 'Ledger correction'} uses original queue, journal, revision and Undo',
       (tester, f) async {
         final core = f.screen.core, c = core.container;
-        if (collector)
+        if (collector) {
           await configurationAction(tester, () => seedDomainCollector(f));
+        }
         final originalMessages = await configurationAction(
           tester,
           () => c.read(chatRepoProvider).getById(DomainLoopFixture.session),

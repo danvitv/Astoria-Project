@@ -63,10 +63,11 @@ final class SupportStudioRuntimeControlAdapter
           : {'id', 'lane', 'temperature', 'maxTokens', 'interval'},
       {'id', 'lane'},
     );
-    if (a.length < 3)
+    if (a.length < 3) {
       throw const SupportAppActionRefused(
         SupportAppActionCode.invalidArguments,
       );
+    }
     final before = await repo.getById(a['id']! as String);
     if (!context.current || before == null) return null;
     if (cleaner

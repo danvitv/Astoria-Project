@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:drift/native.dart';
@@ -36,7 +35,7 @@ part 'database_restore/restore_android_sqlite.dart';
 /// lookup, provider drain, model authority, startup integration or GUI consent.
 /// D2 must retain this owner before any ordinary application database is opened.
 final class DatabaseRestoreRepo {
-  DatabaseRestoreRepo({NativeDatabaseRestoreOwner? owner}) : _owner = owner;
+  DatabaseRestoreRepo({this._owner});
   final NativeDatabaseRestoreOwner? _owner;
 
   Future<DatabaseRestoreProposal> prepare() async {

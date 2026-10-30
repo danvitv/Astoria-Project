@@ -18,7 +18,8 @@ final class _NavGameCursor {
 /// Indexed seeks into independently stored, authenticated COMPLETE objects.
 /// No messages_json/json_each/window/offset read is reachable from these tools.
 extension _NavGame on SupportSourceNavigationRepo {
-  static const _anchorColumns = 'native_order,active_ordinal AS ordinal,message_id,swipe_id,agent_swipe_id,role,integrity,anchor_integrity,'
+  static const _anchorColumns =
+      'native_order,active_ordinal AS ordinal,message_id,swipe_id,agent_swipe_id,role,integrity,anchor_integrity,'
       'astoria_history_anchor_valid(session_id,incarnation,revision,native_order,active_ordinal,'
       'message_id,swipe_id,agent_swipe_id,role,integrity,anchor_integrity) AS anchor_valid';
   Future<Map<String, Object?>> _gameIndex(String session) async {
@@ -53,8 +54,9 @@ extension _NavGame on SupportSourceNavigationRepo {
   );
 
   history.HistoryMessageUnit _message(QueryRow row) {
-    if (row.data['valid'] != 1 || row.data['raw'] is! String)
+    if (row.data['valid'] != 1 || row.data['raw'] is! String) {
       _fail(SupportSourceReadFailure.changed);
+    }
     final message = history.HistoryMessageUnit(row.read<String>('raw'));
     if (!message.eligible) _shape.bad();
     return message;
@@ -66,10 +68,13 @@ extension _NavGame on SupportSourceNavigationRepo {
     }
     final id = _shape.id(row.data['message_id']);
     final swipe = row.data['swipe_id'], agent = row.data['agent_swipe_id'];
-    if (message != null && (message.id != id ||
-        message.nativeSwipe != (swipe == null ? null : '$swipe') ||
-        message.nativeAgentSwipe != (agent == null ? null : '$agent') ||
-        message.role != row.data['role'])) _fail(SupportSourceReadFailure.changed);
+    if (message != null &&
+        (message.id != id ||
+            message.nativeSwipe != (swipe == null ? null : '$swipe') ||
+            message.nativeAgentSwipe != (agent == null ? null : '$agent') ||
+            message.role != row.data['role'])) {
+      _fail(SupportSourceReadFailure.changed);
+    }
     return nav.Anchor(
       id,
       row.read<int>('ordinal'),
@@ -79,21 +84,34 @@ extension _NavGame on SupportSourceNavigationRepo {
   }
 
   Future<List<QueryRow>> _gameMetadata(
-    String session, int incarnation, int revision, int start, int end, int limit,
-  ) => _sql('SELECT $_anchorColumns FROM history_message_units INDEXED BY idx_history_units_active '
-      'WHERE session_id=? AND incarnation=? AND revision=? AND active_ordinal BETWEEN ? AND ? '
-      'ORDER BY active_ordinal LIMIT ?', [
-        Variable.withString(session), Variable.withInt(incarnation), Variable.withInt(revision),
-        Variable.withInt(start), Variable.withInt(end), Variable.withInt(limit),
-      ]);
+    String session,
+    int incarnation,
+    int revision,
+    int start,
+    int end,
+    int limit,
+  ) => _sql(
+    'SELECT $_anchorColumns FROM history_message_units INDEXED BY idx_history_units_active '
+    'WHERE session_id=? AND incarnation=? AND revision=? AND active_ordinal BETWEEN ? AND ? '
+    'ORDER BY active_ordinal LIMIT ?',
+    [
+      Variable.withString(session),
+      Variable.withInt(incarnation),
+      Variable.withInt(revision),
+      Variable.withInt(start),
+      Variable.withInt(end),
+      Variable.withInt(limit),
+    ],
+  );
 
   Future<nav.FrozenScope?> _gameScope(
     String session,
     nav.WorkBound bound,
   ) async {
     final index = await _gameIndex(session);
-    if (index['status'] != 'ready')
+    if (index['status'] != 'ready') {
       return null; // Explicit local backfill only.
+    }
     final count = index['activeCount'] as int;
     if (count == 0) return null;
     final first = await _gameMetadata(
@@ -115,8 +133,9 @@ extension _NavGame on SupportSourceNavigationRepo {
             1,
           );
     _guard();
-    if (first.length != 1 || last.length != 1)
+    if (first.length != 1 || last.length != 1) {
       _fail(SupportSourceReadFailure.changed);
+    }
     return nav.FrozenScope.messages(
       nav.ActiveRange(_anchor(first.single), _anchor(last.single)),
     );
@@ -140,16 +159,19 @@ extension _NavGame on SupportSourceNavigationRepo {
           !identical(cursor.source, source) ||
           !identical(cursor.scope, scope) ||
           cursor.operation != operation ||
-          cursor.literal != literal)
+          cursor.literal != literal) {
         _fail();
+      }
       start = cursor.ordinal;
     }
     final end = last ?? range.end.ordinal;
-    if (start < range.start.ordinal || end > range.end.ordinal || end < start)
+    if (start < range.start.ordinal || end > range.end.ordinal || end < start) {
       _fail();
+    }
     final index = source.header['history_index'] as Map<String, Object?>?;
-    if (index == null || index['status'] != 'ready')
+    if (index == null || index['status'] != 'ready') {
       _fail(SupportSourceReadFailure.unavailable);
+    }
     // Body operations bound complete indexed units. Contents authenticates only
     // separately MAC-bound metadata; it never hydrates game raw_json.
     final records = <nav.DataRecord>[];
@@ -177,16 +199,22 @@ extension _NavGame on SupportSourceNavigationRepo {
         count,
       );
       _guard();
-      if (rows.length != scanEnd - next + 1)
+      if (rows.length != scanEnd - next + 1) {
         _fail(SupportSourceReadFailure.changed);
+      }
       // Account even prefetched/unemitted complete units, never just matches.
       rawBytes += rows.fold<int>(
         0,
-        (n, row) => n + utf8.encode(bodies ? row.read<String>('raw') : jsonEncode(row.data)).length,
+        (n, row) =>
+            n +
+            utf8
+                .encode(bodies ? row.read<String>('raw') : jsonEncode(row.data))
+                .length,
       );
       for (final row in rows) {
-        if (row.read<int>('ordinal') != next)
+        if (row.read<int>('ordinal') != next) {
           _fail(SupportSourceReadFailure.changed);
+        }
         final message = bodies ? _message(row) : null;
         final anchor = _anchor(row, message: message);
         next++;
@@ -196,8 +224,9 @@ extension _NavGame on SupportSourceNavigationRepo {
           nav.ActiveRange(anchor, anchor),
         );
         if (!_allowed(source, scope, selection)) _fail();
-        if (literal != null && !_visibleMatch(message!.content, literal))
+        if (literal != null && !_visibleMatch(message!.content, literal)) {
           continue;
+        }
         final record = nav.DataRecord(
           selection: selection,
           kind: nav.SectionKind.activeMessages,

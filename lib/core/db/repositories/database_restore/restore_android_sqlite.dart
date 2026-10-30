@@ -18,14 +18,17 @@ final class _RestoreAndroidSqlite implements _RestoreNativePort {
   late final Pointer<nsql.sqlite3_char> main;
   final _opens = <_RestoreUnixOpen>[];
   bool _cleanupUncertain = false;
+  @override
   bool closed = false;
 
+  @override
   void check() {
     if (closed) _refuse(DatabaseRestoreCode.closed);
     if (_cleanupUncertain) _refuse(DatabaseRestoreCode.recoveryRequired);
     identity.checkInstallation();
   }
 
+  @override
   _RestoreRaw open(String path, OpenMode mode, {bool immutable = false}) {
     check();
     // FilePort's default data-file pin MUST be O_PATH, never an ordinary RO
@@ -72,6 +75,7 @@ final class _RestoreAndroidSqlite implements _RestoreNativePort {
     throw StateError('Unreachable');
   }
 
+  @override
   void idle(_RestoreRaw raw) {
     check();
     final handle = raw.database.handle.cast<nsql.sqlite3>();
@@ -93,11 +97,13 @@ final class _RestoreAndroidSqlite implements _RestoreNativePort {
     identity.verify(opened.witness!, raw, pin);
   }
 
+  @override
   void verify(_RestoreRaw raw, _RestorePin pin) {
     idle(raw);
     _physical(raw, pin);
   }
 
+  @override
   void verifyReadFence(_RestoreRaw raw, _RestorePin pin) {
     check();
     final db = raw.database;
@@ -117,6 +123,7 @@ final class _RestoreAndroidSqlite implements _RestoreNativePort {
     _physical(raw, pin);
   }
 
+  @override
   void acquireExclusive(_RestoreRaw raw, _RestorePin pin) {
     final db = raw.database;
     db.execute('PRAGMA main.locking_mode = EXCLUSIVE');
@@ -140,6 +147,7 @@ final class _RestoreAndroidSqlite implements _RestoreNativePort {
     verify(raw, pin);
   }
 
+  @override
   void durableOriginal(_RestoreRaw raw) {
     raw.database.execute('PRAGMA main.locking_mode = EXCLUSIVE');
     raw.database.execute('PRAGMA busy_timeout = 0');
@@ -150,9 +158,11 @@ final class _RestoreAndroidSqlite implements _RestoreNativePort {
     idle(raw);
   }
 
+  @override
   Future<void> copy(_RestoreRaw source, _RestoreRaw destination) =>
       _RestoreNativeBackup.copy(main, source, destination, idle);
 
+  @override
   void close() {
     if (closed) return;
     for (final opened in _opens.reversed) {

@@ -95,8 +95,9 @@ final class SupportCharacterControlAdapter implements SupportAppActionAdapter {
       );
       final before = await repo.getById(arguments['id']! as String);
       if (!context.current || before == null) return null;
-      if (before.variantOrder != 0)
+      if (before.variantOrder != 0) {
         throw const SupportAppActionRefused(SupportAppActionCode.denied);
+      }
       return mutations.prepare(
         domain: SupportContentDomain.character,
         target: before.id,

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:easy_localization/easy_localization.dart';
@@ -78,8 +77,9 @@ void backupLoopTest(
       if (message == null) return io.block('empty native message');
       if (channel == SystemChannels.textInput.name &&
           tester.testTextInput.isRegistered &&
-          handler != null)
+          handler != null) {
         return handler(message);
+      }
       if (channel == SystemChannels.platform.name) {
         final call = const JSONMethodCodec().decodeMethodCall(message);
         final result = switch (call.method) {
@@ -110,8 +110,9 @@ void backupLoopTest(
           'data': final Map<dynamic, dynamic> data,
           'nodeId': final int id,
         }) {
-          if (data.isEmpty && id >= 0)
+          if (data.isEmpty && id >= 0) {
             return SystemChannels.accessibility.codec.encodeMessage(null);
+          }
         }
         return io.block('accessibility');
       }
@@ -129,8 +130,9 @@ void backupLoopTest(
                 args['replace'] is bool,
           _ => false,
         };
-        if (valid)
+        if (valid) {
           return SystemChannels.navigation.codec.encodeSuccessEnvelope(null);
+        }
         return io.block('navigation metadata');
       }
       return io.block('native channel');
@@ -627,8 +629,9 @@ final class BackupLoopFixture {
 
   void observePublication(void Function() onPublished) {
     native.onCurrent = () {
-      if (publishedObserved || !File(native.destinationPath).existsSync())
+      if (publishedObserved || !File(native.destinationPath).existsSync()) {
         return;
+      }
       publishedObserved = true;
       onPublished();
     };
@@ -694,8 +697,9 @@ final class BackupLoopWire implements HttpClientAdapter {
     fixture.requests.add(options);
     fixture.wire.add(jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>);
     final round = fixture.wire.length;
-    if (round > fixture.replies.length)
+    if (round > fixture.replies.length) {
       throw StateError('Undeclared extra POST');
+    }
     await fixture.onFetch?.call(round);
     return ResponseBody.fromString(
       jsonEncode(fixture.replies[round - 1]),

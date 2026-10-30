@@ -162,8 +162,9 @@ extension _NavRecords on SupportSourceNavigationRepo {
           ),
         );
       }
-      if (descriptors.length > bound.pageSize)
+      if (descriptors.length > bound.pageSize) {
         _fail(SupportSourceReadFailure.tooLarge);
+      }
       return nav.Page(descriptors);
     }
     final page = await _recordPage(
@@ -228,8 +229,9 @@ extension _NavRecords on SupportSourceNavigationRepo {
         query.before < 0 ||
         query.before > 2 ||
         query.after < 0 ||
-        query.after > 2)
+        query.after > 2) {
       _fail();
+    }
     final capture = source.captures[_selectionKey(query.selection)];
     if (capture == null) _fail();
     if (query.selection.range != null) {
@@ -252,18 +254,21 @@ extension _NavRecords on SupportSourceNavigationRepo {
       final selected = page.items[query.before].selection.range!.start;
       if (!selected.same(range.start) ||
           !page.items[page.items.length - query.after - 1].selection.range!.end
-              .same(range.end))
+              .same(range.end)) {
         _fail(SupportSourceReadFailure.changed);
+      }
       return page;
     }
     if (query.before != 0 ||
         query.after != 0 ||
         capture.record == null ||
-        query.selection.kind != nav.SelectionKind.record)
+        query.selection.kind != nav.SelectionKind.record) {
       _fail();
+    }
     final record = capture.record!;
-    if (_payloadBytes(record.payload) > bound.rawByteLimit)
+    if (_payloadBytes(record.payload) > bound.rawByteLimit) {
       _fail(SupportSourceReadFailure.tooLarge);
+    }
     return nav.Page([record], candidatesExamined: 1);
   }
 
@@ -279,8 +284,9 @@ extension _NavRecords on SupportSourceNavigationRepo {
     if (section != null &&
         (section.kind != nav.SelectionKind.section ||
             !_allowed(source, scope, section) ||
-            !source.captures.containsKey(_selectionKey(section))))
+            !source.captures.containsKey(_selectionKey(section)))) {
       _fail();
+    }
     var tableIndex = 0, after = 0, unitIndex = 0;
     var repeating = false;
     if (cursor != null) {
@@ -291,8 +297,9 @@ extension _NavRecords on SupportSourceNavigationRepo {
           cursor.literal != literal ||
           (section == null
               ? cursor.section != null
-              : cursor.section == null || !section.same(cursor.section!)))
+              : cursor.section == null || !section.same(cursor.section!))) {
         _fail();
+      }
       tableIndex = cursor.table;
       after = cursor.row;
       repeating = cursor.unit > 0;
@@ -380,15 +387,18 @@ extension _NavRecords on SupportSourceNavigationRepo {
         }
         if (!_allowed(source, scope, record.selection) ||
             (section != null &&
-                section.sectionId != record.selection.sectionId))
+                section.sectionId != record.selection.sectionId)) {
           continue;
+        }
         if (literal != null &&
             (record.payload is! String ||
-                !_visibleMatch(record.payload as String, literal)))
+                !_visibleMatch(record.payload as String, literal))) {
           continue;
+        }
         final bytes = _payloadBytes(record.payload);
-        if (bytes > bound.rawByteLimit)
+        if (bytes > bound.rawByteLimit) {
           _fail(SupportSourceReadFailure.tooLarge);
+        }
         if (pageBytes + bytes > bound.rawByteLimit) {
           if (result.isEmpty) _fail(SupportSourceReadFailure.tooLarge);
           return nav.Page(
@@ -486,8 +496,9 @@ extension _NavRecords on SupportSourceNavigationRepo {
       _guard();
       if (budget.single.read<int>('n') == 0) return null;
       if (budget.single.read<int>('n') != 3) _shape.bad();
-      if (budget.single.read<int>('bytes') > byteLimit)
+      if (budget.single.read<int>('bytes') > byteLimit) {
         _fail(SupportSourceReadFailure.tooLarge);
+      }
       final rows = await _sql(
         'SELECT rowid AS native_rowid, ${table.columns} '
         'FROM tracker_rows INDEXED BY sqlite_autoindex_tracker_rows_1 $where ORDER BY name LIMIT 3',
@@ -514,8 +525,9 @@ extension _NavRecords on SupportSourceNavigationRepo {
       );
       _guard();
       if (rows.isEmpty) return null;
-      if (rows.single.data['raw'] == null)
+      if (rows.single.data['raw'] == null) {
         _fail(SupportSourceReadFailure.tooLarge);
+      }
       final items = _shape.list(_decode(rows.single.data['raw']));
       // Validate ALL complete objects/identities in this bounded original row.
       final seen = <String>{};
@@ -548,8 +560,9 @@ extension _NavRecords on SupportSourceNavigationRepo {
     );
     _guard();
     if (metadata.isEmpty) return null;
-    if (metadata.single.read<int>('bytes') > byteLimit)
+    if (metadata.single.read<int>('bytes') > byteLimit) {
       _fail(SupportSourceReadFailure.tooLarge);
+    }
     if (metadata.single.read<int>('eligible') != 1) {
       return {
         'native_rowid': metadata.single.read<int>('native_rowid'),

@@ -40,9 +40,9 @@ final class FlutterSecureCredentialStorage implements CredentialStorage {
   FlutterSecureCredentialStorage._(
     this._storage, {
     required String buildChannel,
-    required bool existingOnly,
+    required this._existingOnly,
     AndroidOptions? androidOptions,
-  }) : _existingOnly = existingOnly {
+  }) {
     if (!RegExp(r'^[a-z][a-z0-9_-]{0,31}$').hasMatch(buildChannel)) {
       throw const FormatException('Invalid credential build channel');
     }

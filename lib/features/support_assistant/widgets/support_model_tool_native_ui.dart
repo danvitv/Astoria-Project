@@ -234,8 +234,9 @@ final class SupportModelToolNativeUi
                                       decided ||
                                       !original() ||
                                       !request.current ||
-                                      !route.isCurrent)
+                                      !route.isCurrent) {
                                     return;
+                                  }
                                   decided = true;
                                   selected = candidate;
                                   // Deliberately NO confirmation lease/body grant.

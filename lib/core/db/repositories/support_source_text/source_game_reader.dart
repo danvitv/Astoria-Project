@@ -41,8 +41,9 @@ extension _SourceGameReader on SupportSourceTextRepo {
     guard();
     if (shape == null) _deny(SupportSourceReadFailure.notFound);
     if (shape.read<int>('valid') == 2) _deny(SupportSourceReadFailure.tooLarge);
-    if (shape.read<int>('valid') != 1)
+    if (shape.read<int>('valid') != 1) {
       _deny(SupportSourceReadFailure.unsupportedFormat);
+    }
     final rows = await _db
         .customSelect(
           '''$_entries
@@ -94,8 +95,9 @@ extension _SourceGameReader on SupportSourceTextRepo {
           !_identity(map['message_id']) ||
           !seen.add(map['message_id'] as String) ||
           map['chars'] is! int ||
-          map['bytes'] is! int)
+          map['bytes'] is! int) {
         _deny(SupportSourceReadFailure.unsupportedFormat);
+      }
       result.add(Map.unmodifiable(map));
     }
     return List.unmodifiable(result);
@@ -107,8 +109,9 @@ extension _SourceGameReader on SupportSourceTextRepo {
   ) async {
     final discovery = await _discoverGame(observation.sourceId, guard);
     guard();
-    if (!_equal(discovery, observation._discovery))
+    if (!_equal(discovery, observation._discovery)) {
       _deny(SupportSourceReadFailure.changed);
+    }
     // Reuse the existing strict variation/eligibility reader. No tolerant
     // ChatMessage JSON codec, hidden variants, raw prompts or attachments.
     final strict = await _text.loadRoleplayForNativeSource(
@@ -154,19 +157,22 @@ extension _SourceGameReader on SupportSourceTextRepo {
                     maxOutputLength: 65536,
                   )
                   .redactText(body) !=
-              strict.messages[i].text)
+              strict.messages[i].text) {
         _deny();
+      }
       // Strict scalar validation also refuses lone-surrogate active text.
       final encoded = jsonEncode(body);
       if (utf8.encode(encoded).length >
-          SupportSourceTextRepo.maxToolResultBytes)
+          SupportSourceTextRepo.maxToolResultBytes) {
         _deny(SupportSourceReadFailure.tooLarge);
+      }
       SupportSourceJson.decode(encoded);
       chars += body.runes.length;
       bytes += utf8.encode(body).length;
     }
-    if (chars != observation.textCharacters || bytes != observation.textBytes)
+    if (chars != observation.textCharacters || bytes != observation.textBytes) {
       _deny(SupportSourceReadFailure.changed);
+    }
     return _snapshot(
       observation,
       [

@@ -94,8 +94,9 @@ final class _SupportCompactedTextReader {
         if (spec._compactionBatch &&
             (ids.length >= 32 ||
                 envelopes + row.read<int>('envelope_length') >
-                    SupportTextContextRepo.maxSelectedEnvelopeChars - 16000))
+                    SupportTextContextRepo.maxSelectedEnvelopeChars - 16000)) {
           break;
+        }
         envelopes += row.read<int>('envelope_length');
         ids.add(id);
       }
@@ -112,7 +113,7 @@ final class _SupportCompactedTextReader {
     );
     checkpoint?.call();
     return (
-      _TextRead._session(read, [if (current != null) current, ...rows]),
+      _TextRead._session(read, [?current, ...rows]),
       List<String>.unmodifiable(ids),
     );
   }

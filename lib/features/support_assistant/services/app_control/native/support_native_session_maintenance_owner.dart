@@ -35,8 +35,9 @@ final class SupportNativeSessionMaintenanceOwners {
     final retained = _claims[session];
     if (retained != null &&
         retained.current &&
-        identical(retained.context, context))
+        identical(retained.context, context)) {
       return retained;
+    }
     if (retained != null) {
       // Never replace actual admitted effect custody with a fresh request.
       if (retained.admitted) return null;
@@ -47,8 +48,9 @@ final class SupportNativeSessionMaintenanceOwners {
         owners.loaded.any(
           (o) =>
               o.sessionId() == null || !o.isIdle() || o.sessionId() == session,
-        ))
+        )) {
       return null;
+    }
     final jobs = captureJobInventory(
       session,
     ); // Exact native inventory BEFORE await.
@@ -203,8 +205,9 @@ final class SupportNativeSessionMaintenanceOwner
         !const {
           SupportAppDomainOperation.sessionRepair,
           SupportAppDomainOperation.sessionUndo,
-        }.contains(custody.operation))
+        }.contains(custody.operation)) {
       return false;
+    }
     _custody = custody;
     return true;
   }

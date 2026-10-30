@@ -269,8 +269,9 @@ final class _MaintenanceTargetStore {
         current,
         expectedRow: after && i == 0 && group ? afterRow(plan) : null,
         absent: after && i == 0 && !group,
-      ))
+      )) {
         return false;
+      }
       _maintenanceRequire(current());
     }
     return true;

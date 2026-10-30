@@ -197,10 +197,12 @@ void main() {
             loop,
             disclosures,
           ); // encrypted v4 BEFORE this actual POST
-          if (round == 3)
+          if (round == 3) {
             return loop.search(source, 'PAGED_HEAD_', 'large_search');
-          if (round == 4)
+          }
+          if (round == 4) {
             return loop.read(source, loop.selector(), 'large_read');
+          }
           final body = loop.body();
           final piece = (body['pieces'] as List).single as Map;
           chunks.add(piece['payload'] as String);
@@ -548,16 +550,19 @@ void main() {
             studio = loop.activeStudioHandle();
             return loop.contents(game, 'batch_game_scope');
           }
-          if (round == 3)
+          if (round == 3) {
             return loop.read(game, loop.selector(), 'batch_game_read');
+          }
           if (round == 4) {
             await _durable(loop, 2);
             return loop.contents(studio, 'batch_studio_scope');
           }
-          if (round == 5)
+          if (round == 5) {
             return loop.search(studio, sourceStudioBody, 'batch_studio_search');
-          if (round == 6)
+          }
+          if (round == 6) {
             return loop.read(studio, loop.selector(), 'batch_studio_read');
+          }
           await _durable(loop, 5);
           expect(jsonEncode(loop.body()), contains(sourceStudioBody));
           return SourceLoop.answer(
@@ -660,14 +665,16 @@ void main() {
             studio = loop.activeStudioHandle();
             return loop.contents(studio, 'metadata_studio_scope');
           }
-          if (round == 6)
+          if (round == 6) {
             return loop.search(
               studio,
               sourceStudioBody,
               'metadata_studio_search',
             );
-          if (round == 7)
+          }
+          if (round == 7) {
             return loop.read(studio, loop.selector(), 'metadata_studio_read');
+          }
           await _durable(loop, 5);
           return SourceLoop.answer(
             'Only approved game text and the current SAVED Studio definition were compared.',
@@ -844,8 +851,9 @@ void main() {
           loop.list('game', '${failure}_catalog'),
           rounds: failure == 'refuse' ? 3 : 2,
           next: (round) {
-            if (round == 2)
+            if (round == 2) {
               return loop.contents(loop.handle(), '${failure}_scope');
+            }
             expect(loop.lastResult()['ok'], isFalse);
             expect(loop.lastResult()['code'], 'denied');
             expect(loop.lastResult()['effect'], 'none');
@@ -1017,8 +1025,9 @@ void main() {
             source = loop.handle();
             return loop.contents(source, 'replay_scope');
           }
-          if (round == 3)
+          if (round == 3) {
             return loop.read(source, loop.selector(), 'replay_read');
+          }
           await _durable(loop, 2);
           expect(jsonEncode(f.wire), contains(sourceGameBody));
           await f.native.db.customStatement(
@@ -1362,12 +1371,13 @@ void main() {
           next: (round) async {
             if (!fake && round == 2) {
               source = loop.handle();
-              if (negative == 'historicalStudioSelector')
+              if (negative == 'historicalStudioSelector') {
                 return loop.read(
                   source,
                   'invented_historical_selector',
                   'forged_history',
                 );
+              }
               return loop.contents(source, 'strict_scope');
             }
             if (strictStudio && round == 3) {
@@ -1649,8 +1659,9 @@ void main() {
           next.toolDisclosures,
           hasLength(operation == 'regenerate' ? 4 : 3),
         );
-        if (operation == 'regenerate')
+        if (operation == 'regenerate') {
           expect(next.toolDisclosures!.first.snapshotDigest, oldDigest);
+        }
         expect(next.toolDisclosures!.last.sourceId, sourceSession);
         expect(
           next.toolDisclosures!.last.operation,

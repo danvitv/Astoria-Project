@@ -62,8 +62,9 @@ extension CharacterAppControl on CharacterRepo {
     if (!current() ||
         latest != expected ||
         latest == null ||
-        latest.variantOrder != 0)
+        latest.variantOrder != 0) {
       return false;
+    }
     final next = switch (field) {
       CharacterControlText.name => latest.copyWith(name: value),
       CharacterControlText.displayName => latest.copyWith(displayName: value),
@@ -161,8 +162,9 @@ extension CharacterAppControl on CharacterRepo {
     final latest = await getVariants(group);
     if (!current() ||
         latest.length != expected.length ||
-        !latest.every((c) => expected.contains(c)))
+        !latest.every((c) => expected.contains(c))) {
       return false;
+    }
     await (_db.update(
       _db.characters,
     )..where((t) => _groupPredicate(t, group))).write(

@@ -34,8 +34,9 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
         (map['updated_at'] as int) > 8640000000000000 ||
         map['label'] is! String ||
         (map['label'] as String).length > 256 ||
-        utf8.encode(map['label'] as String).length > 1024)
+        utf8.encode(map['label'] as String).length > 1024) {
       _deny(SupportSourceReadFailure.unsupportedFormat);
+    }
     if (domain == SupportSourceDomain.game &&
         (!_identity(map['character_id']) ||
             map['parent_identity'] is! int ||
@@ -48,8 +49,9 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
             (map['variant_order'] as int) > 1000000 ||
             (map['variant_group_id'] != null &&
                 map['variant_group_id'] != '' &&
-                !_identity(map['variant_group_id']))))
+                !_identity(map['variant_group_id'])))) {
       _deny(SupportSourceReadFailure.unsupportedFormat);
+    }
     return map;
   }
 
@@ -105,8 +107,9 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
           .get();
       guard();
       if (rows.length > SupportSourceTextRepo.pageSize &&
-          offset + SupportSourceTextRepo.pageSize > 4096)
+          offset + SupportSourceTextRepo.pageSize > 4096) {
         _deny();
+      }
       final entries = <SupportSourceCatalogEntry>[];
       // A bad projected metadata row refuses the page rather than substituting
       // another session with a similar label or a different preset domain.
@@ -172,15 +175,17 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
           studioPage < 0 ||
           studioPage > 255 ||
           (entry.domain == SupportSourceDomain.game && studioPage != 0) ||
-          (entry.domain == SupportSourceDomain.studioPreset && offset != 0))
+          (entry.domain == SupportSourceDomain.studioPreset && offset != 0)) {
         _deny();
+      }
       final result = await _db.transaction(() async {
         guard();
         final before = await _stamp(guard);
         final header = await _header(entry.domain, entry.sourceId, guard);
         guard();
-        if (!_equal(header, entry._header))
+        if (!_equal(header, entry._header)) {
           _deny(SupportSourceReadFailure.changed);
+        }
         List<Map<String, Object?>>? discovery;
         List<String> ids;
         int count, chars, bytes;
@@ -217,8 +222,9 @@ extension _SourceMetadataReader on SupportSourceTextRepo {
         final localLimit = entry.domain == SupportSourceDomain.game
             ? SupportSourceTextRepo.maxToolResultBytes
             : SupportSourceTextRepo.maxStudioStoredBytes;
-        if (bytes > localLimit || chars > localLimit)
+        if (bytes > localLimit || chars > localLimit) {
           _deny(SupportSourceReadFailure.tooLarge);
+        }
         final after = await _stamp(guard);
         if (before != after) _deny(SupportSourceReadFailure.changed);
         return SupportSourceObservation._(

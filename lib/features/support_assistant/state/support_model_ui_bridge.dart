@@ -274,8 +274,9 @@ final class SupportModelUiBridge {
         send._capture?.sessionId != sessionId ||
         activity.sequence < 1 ||
         activity.sequence > 32 ||
-        activity.sequence > send._toolActivities.length + 1)
+        activity.sequence > send._toolActivities.length + 1) {
       return;
+    }
     final next = List<SupportModelToolActivity>.of(send._toolActivities);
     final index = activity.sequence - 1;
     if (index == next.length) {

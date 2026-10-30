@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -314,8 +313,9 @@ void main() {
               'Synthetic failure AFTER actual owning acceptance',
             );
           }
-          if (boundary == DatabaseRestoreTestBoundary.reverseCopy)
+          if (boundary == DatabaseRestoreTestBoundary.reverseCopy) {
             reverseReached = true;
+          }
         },
       );
       final repo = DatabaseRestoreRepo(owner: owner);
@@ -344,12 +344,14 @@ void main() {
       var fail = true;
       final owner = f.owner(
         fault: (boundary) {
-          if (boundary == DatabaseRestoreTestBoundary.acceptance)
+          if (boundary == DatabaseRestoreTestBoundary.acceptance) {
             throw StateError('Synthetic accepted-open failure');
+          }
           if (boundary == DatabaseRestoreTestBoundary.reverseCopy) {
             reverseReached = true;
-            if (fail)
+            if (fail) {
               throw StateError('Synthetic real reverse-boundary failure');
+            }
           }
         },
       );
@@ -378,8 +380,9 @@ void main() {
         fault: (boundary) {
           if (boundary == DatabaseRestoreTestBoundary.rawClose) {
             closeReached = true;
-            if (fail)
+            if (fail) {
               throw StateError('Synthetic actual raw-close boundary failure');
+            }
           }
         },
       );

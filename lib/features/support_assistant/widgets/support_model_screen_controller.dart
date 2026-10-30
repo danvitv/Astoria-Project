@@ -217,8 +217,9 @@ final class SupportModelScreenController extends ChangeNotifier {
         }.contains(reply.status) ||
         reply.sessionId != _session ||
         _conversation.isEmpty ||
-        _conversation.last.id != reply.id)
+        _conversation.last.id != reply.id) {
       return;
+    }
     refusal = SupportModelRefusal.none;
     final send = _send = emitter.regenerate(
       SupportModelMessage(

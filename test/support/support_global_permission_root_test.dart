@@ -7,7 +7,6 @@ import 'package:glaze_flutter/features/support_assistant/models/support_permissi
 import 'package:glaze_flutter/features/support_assistant/services/support_permission_codec.dart';
 import 'package:glaze_flutter/features/support_assistant/services/support_permission_store.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_native_provider.dart';
-import 'package:glaze_flutter/features/support_assistant/models/support_model_view.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_model_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_workspace_provider.dart';
 

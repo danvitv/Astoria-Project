@@ -10,16 +10,19 @@ Object _typedCell(Object? value) {
     return ['real', base64Encode(bits.buffer.asUint8List())];
   }
   if (value is String) {
-    if (value.length > _RestoreLimits.maxCellBytes)
+    if (value.length > _RestoreLimits.maxCellBytes) {
       _refuse(DatabaseRestoreCode.tooLarge);
+    }
     final bytes = utf8.encode(value);
-    if (bytes.length > _RestoreLimits.maxCellBytes)
+    if (bytes.length > _RestoreLimits.maxCellBytes) {
       _refuse(DatabaseRestoreCode.tooLarge);
+    }
     return ['text', base64Encode(bytes)];
   }
   if (value is Uint8List) {
-    if (value.length > _RestoreLimits.maxCellBytes)
+    if (value.length > _RestoreLimits.maxCellBytes) {
       _refuse(DatabaseRestoreCode.tooLarge);
+    }
     return ['blob', base64Encode(value)];
   }
   _refuse(DatabaseRestoreCode.unsupported);
@@ -69,8 +72,9 @@ final class _RestoreLogicalDigest {
       for (final name in _ordinaryTables(db)) {
         check();
         final columns = _metadata(db, 'table_xinfo', name);
-        if (columns.any((c) => c[6] != 0))
+        if (columns.any((c) => c[6] != 0)) {
           _refuse(DatabaseRestoreCode.unsupported);
+        }
         sink.add(utf8.encode(_typedRow([name, ...columns.map(_typedRow)])));
         // Bound cell allocations BEFORE fetching any row. Native SQLite length
         // and typeof operate on storage, not application payload decoding.
@@ -85,8 +89,9 @@ final class _RestoreLogicalDigest {
                   db,
                   'SELECT count(*) FROM main.${_quote(name)} WHERE $predicate',
                 ) !=
-                0)
+                0) {
           _refuse(DatabaseRestoreCode.tooLarge);
+        }
         final rowBytes = columns
             .map(
               (c) =>
@@ -98,8 +103,9 @@ final class _RestoreLogicalDigest {
                   db,
                   'SELECT count(*) FROM main.${_quote(name)} WHERE $rowBytes > ${_RestoreLimits.maxCellBytes * 2}',
                 ) !=
-                0)
+                0) {
           _refuse(DatabaseRestoreCode.tooLarge);
+        }
         final withoutRowId =
             db
                 .select(
@@ -141,8 +147,9 @@ final class _RestoreLogicalDigest {
           );
           while (cursor.moveNext()) {
             check();
-            if (++totalRows > _RestoreLimits.maxRows)
+            if (++totalRows > _RestoreLimits.maxRows) {
               _refuse(DatabaseRestoreCode.tooLarge);
+            }
             final values = cursor.current.values.toList();
             final offset = rowId == null ? 0 : 1;
             final cells = <Object>[];
@@ -150,8 +157,9 @@ final class _RestoreLogicalDigest {
             for (var i = 0; i < columns.length; i++) {
               final tag = values[offset + i * 2] as String;
               final value = values[offset + i * 2 + 1];
-              if (validateStoredTypes)
+              if (validateStoredTypes) {
                 _requireStoredType(tag, value, columns[i]);
+              }
               cells.add(
                 tag == 'text'
                     ? ['text', base64Encode(value as Uint8List)]
@@ -160,8 +168,9 @@ final class _RestoreLogicalDigest {
             }
             final encoded = utf8.encode(jsonEncode(cells));
             totalBytes += encoded.length;
-            if (totalBytes > _RestoreLimits.maxBytes * 2)
+            if (totalBytes > _RestoreLimits.maxBytes * 2) {
               _refuse(DatabaseRestoreCode.tooLarge);
+            }
             a =
                 (a +
                     BigInt.parse(

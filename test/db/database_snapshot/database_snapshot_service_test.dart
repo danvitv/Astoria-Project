@@ -292,8 +292,9 @@ void main() {
         control: DatabaseSnapshotControl(
           isCurrent: () => true,
           onBoundary: (boundary) async {
-            if (boundary == DatabaseSnapshotBoundary.beforePublish)
+            if (boundary == DatabaseSnapshotBoundary.beforePublish) {
               f.sourceCurrent = false;
+            }
           },
         ),
       );

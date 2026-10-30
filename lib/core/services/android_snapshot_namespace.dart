@@ -24,8 +24,9 @@ final class AndroidSnapshotNamespace {
     final namespace = await forStartup();
     if (namespace == null ||
         !p.posix.isWithin(namespace.dataRoot, source.path) ||
-        p.posix.basename(source.path) != 'astoria.db')
+        p.posix.basename(source.path) != 'astoria.db') {
       return null;
+    }
     return namespace;
   }
 
@@ -40,8 +41,9 @@ final class AndroidSnapshotNamespace {
       if (root == null ||
           !p.posix.isAbsolute(root) ||
           root.contains('\u0000') ||
-          p.posix.normalize(root) != root)
+          p.posix.normalize(root) != root) {
         return null;
+      }
       return AndroidSnapshotNamespace._(root);
     } catch (_) {
       return null; // Old engines / unsupported namespace: normal DB still works.

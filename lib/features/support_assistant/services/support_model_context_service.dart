@@ -521,8 +521,9 @@ extension _ModelAdmission on _ModelRun {
         if (!await sourceToolsRevalidate(
           checkpoint,
           additionalSource: additionalSource,
-        ))
+        )) {
           return false;
+        }
         checkpoint();
         return reply == expected!.message && provenance == expected!.provenance;
       } finally {

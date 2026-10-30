@@ -19,8 +19,9 @@ final class SupportModelToolOutcome {
 
   void record(NativeToolResult result, {String? sourceDescription}) {
     _facts.add(result);
-    if (sourceDescription != null)
+    if (sourceDescription != null) {
       _sourceDescriptions[result] = sourceDescription;
+    }
   }
 
   bool get uncertain => _facts.any((r) => r.content['effect'] == 'uncertain');

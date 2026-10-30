@@ -57,13 +57,14 @@ final supportAppNativeDomainAdaptersProvider =
             if (!current()) return const [];
             final ids = cards.map((c) => c.id).toSet();
             for (final member in members) {
-              if (!ids.contains(member.charId))
+              if (!ids.contains(member.charId)) {
                 targets.add(
                   DatabaseMaintenanceTarget.characterMembership(
                     characterId: member.charId,
                     folderId: member.folderId,
                   ),
                 );
+              }
             }
             final memberships = await presetFolders.watchMembers().first;
             if (!current()) return const [];
@@ -73,7 +74,7 @@ final supportAppNativeDomainAdaptersProvider =
                   ? await presets.getById(member.presetId) == null
                   : await studio.getById(member.presetId) == null;
               if (!current()) return const [];
-              if (missing)
+              if (missing) {
                 targets.add(
                   DatabaseMaintenanceTarget.presetMembership(
                     presetId: member.presetId,
@@ -83,6 +84,7 @@ final supportAppNativeDomainAdaptersProvider =
                         : DatabaseMaintenancePresetKind.agentic,
                   ),
                 );
+              }
             }
             return targets;
           },

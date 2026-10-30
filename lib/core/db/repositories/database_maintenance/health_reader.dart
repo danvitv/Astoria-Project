@@ -99,8 +99,9 @@ final class _MaintenanceHealthReader {
           : value == 0
           ? false
           : null;
-      if (enabled == false)
+      if (enabled == false) {
         issue(DatabaseMaintenanceIssueCode.foreignKeysDisabled);
+      }
       // LIMIT in the SQL BEFORE materialization; no FK rowid/parent/table data
       // leaves SQLite. In-flight SQLite work itself has no interrupt port here.
       final rows = await query(
@@ -109,11 +110,12 @@ final class _MaintenanceHealthReader {
       );
       final count = rows.single['n'];
       if (count is! int) return (enabled, DatabaseMaintenanceCheck.unknown);
-      if (count > 0)
+      if (count > 0) {
         issue(
           DatabaseMaintenanceIssueCode.foreignKeyViolation,
           count: count.clamp(0, 32).toInt(),
         );
+      }
       if (count > 32) {
         truncated = true;
         return (enabled, DatabaseMaintenanceCheck.truncated);
@@ -165,8 +167,9 @@ final class _MaintenanceHealthReader {
           'WHERE type = \'index\' AND name = ?',
           [index.entityName],
         );
-        if (rows.single['n'] != 1)
+        if (rows.single['n'] != 1) {
           issue(DatabaseMaintenanceIssueCode.indexMissing);
+        }
       }
       final reader = _MaintenanceTableReader(this);
       for (final table in registration) {

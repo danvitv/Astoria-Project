@@ -17,8 +17,9 @@ final class NativeDataSourceIdentity {
     final namespace = _native.androidSnapshotNamespace;
     if (!isCurrent ||
         namespace == null ||
-        _native._unsettledSnapshots.isNotEmpty)
+        _native._unsettledSnapshots.isNotEmpty) {
       return null;
+    }
     final random = Random.secure();
     final token = List.generate(
       32,
@@ -55,8 +56,9 @@ final class NativeDataSourceIdentity {
     final namespace = _native.androidSnapshotNamespace;
     if (namespace != null) {
       if (destinationPath != _native._pendingSnapshotDestination ||
-          _native._unsettledSnapshots.isNotEmpty)
+          _native._unsettledSnapshots.isNotEmpty) {
         return null;
+      }
       _native._pendingSnapshotDestination = null; // one-use, before native work
       final issuer = _native._privateSnapshotIssuer;
       bool current() =>

@@ -162,8 +162,9 @@ final class _ModelSourceToolRun
       current;
   void check(SupportAppActionContext context) {
     run.operation.check();
-    if (!original(context))
+    if (!original(context)) {
       throw const SupportAppActionRefused(SupportAppActionCode.stale);
+    }
   }
 
   @override
@@ -204,8 +205,9 @@ final class _ModelSourceToolRun
       observationIsCurrent: () => original(context),
       execute: (admitted) async {
         check(context);
-        if (!admitted())
+        if (!admitted()) {
           throw const SupportAppActionRefused(SupportAppActionCode.stale);
+        }
         try {
           run.toolActivity(
             SupportModelToolStage.executing,
@@ -443,8 +445,9 @@ final class _ModelSourceToolRun
         outcome.effect != SupportAppActionEffect.none ||
         outcome.data.length != 1 ||
         outcome.data['sourceText'] != captured.result.encoded ||
-        jsonEncode(captured.native.content) != captured.result.postEncoded)
+        jsonEncode(captured.native.content) != captured.result.postEncoded) {
       return false;
+    }
     if (!_published.contains(captured.result)) _published.add(captured.result);
     return true;
   }
@@ -455,27 +458,31 @@ final class _ModelSourceToolRun
     void Function() checkpoint, {
     nav.SourceObservation? additionalSource,
   }) async {
-    if (!_bound)
+    if (!_bound) {
       return additionalSource == null && _admitted.isEmpty && current;
+    }
     if (!await engine.revalidateForHost([
       ..._discovered,
       ..._admitted.map((e) => e.source),
-      if (additionalSource != null) additionalSource,
-    ], checkpoint))
+      ?additionalSource,
+    ], checkpoint)) {
       return false;
+    }
     for (final entry in _admitted) {
       checkpoint();
       if (!entry.grant.lease.isCurrent() ||
           !entry.source.lease.isCurrent() ||
-          !entry.source.lease.isCurrent())
+          !entry.source.lease.isCurrent()) {
         return false;
+      }
       checkpoint();
       final stamp = await projection.currentStamp();
       checkpoint();
       if (!stamp.same(entry.projection) ||
           !entry.grant.lease.isCurrent() ||
-          !entry.source.lease.isCurrent())
+          !entry.source.lease.isCurrent()) {
         return false;
+      }
     }
     return current;
   }
@@ -495,8 +502,9 @@ final class _ModelSourceToolRun
       if (_wireSpent + bytes > nav.Limits.disclosureBytes ||
           scopeBytes.entries.any(
             (e) => (_scopeSpent[e.key] ?? 0) + e.value > e.key.disclosureBytes,
-          ))
+          )) {
         return;
+      }
       _wireSpent += bytes;
       for (final e in scopeBytes.entries) {
         _scopeSpent.update(e.key, (n) => n + e.value, ifAbsent: () => e.value);
@@ -541,8 +549,9 @@ final class _ModelSourceMetadata implements SupportAppMetadataPolicy {
   String? exactText(String value, {required int maxLength}) {
     try {
       if (!run.current() ||
-          RegExp(r'[\x00-\x1f\x7f\u200b-\u200f\ufeff]').hasMatch(value))
+          RegExp(r'[\x00-\x1f\x7f\u200b-\u200f\ufeff]').hasMatch(value)) {
         return null;
+      }
       return _safeText(run.service._redaction.redactor, value, maxLength);
     } catch (_) {
       return null;

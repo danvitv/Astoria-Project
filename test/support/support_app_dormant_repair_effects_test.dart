@@ -106,8 +106,9 @@ Future<void> _roundTrip(
   required bool collector,
 }) async {
   final core = f.screen.core, c = core.container, db = core.native.db;
-  if (collector)
+  if (collector) {
     await configurationAction(tester, () => seedDomainCollector(f));
+  }
   final original = await configurationAction(
     tester,
     () => c.read(chatRepoProvider).getById(DomainLoopFixture.session),

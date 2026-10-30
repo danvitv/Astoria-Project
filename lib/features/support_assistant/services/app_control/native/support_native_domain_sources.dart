@@ -22,8 +22,11 @@ final class SupportNativeDomainSources {
     String? queuedSession,
     bool allowMaintenance = false,
   }) {
-    if (!isOriginalOwnerCurrent() || mutations.isDisposed || !owners.isCurrent)
+    if (!isOriginalOwnerCurrent() ||
+        mutations.isDisposed ||
+        !owners.isCurrent) {
       return null;
+    }
     final checkpoints = <String, Object>{};
     final native = <String, ChatNativeOwner>{};
     final offline = <String, SupportNativeSessionMaintenanceOwner>{};
@@ -34,8 +37,9 @@ final class SupportNativeDomainSources {
       final loaded = owners.loaded.where((o) => o.sessionId() == id).toList();
       if (loaded.isNotEmpty) {
         final owner = owners.existing(id);
-        if (owner == null)
+        if (owner == null) {
           return null; // Existing running owner is not replaced.
+        }
         native[id] = owner;
       }
     }
@@ -100,8 +104,9 @@ final class SupportNativeDomainObservation {
         final owner = owners[id];
         if (owner != null) publications[id] = owner.queue.beginPublication();
         final maintenance = maintenanceOwners[id];
-        if (maintenance != null)
+        if (maintenance != null) {
           publications[id] = maintenance.queue.beginPublication();
+        }
       }
       final scope = SupportNativeDomainScope._(
         this,

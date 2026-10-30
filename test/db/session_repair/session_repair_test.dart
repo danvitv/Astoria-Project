@@ -181,8 +181,9 @@ void main() {
         ).getLedgerManualMutationRevision(RepairFixture.session),
         1,
       );
-      if (key != 'world:location')
+      if (key != 'world:location') {
         expect(await f.row('world:location'), unrelated);
+      }
       expect(
         await f.snapshotExcept({'tracker_rows', 'support_mutation_journal'}),
         untouched,
@@ -321,24 +322,27 @@ void main() {
       f.base.hook = (event) async {
         if (changed ||
             !event.startsWith('encrypt:') ||
-            !event.contains('before_ciphertext'))
+            !event.contains('before_ciphertext')) {
           return;
+        }
         changed = true;
         if (change == 'sourceCancel') {
           f.current = false;
           return;
         }
-        if (change == 'target')
+        if (change == 'target') {
           await f.db.customStatement(
             'UPDATE tracker_rows SET value=? WHERE session_id=? AND name=?',
             ['synthetic-changed', RepairFixture.session, 'world:location'],
           );
-        if (change == 'session')
+        }
+        if (change == 'session') {
           await f.db.customStatement(
             'UPDATE chat_sessions SET updated_at=99 WHERE session_id=?',
             [RepairFixture.session],
           );
-        if (change == 'revision')
+        }
+        if (change == 'revision') {
           await f.db
               .into(f.db.trackerRows)
               .insert(
@@ -350,11 +354,13 @@ void main() {
                   provenance: const Value('manual_ledger_mutation'),
                 ),
               );
-        if (change == 'parent')
+        }
+        if (change == 'parent') {
           await f.db.customStatement(
             'UPDATE support_sessions SET updated_at=99 WHERE id=?',
             [MaintenanceFixture.sessionId],
           );
+        }
       };
       expect(await f.apply(plan), isNull);
       f.base.hook = null;
@@ -370,8 +376,9 @@ void main() {
       final plan = (await f.correction())!;
       final before = await f.base.snapshot();
       f.base.hook = (event) async {
-        if (event.startsWith('update:UPDATE "tracker_rows"'))
+        if (event.startsWith('update:UPDATE "tracker_rows"')) {
           throw StateError('SqlError ${RepairFixture.canary} world:location');
+        }
       };
       Object? failure;
       try {
@@ -552,8 +559,9 @@ void main() {
           isCurrent: f.isCurrent,
         );
         if (result.plan == null &&
-            result.issue == SessionRepairIssue.incompleteEvidence)
+            result.issue == SessionRepairIssue.incompleteEvidence) {
           sawClockRefusal = true;
+        }
       }
       expect(
         sawClockRefusal,

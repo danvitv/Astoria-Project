@@ -215,8 +215,9 @@ extension SupportCompactionStore on SupportRepo {
         summary.isEmpty ||
         summary.length > 8192 ||
         lineageJson.length > 65536 ||
-        await _compactStamp() != expected.stamp)
+        await _compactStamp() != expected.stamp) {
       return null;
+    }
     final fresh = await captureCompactionSource(
       sessionId: expected.sessionId,
       endMessageId: expected.endMessageId,
@@ -226,8 +227,9 @@ extension SupportCompactionStore on SupportRepo {
         fresh == null ||
         fresh.digest != expected.digest ||
         fresh.count != expected.count ||
-        fresh.previous != expected.previous)
+        fresh.previous != expected.previous) {
       return null;
+    }
     final block = await _context.write(
       SupportContextBlock(
         id: checkpointId(expected.sessionId),

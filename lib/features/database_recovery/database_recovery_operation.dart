@@ -54,8 +54,9 @@ final class DatabaseRecoveryOperation {
 
   bool get current => !retired && isViewCurrent();
   void requireCurrent() {
-    if (!current)
+    if (!current) {
       throw const DatabaseRestoreException(DatabaseRestoreCode.cancelled);
+    }
   }
 
   Future<T> _observe<T>(Future<T> original) {

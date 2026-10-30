@@ -264,7 +264,7 @@ final class BackupLoopNative {
     await failure.run(redaction.dispose);
     if (databaseReady) await failure.run(db.close);
     if (opened) await failure.run(handle.close);
-    if (created)
+    if (created) {
       await failure.run(() async {
         await for (final entry in directory.list(followLinks: false)) {
           expect(p.dirname(entry.path), directory.path);
@@ -275,6 +275,7 @@ final class BackupLoopNative {
         }
         await directory.delete();
       });
+    }
     failure.throwIfAny();
   }
 }
@@ -299,8 +300,9 @@ final class BackupLoopIo extends IOOverrides {
   // links. Reject traversal/namespace aliases before normalizing comparisons.
   static String? canonicalPath(String path) {
     if (!RegExp(r'^[a-zA-Z]:[\\/]').hasMatch(path) ||
-        !_windows.isAbsolute(path))
+        !_windows.isAbsolute(path)) {
       return null;
+    }
     final parts = path.substring(3).split(RegExp(r'[\\/]'));
     if (parts.any(
       (part) =>
@@ -310,8 +312,9 @@ final class BackupLoopIo extends IOOverrides {
           part.endsWith(' ') ||
           part.contains(':') ||
           part.contains('\u0000'),
-    ))
+    )) {
       return null;
+    }
     return _windows.normalize(path).replaceAll('/', r'\').toLowerCase();
   }
 

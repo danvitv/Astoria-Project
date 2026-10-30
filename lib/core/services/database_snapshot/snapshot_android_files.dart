@@ -42,8 +42,9 @@ final class _AndroidSnapshotFiles {
     );
     directory = _slot = _keep(_api.directory(directory, token, create: 2));
     _stage = _AndroidSnapshotPin(_api, _api.stage(directory, 'snapshot.db'));
-    if (stage.length != 0)
+    if (stage.length != 0) {
       throw const _SnapshotFailure(DatabaseSnapshotStatus.invalid);
+    }
     guard.check();
   }
 
@@ -125,15 +126,17 @@ final class _AndroidSnapshotPin implements _SnapshotImmutablePin {
           min(_SnapshotLimits.hashChunk, size - offset),
           offset,
         );
-        if (count <= 0)
+        if (count <= 0) {
           throw const _SnapshotFailure(DatabaseSnapshotStatus.invalid);
+        }
         digest.add(memory.asTypedList(count));
         offset += count;
         await Future<void>.delayed(Duration.zero);
         guard.check();
       }
-      if (length != size)
+      if (length != size) {
         throw const _SnapshotFailure(DatabaseSnapshotStatus.invalid);
+      }
       digest.close();
       return sink.value!;
     } finally {
@@ -151,8 +154,9 @@ final class _AndroidSnapshotPin implements _SnapshotImmutablePin {
 
 final class _AndroidSnapshotApi {
   _AndroidSnapshotApi() {
-    if (!Platform.isAndroid)
+    if (!Platform.isAndroid) {
       throw const _SnapshotFailure(DatabaseSnapshotStatus.unavailable);
+    }
     _library = DynamicLibrary.open('libastoria_snapshot.so');
     if (_library.lookupFunction<Int32 Function(), int Function()>(
           'astoria_snapshot_abi',
@@ -271,8 +275,9 @@ final class _AndroidSnapshotApi {
             Int32 Function(Pointer<_AndroidSnapshotPointer>, Pointer<Uint64>),
             int Function(Pointer<_AndroidSnapshotPointer>, Pointer<Uint64>)
           >('astoria_snapshot_info')(pin, output) !=
-          0)
+          0) {
         throw _failure;
+      }
       return output.asTypedList(6).toList();
     } finally {
       free(memory);
@@ -284,8 +289,9 @@ final class _AndroidSnapshotApi {
           Int32 Function(Pointer<_AndroidSnapshotPointer>),
           int Function(Pointer<_AndroidSnapshotPointer>)
         >(name)(pin) !=
-        0)
+        0) {
       throw _failure;
+    }
   }
 
   void seal(Pointer<_AndroidSnapshotPointer> pin) =>

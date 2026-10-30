@@ -53,8 +53,9 @@ final class SupportAppSessionDiagnosticsAdapter
     SupportAppActionContext context,
   ) async {
     if (action != definitions.single.name ||
-        !definitions.single.accepts(arguments))
+        !definitions.single.accepts(arguments)) {
       return null;
+    }
     final id = arguments['sessionId']! as String;
     final valid = guard.observe(id, context);
     if (valid == null) return null;

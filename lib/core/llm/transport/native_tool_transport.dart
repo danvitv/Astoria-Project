@@ -67,12 +67,11 @@ final class NativeToolRequest {
   NativeToolRequest._({
     required this.config,
     required this.savedConnectionAuth,
-    _LegacySavedToolSource? legacySaved,
+    this._legacySaved,
     required this.approvedRecipient,
     required List<NativeToolDefinition> tools,
     required List<NativeToolMessage> messages,
-  }) : _legacySaved = legacySaved,
-       tools = _ntBoundedList(tools, NativeToolLimits.definitions),
+  }) : tools = _ntBoundedList(tools, NativeToolLimits.definitions),
        messages = _ntBoundedList(messages, NativeToolLimits.messages) {
     _ntRequire(
       config.apiKey.isEmpty &&

@@ -492,11 +492,12 @@ void main() {
             'filtered-$i',
           ],
         );
-        if (i < 16 || i == 34)
+        if (i < 16 || i == 34) {
           await f.db.customStatement(
             'INSERT INTO chat_summaries(session_id,content,message_count) VALUES(?,?,?)',
             ['filtered-$i', 'PRIVATE', 0],
           );
+        }
       }
       final repo = _repo(f);
       Object? cursor;

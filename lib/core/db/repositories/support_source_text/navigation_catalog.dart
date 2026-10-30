@@ -124,8 +124,9 @@ extension _NavCatalog on SupportSourceNavigationRepo {
       if (cursor is! _NavListCursor ||
           !identical(cursor.repo, this) ||
           cursor.domain != domain ||
-          cursor.parent != parent)
+          cursor.parent != parent) {
         _fail();
+      }
       after = cursor.rowid;
       issued = cursor;
     }
@@ -135,8 +136,9 @@ extension _NavCatalog on SupportSourceNavigationRepo {
     if (parent != null &&
         (!sessionDomain ||
             domain == nav.SourceDomain.game ||
-            parent.domain != nav.SourceDomain.game))
+            parent.domain != nav.SourceDomain.game)) {
       return nav.Page(const []);
+    }
     // Freeze a bounded keyset BEFORE eligibility/EXISTS filtering. LIMIT after
     // such filters alone could inspect every absent/hidden session in the DB.
     if (sessionDomain && parent == null) {
@@ -323,11 +325,13 @@ extension _NavCatalog on SupportSourceNavigationRepo {
           (header['session_index'] as int) > 1000000 ||
           header['variant_order'] is! int ||
           (header['variant_order'] as int) < 0 ||
-          (header['variant_order'] as int) > 1000000)
+          (header['variant_order'] as int) > 1000000) {
         _shape.bad();
+      }
       if (header['variant_group_id'] != null &&
-          header['variant_group_id'] != '')
+          header['variant_group_id'] != '') {
         _shape.id(header['variant_group_id']);
+      }
     }
     bool? active;
     if (key.domain == nav.SourceDomain.studioPreset && _activeStudio != null) {

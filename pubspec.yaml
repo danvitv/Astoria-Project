@@ -89,7 +89,7 @@ hooks:
   user_defines:
     sqlite3:
       source: source
-      path: third_party/sqlite3_3530100/sqlite3.c
+      path: tool/sqlite3_source.c
       defines:
         default_options: false
         defines:
@@ -117,5 +117,4 @@ hooks:
           SQLITE_HAVE_LOCALTIME_S: null
           SQLITE_HAVE_MALLOC_USABLE_SIZE: null
           SQLITE_HAVE_STRCHRNUL: null
-          SQLITE_API: '__declspec(dllexport)'
 # END ASTORIA PINNED SQLITE SOURCE HOOK

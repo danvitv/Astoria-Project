@@ -58,8 +58,9 @@ extension _RestoreEngine on NativeDatabaseRestoreOwner {
         validateStoredTypes: true,
       );
       _check();
-      if (!copied.same(candidate.digest!))
+      if (!copied.same(candidate.digest!)) {
         _refuse(DatabaseRestoreCode.invalidCandidate);
+      }
       candidate.schema!.validate(_target!.database);
       _wrapper = _RestoreAcceptedWrapper(
         AppDatabase.openedNative(
@@ -85,8 +86,9 @@ extension _RestoreEngine on NativeDatabaseRestoreOwner {
         _check,
       );
       _check();
-      if (!acceptedImage.same(candidate.digest!))
+      if (!acceptedImage.same(candidate.digest!)) {
         _refuse(DatabaseRestoreCode.invalidCandidate);
+      }
       _native.verify(_target!, _targetPin!);
       _originals!.clearSettledMarker();
       _state = _RestoreState.accepted;
@@ -138,8 +140,9 @@ extension _RestoreEngine on NativeDatabaseRestoreOwner {
         () => _check(settling: true),
       );
       _check(settling: true);
-      if (!restored.same(_originals!.digest!))
+      if (!restored.same(_originals!.digest!)) {
         _refuse(DatabaseRestoreCode.recoveryRequired);
+      }
       _originals!.clearSettledMarker();
       _state = _RestoreState.settled;
       return const DatabaseRestoreResult._(
@@ -193,8 +196,9 @@ abstract final class _RestoreAcceptance {
             .map((t) => t.actualTableName)
             .toSet()
             .difference(schema.tables)
-            .isNotEmpty)
+            .isNotEmpty) {
       _refuse(DatabaseRestoreCode.invalidCandidate);
+    }
     for (final table in schema.tables) {
       // Real SAME executor reads, bounded one-row metadata, all registration.
       await work.run(
@@ -204,29 +208,34 @@ abstract final class _RestoreAcceptance {
     }
     final chat = ChatRepo(app);
     await _each(raw, 'chat_sessions', 'session_id', (id) async {
-      if (await work.run(chat.getById(id)) == null)
+      if (await work.run(chat.getById(id)) == null) {
         _refuse(DatabaseRestoreCode.invalidCandidate);
+      }
     }, check);
     final support = SupportRepo(app, cipher);
     await _each(raw, 'support_sessions', 'id', (id) async {
       final model = await work.run(support.getSessionById(id));
-      if (model == null || model.isLocked)
+      if (model == null || model.isLocked) {
         _refuse(DatabaseRestoreCode.invalidCandidate);
+      }
     }, check);
     await _each(raw, 'support_messages', 'id', (id) async {
       final model = await work.run(support.getMessageById(id));
-      if (model == null || model.isLocked)
+      if (model == null || model.isLocked) {
         _refuse(DatabaseRestoreCode.invalidCandidate);
+      }
     }, check);
     await _each(raw, 'support_context_blocks', 'id', (id) async {
       final model = await work.run(support.getContextBlockById(id));
-      if (model == null || model.isLocked)
+      if (model == null || model.isLocked) {
         _refuse(DatabaseRestoreCode.invalidCandidate);
+      }
     }, check);
     await _each(raw, 'support_mutation_journal', 'id', (id) async {
       final model = await work.run(support.getMutationById(id));
-      if (model == null || model.isLocked)
+      if (model == null || model.isLocked) {
         _refuse(DatabaseRestoreCode.invalidCandidate);
+      }
     }, check);
     await checkPayloads(raw, cipher, work, check);
     check();
@@ -247,8 +256,9 @@ abstract final class _RestoreAcceptance {
       var count = 0;
       while (cursor.moveNext()) {
         check();
-        if (++count > _RestoreLimits.maxRows)
+        if (++count > _RestoreLimits.maxRows) {
           _refuse(DatabaseRestoreCode.tooLarge);
+        }
         await action(cursor.current.values.single as String);
         check();
       }
@@ -283,16 +293,18 @@ abstract final class _RestoreAcceptance {
         final cursor = statement.iterateWith(const StatementParameters.empty());
         while (cursor.moveNext()) {
           check();
-          if (++total > _RestoreLimits.maxRows)
+          if (++total > _RestoreLimits.maxRows) {
             _refuse(DatabaseRestoreCode.tooLarge);
+          }
           final values = cursor.current.values.toList();
           for (var i = 0; i < entry.value.length; i++) {
             final field = entry.value[i];
             final envelope = values[i + 2] as String;
             if (envelope.isEmpty &&
                 (field == 'cards_ciphertext' ||
-                    field == 'protected_facts_ciphertext'))
+                    field == 'protected_facts_ciphertext')) {
               continue;
+            }
             // Plaintext stays local to the original pure AEAD future and is
             // discarded. Missing installation keys are a refusal, not recovery.
             await work.run(

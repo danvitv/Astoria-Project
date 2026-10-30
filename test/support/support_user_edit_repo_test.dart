@@ -317,8 +317,9 @@ void main() {
           f.sql.afterWrite = pause;
         } else {
           f.sql.afterWrite = (sql) async {
-            if (sql.startsWith('UPDATE "support_messages"'))
+            if (sql.startsWith('UPDATE "support_messages"')) {
               provisionalWrite = true;
+            }
           };
           f.primitive.beforeDecrypt = (aad) async {
             if (provisionalWrite) await pause(aad);

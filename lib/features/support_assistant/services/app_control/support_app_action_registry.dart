@@ -268,7 +268,7 @@ final class SupportAppActionRegistry {
       effect = outcome.effect;
       // A known durable effect is not erased by Stop; no data/continuation is
       // published to a replacement run. Unknown completion is never retried.
-      if (!current())
+      if (!current()) {
         return result(
           call,
           interrupted(
@@ -277,6 +277,7 @@ final class SupportAppActionRegistry {
                 outcome.data['refreshPending'] == true,
           ),
         );
+      }
       if (!_safeOutcome(call, outcome, context) || !current()) {
         return result(
           call,
@@ -430,8 +431,9 @@ final class SupportAppActionRegistry {
           (port as SupportAppSourceBodyResultPort).acceptsSourceBodyOutcome(
             call,
             outcome,
-          ))
+          )) {
         return true;
+      }
       // Even a short body must not fall through the metadata string allowance
       // after its original native approval/observation has retired.
       return outcome.data.isEmpty &&

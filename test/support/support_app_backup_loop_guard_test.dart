@@ -124,10 +124,11 @@ void main() {
           );
         });
         // Delete only the exact owned creation, even if a post-capture check failed.
-        if (captured != null)
+        if (captured != null) {
           await failure.run(() async {
             await captured!.delete();
           });
+        }
       }, io);
       failure.throwIfAny();
     },

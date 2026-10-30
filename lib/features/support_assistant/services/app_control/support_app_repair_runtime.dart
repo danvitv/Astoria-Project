@@ -191,27 +191,30 @@ final class SupportAppRepairScope {
           session,
           queue,
         );
-    if (maintenance)
+    if (maintenance) {
       (native as SupportAppRepairQueueResolutionPort).repairQueueStarted(
         session,
         queue,
       );
+    }
     try {
       return await queue.run<T?>(() async {
         if (!current) return null;
         if (maintenance &&
             !await (native as SupportAppRepairQueueResolutionPort)
-                .validateRepairQueue(session, queue))
+                .validateRepairQueue(session, queue)) {
           return null;
+        }
         if (!current) return null;
         return operation(); // Repo owns every awaited DB/encryption/CAS boundary.
       });
     } finally {
-      if (maintenance)
+      if (maintenance) {
         (native as SupportAppRepairQueueResolutionPort).repairQueueSettled(
           session,
           queue,
         );
+      }
     }
   }
 

@@ -99,8 +99,9 @@ extension _ModelTools on _ModelRun {
             service._db.nativeDataSourceIdentity != null;
         if (isReattempt) {
           // No base graph/factory, backup, navigation or configuration authority.
-          if (!sourceReady || binding.toolUi?.confirmation == null)
+          if (!sourceReady || binding.toolUi?.confirmation == null) {
             return false;
+          }
           final adapter = originalSourceTools = _newSourceTools(source);
           originalActions = SupportAppActionRegistry(
             adapters: [adapter],
@@ -158,8 +159,9 @@ extension _ModelTools on _ModelRun {
       scopeForApproval: (observation) async {
         operation.check();
         final scope = repo.approvalScope(observation);
-        if (scope == null)
+        if (scope == null) {
           throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
+        }
         final range = scope.messages;
         return _ModelSourceScopePlan(
           scope,

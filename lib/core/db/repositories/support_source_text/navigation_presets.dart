@@ -35,8 +35,9 @@ extension _NavPresets on SupportSourceNavigationRepo {
       nested: const {'blocks', 'regexes'},
       required: const {'id', 'name', 'blocks', 'regexes'},
     );
-    if (_shape.id(preset['id']) != source.observation.key.nativeId)
+    if (_shape.id(preset['id']) != source.observation.key.nativeId) {
       _shape.bad();
+    }
     final records = <nav.DataRecord>[];
     final seen = <String>{};
     var index = 0;
@@ -112,8 +113,9 @@ extension _NavPresets on SupportSourceNavigationRepo {
       if (!seen.add(_shape.id(regex['id']))) _shape.bad();
       for (final key in ['placement', 'ephemerality']) {
         if (!regex.containsKey(key)) continue;
-        if (_shape.list(regex[key]).any((v) => v is! int || v < 0 || v > 16))
+        if (_shape.list(regex[key]).any((v) => v is! int || v < 0 || v > 16)) {
           _shape.bad();
+        }
       }
       records.addAll(
         _fields(
@@ -169,14 +171,16 @@ extension _NavPresets on SupportSourceNavigationRepo {
     Map<String, Object?> row,
   ) {
     final decoded = <String, Object?>{};
-    for (final key in _SourceStudioReader._definitionColumns)
+    for (final key in _SourceStudioReader._definitionColumns) {
       decoded[key] = _decode(row[key]);
+    }
     _StudioSourceShape(_boundary)._validate(decoded);
     if (row['max_final_history_messages'] is! int ||
         (row['max_final_history_messages'] as int) < 0 ||
         (row['max_final_history_messages'] as int) > 2000 ||
-        !const ['legacy', 'agentic'].contains(row['execution_mode']))
+        !const ['legacy', 'agentic'].contains(row['execution_mode'])) {
       _shape.bad();
+    }
     final records = <nav.DataRecord>[];
     final blocks = _shape.list(decoded['blocks_json']).map(_shape.map).toList();
     final agents = _shape.list(decoded['agents_json']).map(_shape.map).toList();
@@ -189,8 +193,9 @@ extension _NavPresets on SupportSourceNavigationRepo {
     final controllerIndices = <String, int>{};
     for (final agent in agents) {
       final id = agent['controllerId'];
-      if (id is String)
+      if (id is String) {
         controllerIndices.putIfAbsent(id, () => controllerIndices.length);
+      }
     }
     int reference(Object? id, Map<String, int> indices) {
       final index = indices[id];
@@ -285,8 +290,9 @@ extension _NavPresets on SupportSourceNavigationRepo {
       'max_final_history_messages',
       'execution_mode',
       'updated_at',
-    ])
+    ]) {
       settings[key] = row[key];
+    }
     // API slot identities stay in exact private raw captures. Availability is a
     // fixed finite saved flag, not a credential or a resolved connection.
     for (final key in [

@@ -91,11 +91,15 @@ extension _NavMemory on SupportSourceNavigationRepo {
         if (!seen.add(_shape.id(stamp['messageId'])) ||
             (stamp['swipeId'] as int) < 0 ||
             (stamp['agentSwipeId'] as int) < 0 ||
-            !RegExp(r'^[0-9a-f]{64}$').hasMatch(stamp['contentHash'] as String))
+            !RegExp(
+              r'^[0-9a-f]{64}$',
+            ).hasMatch(stamp['contentHash'] as String)) {
           _shape.bad();
+        }
       }
-      if (m['invalidated'] == true || m['version'] == 0 || seen.isEmpty)
+      if (m['invalidated'] == true || m['version'] == 0 || seen.isEmpty) {
         evidence = nav.EvidenceState.invalid;
+      }
       // A well-formed saved manifest is NOT a fresh evidence verification.
     }
     return nav.Binding(
@@ -177,14 +181,16 @@ extension _NavMemory on SupportSourceNavigationRepo {
     );
     _shape.id(object['id']);
     for (final key in ['keys', 'messageIds', if (draft) 'glazeKeys']) {
-      if (object.containsKey(key))
+      if (object.containsKey(key)) {
         _shape.strings(object[key], identities: key == 'messageIds');
+      }
     }
     if (object.containsKey('keyParagraphs')) {
       for (final entry in _shape.map(object['keyParagraphs']).entries) {
         if (entry.key.isEmpty ||
-            _shape.list(entry.value).any((v) => v is! int || v < 0))
+            _shape.list(entry.value).any((v) => v is! int || v < 0)) {
           _shape.bad();
+        }
       }
     }
     if (object['messageRange'] != null) {
@@ -195,8 +201,9 @@ extension _NavMemory on SupportSourceNavigationRepo {
         required: const {'start', 'end'},
       );
       if ((range['start'] as int) < 0 ||
-          (range['end'] as int) < (range['start'] as int))
+          (range['end'] as int) < (range['start'] as int)) {
         _shape.bad();
+      }
     }
     if (!revision) {
       _shape.choice(
@@ -211,13 +218,14 @@ extension _NavMemory on SupportSourceNavigationRepo {
               }
             : const {'active', 'inactive', 'archived', 'invalidated'},
       );
-      if (!draft)
+      if (!draft) {
         _shape.choice(object, 'kind', const {
           'curated',
           'summary',
           'range_summary',
           'micro',
         });
+      }
     }
   }
 
@@ -284,8 +292,9 @@ extension _NavMemory on SupportSourceNavigationRepo {
           );
         }
         if (object['activeRevisionId'] != null &&
-            !seen.contains(object['activeRevisionId']))
+            !seen.contains(object['activeRevisionId'])) {
           _shape.bad();
+        }
       }
       return records;
     }
@@ -413,8 +422,9 @@ extension _NavMemory on SupportSourceNavigationRepo {
     for (final k in jsonKeys) {
       final value = _decode(m[k]);
       if (k == 'emotional_valence_json') {
-        if (_shape.map(value).values.any((v) => v is! num || !v.isFinite))
+        if (_shape.map(value).values.any((v) => v is! num || !v.isFinite)) {
           _shape.bad();
+        }
       } else {
         _shape.strings(
           value,

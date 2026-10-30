@@ -781,8 +781,9 @@ class SourceNavigationEngine {
         checkpoint();
         _checkpoint();
         final source = _sources[observation.key];
-        if (source == null || !identical(source.source, observation))
+        if (source == null || !identical(source.source, observation)) {
           return false;
+        }
         if (!checked.add(observation)) continue;
         sources.add(source);
       }
@@ -795,8 +796,9 @@ class SourceNavigationEngine {
         return true;
       }
       if (!identical(originalRoot.repository, repository) ||
-          !originalRoot.isCurrent)
+          !originalRoot.isCurrent) {
         return false;
+      }
       void leases() {
         checkpoint();
         _checkpoint();
@@ -1518,8 +1520,9 @@ class SourceNavigationEngine {
         authored: true,
         byteLimit: Limits.projectedBytes,
       );
-      if (projectedBytes > Limits.projectedBytes)
+      if (projectedBytes > Limits.projectedBytes) {
         throw const _Failure('oversized');
+      }
       stamp = _sameStamp(stamp, item.stamp);
       projected.add(item);
     }
@@ -1783,8 +1786,9 @@ class SourceNavigationEngine {
     _busy = true;
     try {
       _checkpoint();
-      if (candidates.length > Limits.collection)
+      if (candidates.length > Limits.collection) {
         throw const _Failure('budgetExceeded');
+      }
       final results = <NavigationResult>[];
       for (final candidate in candidates) {
         if (candidate is! NavigationResult || !_outcomes.contains(candidate)) {
@@ -1798,8 +1802,9 @@ class SourceNavigationEngine {
       _checkpoint();
       for (final retained in _retained) {
         _grantCurrent(retained.source, retained.grant);
-        if (!stamp.same(retained.projection))
+        if (!stamp.same(retained.projection)) {
           throw const _Failure('staleProjection');
+        }
         if (checked.add(retained.source)) {
           await _fresh(retained.source, retained.grant);
           _checkpoint();
@@ -1989,8 +1994,9 @@ void _validateArguments(String name, Map<String, Object?> args) {
   for (final entry in args.entries) {
     final value = entry.value;
     if (entry.key == 'before' || entry.key == 'after') {
-      if (value is! int || value < 0 || value > 2)
+      if (value is! int || value < 0 || value > 2) {
         throw const _Failure('invalidArguments');
+      }
     } else if (entry.key == 'domain') {
       if (value is! String ||
           !SourceDomain.values.any((d) => d.name == value)) {
@@ -2001,8 +2007,9 @@ void _validateArguments(String name, Map<String, Object?> args) {
           value.length > Limits.literalScalars * 2 ||
           !_validScalars(value) ||
           value.isEmpty ||
-          value.runes.length > Limits.literalScalars)
+          value.runes.length > Limits.literalScalars) {
         throw const _Failure('invalidArguments');
+      }
     } else if (value is! String || !_validHandle(value)) {
       // Explicit null/coercions are not optional omission.
       throw const _Failure('invalidArguments');
@@ -2013,26 +2020,31 @@ void _validateArguments(String name, Map<String, Object?> args) {
 void _observation(SourceObservation source) {
   if (source.key.nativeId.isEmpty ||
       source.snapshot.incarnation.isEmpty ||
-      source.snapshot.revision < 0)
+      source.snapshot.revision < 0) {
     throw const _Failure('unavailable');
+  }
   _privateId(source.key.nativeId);
   _privateId(source.snapshot.incarnation);
-  if (source.snapshot.privateIntegrity != null)
+  if (source.snapshot.privateIntegrity != null) {
     _privateId(source.snapshot.privateIntegrity!);
+  }
   if ((source.key.domain == SourceDomain.ordinaryPreset ||
           source.key.domain == SourceDomain.studioPreset) &&
-      source.state != SourceState.currentSaved)
+      source.state != SourceState.currentSaved) {
     throw const _Failure('unavailable');
+  }
   if (source.key.domain == SourceDomain.ledgerState &&
       (source.binding.anchor != null ||
           source.binding.evidence.range != null ||
-          source.binding.evidence.state == EvidenceState.attested))
+          source.binding.evidence.state == EvidenceState.attested)) {
     throw const _Failure('unavailable');
+  }
   if (source.key.domain == SourceDomain.savedSummary &&
       (source.binding.anchor != null ||
           source.binding.evidence.range != null ||
-          source.binding.evidence.state == EvidenceState.attested))
+          source.binding.evidence.state == EvidenceState.attested)) {
     throw const _Failure('unavailable');
+  }
   _snapshotAnchor(source.key.domain, source.state, source.binding);
   _checkBinding(source.binding);
 }
@@ -2097,14 +2109,16 @@ void _descriptor(SectionDescriptor descriptor, SourceDomain domain) {
   }
   if ((domain == SourceDomain.ordinaryPreset ||
           domain == SourceDomain.studioPreset) &&
-      descriptor.state != SourceState.currentSaved)
+      descriptor.state != SourceState.currentSaved) {
     throw const _Failure('unavailable');
+  }
   if ((domain == SourceDomain.ledgerState ||
           domain == SourceDomain.savedSummary) &&
       (descriptor.binding.anchor != null ||
           descriptor.binding.evidence.range != null ||
-          descriptor.binding.evidence.state == EvidenceState.attested))
+          descriptor.binding.evidence.state == EvidenceState.attested)) {
     throw const _Failure('unavailable');
+  }
   _snapshotAnchor(domain, descriptor.state, descriptor.binding);
   _checkBinding(descriptor.binding);
 }
@@ -2230,8 +2244,9 @@ void _rawPage(List<DataRecord> records) {
 }
 
 ProjectionStamp _sameStamp(ProjectionStamp? previous, ProjectionStamp next) {
-  if (previous != null && !previous.same(next))
+  if (previous != null && !previous.same(next)) {
     throw const _Failure('staleProjection');
+  }
   return next;
 }
 
@@ -2252,8 +2267,9 @@ bool _validScalars(String text) {
 Object? _freeze(Object? value) {
   var nodes = 0;
   Object? copy(Object? node, int depth) {
-    if (++nodes > Limits.nodes || depth > Limits.depth)
+    if (++nodes > Limits.nodes || depth > Limits.depth) {
       throw const _Failure('oversized');
+    }
     if (node is Map) {
       if (node.length > Limits.collection) throw const _Failure('oversized');
       return Map<String, Object?>.unmodifiable(
@@ -2267,8 +2283,9 @@ Object? _freeze(Object? value) {
       if (node.length > Limits.collection) throw const _Failure('oversized');
       return List<Object?>.unmodifiable(node.map((v) => copy(v, depth + 1)));
     }
-    if (node == null || node is String || node is bool || node is num)
+    if (node == null || node is String || node is bool || node is num) {
       return node;
+    }
     throw const _Failure('unavailable');
   }
 
@@ -2286,8 +2303,9 @@ int _validateTree(
   var bytes = 0;
   void visit(Object? node, int depth, bool body) {
     if (ownedBodies.any((original) => identical(original, node))) body = true;
-    if (++nodes > Limits.nodes || depth > Limits.depth)
+    if (++nodes > Limits.nodes || depth > Limits.depth) {
       throw const _Failure('oversized');
+    }
     if (node is String) {
       if (node.length > byteLimit ||
           (!body && node.length > Limits.metadataBytes)) {
@@ -2295,8 +2313,9 @@ int _validateTree(
       }
       if (!_validScalars(node)) throw const _Failure('unavailable');
       final length = utf8.encode(node).length;
-      if (!body && length > Limits.metadataBytes)
+      if (!body && length > Limits.metadataBytes) {
         throw const _Failure('oversized');
+      }
       bytes += length;
     } else if (node is Map) {
       if (node.length > Limits.collection) throw const _Failure('oversized');
@@ -2335,8 +2354,9 @@ int _validateTree(
 String _encodeWire(Map<String, Object?> wire) {
   _validateTree(wire, authored: false, byteLimit: Limits.wireBytes, wire: true);
   final json = jsonEncode(wire);
-  if (utf8.encode(json).length > Limits.wireBytes)
+  if (utf8.encode(json).length > Limits.wireBytes) {
     throw const _Failure('oversized');
+  }
   return json;
 }
 
@@ -2344,8 +2364,9 @@ String _encodeEnvelope(ProjectedWire wrapped, WireCandidate candidate) {
   var occurrences = 0;
   var nodes = 0;
   void find(Object? node, int depth) {
-    if (++nodes > Limits.nodes || depth > Limits.depth)
+    if (++nodes > Limits.nodes || depth > Limits.depth) {
       throw const _Failure('oversized');
+    }
     if (identical(node, candidate.wire) || identical(node, candidate.encoded)) {
       occurrences++;
       return;
@@ -2372,8 +2393,9 @@ String _encodeEnvelope(ProjectedWire wrapped, WireCandidate candidate) {
     ownedBodies: [candidate.wire, candidate.encoded],
   );
   final encoded = jsonEncode(wrapped.fullResult);
-  if (utf8.encode(encoded).length > Limits.wireBytes)
+  if (utf8.encode(encoded).length > Limits.wireBytes) {
     throw const _Failure('oversized');
+  }
   return encoded;
 }
 
@@ -2404,8 +2426,9 @@ int _scalarOffset(String text, int utf16) {
       utf16 > text.length ||
       (utf16 < text.length &&
           text.codeUnitAt(utf16) >= 0xdc00 &&
-          text.codeUnitAt(utf16) <= 0xdfff))
+          text.codeUnitAt(utf16) <= 0xdfff)) {
     throw const _Failure('unavailable');
+  }
   return text.substring(0, utf16).runes.length;
 }
 
@@ -2435,8 +2458,9 @@ _Chunk _textChunk(String text, int offset) {
             .length -
         2;
     if (escaped + cost > Limits.partialEscapedBytes ||
-        escapedAgain + again > Limits.partialEscapedBytes)
+        escapedAgain + again > Limits.partialEscapedBytes) {
       break;
+    }
     escaped += cost;
     escapedAgain += again;
     end += width;

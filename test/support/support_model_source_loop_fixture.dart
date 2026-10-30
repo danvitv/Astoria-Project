@@ -101,7 +101,7 @@ final class SourceLoop {
   Map<String, Object?> contents(String source, String id, {String? section}) =>
       call('astoria_source_contents', {
         'source': source,
-        if (section != null) 'section': section,
+        'section': ?section,
       }, id: id);
   Map<String, Object?> search(
     String source,
@@ -112,8 +112,8 @@ final class SourceLoop {
   }) => call('astoria_source_search', {
     'source': source,
     'literal': literal,
-    if (section != null) 'section': section,
-    if (cursor != null) 'cursor': cursor,
+    'section': ?section,
+    'cursor': ?cursor,
   }, id: id);
   Map<String, Object?> read(
     String source,

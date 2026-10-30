@@ -126,8 +126,9 @@ final class SupportBackupNativeUi implements SupportBackupFileUi {
     if (!isCurrent ||
         !request.current ||
         request.action != SupportBackupNativeFileHost.action ||
-        disclosure != SupportBackupNativeFileHost.disclosure)
+        disclosure != SupportBackupNativeFileHost.disclosure) {
       return null;
+    }
     final location = _location;
     bool original() => isCurrent && _location == location;
     var open = true, decided = false;
@@ -235,8 +236,9 @@ final class SupportBackupNativeUi implements SupportBackupFileUi {
                                   if (!open ||
                                       decided ||
                                       !original() ||
-                                      !request.current)
+                                      !request.current) {
                                     return;
+                                  }
                                   decided = true;
                                   accepted = SupportAppConfirmationLease(
                                     request: request,

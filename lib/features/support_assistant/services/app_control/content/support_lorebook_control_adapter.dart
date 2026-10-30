@@ -77,8 +77,9 @@ final class SupportLorebookControlAdapter implements SupportAppActionAdapter {
     if (definition == null) return null;
     SupportContentArguments.validate(definition, arguments);
     if (!context.current) return null;
-    if (action == 'astoria_lorebook_entry_manage')
+    if (action == 'astoria_lorebook_entry_manage') {
       return _entry(arguments, context);
+    }
     final op = SupportLorebookOperation.values.byName(
       arguments['operation']! as String,
     );
@@ -121,15 +122,17 @@ final class SupportLorebookControlAdapter implements SupportAppActionAdapter {
         {'operation', 'id', 'scanDepth', 'maxInjectedEntries'},
         {'id'},
       );
-      if (arguments.length < 3)
+      if (arguments.length < 3) {
         throw const SupportAppActionRefused(
           SupportAppActionCode.invalidArguments,
         );
+      }
     }
     final before = await repo.getById(arguments['id']! as String);
     if (!context.current || before == null) return null;
-    if (before.activationScope == 'chat')
+    if (before.activationScope == 'chat') {
       throw const SupportAppActionRefused(SupportAppActionCode.denied);
+    }
     return mutations.prepare(
       domain: SupportContentDomain.lorebook,
       target: before.id,
@@ -167,8 +170,9 @@ final class SupportLorebookControlAdapter implements SupportAppActionAdapter {
         {'operation', 'id', 'text', 'clearText', 'enabled', 'constant'},
         {'id'},
       );
-      if (a.containsKey('text') || a.containsKey('clearText'))
+      if (a.containsKey('text') || a.containsKey('clearText')) {
         text = SupportContentTextArguments.selected(a);
+      }
     } else if (op == SupportLorebookEntryOperation.editText) {
       SupportContentArguments.shape(
         a,
@@ -193,21 +197,24 @@ final class SupportLorebookControlAdapter implements SupportAppActionAdapter {
         },
         {'entryId'},
       );
-      if (a.length < 4)
+      if (a.length < 4) {
         throw const SupportAppActionRefused(
           SupportAppActionCode.invalidArguments,
         );
+      }
     }
     final before = await repo.getById(a['id']! as String);
     if (!context.current || before == null) return null;
-    if (before.activationScope == 'chat')
+    if (before.activationScope == 'chat') {
       throw const SupportAppActionRefused(SupportAppActionCode.denied);
+    }
     final id = op == SupportLorebookEntryOperation.create
         ? newId()
         : a['entryId']! as String;
     if (op != SupportLorebookEntryOperation.create &&
-        !before.entries.any((e) => e.id == id))
+        !before.entries.any((e) => e.id == id)) {
       return null;
+    }
     return mutations.prepare(
       domain: SupportContentDomain.lorebook,
       target: before.id,

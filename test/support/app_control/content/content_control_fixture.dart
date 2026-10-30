@@ -214,8 +214,9 @@ final class ContentControlFixture {
     SupportAppActionRegistry? gateway,
   }) {
     final source = original ?? context();
-    if (nativeGesture)
+    if (nativeGesture) {
       gesture.gesture(action: action, arguments: args, original: source);
+    }
     return (gateway ?? registry).execute(
       NativeToolCall(
         id: 'content_call_${seq++}',

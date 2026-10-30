@@ -41,8 +41,9 @@ final class _RepairInspectionReader {
           SessionRepairAvailability availability,
         ) {
           if (targets.length >= 64) {
-            if (!global.contains(SessionRepairIssue.incompleteInspection))
+            if (!global.contains(SessionRepairIssue.incompleteInspection)) {
               global.add(SessionRepairIssue.incompleteInspection);
+            }
             return;
           }
           targets.add(
@@ -98,10 +99,11 @@ final class _RepairInspectionReader {
         final validator = _RepairLedgerValidation(db);
         for (final row in image.rows(db.trackerRows)) {
           final issue = validator.rowIssue(image, row);
-          final issues = <SessionRepairIssue>[if (issue != null) issue];
+          final issues = <SessionRepairIssue>[?issue];
           if ((row['value'] as String).isEmpty ||
-              (row['value'] as String).length > 1200)
+              (row['value'] as String).length > 1200) {
             issues.add(SessionRepairIssue.invalidValue);
+          }
           var available = issue == null && global.isEmpty;
           if (available) {
             try {
@@ -186,10 +188,12 @@ final class _RepairInspectionReader {
   List<SessionRepairIssue> sessionMetadataIssues(_RepairImage image) {
     final issues = <SessionRepairIssue>[];
     final row = image.rows(db.chatSessions).single;
-    if (image.rows(db.characters).length != 1)
+    if (image.rows(db.characters).length != 1) {
       issues.add(SessionRepairIssue.missingReference);
-    if ((row['session_index'] as int) < 0 || (row['updated_at'] as int) < 0)
+    }
+    if ((row['session_index'] as int) < 0 || (row['updated_at'] as int) < 0) {
       issues.add(SessionRepairIssue.invalidShape);
+    }
     for (final field in [
       'session_vars_json',
       'authors_note_json',
@@ -197,8 +201,9 @@ final class _RepairInspectionReader {
     ]) {
       if (row[field] == null) continue;
       try {
-        if (jsonDecode(row[field] as String) is! Map<String, dynamic>)
+        if (jsonDecode(row[field] as String) is! Map<String, dynamic>) {
           issues.add(SessionRepairIssue.invalidShape);
+        }
       } catch (_) {
         issues.add(SessionRepairIssue.malformedPayload);
       }
@@ -208,8 +213,9 @@ final class _RepairInspectionReader {
     String parent = '';
     for (var i = 0; i < checkpoints.length; i++) {
       final point = checkpoints[i];
-      if (point['sequence'] != i || point['parent_checkpoint_id'] != parent)
+      if (point['sequence'] != i || point['parent_checkpoint_id'] != parent) {
         issues.add(SessionRepairIssue.invalidChain);
+      }
       if (!image
           .rows(db.characterRevisionRows)
           .any(
@@ -217,14 +223,16 @@ final class _RepairInspectionReader {
                 r['character_id'] == point['character_id'] &&
                 r['revision'] == point['character_revision'] &&
                 r['revision_hash'] == point['character_revision_hash'],
-          ))
+          )) {
         issues.add(SessionRepairIssue.missingReference);
+      }
       parent = point['id'] as String;
     }
     if (image
         .rows(db.sessionLorebookRevisionRows)
-        .any((r) => !checkpoints.any((p) => p['id'] == r['checkpoint_id'])))
+        .any((r) => !checkpoints.any((p) => p['id'] == r['checkpoint_id']))) {
       issues.add(SessionRepairIssue.missingReference);
+    }
     return issues.toSet().toList();
   }
 
@@ -269,11 +277,13 @@ final class _RepairInspectionReader {
       'expired',
       'promoted',
       'consumed',
-    }.contains(row['status']))
+    }.contains(row['status'])) {
       issues.add(SessionRepairIssue.unknownStatus);
+    }
     if (row['character_id'] !=
-        image.rows(db.chatSessions).single['character_id'])
+        image.rows(db.chatSessions).single['character_id']) {
       issues.add(SessionRepairIssue.missingReference);
+    }
     capture(() {
       final evidence = strings(row['evidence_message_ids']);
       _repairRequire(
@@ -313,8 +323,9 @@ final class _RepairInspectionReader {
             row['target_kind'] == 'injected_lorebook_entry',
         SessionRepairIssue.invalidShape,
       );
-      if (row['target_kind'] == 'injected_lorebook_entry')
+      if (row['target_kind'] == 'injected_lorebook_entry') {
         throw const _RepairRefused(SessionRepairIssue.incompleteEvidence);
+      }
     });
     final runs = image.rows(db.cardEvolutionCollectorRuns);
     for (final key in ['run_ordinal', 'first_seen_run', 'last_confirmed_run']) {
@@ -323,8 +334,9 @@ final class _RepairInspectionReader {
             (r) =>
                 r['collector_ordinal'] == row[key] &&
                 r['status'] == 'completed',
-          ))
+          )) {
         issues.add(SessionRepairIssue.missingReference);
+      }
     }
     return issues;
   }
@@ -334,19 +346,22 @@ final class _RepairInspectionReader {
     Map<String, Object?> row,
   ) {
     final issues = <SessionRepairIssue>[];
-    if (!const {'claimed', 'completed', 'failed'}.contains(row['status']))
+    if (!const {'claimed', 'completed', 'failed'}.contains(row['status'])) {
       issues.add(SessionRepairIssue.unknownStatus);
+    }
     if (row['character_id'] !=
-        image.rows(db.chatSessions).single['character_id'])
+        image.rows(db.chatSessions).single['character_id']) {
       issues.add(SessionRepairIssue.missingReference);
+    }
     final refs = image
         .rows(db.ledgerReconciliationSuccessfulRuns)
         .where((r) => r['id'] == row['reconciliation_run_id'])
         .toList();
     if (refs.length != 1 ||
         refs.single['ordinal'] != row['reconciliation_run_ordinal'] ||
-        refs.single['chain_hash'] != row['reconciliation_chain_hash'])
+        refs.single['chain_hash'] != row['reconciliation_chain_hash']) {
       issues.add(SessionRepairIssue.missingReference);
+    }
     final ordinal = row['reconciliation_run_ordinal'] as int;
     final batch =
         image
@@ -372,13 +387,15 @@ final class _RepairInspectionReader {
                         .join('\u001e'),
                   ),
                 )
-                .toString())
+                .toString()) {
       issues.add(SessionRepairIssue.incompleteEvidence);
+    }
     if (row['last_call_id'] != null &&
         !image
             .rows(db.llmCallEventRows)
-            .any((r) => r['call_id'] == row['last_call_id']))
+            .any((r) => r['call_id'] == row['last_call_id'])) {
       issues.add(SessionRepairIssue.missingReference);
+    }
     if (row['last_call_id'] != null &&
         (image
                 .rows(db.llmCallEventRows)
@@ -393,18 +410,21 @@ final class _RepairInspectionReader {
                   (r) =>
                       r['call_id'] == row['last_call_id'] &&
                       r['truncated'] == 1,
-                )))
+                ))) {
       issues.add(SessionRepairIssue.truncatedEvidence);
+    }
     if (row['status'] == 'failed' &&
         (row['failure_code'] == null ||
             row['failed_at'] == null ||
             row['lease_expires_at'] != 0 ||
             row['completed_at'] != null ||
-            row['model_output_hash'] != null))
+            row['model_output_hash'] != null)) {
       issues.add(SessionRepairIssue.invalidShape);
+    }
     if (row['status'] == 'completed' &&
-        (row['completed_at'] == null || row['model_output_hash'] == null))
+        (row['completed_at'] == null || row['model_output_hash'] == null)) {
       issues.add(SessionRepairIssue.incompleteEvidence);
+    }
     return issues;
   }
 
@@ -459,8 +479,9 @@ final class _RepairInspectionReader {
         .toSet();
     if (image
         .rows(db.ledgerReconciliationEffects)
-        .any((r) => !runIds.contains(r['run_id'])))
+        .any((r) => !runIds.contains(r['run_id']))) {
       issues.add(SessionRepairIssue.invalidEffect);
+    }
     // Raw preflight already bounded all run/effect/manifest/session rows and
     // dynamic column types. Existing owners provide structural chain validation.
     try {
@@ -468,21 +489,24 @@ final class _RepairInspectionReader {
         current,
         () => repo.validateChain(image.targetSession),
       );
-      if (chain is! ReconciliationRunValid)
+      if (chain is! ReconciliationRunValid) {
         issues.add(SessionRepairIssue.invalidChain);
+      }
       final audit = await owner._raw.checked(
         current,
         () => repo.readSessionAudit(image.targetSession),
       );
-      if (audit.integrity is! ReconciliationRunValid)
+      if (audit.integrity is! ReconciliationRunValid) {
         issues.add(SessionRepairIssue.invalidChain);
+      }
       final invalid = image
           .rows(db.ledgerReconciliationRunInvalidations)
           .map((r) => r['run_id'])
           .toSet();
       if (audit.logical.length !=
-          audit.physical.where((r) => !invalid.contains(r.id)).length)
+          audit.physical.where((r) => !invalid.contains(r.id)).length) {
         issues.add(SessionRepairIssue.incompleteEvidence);
+      }
     } on _RepairRefused {
       rethrow;
     } catch (_) {
@@ -521,8 +545,9 @@ final class _RepairInspectionReader {
       } catch (_) {
         found.add(SessionRepairIssue.malformedPayload);
       }
-      if (perEffect != null)
+      if (perEffect != null) {
         perEffect[row['id'] as String] = List.unmodifiable(found);
+      }
       issues.addAll(found);
     }
     return issues.toSet().toList();

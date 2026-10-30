@@ -91,8 +91,9 @@ final class _RestoreOriginals {
           final retained = windows.pin(copyPath, immutable: true);
           _rawPins.add(retained);
           if (retained.length != size ||
-              await windows.copyOrHash(retained, owner._check) != hash)
+              await windows.copyOrHash(retained, owner._check) != hash) {
             _refuse(DatabaseRestoreCode.recoveryRequired);
+          }
           owner._check();
           _observations[suffix] = (true, size, hash);
         } catch (error, stack) {
@@ -167,8 +168,9 @@ extension _RestoreRetention on NativeDatabaseRestoreOwner {
     if (_state != _RestoreState.accepted ||
         _retired ||
         _cancelled ||
-        _active == null)
+        _active == null) {
       _refuse(DatabaseRestoreCode.stale);
+    }
     // No delete may race owner close/cancel; retain the actual original future.
     await _track(_originals!.releaseAfterAcceptance());
     _check();

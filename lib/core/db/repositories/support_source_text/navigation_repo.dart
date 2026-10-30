@@ -8,12 +8,11 @@ part of '../support_source_text_repo.dart';
 final class SupportSourceNavigationRepo
     implements nav.OriginalRootNavigationRepository {
   SupportSourceNavigationRepo({
-    required SupportSourceTextRepo boundary,
+    required this._boundary,
     required bool Function() isCurrent,
     Future<String> Function()? activeStudioPresetId,
     Future<String?> Function()? activeOrdinaryPresetId,
-  }) : _boundary = boundary,
-       _current = isCurrent,
+  }) : _current = isCurrent,
        _activeStudio = activeStudioPresetId,
        _activeOrdinary = activeOrdinaryPresetId;
 
@@ -164,8 +163,9 @@ final class SupportSourceNavigationRepo
         !_alive() ||
         entry.extents.length > 16 ||
         entry.grant.source != entry.source.key ||
-        !entry.grant.snapshot.same(entry.source.snapshot))
+        !entry.grant.snapshot.same(entry.source.snapshot)) {
       return null;
+    }
     // The source/session/character are already exact private bindings in the
     // entry and digest. This bounded list is the native selected-record extent,
     // not a duplicate list of all binding/citation identities.
@@ -178,20 +178,23 @@ final class SupportSourceNavigationRepo
       final record = capture.record;
       if (record == null ||
           jsonEncode(_bindingMaterial(record.binding)) !=
-              jsonEncode(_bindingMaterial(extent.binding)))
+              jsonEncode(_bindingMaterial(extent.binding))) {
         return null;
+      }
       ids.addAll(capture.ids);
       if (ids.length > 16) return null;
       if ((extent.startScalar == null) != (extent.endScalar == null) ||
           (extent.startScalar != null &&
               (extent.startScalar! < 0 ||
-                  extent.endScalar! < extent.startScalar!)))
+                  extent.endScalar! < extent.startScalar!))) {
         return null;
+      }
       if (extent.endScalar != null &&
           (record.payload is! String ||
               extent.endScalar! >
-                  _projectComplete(record.payload as String).runes.length))
+                  _projectComplete(record.payload as String).runes.length)) {
         return null;
+      }
       // These are projected scalar extents, not invented raw/evidence offsets.
       captures.add([
         capture.raw,
@@ -240,12 +243,14 @@ final class SupportSourceNavigationRepo
           native == null ||
           _db.isClosing ||
           !_boundary._text.retainsNativeDataSource(native) ||
-          (_native != null && !identical(native, _native)))
+          (_native != null && !identical(native, _native))) {
         _fail();
+      }
       _native ??= native;
       final policy = _boundary._currentRedactor();
-      if (_projectionPolicy != null && !identical(_projectionPolicy, policy))
+      if (_projectionPolicy != null && !identical(_projectionPolicy, policy)) {
         _fail(SupportSourceReadFailure.changed);
+      }
       _projectionPolicy ??= policy;
     } catch (_) {
       _retire();
@@ -293,8 +298,9 @@ final class SupportSourceNavigationRepo
     );
     _guard();
     final schema = rows.single.read<int>('schema_revision');
-    if (_schemaVersion != null && _schemaVersion != schema)
+    if (_schemaVersion != null && _schemaVersion != schema) {
       _fail(SupportSourceReadFailure.changed);
+    }
     _schemaVersion ??= schema;
     return (rows.single.read<int>('changes'), rows.single.read<int>('version'));
   }
@@ -302,8 +308,9 @@ final class SupportSourceNavigationRepo
   Future<void> _fresh() async {
     final stamp = await _stamp();
     _guard();
-    if (_fence != null && stamp != _fence)
+    if (_fence != null && stamp != _fence) {
       _fail(SupportSourceReadFailure.changed);
+    }
     _fence ??= stamp;
   }
 
@@ -318,8 +325,9 @@ final class SupportSourceNavigationRepo
           bound.candidateLimit < 1 ||
           bound.candidateLimit > 4096 ||
           bound.rawByteLimit < 1 ||
-          bound.rawByteLimit > nav.Limits.rawBytes)
+          bound.rawByteLimit > nav.Limits.rawBytes) {
         _fail();
+      }
       await _fresh();
       _guard();
       _rootValidation?._check();
@@ -353,8 +361,9 @@ final class SupportSourceNavigationRepo
     final source = _owned(observation);
     if (source == null ||
         source.scope == null ||
-        !_scopeWithin(source.scope!, scope))
+        !_scopeWithin(source.scope!, scope)) {
       _fail();
+    }
     return source;
   }
 
@@ -437,8 +446,9 @@ final class _NavRootRevalidation implements nav.OriginalRootRevalidation {
     repository._guard();
     if (!_active ||
         !identical(repository._rootValidation, this) ||
-        _originals.any((o) => repository._owned(o) == null))
+        _originals.any((o) => repository._owned(o) == null)) {
       repository._fail();
+    }
   }
 
   @override
@@ -455,8 +465,9 @@ final class _NavRootRevalidation implements nav.OriginalRootRevalidation {
   ) async {
     if (!isCurrent ||
         originals.isEmpty ||
-        originals.length > nav.Limits.references)
+        originals.length > nav.Limits.references) {
       return false;
+    }
     _used = true;
     _running = true;
     _originals = List.unmodifiable(originals);

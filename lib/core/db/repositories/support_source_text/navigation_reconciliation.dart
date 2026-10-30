@@ -74,8 +74,9 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
             ids.length > 16 ||
             ids.toSet().length != ids.length ||
             ids.first != row['start_message_id'] ||
-            ids.last != row['end_message_id'])
+            ids.last != row['end_message_id']) {
           _shape.bad();
+        }
         final end = await _savedAnchor(
           source,
           row['end_message_id'] as String,
@@ -200,14 +201,16 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
     );
     if ((row['ordinal'] as int) < 1 ||
         row['contract_version'] != 1 ||
-        (row['effective_canon_revision'] as int) < 0)
+        (row['effective_canon_revision'] as int) < 0) {
       _shape.bad();
+    }
     _shape.id(row['id']);
     final anchors = _shape.list(_canonicalSaved(row['anchors_json']));
     if (anchors.isEmpty ||
         anchors.length > 16 ||
-        _navHash(row['anchors_json'] as String) != row['range_hash'])
+        _navHash(row['anchors_json'] as String) != row['range_hash']) {
       _shape.bad();
+    }
     final refs = _shape.list(
       _canonicalSaved(row['accepted_manifest_refs_json']),
     );
@@ -238,8 +241,9 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
                 'contentHash': content,
               }),
             ) !=
-            row['chain_hash'])
+            row['chain_hash']) {
       _shape.bad();
+    }
     if (row['ordinal'] == 1) {
       if (row['predecessor_chain_hash'] != '') _shape.bad();
     } else {
@@ -253,8 +257,9 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
       );
       _guard();
       if (previous.isEmpty ||
-          previous.single.data['chain_hash'] != row['predecessor_chain_hash'])
+          previous.single.data['chain_hash'] != row['predecessor_chain_hash']) {
         _shape.bad();
+      }
     }
     final seen = <String>{};
     nav.Anchor? start, end;
@@ -275,8 +280,9 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
       );
       _shape.choice(a, 'role', const {'user', 'assistant', 'system'});
       if (!seen.add(_shape.id(a['messageId'])) ||
-          !RegExp(r'^[0-9a-f]{64}$').hasMatch(a['contentHash'] as String))
+          !RegExp(r'^[0-9a-f]{64}$').hasMatch(a['contentHash'] as String)) {
         _shape.bad();
+      }
       final admitted = await _savedAnchor(
         source,
         a['messageId'] as String,
@@ -294,8 +300,9 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
         first['agentSwipeId'] != row['start_agent_swipe_id'] ||
         last['messageId'] != row['end_message_id'] ||
         last['swipeId'] != row['end_swipe_id'] ||
-        last['agentSwipeId'] != row['end_agent_swipe_id'])
+        last['agentSwipeId'] != row['end_agent_swipe_id']) {
       _shape.bad();
+    }
     for (final raw in refs) {
       final ref = _shape.map(raw);
       _shape.fields(
@@ -323,11 +330,13 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
         'sessionId',
         'messageId',
         'acceptedByUserMessageId',
-      ])
+      ]) {
         _shape.id(ref[key]);
+      }
       if (ref['sessionId'] != source.observation.key.nativeId ||
-          !seen.contains(ref['messageId']))
+          !seen.contains(ref['messageId'])) {
         _shape.bad();
+      }
     }
     final invalidations = await _sql(
       'SELECT 1 AS invalid FROM reconciliation_run_invalidations '
@@ -460,8 +469,9 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
               }),
             ) !=
             row['after_state_hash'] ||
-        _navHash(row['actual_effects_json'] as String) != row['effects_hash'])
+        _navHash(row['actual_effects_json'] as String) != row['effects_hash']) {
       _shape.bad();
+    }
     final records = <nav.DataRecord>[];
     void trackerRows(List<Object?> values, String label) {
       final seen = <String>{};
@@ -478,8 +488,10 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
           for (final e in original.entries) names[e.key] ?? e.key: e.value,
         };
         final parsed = _trackerShape(m, source.observation.key.nativeId);
-        if (!seen.add(parsed['name'] as String) || parsed['scope'] != 'ledger')
+        if (!seen.add(parsed['name'] as String) ||
+            parsed['scope'] != 'ledger') {
           _shape.bad();
+        }
         if ((parsed['name'] as String).startsWith('canon_')) continue;
         records.addAll(
           _fields(
@@ -562,15 +574,15 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
           required: const {'before', 'after'},
         );
         if (domain == 'ledger') {
-          trackerRows([change['before']], 'ledger:changedBefore${changeIndex}');
-          trackerRows([change['after']], 'ledger:changedAfter${changeIndex}');
+          trackerRows([change['before']], 'ledger:changedBefore$changeIndex');
+          trackerRows([change['after']], 'ledger:changedAfter$changeIndex');
         } else {
           knowledgeRows([
             change['before'],
-          ], 'knowledge:changedBefore${changeIndex}');
+          ], 'knowledge:changedBefore$changeIndex');
           knowledgeRows([
             change['after'],
-          ], 'knowledge:changedAfter${changeIndex}');
+          ], 'knowledge:changedAfter$changeIndex');
         }
         changeIndex++;
       }
@@ -607,8 +619,9 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
         required: const {'type'},
       );
       _shape.choice(op, 'type', const {'retract', 'renameEntity'});
-      for (final key in ['factId', 'fromKey', 'toKey'])
+      for (final key in ['factId', 'fromKey', 'toKey']) {
         if (op.containsKey(key)) _shape.id(op[key]);
+      }
     }
     final export = _shape.map(result['export']);
     _shape.fields(
@@ -651,8 +664,9 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
         strings: const {'time', 'date', 'location', 'immediateThread'},
         nested: const {'presentEntities', 'activeTensions'},
       );
-      if (scene.containsKey('activeTensions'))
+      if (scene.containsKey('activeTensions')) {
         _shape.strings(scene['activeTensions']);
+      }
       for (final raw in _shape.list(scene['presentEntities'])) {
         _shape.fields(
           _shape.map(raw),
@@ -669,8 +683,14 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
         nested: const {'aliases', 'knowledge', 'boundaries', 'cardOverrides'},
         required: const {'name'},
       );
-      for (final key in ['aliases', 'knowledge', 'boundaries', 'cardOverrides'])
+      for (final key in [
+        'aliases',
+        'knowledge',
+        'boundaries',
+        'cardOverrides',
+      ]) {
         if (entity.containsKey(key)) _shape.strings(entity[key]);
+      }
     }
     for (final raw in _shape.list(export['arcState'])) {
       final arc = _shape.map(raw);
@@ -682,8 +702,9 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
         required: const {'id'},
       );
       _shape.id(arc['id']);
-      for (final key in ['entities', 'topics'])
+      for (final key in ['entities', 'topics']) {
         if (arc.containsKey(key)) _shape.strings(arc[key]);
+      }
     }
     for (final raw in _shape.list(export['knowledgeFacts'])) {
       final fact = _shape.map(raw);
@@ -706,7 +727,9 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
         nullable: const {'supersedesId'},
         required: const {'knowerKey', 'subjectKey', 'predicate', 'object'},
       );
-      for (final key in ['knowerKey', 'subjectKey']) _shape.id(fact[key]);
+      for (final key in ['knowerKey', 'subjectKey']) {
+        _shape.id(fact[key]);
+      }
       _shape.choice(fact, 'factClass', const {
         'knowledge',
         'relationship',
@@ -725,8 +748,9 @@ extension _NavReconciliation on SupportSourceNavigationRepo {
         'forgotten',
         'retracted',
       });
-      for (final key in ['entities', 'topics'])
+      for (final key in ['entities', 'topics']) {
         if (fact.containsKey(key)) _shape.strings(fact[key]);
+      }
     }
     return result;
   }

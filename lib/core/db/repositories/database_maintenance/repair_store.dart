@@ -47,8 +47,9 @@ final class _MaintenanceRepairStore {
         !_maintenanceSafeId(operationId) ||
         !_maintenanceSafeId(sessionId) ||
         createdAt < 0 ||
-        createdAt > 9007199254740991)
+        createdAt > 9007199254740991) {
       return null;
+    }
     return transaction(current, () async {
       final guards = await targets.prepare(target, current);
       _maintenanceRequire(current());

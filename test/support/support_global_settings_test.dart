@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:glaze_flutter/core/db/repositories/support_repo.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/support/support_payload_cipher.dart';
-import 'package:glaze_flutter/features/support_assistant/models/support_workspace_models.dart';
 import 'package:glaze_flutter/features/support_assistant/services/support_workspace_settings_codec.dart';
 import 'package:glaze_flutter/features/support_assistant/services/support_workspace_store.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_workspace_provider.dart';
