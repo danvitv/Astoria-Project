@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 
 import '../../models/historical_message_window.dart';
 import '../../models/chat_message.dart';
+import '../../models/chat_session_content.dart';
 
 import '../../models/tracker.dart';
 import '../../models/tracker_snapshot.dart';
@@ -49,7 +50,10 @@ class TrackerSnapshotRepo {
       throw const FormatException('Tracker snapshot belongs to another chat');
     }
     if (expectedChat != null &&
-        await ChatRepo(db).getById(sessionId) != expectedChat) {
+        !chatSessionContentEquals(
+          await ChatRepo(db).getById(sessionId),
+          expectedChat,
+        )) {
       throw StateError('Chat changed during tracker snapshot restore');
     }
     if (expectedSnapshots != null) {

@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'sync_lifecycle_test.dart'
     show
         FakeCloudAdapter,
+        FakeChatStore,
         FakeExtensionPresetStore,
         FakeExtensionsSettingsStore,
         FakeInfoBlockStore,
@@ -80,8 +81,22 @@ class _Cloud extends FakeCloudAdapter {
   }
 }
 
+/// Like ChatRepo: every read rehydrates nested value objects from stored JSON.
+class _HydratingChatStore extends FakeChatStore {
+  @override
+  Future<ChatSession?> getById(String id) async {
+    final chat = await super.getById(id);
+    return chat == null
+        ? null
+        : ChatSession.fromJson(
+            jsonDecode(jsonEncode(chat.toJson())) as Map<String, dynamic>,
+          );
+  }
+}
+
 class _SnapshotWorld extends SyncWorld {
   final snapshots = _SnapshotStore();
+  final restoreChats = _HydratingChatStore();
   final restoreCloud = _Cloud();
   late final SyncEngine _engine;
   late final InMemoryManifestProvider _restoreManifestProvider;
@@ -89,6 +104,9 @@ class _SnapshotWorld extends SyncWorld {
 
   @override
   _Cloud get cloud => restoreCloud;
+
+  @override
+  _HydratingChatStore get chats => restoreChats;
 
   @override
   InMemoryManifestProvider get manifestProvider => _restoreManifestProvider;
@@ -157,15 +175,20 @@ class _SnapshotWorld extends SyncWorld {
     );
   }
 
-  Future<void> seedAcceptedCut({int version = 16}) async {
+  Future<void> seedAcceptedCut({int version = 16, ChatMessage? message}) async {
     await chats.put(
-      const ChatSession(
+      ChatSession(
         id: _sessionId,
         characterId: 'card',
         sessionIndex: 0,
         updatedAt: 1000,
         messages: [
-          ChatMessage(id: 'message-0', role: 'assistant', content: 'Hi'),
+          message ??
+              const ChatMessage(
+                id: 'message-0',
+                role: 'assistant',
+                content: 'Hi',
+              ),
         ],
       ),
     );
@@ -214,6 +237,57 @@ class _SnapshotWorld extends SyncWorld {
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  for (final entry in <String, ChatMessage>{
+    'agent swipes': const ChatMessage(
+      id: 'message-0',
+      role: 'assistant',
+      content: 'Hi',
+      agentSwipes: [AgentSwipe(content: 'Hi', reasoning: 'reasoning')],
+    ),
+    'triggered lorebooks': const ChatMessage(
+      id: 'message-0',
+      role: 'assistant',
+      content: 'Hi',
+      triggeredLorebooks: [TriggeredEntry(id: 'lore', name: 'Lore')],
+    ),
+    'triggered memories': const ChatMessage(
+      id: 'message-0',
+      role: 'assistant',
+      content: 'Hi',
+      triggeredMemories: [TriggeredEntry(id: 'memory', name: 'Memory')],
+    ),
+  }.entries) {
+    test(
+      'restore tolerates rehydrated ${entry.key} without replaying history',
+      () async {
+        final world = _SnapshotWorld();
+        await world.seedAcceptedCut(message: entry.value);
+        final first = (await world.chats.getById(_sessionId))!;
+        final second = (await world.chats.getById(_sessionId))!;
+        // Reproduce the prior guard failure: the DB row is unchanged, but nested
+        // domain objects do not implement value equality.
+        expect(first == second, isFalse);
+        expect(jsonEncode(first.toJson()), jsonEncode(second.toJson()));
+        final history = jsonEncode(first.toJson());
+        expect(await world.pull(), isEmpty);
+        expect(world.snapshots.data[_sessionId], _payload(108)['items']);
+        expect(
+          jsonEncode((await world.chats.getById(_sessionId))!.toJson()),
+          history,
+        );
+        expect(
+          (await world.manifestProvider.readLocalManifest())
+              .trackerSnapshotRestoreHashes,
+          isEmpty,
+        );
+        world.cloud.downloadCalls.clear();
+        expect(await world.pull(), isEmpty);
+        expect(world.cloud.downloadCalls, [_manifestPath]);
+        expect(world.snapshots.replacements, 1);
+      },
+    );
+  }
 
   test(
     'v16 migration derives only nonempty accepted snapshot restore markers',

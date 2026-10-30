@@ -18,6 +18,122 @@ import 'package:glaze_flutter/core/models/tracker_snapshot.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/card_rewriter_contracts.dart';
 
 void main() {
+  const message = ChatMessage(
+    id: 'turn',
+    role: 'assistant',
+    content: 'unchanged answer',
+    agentSwipes: [
+      AgentSwipe(content: 'unchanged answer', reasoning: 'reasoning'),
+    ],
+    triggeredLorebooks: [TriggeredEntry(id: 'lore', name: 'Lore')],
+    triggeredMemories: [TriggeredEntry(id: 'memory', name: 'Memory')],
+  );
+
+  test(
+    'atomic snapshot restore compares rehydrated chat values, not object identity',
+    () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      final chats = ChatRepo(db);
+      await chats.put(
+        const ChatSession(
+          id: 'session',
+          characterId: 'character',
+          sessionIndex: 0,
+          updatedAt: 1000,
+          messages: [message],
+        ),
+      );
+      await _snapshot(db, 'turn', 'old', '');
+      final expected = (await chats.getById('session'))!;
+      final rehydrated = (await chats.getById('session'))!;
+      expect(expected == rehydrated, isFalse);
+      expect(jsonEncode(expected.toJson()), jsonEncode(rehydrated.toJson()));
+      final repo = TrackerSnapshotRepo(db);
+      await repo.replaceForSession(
+        'session',
+        [
+          const TrackerSnapshot(
+            sessionId: 'session',
+            messageId: 'turn',
+            committed: true,
+          ),
+        ],
+        expectedSnapshots: await repo.getBySessionId('session'),
+        expectedChat: expected,
+      );
+      expect((await repo.getBySessionId('session')).single.trackers, isEmpty);
+      expect(
+        jsonEncode((await chats.getById('session'))!.toJson()),
+        jsonEncode(expected.toJson()),
+      );
+    },
+  );
+
+  for (final edit in <String, ChatMessage>{
+    'agent swipe reasoning': message.copyWith(
+      agentSwipes: [
+        message.agentSwipes.single.copyWith(reasoning: 'authored reasoning'),
+      ],
+    ),
+    'triggered lorebook': message.copyWith(
+      triggeredLorebooks: [
+        const TriggeredEntry(id: 'lore', name: 'Authored lore'),
+      ],
+    ),
+    'triggered memory': message.copyWith(
+      triggeredMemories: [
+        const TriggeredEntry(id: 'memory', name: 'Authored memory'),
+      ],
+    ),
+  }.entries) {
+    test(
+      'atomic restore rejects a real ${edit.key} edit with unchanged message text and timestamp',
+      () async {
+        final db = AppDatabase.forTesting(NativeDatabase.memory());
+        addTearDown(db.close);
+        final chats = ChatRepo(db);
+        await chats.put(
+          const ChatSession(
+            id: 'session',
+            characterId: 'character',
+            sessionIndex: 0,
+            updatedAt: 1000,
+            messages: [message],
+          ),
+        );
+        await _snapshot(db, 'turn', 'original', '');
+        final expected = (await chats.getById('session'))!;
+        final snapshots = TrackerSnapshotRepo(db);
+        final original = await snapshots.getBySessionId('session');
+        await chats.mutateSession(
+          sessionId: 'session',
+          mutate: (chat) => chat.copyWith(messages: [edit.value]),
+        );
+        final changed = (await chats.getById('session'))!;
+        expect(changed.updatedAt, expected.updatedAt);
+        expect(
+          changed.messages.single.content,
+          expected.messages.single.content,
+        );
+        await expectLater(
+          snapshots.replaceForSession(
+            'session',
+            [],
+            expectedChat: expected,
+            expectedSnapshots: original,
+          ),
+          throwsStateError,
+        );
+        expect(await snapshots.getBySessionId('session'), original);
+        expect(
+          jsonEncode((await chats.getById('session'))!.toJson()),
+          jsonEncode(changed.toJson()),
+        );
+      },
+    );
+  }
+
   test(
     'snapshot replacement rolls back a failure after an earlier insert',
     () async {

@@ -21,6 +21,7 @@ import '../../../core/models/gallery_entry.dart';
 import '../../../core/models/memory_book.dart';
 import '../../../core/models/persona.dart';
 import '../../../core/models/chat_message.dart';
+import '../../../core/models/chat_session_content.dart';
 import '../../../core/models/tracker_snapshot.dart';
 import '../../../core/models/lorebook.dart';
 import '../../../core/models/api_config.dart';
@@ -1108,7 +1109,10 @@ class SyncEngine {
         'Session changed during tracker snapshot restore; retry',
       );
     }
-    if (await _chatRepo.getById(entry.id) != expectedChat) {
+    if (!chatSessionContentEquals(
+      await _chatRepo.getById(entry.id),
+      expectedChat,
+    )) {
       throw StateError('Chat changed during tracker snapshot restore; retry');
     }
     checkActive();
