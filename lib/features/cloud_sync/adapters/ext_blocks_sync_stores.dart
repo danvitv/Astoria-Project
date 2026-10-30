@@ -15,6 +15,7 @@ import '../../../core/db/repositories/summary_repo.dart';
 import '../../../core/db/repositories/tracker_snapshot_repo.dart';
 import '../../../core/db/repositories/tracker_repo.dart';
 import '../../../core/models/tracker.dart';
+import '../../../core/models/chat_message.dart';
 import '../../../core/models/tracker_snapshot.dart';
 import '../../../core/services/card_rewriter/card_rewriter_contracts.dart';
 import '../../../core/utils/cast_helpers.dart';
@@ -108,7 +109,7 @@ class InfoBlockSyncStore implements SyncInfoBlockStore {
 
 /// Adapter wrapping [TrackerSnapshotRepo] for cloud sync. Per-session
 /// collection, same shape as [InfoBlockSyncStore].
-class TrackerSnapshotSyncStore implements SyncTrackerSnapshotStore {
+class TrackerSnapshotSyncStore implements SyncAtomicTrackerSnapshotStore {
   final TrackerSnapshotRepo _repo;
 
   TrackerSnapshotSyncStore(this._repo);
@@ -130,6 +131,21 @@ class TrackerSnapshotSyncStore implements SyncTrackerSnapshotStore {
   Future<void> insertRaw(Map<String, dynamic> snapshot) async {
     await _repo.upsert(TrackerSnapshot.fromJson(snapshot));
   }
+
+  @override
+  Future<void> replaceBySessionId(
+    String sessionId,
+    List<TrackerSnapshot> snapshots, {
+    List<TrackerSnapshot>? expectedSnapshots,
+    ChatSession? expectedChat,
+    void Function()? checkCurrent,
+  }) => _repo.replaceForSession(
+    sessionId,
+    snapshots,
+    expectedSnapshots: expectedSnapshots,
+    expectedChat: expectedChat,
+    checkCurrent: checkCurrent,
+  );
 }
 
 /// Adapter wrapping [TrackerRepo] for cloud sync of the live Tracker Values

@@ -28,7 +28,18 @@ class SessionCanonCheckpointRepo {
     HistoricalMessageWindow window,
   ) async {
     final checkpoints = await getForSession(sessionId);
-    SessionCanonCheckpointRow? selected;
+    return survivingHistory(checkpoints, window).lastOrNull;
+  }
+
+  /// Valid epochs of the selected history, including epochs before a rewrite.
+  /// Rollback markers resume the surviving prefix without reviving discarded
+  /// transitions. Historical tracker snapshots may still belong to older forks
+  /// that predate this session's root checkpoint.
+  static List<SessionCanonCheckpointRow> survivingHistory(
+    Iterable<SessionCanonCheckpointRow> checkpoints,
+    HistoricalMessageWindow window,
+  ) {
+    final surviving = <SessionCanonCheckpointRow>[];
     var prefixValid = true;
     for (final checkpoint in checkpoints) {
       final survives =
@@ -43,12 +54,12 @@ class SessionCanonCheckpointRepo {
           checkpoint.rewriteJobId?.startsWith('canon-rollback:') ?? false;
       if (rollback) prefixValid = survives;
       if (prefixValid && survives) {
-        selected = checkpoint;
+        surviving.add(checkpoint);
       } else if (!rollback) {
         prefixValid = false;
       }
     }
-    return selected;
+    return surviving;
   }
 
   Future<SessionCanonCheckpointRow?> getLatest(String sessionId) =>

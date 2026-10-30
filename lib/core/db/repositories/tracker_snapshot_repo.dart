@@ -3,12 +3,14 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 
 import '../../models/historical_message_window.dart';
+import '../../models/chat_message.dart';
 
 import '../../models/tracker.dart';
 import '../../models/tracker_snapshot.dart';
 import '../../llm/game_time.dart';
 import '../../utils/time_helpers.dart';
 import '../app_db.dart';
+import 'chat_repo.dart';
 
 /// Repository for the `tracker_snapshots` table.
 ///
@@ -30,6 +32,43 @@ class TrackerSnapshotRepo {
   final AppDatabase db;
 
   const TrackerSnapshotRepo(this.db);
+
+  Future<void> replaceForSession(
+    String sessionId,
+    List<TrackerSnapshot> snapshots, {
+    List<TrackerSnapshot>? expectedSnapshots,
+    ChatSession? expectedChat,
+    void Function()? checkCurrent,
+  }) => db.transaction(() async {
+    checkCurrent?.call();
+    if (snapshots.any(
+      (snapshot) =>
+          snapshot.sessionId != sessionId ||
+          snapshot.trackers.any((tracker) => tracker.sessionId != sessionId),
+    )) {
+      throw const FormatException('Tracker snapshot belongs to another chat');
+    }
+    if (expectedChat != null &&
+        await ChatRepo(db).getById(sessionId) != expectedChat) {
+      throw StateError('Chat changed during tracker snapshot restore');
+    }
+    if (expectedSnapshots != null) {
+      final current = await getBySessionId(sessionId);
+      if (current.length != expectedSnapshots.length ||
+          current.indexed.any(
+            (entry) => entry.$2 != expectedSnapshots[entry.$1],
+          )) {
+        throw StateError('Snapshots changed during tracker snapshot restore');
+      }
+    }
+    checkCurrent?.call();
+    await deleteBySessionId(sessionId);
+    for (final snapshot in snapshots) {
+      checkCurrent?.call();
+      await upsert(snapshot);
+    }
+    checkCurrent?.call();
+  });
 
   Future<TrackerSnapshot?> getCommittedInWindow(
     String sessionId,

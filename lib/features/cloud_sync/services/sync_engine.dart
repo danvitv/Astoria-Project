@@ -21,6 +21,7 @@ import '../../../core/models/gallery_entry.dart';
 import '../../../core/models/memory_book.dart';
 import '../../../core/models/persona.dart';
 import '../../../core/models/chat_message.dart';
+import '../../../core/models/tracker_snapshot.dart';
 import '../../../core/models/lorebook.dart';
 import '../../../core/models/api_config.dart';
 import '../../../core/models/extra_request_parameter.dart';
@@ -199,6 +200,30 @@ class SyncEngine {
     var localManifest = await _manifestBuilder.buildLocalManifest(
       cloudManifest: cloudManifest,
     );
+    if (cloudManifest != null) {
+      for (final key in localManifest.trackerSnapshotRestoreHashes.keys) {
+        final snapshot = localManifest.entries[key];
+        if (snapshot == null) continue;
+        final chatKey = entryKey('chat', snapshot.id);
+        final localChat = localManifest.entries[chatKey];
+        final previousChat = previousManifest.entries[chatKey];
+        final cloudChat = cloudManifest.entries[chatKey];
+        if (localChat != null &&
+            !localChat.deleted &&
+            previousChat != null &&
+            !previousChat.deleted &&
+            cloudChat != null &&
+            localChat.hash == previousChat.hash &&
+            (cloudChat.deleted || cloudChat.hash != localChat.hash)) {
+          // Protect the owner too: publishing its old message prefix would
+          // orphan complete cloud snapshots and make the repair truncate again.
+          // Do not advance the local owner baseline without importing that chat.
+          throw StateError(
+            'Pull required before push: cloud chat changed during snapshot history repair',
+          );
+        }
+      }
+    }
     localManifest = await _bridgeCharacterHashes(localManifest, cloudManifest);
     localManifest = await _unorderedBridge.bridge(localManifest, cloudManifest);
     // Fingerprint the bytes that include keys, not an accepted keyless hash.
@@ -311,6 +336,13 @@ class SyncEngine {
     for (final entry in entries) {
       final cloudEntry = cloudManifest?.entries[entry.key];
 
+      if (localManifest.trackerSnapshotRestoreHashes.containsKey(entry.key)) {
+        // Even a changed cloud hash or missing payload must not cause this
+        // known truncated local aggregate to replace the cloud history.
+        hashSkippedKeys.add(entry.key);
+        continue;
+      }
+
       if (entry.deleted) {
         if (cloudEntry != null && !cloudEntry.deleted) {
           tasks.add(() async {
@@ -420,6 +452,14 @@ class SyncEngine {
     final acceptedLocalHashes = Map<String, String>.from(
       localManifest.acceptedLocalHashes,
     );
+    for (final key in localManifest.trackerSnapshotRestoreHashes.keys) {
+      final cloudEntry = cloudManifest?.entries[key];
+      if (cloudEntry == null) {
+        cleanedEntries.remove(key);
+      } else {
+        cleanedEntries[key] = cloudEntry;
+      }
+    }
     if (apiPayloadUploaded) {
       final key = entryKey('api_presets', 'api_presets');
       final entry = cleanedEntries[key];
@@ -546,6 +586,22 @@ class SyncEngine {
       }
       final localEntry = localManifest.entries[cloudEntry.key];
       final previouslyAccepted = previousManifest.entries[cloudEntry.key];
+
+      if (localManifest.trackerSnapshotRestoreHashes.containsKey(
+        cloudEntry.key,
+      )) {
+        if (await _canRestoreTrackerSnapshots(
+          cloudEntry,
+          localManifest,
+          previousManifest,
+          cloudManifest,
+        )) {
+          pullEntries.add(cloudEntry);
+        }
+        // Defer unsafe owner states rather than falling through to a generic
+        // timestamp-based replacement of the known truncated aggregate.
+        continue;
+      }
 
       if (!previousManifest.needsReconciliationRestore(cloudEntry.key) &&
           _isAlreadyCurrentOrAccepted(
@@ -688,6 +744,19 @@ class SyncEngine {
       }
       final localEntry = localManifest.entries[cloudEntry.key];
       final previouslyAccepted = previousManifest.entries[cloudEntry.key];
+      if (localManifest.trackerSnapshotRestoreHashes.containsKey(
+        cloudEntry.key,
+      )) {
+        if (await _canRestoreTrackerSnapshots(
+          cloudEntry,
+          localManifest,
+          previousManifest,
+          cloudManifest,
+        )) {
+          pullEntries.add(cloudEntry);
+        }
+        continue;
+      }
       if (!previousManifest.needsReconciliationRestore(cloudEntry.key) &&
           _isAlreadyCurrentOrAccepted(
             cloudEntry,
@@ -775,7 +844,16 @@ class SyncEngine {
           (entry) =>
               entry.type != 'session_lorebook_overlays' &&
               entry.type != 'reconciliation_state' &&
-              entry.type != 'rewrite_job_history',
+              entry.type != 'rewrite_job_history' &&
+              !localManifest.trackerSnapshotRestoreHashes.containsKey(
+                entry.key,
+              ),
+        )
+        .toList(growable: false);
+    final snapshotRestoreEntries = pullEntries
+        .where(
+          (entry) =>
+              localManifest.trackerSnapshotRestoreHashes.containsKey(entry.key),
         )
         .toList(growable: false);
     final overlayEntries = pullEntries
@@ -800,7 +878,12 @@ class SyncEngine {
               message: 'Pulling ${entry.type}:${entry.id}',
             ),
           );
-          if (entry.type == 'rewrite_job_history' && !entry.deleted) {
+          if (localManifest.trackerSnapshotRestoreHashes.containsKey(
+            entry.key,
+          )) {
+            await _restoreTrackerSnapshots(entry, localManifest, cloudManifest);
+            appliedEntries.add(entry);
+          } else if (entry.type == 'rewrite_job_history' && !entry.deleted) {
             final cloudData = await SyncSerialization.readRequiredCloudEntity(
               _adapter,
               entry,
@@ -848,7 +931,13 @@ class SyncEngine {
     if (primaryErrors.isNotEmpty) {
       throw SyncQueueAggregateError(primaryErrors);
     }
-    final touchedSessionIds = primaryEntries
+    // Restore only after any owning chat import has completed, but before the
+    // session consistency pass and the dependent history imports.
+    final snapshotErrors = await applyEntries(snapshotRestoreEntries);
+    if (snapshotErrors.isNotEmpty) {
+      throw SyncQueueAggregateError(snapshotErrors);
+    }
+    final touchedSessionIds = [...primaryEntries, ...snapshotRestoreEntries]
         .where(
           (entry) =>
               entry.type == 'chat' ||
@@ -890,6 +979,9 @@ class SyncEngine {
     await _unorderedBridge.verifyAnchors(localManifest);
     final entries = Map<String, SyncManifestEntry>.from(rebuilt.entries);
     final acceptedLocalHashes = <String, String>{};
+    final trackerSnapshotRestoreHashes = Map<String, String>.from(
+      rebuilt.trackerSnapshotRestoreHashes,
+    );
 
     for (final accepted in localManifest.acceptedLocalHashes.entries) {
       final rebuiltEntry = rebuilt.entries[accepted.key];
@@ -910,6 +1002,7 @@ class SyncEngine {
       acceptedLocalHashes[accepted.key] = accepted.value;
     }
     for (final entry in acceptedCloudEntries) {
+      trackerSnapshotRestoreHashes.remove(entry.key);
       final rebuiltEntry = rebuilt.entries[entry.key];
       entries[entry.key] = entry;
       if (rebuiltEntry != null && rebuiltEntry.hash == entry.hash) {
@@ -932,9 +1025,108 @@ class SyncEngine {
         lastSync: DateTime.now().millisecondsSinceEpoch,
         entries: entries,
         acceptedLocalHashes: acceptedLocalHashes,
+        trackerSnapshotRestoreHashes: trackerSnapshotRestoreHashes,
       ),
     );
     await _manifestBuilder.clearDeleted();
+  }
+
+  Future<bool> _canRestoreTrackerSnapshots(
+    SyncManifestEntry snapshot,
+    SyncManifest local,
+    SyncManifest previous,
+    SyncManifest cloud,
+  ) async {
+    if (snapshot.type != 'tracker_snapshot' || snapshot.deleted) return false;
+    final chatKey = entryKey('chat', snapshot.id);
+    final localChat = local.entries[chatKey];
+    final cloudChat = cloud.entries[chatKey];
+    if (localChat == null ||
+        localChat.deleted ||
+        cloudChat == null ||
+        cloudChat.deleted ||
+        await _manifestBuilder.isDeleted('chat', snapshot.id)) {
+      return false;
+    }
+    if (localChat.hash == cloudChat.hash) return true;
+    // A cloud-only chat advance can be applied first. Never use the migration
+    // to overwrite snapshots alongside authored local-only/conflicting edits.
+    return previous.entries[chatKey]?.deleted == false &&
+        localChat.hash == previous.entries[chatKey]?.hash &&
+        !SyncConflictDetector.needsConflict(localChat, cloudChat);
+  }
+
+  Future<void> _restoreTrackerSnapshots(
+    SyncManifestEntry entry,
+    SyncManifest local,
+    SyncManifest cloud,
+  ) async {
+    final checkActive = _queue.captureActiveGuard();
+    final data = await SyncSerialization.readRequiredCloudEntity(
+      _adapter,
+      entry,
+    );
+    final items = data['items'];
+    if (data['__trackerSnapshots'] != true ||
+        items is! List ||
+        items.any((item) => item is! Map<String, dynamic>) ||
+        SyncSerialization.computeSyncHash(data) != entry.hash) {
+      throw const FormatException('Invalid tracker snapshot restore payload');
+    }
+    // Decode every row before replacement: a malformed later row must not
+    // delete the accepted local history before its import fails.
+    final replacements = items
+        .cast<Map<String, dynamic>>()
+        .map(TrackerSnapshot.fromJson)
+        .toList();
+    for (final snapshot in replacements) {
+      if (snapshot.sessionId != entry.id ||
+          snapshot.trackers.any((tracker) => tracker.sessionId != entry.id)) {
+        throw const FormatException('Tracker snapshot belongs to another chat');
+      }
+    }
+    final chatKey = entryKey('chat', entry.id);
+    final expectedChat = await _chatRepo.getById(entry.id);
+    final metadata = await _chatRepo.getAllSessionMetadata();
+    final chats = metadata.where((chat) => chat.sessionId == entry.id);
+    final currentChatHash = chats.isEmpty
+        ? null
+        : SyncSerialization.computeChatMetadataHash(chats.first);
+    final initialChatHash =
+        local.acceptedLocalHashes[chatKey] ?? local.entries[chatKey]?.hash;
+    final current = await _readLocalEntity(entry.type, entry.id);
+    if (await _manifestBuilder.isDeleted('chat', entry.id) ||
+        await _manifestBuilder.isDeleted(entry.type, entry.id) ||
+        expectedChat == null ||
+        currentChatHash == null ||
+        (currentChatHash != initialChatHash &&
+            currentChatHash != cloud.entries[chatKey]?.hash) ||
+        current == null ||
+        SyncSerialization.computeSyncHash(current) !=
+            local.trackerSnapshotRestoreHashes[entry.key]) {
+      throw StateError(
+        'Session changed during tracker snapshot restore; retry',
+      );
+    }
+    if (await _chatRepo.getById(entry.id) != expectedChat) {
+      throw StateError('Chat changed during tracker snapshot restore; retry');
+    }
+    checkActive();
+    final store = _trackerSnapshotStore;
+    if (store is SyncAtomicTrackerSnapshotStore) {
+      await store.replaceBySessionId(
+        entry.id,
+        replacements,
+        expectedSnapshots: (current['items'] as List)
+            .cast<Map<String, dynamic>>()
+            .map(TrackerSnapshot.fromJson)
+            .toList(),
+        expectedChat: expectedChat,
+        checkCurrent: checkActive,
+      );
+    } else {
+      await _applyCloudTrackerSnapshots(entry.id, data);
+    }
   }
 
   bool _isAlreadyCurrentOrAccepted(
@@ -1020,8 +1212,17 @@ class SyncEngine {
       );
     }
 
+    final restoreHashes = Map<String, String>.from(
+      rebuiltManifest.trackerSnapshotRestoreHashes,
+    );
+    if (choice == 'cloud' && !deferCloudApply) {
+      restoreHashes.remove(conflict.key);
+    }
     await _manifestBuilder.writeLocalManifest(
-      rebuiltManifest.copyWith(entries: updatedEntries),
+      rebuiltManifest.copyWith(
+        entries: updatedEntries,
+        trackerSnapshotRestoreHashes: restoreHashes,
+      ),
     );
   }
 
@@ -1646,6 +1847,14 @@ class SyncEngine {
     }
 
     // Replace existing snapshots for this session with the cloud version.
+    final store = _trackerSnapshotStore;
+    if (store is SyncAtomicTrackerSnapshotStore) {
+      await store.replaceBySessionId(
+        sessionId,
+        items.map(TrackerSnapshot.fromJson).toList(),
+      );
+      return;
+    }
     await _trackerSnapshotStore.deleteBySessionId(sessionId);
     for (final item in items) {
       await _trackerSnapshotStore.insertRaw(item);

@@ -9,6 +9,7 @@ import '../models/memory_book.dart';
 import '../models/persona.dart';
 import '../models/preset.dart';
 import '../models/studio_config.dart';
+import '../models/tracker_snapshot.dart';
 
 abstract class SyncCharacterStore {
   Future<List<Character>> getAll();
@@ -82,6 +83,19 @@ abstract class SyncTrackerSnapshotStore {
   Future<List<Map<String, dynamic>>> getBySessionId(String sessionId);
   Future<void> deleteBySessionId(String sessionId);
   Future<void> insertRaw(Map<String, dynamic> snapshot);
+}
+
+/// Production replacement commits as one transaction; optional compare-and-swap
+/// inputs protect recovery against edits after its cloud download.
+abstract class SyncAtomicTrackerSnapshotStore
+    implements SyncTrackerSnapshotStore {
+  Future<void> replaceBySessionId(
+    String sessionId,
+    List<TrackerSnapshot> snapshots, {
+    List<TrackerSnapshot>? expectedSnapshots,
+    ChatSession? expectedChat,
+    void Function()? checkCurrent,
+  });
 }
 
 abstract class SyncTrackerValueStore {

@@ -72,3 +72,27 @@ cannot decode them. Small journals retain their old wire format.
 For a phone whose push stopped at the old payload limit, install updated builds,
 push from the phone owning the latest history, then pull on PC. Do not overwrite
 the newer phone cloud files by pushing an older PC session first.
+
+## Snapshot history recovery (manifest version 17)
+
+Post-pull consistency keeps historical snapshots from surviving older card
+revisions, including inherited epochs predating a branch root, and snapshots of
+existing inactive variations. Only deleted coordinates and explicitly discarded
+canon epochs are pruned. The live Ledger still uses an exact active committed
+snapshot compatible with current canon; historical retention is not promotion.
+
+Older builds could accept a truncated `tracker_snapshot` aggregate as a local
+normalization. Version 17 records a local-only pending repair for those old
+accepted hashes. It survives push-first upgrades and prevents publishing the
+known truncated aggregate over complete cloud history. A normal pull retries it
+once, after any owning chat import. Authored snapshot edits or unsafe owner states
+do not trigger automatic replacement. Successful repair clears the marker even
+if harmless normalization remains; failures leave it pending.
+If an unchanged local owner has advanced or been deleted in cloud while repair
+is pending, push stops before publishing files and requires pull first. Protecting
+only snapshots while publishing an older owning chat would truncate history again.
+
+Production replacement validates rows before deletion and runs delete/inserts in
+one transaction, with exact snapshot/chat compare-and-swap and ownership checks
+for recovery. Update the affected app and pull normally; do not delete the local
+chat merely to bypass its canon timeline or create a sync tombstone.

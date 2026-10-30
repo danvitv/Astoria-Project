@@ -583,6 +583,25 @@ class SyncManifestBuilder implements SyncManifestProvider {
     await _addSingletons(entries, previous, now, cloudManifest);
     await _addDeletedEntries(entries, now);
 
+    final trackerSnapshotRestoreHashes = <String, String>{};
+    for (final pending in previous.trackerSnapshotRestoreHashes.entries) {
+      final snapshot = entries[pending.key];
+      final chat = snapshot == null
+          ? null
+          : entries[entryKey('chat', snapshot.id)];
+      if (snapshot == null ||
+          snapshot.type != 'tracker_snapshot' ||
+          snapshot.deleted ||
+          snapshot.hash != pending.value ||
+          chat == null ||
+          chat.deleted ||
+          await isDeleted('chat', snapshot.id) ||
+          await isDeleted(snapshot.type, snapshot.id)) {
+        continue;
+      }
+      trackerSnapshotRestoreHashes[pending.key] = pending.value;
+    }
+
     final acceptedLocalHashes = <String, String>{...characterAcceptedHashes};
     if (applyAcceptedHashes) {
       for (final accepted in previous.acceptedLocalHashes.entries) {
@@ -600,11 +619,13 @@ class SyncManifestBuilder implements SyncManifestProvider {
     }
 
     return SyncManifest(
+      version: SyncManifest.currentVersion,
       deviceId: deviceId,
       createdAt: previous.createdAt,
       lastSync: previous.lastSync,
       entries: entries,
       acceptedLocalHashes: acceptedLocalHashes,
+      trackerSnapshotRestoreHashes: trackerSnapshotRestoreHashes,
     );
   }
 

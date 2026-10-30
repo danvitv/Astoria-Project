@@ -113,7 +113,9 @@ class SyncManifest {
   ///  15 — added merge-only terminal rewrite job history.
   ///  16 — restore explicitly invalidated reconciliation history and retry
   ///         nonempty normalized states accepted by the previous importer.
-  static const int currentVersion = 16;
+  ///  17 — retry tracker snapshot history truncated by the old revision cleanup,
+  ///         retaining a local-only restore request across push-first upgrades.
+  static const int currentVersion = 17;
 
   final int version;
   final String deviceId;
@@ -127,6 +129,11 @@ class SyncManifest {
   /// cloud hash remains the sync baseline, while this map identifies the
   /// unchanged local representation produced by that pull.
   final Map<String, String> acceptedLocalHashes;
+
+  /// Original raw local hashes awaiting the one-time snapshot history repair.
+  /// Unlike a version check, these survive a push before the restoring pull.
+  /// A local snapshot edit abandons automatic replacement.
+  final Map<String, String> trackerSnapshotRestoreHashes;
 
   /// Whether the last cloud push included API/embedding keys in api_presets.
   final bool apiKeysIncluded;
@@ -143,6 +150,7 @@ class SyncManifest {
     required this.createdAt,
     this.entries = const {},
     this.acceptedLocalHashes = const {},
+    this.trackerSnapshotRestoreHashes = const {},
     this.apiKeysIncluded = false,
   });
 
@@ -153,6 +161,7 @@ class SyncManifest {
     int? createdAt,
     Map<String, SyncManifestEntry>? entries,
     Map<String, String>? acceptedLocalHashes,
+    Map<String, String>? trackerSnapshotRestoreHashes,
     bool? apiKeysIncluded,
   }) => SyncManifest(
     version: version ?? this.version,
@@ -161,6 +170,8 @@ class SyncManifest {
     createdAt: createdAt ?? this.createdAt,
     entries: entries ?? this.entries,
     acceptedLocalHashes: acceptedLocalHashes ?? this.acceptedLocalHashes,
+    trackerSnapshotRestoreHashes:
+        trackerSnapshotRestoreHashes ?? this.trackerSnapshotRestoreHashes,
     apiKeysIncluded: apiKeysIncluded ?? this.apiKeysIncluded,
   );
 
@@ -173,21 +184,46 @@ class SyncManifest {
     'entries': entries.map((k, v) => MapEntry(k, v.toJson())),
     if (includeLocalState && acceptedLocalHashes.isNotEmpty)
       'acceptedLocalHashes': acceptedLocalHashes,
+    if (includeLocalState && trackerSnapshotRestoreHashes.isNotEmpty)
+      'trackerSnapshotRestoreHashes': trackerSnapshotRestoreHashes,
   };
 
-  factory SyncManifest.fromJson(Map<String, dynamic> m) => SyncManifest(
-    version: m['version'] as int? ?? 2,
-    deviceId: m['deviceId'] as String? ?? '',
-    lastSync: m['lastSync'] as int?,
-    createdAt: m['createdAt'] as int? ?? DateTime.now().millisecondsSinceEpoch,
-    apiKeysIncluded: m['apiKeysIncluded'] as bool? ?? false,
-    entries: _parseEntries(m['entries'] as Map<String, dynamic>?),
-    acceptedLocalHashes:
+  factory SyncManifest.fromJson(Map<String, dynamic> m) {
+    final version = m['version'] as int? ?? 2;
+    final entries = _parseEntries(m['entries'] as Map<String, dynamic>?);
+    final acceptedLocalHashes =
         (m['acceptedLocalHashes'] as Map<String, dynamic>?)?.map(
           (key, value) => MapEntry(key, value as String),
         ) ??
-        const {},
-  );
+        const <String, String>{};
+    final restoreHashes =
+        (m['trackerSnapshotRestoreHashes'] as Map<String, dynamic>?)?.map(
+          (key, value) => MapEntry(key, value as String),
+        ) ??
+        <String, String>{};
+    if (version < 17) {
+      for (final accepted in acceptedLocalHashes.entries) {
+        final entry = entries[accepted.key];
+        if (entry != null &&
+            entry.type == 'tracker_snapshot' &&
+            !entry.deleted &&
+            accepted.value.isNotEmpty) {
+          restoreHashes.putIfAbsent(accepted.key, () => accepted.value);
+        }
+      }
+    }
+    return SyncManifest(
+      version: version,
+      deviceId: m['deviceId'] as String? ?? '',
+      lastSync: m['lastSync'] as int?,
+      createdAt:
+          m['createdAt'] as int? ?? DateTime.now().millisecondsSinceEpoch,
+      apiKeysIncluded: m['apiKeysIncluded'] as bool? ?? false,
+      entries: entries,
+      acceptedLocalHashes: acceptedLocalHashes,
+      trackerSnapshotRestoreHashes: restoreHashes,
+    );
+  }
 
   static Map<String, SyncManifestEntry> _parseEntries(Map<String, dynamic>? m) {
     if (m == null) return {};
