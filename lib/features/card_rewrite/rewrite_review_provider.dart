@@ -30,6 +30,111 @@ final rewriteCharacterProvider = FutureProvider.family<Character?, String>((
   return ref.watch(characterRepoProvider).getById(charId);
 });
 
+/// Session-local content, shared by previews and advisory approval checks.
+final rewriteSessionLorebookOverlaysProvider =
+    StreamProvider.family<List<SessionLorebookEvolutionRow>, String>((
+      ref,
+      sessionId,
+    ) {
+      return ref
+          .watch(sessionLorebookEvolutionRepoProvider)
+          .watchBySessionId(sessionId);
+    });
+
+enum RewriteLorebookSourceStatus {
+  loading,
+  unavailable,
+  current,
+  stale,
+  historical,
+}
+
+class RewriteLorebookReview {
+  const RewriteLorebookReview({
+    required this.status,
+    this.content,
+    this.violations = const [],
+  });
+
+  final RewriteLorebookSourceStatus status;
+  final String? content;
+  final List<CardPatchViolation> violations;
+
+  bool get canApprove => status == RewriteLorebookSourceStatus.current;
+}
+
+/// Mirrors guarded lorebook apply: the operation's session overlay wins;
+/// only a confirmed absent overlay falls back to its immutable base content.
+/// Loading/error values (including retained previous data) are never current.
+final rewriteLorebookReviewProvider = Provider.autoDispose
+    .family<RewriteLorebookReview, ManualRewriteOperationView>((ref, view) {
+      final snapshot = decodeRewriteOperationSnapshot(view.currentSnapshotJson);
+      if (snapshot is! LorebookRewriteOperationSnapshot) {
+        return const RewriteLorebookReview(
+          status: RewriteLorebookSourceStatus.unavailable,
+        );
+      }
+      if (view.operation.status == 'applied') {
+        return const RewriteLorebookReview(
+          status: RewriteLorebookSourceStatus.historical,
+        );
+      }
+      final overlays = ref.watch(
+        rewriteSessionLorebookOverlaysProvider(view.operation.chatSessionId),
+      );
+      if (overlays.isLoading) {
+        return const RewriteLorebookReview(
+          status: RewriteLorebookSourceStatus.loading,
+        );
+      }
+      final rows = overlays.asData?.value;
+      if (overlays.hasError || rows == null) {
+        return const RewriteLorebookReview(
+          status: RewriteLorebookSourceStatus.unavailable,
+        );
+      }
+      var content = snapshot.baseContent;
+      for (final row in rows) {
+        if (row.chatSessionId == view.operation.chatSessionId &&
+            row.lorebookId == snapshot.lorebookId &&
+            row.entryId == snapshot.entryId) {
+          content = row.content;
+          break;
+        }
+      }
+      final violations = advisoryLorebookViolations(snapshot, content);
+      final current =
+          CardCanonicalizer.scalarSha256(content) ==
+              snapshot.expectedContentHash &&
+          violations.isEmpty;
+      return RewriteLorebookReview(
+        status: current
+            ? RewriteLorebookSourceStatus.current
+            : RewriteLorebookSourceStatus.stale,
+        content: content,
+        violations: violations,
+      );
+    });
+
+/// The scalar validator has the same sequential exact-once, anchor-hash,
+/// duplicate-anchor and macro-token contract as session lorebook apply.
+List<CardPatchViolation> advisoryLorebookViolations(
+  LorebookRewriteOperationSnapshot snapshot,
+  String content,
+) => AnchoredScalarPatchValidator.validate(
+  patches: [
+    for (final patch in snapshot.patches)
+      AnchoredScalarPatch(
+        scopeKey: 'world:lorebook',
+        field: CardRewriteField.description,
+        anchor: patch.anchor,
+        anchorSha256: patch.anchorSha256,
+        value: patch.value,
+      ),
+  ],
+  currentCardValues: {CardRewriteField.description: content},
+).violations;
+
 /// The durable job stores a session id, while chat navigation needs its index.
 final rewriteSessionIndexProvider = FutureProvider.family<int?, String>(
   (ref, sessionId) async =>
@@ -161,6 +266,19 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
     String decision,
   ) async {
     final op = view.operation;
+    if (decision == 'approved') {
+      final snapshot = decodeRewriteOperationSnapshot(view.currentSnapshotJson);
+      if (snapshot == null) return 'invalidSnapshot';
+      if (snapshot is LorebookRewriteOperationSnapshot) {
+        if (op.validationStatus != 'valid') return 'invalidOperation';
+        final review = ref.read(rewriteLorebookReviewProvider(view));
+        if (!review.canApprove) {
+          return review.status == RewriteLorebookSourceStatus.stale
+              ? 'staleLorebookEntry'
+              : 'lorebookSourceUnavailable';
+        }
+      }
+    }
     final outcome = await ref
         .read(manualRewriteJobRepoProvider)
         .setDecision(
@@ -173,7 +291,8 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
   }
 
   /// Approves every still-`pending`, reviewable, durably-valid operation that
-  /// is not advisory-lock-blocked. Returns the number actually approved.
+  /// is not advisory-lock-blocked. Lorebook decisions also require a loaded,
+  /// current session source. Returns the number actually approved.
   Future<int> approveAllValid({
     required List<ManualRewriteOperationView> ops,
     required Set<String> manualControlNames,

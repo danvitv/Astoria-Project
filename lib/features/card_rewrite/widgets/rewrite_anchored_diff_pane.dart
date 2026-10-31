@@ -27,7 +27,7 @@ class RewriteAnchoredDiffPane extends StatelessWidget {
   final String? fieldValue;
 
   /// Applied operations are historical: their original anchor is not expected
-  /// to survive in the live card. Show only the saved before/after fragment.
+  /// to survive in the live content. Show only the saved before/after fragment.
   final bool historical;
   final VoidCallback? onDelete;
 
@@ -35,8 +35,8 @@ class RewriteAnchoredDiffPane extends StatelessWidget {
     super.key,
     required LorebookAnchoredPatch patch,
     required this.fieldValue,
-  }) : historical = false,
-       onDelete = null,
+    this.historical = false,
+  }) : onDelete = null,
        patch = AnchoredScalarPatch(
          scopeKey: 'world:lorebook',
          field: CardRewriteField.description,
@@ -110,7 +110,7 @@ class RewriteAnchoredDiffPane extends StatelessWidget {
   }
 
   static int _occurrences(String value, String anchor) {
-    if (anchor.isEmpty) return 0;
+    if (anchor.isEmpty) return value.isEmpty ? 1 : 0;
     var count = 0;
     var from = 0;
     while (true) {

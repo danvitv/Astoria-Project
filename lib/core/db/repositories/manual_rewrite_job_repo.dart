@@ -336,6 +336,63 @@ class ManualRewriteJobRepo {
     );
   }
 
+  /// An explicit user definition correction may need its own apply job while a
+  /// proposal is pending. Keep the one-active-job constraint intact: suspend
+  /// only this exact pending row, execute the correction, then restore it in
+  /// the SAME transaction. Never cancel, retry generation, or expose a terminal
+  /// state. Any callback failure rolls the entire suspension back.
+  Future<T> withPendingReviewSuspended<T>({
+    required String jobId,
+    required int expectedVersion,
+    required Future<T> Function() correction,
+  }) => _db.transaction(() async {
+    final table = _db.rewriteJobs;
+    final original = await (_db.select(
+      table,
+    )..where((row) => row.id.equals(jobId))).getSingleOrNull();
+    if (original == null ||
+        original.status != 'pending' ||
+        original.version != expectedVersion) {
+      throw StateError('Pending review changed before definition correction');
+    }
+    final reason = 'temporaryUserDefinitionCorrection:$jobId';
+    final suspended =
+        await (_db.update(table)..where(
+              (row) =>
+                  row.id.equals(jobId) &
+                  row.status.equals('pending') &
+                  row.version.equals(expectedVersion),
+            ))
+            .write(
+              RewriteJobsCompanion(
+                status: const Value('failed'),
+                statusReason: Value(reason),
+              ),
+            );
+    if (suspended != 1) {
+      throw StateError('Pending review suspension conflicted');
+    }
+    final result = await correction();
+    final resumed =
+        await (_db.update(table)..where(
+              (row) =>
+                  row.id.equals(jobId) &
+                  row.status.equals('failed') &
+                  row.version.equals(expectedVersion) &
+                  row.statusReason.equals(reason),
+            ))
+            .write(
+              RewriteJobsCompanion(
+                status: const Value('pending'),
+                statusReason: Value(original.statusReason),
+              ),
+            );
+    if (resumed != 1) {
+      throw StateError('Pending review changed during definition correction');
+    }
+    return result;
+  });
+
   /// Caller-owned transaction helper for automation. It creates the same
   /// pending/reviewable aggregate as manual generation without exposing any
   /// approve, edit, retry, or apply behavior to the automated service.
@@ -818,6 +875,44 @@ class ManualRewriteJobRepo {
       count++;
       from = index + anchor.length;
     }
+  }
+
+  /// Transaction-scoped read of current immutable review snapshots. A watcher
+  /// must not be awaited from inside a canon mutation transaction.
+  Future<ManualRewriteJobSnapshot?> getJobSnapshot(String jobId) async {
+    final job = await (_db.select(
+      _db.rewriteJobs,
+    )..where((row) => row.id.equals(jobId))).getSingleOrNull();
+    if (job == null) return null;
+    final ops = _db.rewriteOperations;
+    final revisions = _db.rewriteOperationRevisions;
+    final evidence = _db.rewriteEvidenceRows;
+    final count = evidence.id.count();
+    final query =
+        _db.select(ops).join([
+            leftOuterJoin(
+              revisions,
+              revisions.rewriteOperationId.equalsExp(ops.id) &
+                  revisions.revision.equalsExp(ops.currentRevision),
+            ),
+            leftOuterJoin(
+              evidence,
+              evidence.rewriteOperationId.equalsExp(ops.id),
+            ),
+          ])
+          ..where(ops.rewriteJobId.equals(jobId))
+          ..addColumns([count])
+          ..groupBy([ops.id]);
+    final views = [
+      for (final row in await query.get())
+        ManualRewriteOperationView(
+          operation: row.readTable(ops),
+          currentSnapshotJson:
+              row.readTableOrNull(revisions)?.snapshotJson ?? '',
+          evidenceCount: row.read(count) ?? 0,
+        ),
+    ]..sort((a, b) => a.operation.id.compareTo(b.operation.id));
+    return ManualRewriteJobSnapshot(job: job, operations: views);
   }
 
   /// Read-side aggregate watcher keyed by job id: job row plus each operation

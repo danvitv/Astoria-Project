@@ -332,9 +332,14 @@ class _LorebookOperationItem extends ConsumerWidget {
     final controller = ref.read(
       rewriteReviewUiProvider(operation.rewriteJobId).notifier,
     );
+    final review = ref.watch(rewriteLorebookReviewProvider(view));
+    final historical = review.status == RewriteLorebookSourceStatus.historical;
     final reviewable = operation.status == 'reviewable';
     final canApprove =
-        enabled && reviewable && operation.validationStatus == 'valid';
+        enabled &&
+        reviewable &&
+        operation.validationStatus == 'valid' &&
+        review.canApprove;
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: InkWell(
@@ -371,6 +376,7 @@ class _LorebookOperationItem extends ConsumerWidget {
                   ),
                   if (reviewable && enabled) ...[
                     TextButton(
+                      key: Key('rewrite-lorebook-approve-${operation.id}'),
                       onPressed: canApprove
                           ? () async {
                               final result = await controller.decide(
@@ -397,11 +403,28 @@ class _LorebookOperationItem extends ConsumerWidget {
                   ],
                 ],
               ),
-              if (operation.validationStatus == 'invalid')
+              if (!historical &&
+                  review.status == RewriteLorebookSourceStatus.loading)
+                const Padding(
+                  padding: EdgeInsets.only(top: 6),
+                  child: GlazeSpinner(),
+                ),
+              if (!historical &&
+                  review.status == RewriteLorebookSourceStatus.unavailable)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
-                    'rewrite_btn_approve_disabled_invalid'.tr(),
+                    'rewrite_load_failed'.tr(),
+                    style: TextStyle(color: context.cs.error, fontSize: 12),
+                  ),
+                ),
+              if (!historical &&
+                  (operation.validationStatus == 'invalid' ||
+                      review.status == RewriteLorebookSourceStatus.stale))
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    'rewrite_freshness_stale'.tr(),
                     style: TextStyle(color: context.cs.error, fontSize: 12),
                   ),
                 ),
@@ -409,7 +432,8 @@ class _LorebookOperationItem extends ConsumerWidget {
               for (final patch in snapshot.patches) ...[
                 RewriteAnchoredDiffPane.lorebook(
                   patch: patch,
-                  fieldValue: snapshot.baseContent,
+                  fieldValue: review.content,
+                  historical: historical,
                 ),
                 const SizedBox(height: 8),
               ],
@@ -457,7 +481,9 @@ class _ApplyFooter extends ConsumerWidget {
               op.validationStatus == 'valid' &&
               operationSnapshot != null &&
               (operationSnapshot is! CardRewriteOperationSnapshot ||
-                  lockOverlap(operationSnapshot, manualControlNames).isEmpty);
+                  lockOverlap(operationSnapshot, manualControlNames).isEmpty) &&
+              (operationSnapshot is! LorebookRewriteOperationSnapshot ||
+                  ref.watch(rewriteLorebookReviewProvider(view)).canApprove);
         });
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
@@ -475,6 +501,7 @@ class _ApplyFooter extends ConsumerWidget {
                 'rewrite_apply_summary'.tr(namedArgs: {'count': '$approved'}),
               ),
               TextButton.icon(
+                key: const Key('rewrite-approve-all-button'),
                 onPressed: canApproveAll
                     ? () => _approveAll(context, ref)
                     : null,

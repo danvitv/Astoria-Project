@@ -98,4 +98,62 @@ void main() {
 
     expect(find.textContaining('Якорь больше не найден'), findsOneWidget);
   });
+
+  testWidgets('applied lorebook patch shows history without a live source', (
+    tester,
+  ) async {
+    await pumpLocalized(
+      tester,
+      RewriteAnchoredDiffPane.lorebook(
+        patch: const LorebookAnchoredPatch(
+          anchor: 'Old lore fragment',
+          anchorSha256: 'hash',
+          value: 'New lore fragment',
+        ),
+        fieldValue: null,
+        historical: true,
+      ),
+    );
+
+    expect(find.text('Фрагмент до применения'), findsOneWidget);
+    expect(find.text('Фрагмент после применения'), findsOneWidget);
+    expect(find.textContaining('Якорь больше не найден'), findsNothing);
+    expect(find.textContaining('Old lore fragment'), findsWidgets);
+    expect(find.textContaining('New lore fragment'), findsWidgets);
+  });
+
+  testWidgets('lorebook diff defaults to checking its current anchor', (
+    tester,
+  ) async {
+    await pumpLocalized(
+      tester,
+      RewriteAnchoredDiffPane.lorebook(
+        patch: const LorebookAnchoredPatch(
+          anchor: 'Old lore fragment',
+          anchorSha256: 'hash',
+          value: 'New lore fragment',
+        ),
+        fieldValue: 'New lore fragment',
+      ),
+    );
+
+    expect(find.textContaining('Якорь больше не найден'), findsOneWidget);
+  });
+
+  testWidgets('empty lorebook content has one insertion point', (tester) async {
+    await pumpLocalized(
+      tester,
+      RewriteAnchoredDiffPane.lorebook(
+        patch: const LorebookAnchoredPatch(
+          anchor: '',
+          anchorSha256: 'hash',
+          value: 'Initial lore content',
+        ),
+        fieldValue: '',
+      ),
+    );
+
+    expect(find.textContaining('Якорь больше не найден'), findsNothing);
+    expect(find.textContaining('Initial lore content'), findsWidgets);
+  });
 }
