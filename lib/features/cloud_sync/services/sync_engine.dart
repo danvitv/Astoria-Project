@@ -11,6 +11,7 @@ import 'sync_conflict_diagnostics.dart';
 import 'sync_queue.dart';
 import 'sync_image_stripper.dart';
 import 'sync_serialization.dart';
+import 'sync_tracker_snapshot_decoder.dart';
 import 'sync_payload_transport.dart';
 import 'reconciliation_page_transport.dart';
 import 'sync_character_hash.dart';
@@ -1076,16 +1077,10 @@ class SyncEngine {
     }
     // Decode every row before replacement: a malformed later row must not
     // delete the accepted local history before its import fails.
-    final replacements = items
-        .cast<Map<String, dynamic>>()
-        .map(TrackerSnapshot.fromJson)
-        .toList();
-    for (final snapshot in replacements) {
-      if (snapshot.sessionId != entry.id ||
-          snapshot.trackers.any((tracker) => tracker.sessionId != entry.id)) {
-        throw const FormatException('Tracker snapshot belongs to another chat');
-      }
-    }
+    final decoded = SyncTrackerSnapshotDecoder.decode(
+      entry.id,
+      items.cast<Map<String, dynamic>>(),
+    );
     final chatKey = entryKey('chat', entry.id);
     final expectedChat = await _chatRepo.getById(entry.id);
     final metadata = await _chatRepo.getAllSessionMetadata();
@@ -1120,7 +1115,7 @@ class SyncEngine {
     if (store is SyncAtomicTrackerSnapshotStore) {
       await store.replaceBySessionId(
         entry.id,
-        replacements,
+        decoded.snapshots,
         expectedSnapshots: (current['items'] as List)
             .cast<Map<String, dynamic>>()
             .map(TrackerSnapshot.fromJson)
@@ -1850,17 +1845,16 @@ class SyncEngine {
       return;
     }
 
-    // Replace existing snapshots for this session with the cloud version.
+    // Normalize legacy nested branch-owner labels without accepting a foreign
+    // outer snapshot. Decode every row before any deletion in either adapter.
+    final decoded = SyncTrackerSnapshotDecoder.decode(sessionId, items);
     final store = _trackerSnapshotStore;
     if (store is SyncAtomicTrackerSnapshotStore) {
-      await store.replaceBySessionId(
-        sessionId,
-        items.map(TrackerSnapshot.fromJson).toList(),
-      );
+      await store.replaceBySessionId(sessionId, decoded.snapshots);
       return;
     }
     await _trackerSnapshotStore.deleteBySessionId(sessionId);
-    for (final item in items) {
+    for (final item in decoded.items) {
       await _trackerSnapshotStore.insertRaw(item);
     }
   }

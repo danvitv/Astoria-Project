@@ -42,6 +42,12 @@ TrackerSnapshot _snapshot(int index) => TrackerSnapshot(
   ],
 );
 
+TrackerSnapshot _legacySnapshot(int index) => _snapshot(index).copyWith(
+  trackers: [
+    _snapshot(index).trackers.single.copyWith(sessionId: 'legacy-parent'),
+  ],
+);
+
 class _Snapshots extends TrackerSnapshotSyncStore {
   _Snapshots(super.repo);
   Future<void> Function()? beforeReplace;
@@ -122,7 +128,10 @@ class _Rig {
   late final fixtures.InMemoryManifestProvider manifest;
   late final SyncEngine engine;
 
-  Future<void> seed() async {
+  Future<void> seed({
+    bool legacyOwners = false,
+    bool pendingRestore = true,
+  }) async {
     await chats.put(
       ChatSession(
         id: _session,
@@ -147,30 +156,49 @@ class _Rig {
       ),
     );
     for (var index = 0; index < 47; index++) {
-      await repo.upsert(_snapshot(index));
+      await repo.upsert(
+        legacyOwners ? _legacySnapshot(index) : _snapshot(index),
+      );
     }
     final local = await manifest.buildLocalManifest(applyAcceptedHashes: false);
     final complete = {
       '__trackerSnapshots': true,
       'items': [
-        for (var index = 107; index >= 0; index--) _snapshot(index).toJson(),
+        for (var index = 107; index >= 0; index--)
+          (legacyOwners && index < 47
+                  ? _legacySnapshot(index)
+                  : _snapshot(index))
+              .toJson(),
       ],
     };
     final baseline = local.copyWith(
-      version: 16,
+      version: pendingRestore ? 16 : 17,
       lastSync: 1000,
       entries: {
         ...local.entries,
         _snapshotKey: local.entries[_snapshotKey]!.copyWith(
-          hash: SyncSerialization.computeSyncHash(complete),
+          hash: pendingRestore
+              ? SyncSerialization.computeSyncHash(complete)
+              : local.entries[_snapshotKey]!.hash,
           updatedAt: 1000,
         ),
       },
-      acceptedLocalHashes: {_snapshotKey: local.entries[_snapshotKey]!.hash},
+      acceptedLocalHashes: {
+        if (pendingRestore) _snapshotKey: local.entries[_snapshotKey]!.hash,
+      },
     );
     await manifest.writeLocalManifest(baseline);
     world.cloud.files[cloudPath('manifest', 'manifest')] = jsonEncode(
-      baseline.toJson(includeLocalState: false),
+      baseline
+          .copyWith(
+            entries: {
+              ...baseline.entries,
+              _snapshotKey: baseline.entries[_snapshotKey]!.copyWith(
+                hash: SyncSerialization.computeSyncHash(complete),
+              ),
+            },
+          )
+          .toJson(includeLocalState: false),
     );
     world.cloud.files[_snapshotPath] = jsonEncode(complete);
     world.cloud.files[cloudPath('chat', _session)] = jsonEncode(
@@ -263,6 +291,99 @@ void main() {
         (await rig.manifest.readLocalManifest()).trackerSnapshotRestoreHashes,
         contains(_snapshotKey),
       );
+    },
+  );
+
+  for (final pendingRestore in [true, false]) {
+    test(
+      'legacy nested owners import safely (pending repair: $pendingRestore)',
+      () async {
+        final rig = _Rig();
+        addTearDown(rig.db.close);
+        await rig.seed(legacyOwners: true, pendingRestore: pendingRestore);
+        final originalCloud = rig.world.cloud.files[_snapshotPath];
+        final expected = [
+          for (var index = 107; index >= 0; index--) _snapshot(index),
+        ];
+        await rig.pull();
+        expect(await rig.repo.getBySessionId(_session), expected);
+        expect(rig.world.cloud.files[_snapshotPath], originalCloud);
+        final state = await rig.manifest.readLocalManifest();
+        expect(state.trackerSnapshotRestoreHashes, isEmpty);
+        expect(
+          state.acceptedLocalHashes[_snapshotKey],
+          isNot(state.entries[_snapshotKey]!.hash),
+        );
+        rig.world.cloud.downloadCalls.clear();
+        await rig.pull();
+        expect(rig.world.cloud.downloadCalls, [
+          cloudPath('manifest', 'manifest'),
+        ]);
+        expect(await rig.repo.getBySessionId(_session), expected);
+      },
+    );
+
+    test(
+      'foreign outer snapshot cannot replace history (pending repair: $pendingRestore)',
+      () async {
+        final rig = _Rig();
+        addTearDown(rig.db.close);
+        await rig.seed(legacyOwners: true, pendingRestore: pendingRestore);
+        final before = await rig.repo.getBySessionId(_session);
+        final payload =
+            jsonDecode(rig.world.cloud.files[_snapshotPath]!)
+                as Map<String, dynamic>;
+        ((payload['items'] as List).last as Map)['sessionId'] =
+            'different-chat';
+        rig.world.cloud.files[_snapshotPath] = jsonEncode(payload);
+        final manifestPath = cloudPath('manifest', 'manifest');
+        final cloud = SyncManifest.fromJson(
+          jsonDecode(rig.world.cloud.files[manifestPath]!)
+              as Map<String, dynamic>,
+        );
+        rig.world.cloud.files[manifestPath] = jsonEncode(
+          cloud
+              .copyWith(
+                entries: {
+                  ...cloud.entries,
+                  _snapshotKey: cloud.entries[_snapshotKey]!.copyWith(
+                    hash: SyncSerialization.computeSyncHash(payload),
+                  ),
+                },
+              )
+              .toJson(includeLocalState: false),
+        );
+        rig.snapshots.beforeReplace = () async =>
+            fail('Foreign payload must not reach replacement');
+        await expectLater(
+          rig.pull(),
+          throwsA(
+            isA<SyncQueueAggregateError>().having(
+              (error) => error.toString(),
+              'message',
+              contains('belongs to another chat'),
+            ),
+          ),
+        );
+        expect(await rig.repo.getBySessionId(_session), before);
+      },
+    );
+  }
+
+  test(
+    'empty device can pull legacy branch snapshots after deleting its local chat',
+    () async {
+      final source = _Rig();
+      addTearDown(source.db.close);
+      await source.seed(legacyOwners: true, pendingRestore: false);
+      final target = _Rig();
+      addTearDown(target.db.close);
+      target.world.cloud.files.addAll(source.world.cloud.files);
+      await target.pull();
+      expect((await target.chats.getById(_session))!.messages, hasLength(213));
+      expect(await target.repo.getBySessionId(_session), [
+        for (var index = 107; index >= 0; index--) _snapshot(index),
+      ]);
     },
   );
 }
