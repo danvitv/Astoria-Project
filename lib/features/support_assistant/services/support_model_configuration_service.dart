@@ -278,6 +278,8 @@ final class _ModelBinding {
        lifetime = service._runtime.lifetime,
        owner = service._runtime.writeOwner,
        epoch = service._runtime.epoch,
+       applicationDataRevision =
+           service._runtime.permissions.applicationDataRevocationRevision,
        revision = service._revisions.revision,
        redactor = service._redaction.redactor,
        visibleConversation = visibleConversation == null
@@ -286,7 +288,12 @@ final class _ModelBinding {
   final SupportModelService service;
   final _ModelConfiguration configuration;
   final Object controller, uiLifetime;
-  final int draftRevision, lifetime, owner, epoch, revision;
+  final int draftRevision,
+      lifetime,
+      owner,
+      epoch,
+      revision,
+      applicationDataRevision;
   final String sessionId;
   final bool Function() isEmitterCurrent, isDraftCurrent;
   final SecretRedactor redactor;
@@ -313,6 +320,8 @@ final class _ModelBinding {
           r.lifetime == lifetime &&
           r.writeOwner == owner &&
           r.epoch == epoch &&
+          r.permissions.applicationDataRevocationRevision ==
+              applicationDataRevision &&
           r.pending == 0 &&
           r.settingsPending == 0 &&
           service._revisions.isStable &&

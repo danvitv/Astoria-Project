@@ -23,110 +23,6 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
     }
   }
 
-  Future<bool> _sendWithGuidance(
-    SupportModelUiEmitter? emitter,
-    SupportComposerDraft draft,
-    String session,
-  ) {
-    if (!mounted ||
-        !draft.isCurrent() ||
-        (emitter != null && !emitter.isCurrent)) {
-      return Future.value(false);
-    }
-    final controller = ref.read(supportNativeConsentControllerProvider);
-    final runtime = controller.runtime;
-    final policy = runtime.snapshot.preferences;
-    final scope = policy?.scope;
-    final requested = const SupportGuidancePlanner()
-        .targetsFor(text: draft.text)
-        .where(
-          (target) =>
-              target != SupportGuidanceTarget.recipient &&
-              target != SupportGuidanceTarget.supportSession &&
-              target != SupportGuidanceTarget.modelSupportHistory,
-        )
-        .toList();
-    final needed = requested
-        .where((target) {
-          final permission = target.permission;
-          if (permission != null) return policy?.allows(permission) != true;
-          return switch (target) {
-            SupportGuidanceTarget.gameSession =>
-              scope?.gameHistoryExtent != SupportHistoryExtent.wholeSession,
-            SupportGuidanceTarget.supportSession =>
-              scope?.supportHistoryExtent != SupportHistoryExtent.wholeSession,
-            SupportGuidanceTarget.recipient => false,
-            SupportGuidanceTarget.themeScope =>
-              scope?.safeCategories.contains(SupportSafeCategory.theme) != true,
-            SupportGuidanceTarget.connectionsScope =>
-              scope?.safeCategories.contains(SupportSafeCategory.connections) !=
-                  true,
-            _ => true,
-          };
-        })
-        .toList(growable: false);
-    final diagnostics = RegExp(
-      r'диагност|diagnos|последн[а-я]* сесси|recent sessions',
-      caseSensitive: false,
-    ).hasMatch(draft.text);
-    final ordered = <SupportGuidanceTarget>{
-      ...needed.where(
-        (target) =>
-            target == SupportGuidanceTarget.gameSession ||
-            target == SupportGuidanceTarget.supportSession ||
-            target == SupportGuidanceTarget.readGameData,
-      ),
-      ...needed,
-    }.take(4).toList(growable: false);
-    // A conversation does not grant access to game history or diagnostics.
-    // Optional data proposals must not prevent an otherwise valid plain prompt.
-    final blocked = emitter == null;
-    final proposals = <SupportGuidanceTarget>{
-      if (diagnostics) SupportGuidanceTarget.gameSession,
-      ...ordered,
-    }.take(4).toList(growable: false);
-    if (blocked) {
-      if (emitter == null) _modelUi.rejectNoModel();
-      _publishGuidance(
-        proposals.isNotEmpty
-            ? proposals
-            : const [
-                SupportGuidanceTarget.connection,
-                SupportGuidanceTarget.providerSetup,
-              ],
-        draft,
-        session,
-      );
-      // A proposal is not acceptance: preserve the draft, do not grant or resend.
-      return Future.value(false);
-    }
-    if (proposals.isNotEmpty) {
-      _publishGuidance(proposals, draft, session, blocking: false);
-    } else {
-      _clearSendGuidance();
-    }
-    final originalController = _guidanceController;
-    final originalLifetime = _guidanceLifetime;
-    final accepted = _modelUi.send(emitter, draft, context);
-    accepted.then((value) {
-      if (mounted &&
-          value &&
-          identical(originalController, _guidanceController) &&
-          identical(
-            originalController,
-            ref.read(supportNativeConsentControllerProvider),
-          ) &&
-          originalLifetime == _guidanceLifetime &&
-          controller.runtime.lifetime == originalLifetime &&
-          controller.runtime.sessionId == session &&
-          draft.isCurrent() &&
-          _guidanceSession == session) {
-        _retainGuidance();
-      }
-    }, onError: (_) {});
-    return accepted;
-  }
-
   Iterable<Widget> _pendingGuidance(String session) sync* {
     final controller = ref.read(supportNativeConsentControllerProvider);
     if (!_showSendSnapshot ||
@@ -149,10 +45,8 @@ extension _ScreenGuidance on _SupportAssistantScreenState {
       _guidanceBlocking
           ? 'Для этого предлагаю нужные настройки ниже. Ничего не включено; '
                 'твой текст сохранён в поле. После выбора отправь его снова.'
-          : 'Можно начать диагностику без выбора игровой сессии. '
-                'Вот список последних сессий — какую хочешь разобрать? '
-                'Открой список ниже: это только метаданные. '
-                'Содержимое требует отдельных разрешений.',
+          : 'Доступ к данным включается одним согласием. '
+                'После этого Астория сама выбирает нужные источники.',
       key: ValueKey('support_contextual_guidance'),
     );
     for (final target in _guidance) {

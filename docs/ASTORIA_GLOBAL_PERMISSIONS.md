@@ -5,7 +5,7 @@ For delivered capabilities, remaining scope and verification limits, see
 
 Astoria's native workspace uses one encrypted permission profile, shared across
 all Astoria conversations. Opening another chat, restarting, or deleting chats
-does not reset its switches. The fixed inactive `workspace-permissions-global-v1`
+does not reset the profile. The fixed inactive `workspace-permissions-global-v1`
 context has no conversation parent, no message range, and no support-session row.
 Real conversation deletion cascades therefore leave it intact.
 
@@ -26,50 +26,80 @@ the model's original ROOT reader prefer it. Corruption or locking never falls ba
 to old conversation policies. Every native global write uses the latest row in
 the repository transaction, with ownership checked after encryption and SQL.
 
-## Switches versus exact sources
+## One application-data consent — November 1 redesign
 
-- A displayed enabled switch means **configured**, not unconditional access.
-  `allows` still requires that right's actual current scope and, where applicable,
-  recipient. An enabled but ineffective switch can be revoked without selecting
-  a new source first.
-- Safe categories and exact game-history selections are shared. The game session
-  ID and selected ordered message IDs are unchanged; a different game cannot
-  inherit them. Source mutation/staleness checks remain required.
-- Selected Astoria message IDs stay attached to the originating Astoria chat.
-  Another chat's projection hides them without deleting or rebinding them. A
-  grant-only edit there preserves the original selection. Only the fresh native
-  support-history picker may replace it with that chat's own selection.
-- Explicit **whole current Astoria chat** is a distinct rule. It may apply to the
-  current chat after switching. A null selection alone never means all messages.
-- Private data/file/snippet handles retain their originating owner and are hidden
-  from another chat's effective scope. Selecting support history in a different
-  chat does not transplant those handles. Their loaders remain unavailable where
-  they were unavailable before this change.
-- An explicit scope change still advances its selection revision and revokes
-  scope-dependent grants. A recipient change still revokes recipient-dependent
-  grants. Independent grant-only edits merge; original identity, scope/recipient
-  revision, revocation, and ABA checks remain exact.
+This is the implemented product contract for the current access slice. Native
+source/permission checks passed; UI evidence has explicit remaining gaps in the
+status document. Do not interpret this contract as full device acceptance.
 
-## Reading, model output, and actions
+- The normal UI exposes one **application-data access** control, not independent
+  local/model/category/session/recipient/report switches. Enabling requires one
+  native consent; subsequent reads and conversations do not repeat that dialog.
+- Consent allows Astoria to independently discover and read needed supported
+  application sources, including several sessions and saved presets in one run.
+  Session titles and other useful catalog labels may be returned to the selected
+  model after bounded secret redaction. A catalog is not a complete history read.
+- This is application-wide read consent, not a grant for one chosen session or
+  provider. The user already chooses Astoria's local/external model connection.
+  No extra per-provider approval is added. Ordinary DirectSend of the current
+  Astoria conversation continues without a prompt/recipient review on every Send.
+- Credentials remain excluded regardless of consent: API keys, authentication
+  tokens, secret headers, vault material and other credential-bearing fields are
+  not application content the assistant may reveal. Bounded typed projections
+  and redaction remain required; consent does not expose SQL, shell or file paths.
+- Revocation is available through the same single control. It must retire ongoing
+  reads and prevent previously obtained source results from being posted again.
+  Declining access does not prevent ordinary conversation, but source analysis
+  must honestly report unavailable access rather than ask for repeated fragments.
+- Legacy narrow grants do not automatically become this new broad consent.
+  Missing/corrupt/locked state is not approval, and revocation must not fall back
+  to old hidden per-category grants in production.
 
-Reading and sending full selected source bodies are distinct rights. A
-model-initiated tool read returns its bounded factual summary/projection to the
-model; it is not a promise of zero data egress. A game-history read grant alone
-does not add full selected history bodies to a model request.
-Ordinary DirectSend of the current Astoria conversation is unchanged and does not
-gain a per-request recipient confirmation.
+The first-Send invitation is suppressed after a decline for the current app
+lifetime; accepted consent is durable. Missing consent after a later process
+restart is still denial, not implicit authorization.
 
-Do not describe every tool read as "nothing is sent." Existing finite application
-tools can return factual bounded metadata to the model: for example,
-`astoria_preferences_read` returns safe UI scalar values, which the active tool
-loop places in its next tool-result round. This is not arbitrary existing-body or
-file access. Existing native discovery returns opaque/session IDs, indexes and
-counts, with body access not granted. Selected history/body context still has its separate source/model
-authorization. This change does not broaden tool results or add body loaders.
+## User consent versus technical source custody
 
-Switches are prerequisites, not persistent final approval. Fresh exact destructive
-consent, native authentication, file pickers, recipient-route validation, original
-ROOT admission before each wire/action, and action-specific refusal remain intact.
-Models cannot edit this permission profile. Locked bytes cannot be recovered by
-resetting them; readable corruption of an initialized global profile can only be
-explicitly recovered to deny with a fresh identity.
+Removing repeated dialogs does not remove source fences. Each actual read still
+belongs to the original native operation, database, selected connection/model and
+immutable source snapshot. Native code establishes bounded frozen scopes from the
+global read consent; models cannot mint grants or broaden an old snapshot with raw
+IDs, invented selectors, appended messages or another run's handles.
+
+Stop, source mutation, database/model/route changes and revocation remain terminal
+for the affected operation. Writer exclusion, original ROOT validation before
+actual POSTs and encrypted body-disclosure provenance remain mandatory. Source-only
+retry/regeneration must not replay configuration, repair or backup effects.
+
+Old exact-selection policies remain a compatibility format, not the normal UI.
+Their selected message IDs and private handles retain their originating owner;
+they must not silently be rebound while introducing application-wide consent.
+Existing scope/recipient-bound legacy rights retain their stricter checks.
+
+Native OFF first latches a shared denial/revision on the actual database owner,
+then attempts encrypted persistence. This retires already-issued runs even if a
+different bridge/runtime admitted OFF or the save fails. Refresh, conversation
+switches and another repository on that same owner cannot clear it; only a fresh
+successfully saved native enable review can. A later enable never revives old runs.
+Failed persistence exposes an explicit save retry and stays locally OFF. It cannot
+guarantee denial after process restart/new database owner until the denial is saved.
+
+## Developer reports and changes are separate
+
+Reading data for an answer is not permission to send a report to the developer.
+Before export/sharing, the user must see the actual proposed contents, including
+any necessary session titles/history, diagnosis and content-derived quotations.
+They may exclude material or cancel. Cancellation means no export/upload/transfer;
+the UI must not promise that a bug will necessarily be fixed after submission.
+
+The detached recipient-encrypted `.astoria-report` exporter and local decoder are
+not implemented. Do not present history encryption or reading consent as a working
+report product, invent a support key, or silently downgrade its encryption design.
+
+Read consent does not authorize edits, destructive repairs, connection tests,
+backup export, restore, uploads or other public actions. Existing action-specific
+native confirmations/authentication/file pickers, route validation and exact ROOT
+admission remain intact. Models cannot edit the permission profile. Locked bytes
+cannot be recovered by resetting them; readable corruption of an initialized
+global profile can only be explicitly recovered to deny with a fresh identity.

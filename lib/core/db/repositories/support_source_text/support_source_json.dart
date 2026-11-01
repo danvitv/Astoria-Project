@@ -1,8 +1,72 @@
 import 'dart:convert';
+import '../../../credentials/secret_redactor.dart';
 
 /// Bounded strict JSON boundary. No tolerant defaults, duplicate-key
 /// overwrite, arbitrary serialization, or executable values.
 abstract final class SupportSourceJson {
+  /// Source text may itself contain JSON or custom HTTP headers. Header values
+  /// are never useful source evidence and arbitrary header names cannot be
+  /// classified as non-secret. Remove whole header containers, including
+  /// JSON-in-JSON, before normal known-secret/pattern redaction and slicing.
+  static String redactText(String raw, SecretRedactor redactor) {
+    if (raw.length > redactor.maxInputLength) return SecretRedactor.limited;
+    var nodes = 0;
+    Object? visit(Object? value, int depth) {
+      if (++nodes > 8192 || depth > 24) throw const FormatException();
+      if (value is Map<String, Object?>) {
+        return {
+          for (final e in value.entries)
+            e.key:
+                SecretRedactor.isSecretField(e.key) ||
+                    e.key
+                        .toLowerCase()
+                        .replaceAll(RegExp('[^a-z]'), '')
+                        .contains('header')
+                ? SecretRedactor.removed
+                : visit(e.value, depth + 1),
+        };
+      }
+      if (value is List) return value.map((v) => visit(v, depth + 1)).toList();
+      if (value is String) {
+        final trimmed = value.trimLeft();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+          return jsonEncode(
+            visit(
+              decode(value, maxBytes: redactor.maxInputLength * 4),
+              depth + 1,
+            ),
+          );
+        }
+        return redactor.redactText(value);
+      }
+      return value;
+    }
+
+    final trimmed = raw.trimLeft();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return redactor.redactText(
+          jsonEncode(
+            visit(decode(raw, maxBytes: redactor.maxInputLength * 4), 0),
+          ),
+        );
+      } catch (_) {
+        // JSON-like malformed or over-budget source text is not a safe fallback.
+        return SecretRedactor.limited;
+      }
+    }
+    // Raw custom HTTP header blocks have arbitrary names too. When source text
+    // explicitly declares such a block, fail closed instead of guessing values.
+    if (RegExp(
+      r'^\s*(?:custom|extra|request)?[-_ ]*headers\s*[:=]',
+      caseSensitive: false,
+      multiLine: true,
+    ).hasMatch(raw)) {
+      return SecretRedactor.removed;
+    }
+    return redactor.redactText(raw);
+  }
+
   static Object? decode(String raw, {int maxBytes = 65536}) {
     if (maxBytes < 1 || utf8.encode(raw).length > maxBytes) {
       throw const FormatException();

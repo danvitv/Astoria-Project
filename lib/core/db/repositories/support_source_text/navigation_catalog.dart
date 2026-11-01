@@ -106,7 +106,15 @@ extension _NavCatalog on SupportSourceNavigationRepo {
       CASE WHEN octet_length(s.character_id)<=256 THEN s.character_id END AS character_id, s.session_index, c.rowid AS character_incarnation,
       CASE WHEN octet_length(c.variant_group_id)<=256 THEN c.variant_group_id END AS variant_group_id, c.variant_order,
       (c.variant_group_id IS NULL OR octet_length(c.variant_group_id)<=256) AS identities_bounded,
-      CASE WHEN octet_length(c.name) <= 1024 THEN c.name END AS label, s.updated_at
+      CASE WHEN octet_length(c.name) <= 1024 THEN c.name END AS label,
+      CASE WHEN octet_length(s.session_vars_json)<=65536 THEN
+        CASE WHEN json_valid(s.session_vars_json) THEN
+          CASE WHEN json_type(s.session_vars_json,'\$.sessionName')='text' THEN
+            CASE WHEN octet_length(json_extract(s.session_vars_json,'\$.sessionName'))<=1024
+              THEN json_extract(s.session_vars_json,'\$.sessionName') END
+          END
+        END
+      END AS title, s.updated_at
       FROM chat_sessions s INNER JOIN characters c ON c.char_id = s.character_id
       WHERE s.rowid > ? AND c.hidden = 0 AND ${_savedExists(domain)}''';
   }

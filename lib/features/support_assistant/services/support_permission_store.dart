@@ -7,6 +7,12 @@ import '../models/support_permission_preferences.dart';
 import '../models/support_permission_scope.dart';
 import 'support_permission_codec.dart';
 
+final class _ApplicationDataRevocation {
+  bool denied = false;
+  bool unsaved = false;
+  int revision = 0;
+}
+
 /// Trusted native composition ONLY: never expose these methods in a tool,
 /// imported card, model response or text-command registry. SupportRepo owns
 /// synchronous latest-row decisions, encryption, parent checks and rollback.
@@ -25,8 +31,43 @@ final class SupportPermissionStore {
   /// Production composition opts in; deliberate legacy fixtures stay per-chat.
   final bool initializeGlobalOnRefresh;
   bool _globalRequired = false;
-  bool get globalRequired => initializeGlobalOnRefresh || _globalRequired;
+  bool get globalRequired =>
+      initializeGlobalOnRefresh || _globalRequired || applicationDataReadDenied;
   static const codec = SupportPermissionCodec();
+  // Weakly tied to the actual native storage owner, not a widget, conversation,
+  // bridge or repository instance. Failed denial writes cannot resurrect reads
+  // through a replacement store/runtime on the same database.
+  static final _revocations = Expando<_ApplicationDataRevocation>();
+  _ApplicationDataRevocation get _revocation =>
+      _revocations[repo.assistantPermissionStorageOwner] ??=
+          _ApplicationDataRevocation();
+  bool get applicationDataReadDenied => _revocation.denied;
+  bool get applicationDataRevocationUnsaved => _revocation.unsaved;
+  int get applicationDataRevocationRevision => _revocation.revision;
+
+  /// Native OFF admission only, before any await. This is a denial, not an
+  /// authority or permission write. It survives refresh and bridge replacement.
+  int latchApplicationDataRevocation() {
+    final state = _revocation;
+    state.denied = true;
+    state.unsaved = true;
+    return ++state.revision;
+  }
+
+  void settleApplicationDataRevocation(int revision) {
+    if (_revocation.revision == revision) _revocation.unsaved = false;
+  }
+
+  /// Called only after the current exact native enable review committed. A
+  /// review predating another OFF gesture cannot clear that later denial.
+  bool confirmApplicationDataConsent(int reviewedRevision) {
+    final state = _revocation;
+    if (state.revision != reviewedRevision) return false;
+    state.denied = false;
+    state.unsaved = false;
+    state.revision++;
+    return true;
+  }
 
   /// Normal native workspace admission only. Existing rows are left unchanged.
   /// Current/chosen policy wins; otherwise newest existing legacy policy wins.
@@ -113,6 +154,7 @@ final class SupportPermissionStore {
               await repo.getContextBlockById(codec.idFor(sessionId)),
             );
       if (global != null) {
+        _globalRequired = true;
         // The parentless row outlives chats. It must not make a deleted/locked
         // current conversation look readable after an awaited global decrypt.
         final latestParent = await repo.getSessionById(sessionId);
@@ -149,7 +191,21 @@ final class SupportPermissionStore {
     SupportPermission right,
     bool enabled, {
     required bool Function() isCurrent,
-  }) => _update(sessionId, (p) => p.withNativeGrant(right, enabled), isCurrent);
+  }) async {
+    // Broad access never exists in the legacy per-chat storage lane, including
+    // fixtures. Revocation pins this store to the global row before any await.
+    if (right == SupportPermission.readApplicationData) {
+      if (await initializeGlobalFromNative(sessionId, isCurrent: isCurrent) ==
+          null) {
+        return null;
+      }
+    }
+    return _update(
+      sessionId,
+      (p) => p.withNativeGrant(right, enabled),
+      isCurrent,
+    );
+  }
 
   Future<SupportPermissionPreferences?> selectScopeFromNative(
     String sessionId,
@@ -250,6 +306,7 @@ final class SupportPermissionStore {
         SupportPermissionCodec.globalId,
       );
       if (!isCurrent()) return null;
+      if (global != null) _globalRequired = true;
       if (global == null && globalRequired) {
         throw SupportPermissionsUnavailable(
           SupportPermissionAvailability.unavailable,

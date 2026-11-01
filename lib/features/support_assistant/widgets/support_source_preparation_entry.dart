@@ -45,8 +45,9 @@ class _EntryState extends State<SupportSourcePreparationEntry> {
   Widget build(BuildContext context) => SupportActionTile(
     key: const ValueKey('support_local_source_preparation'),
     icon: Icons.manage_search_rounded,
-    label: 'Источники',
-    tooltip: 'Подготовить историю для навигации — без передачи модели',
+    label: 'Проверить индекс источников',
+    tooltip:
+        'Дополнительная локальная диагностика индекса; не нужна для обычного разговора',
     selected: _open,
     onTap: _open ? null : _show,
   );

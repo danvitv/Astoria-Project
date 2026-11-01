@@ -122,16 +122,27 @@ final class SupportPermissionCodec {
         'recipient',
       });
       if (m['version'] is! int ||
-          (m['version'] != 1 && m['version'] != 2) ||
+          (m['version'] != 1 && m['version'] != 2 && m['version'] != 3) ||
           m['session'] != sessionId) {
         throw const FormatException();
       }
       final rights = _map(
         m['grants'],
-        SupportPermission.values.map((r) => r.name).toSet(),
+        SupportPermission.values
+            .where(
+              (r) =>
+                  m['version'] == 3 ||
+                  r != SupportPermission.readApplicationData,
+            )
+            .map((r) => r.name)
+            .toSet(),
       );
       final grants = <SupportPermission>[];
       for (final right in SupportPermission.values) {
+        if (m['version'] != 3 &&
+            right == SupportPermission.readApplicationData) {
+          continue;
+        }
         if (rights[right.name] is! bool) throw const FormatException();
         if (rights[right.name] == true) grants.add(right);
       }
@@ -152,9 +163,10 @@ final class SupportPermissionCodec {
 
   SupportContextBlock encode(SupportPermissionPreferences p, int now) {
     final s = p.scope, r = p.recipient;
-    final version =
-        s?.gameHistoryExtent == SupportHistoryExtent.wholeSession ||
-            s?.supportHistoryExtent == SupportHistoryExtent.wholeSession
+    final version = p.grants.contains(SupportPermission.readApplicationData)
+        ? 3
+        : s?.gameHistoryExtent == SupportHistoryExtent.wholeSession ||
+              s?.supportHistoryExtent == SupportHistoryExtent.wholeSession
         ? 2
         : 1;
     final json = jsonEncode(<String, Object?>{
@@ -164,7 +176,8 @@ final class SupportPermissionCodec {
       'revision': p.revision,
       'grants': {
         for (final right in SupportPermission.values)
-          right.name: p.grants.contains(right),
+          if (version == 3 || right != SupportPermission.readApplicationData)
+            right.name: p.grants.contains(right),
       },
       'scope': s == null
           ? null
@@ -173,8 +186,8 @@ final class SupportPermissionCodec {
               'gameSession': s.gameSessionId,
               'gameHistory': s.gameHistory?.messageIds,
               'supportHistory': s.supportHistory?.messageIds,
-              if (version == 2) 'gameHistoryExtent': s.gameHistoryExtent.name,
-              if (version == 2)
+              if (version >= 2) 'gameHistoryExtent': s.gameHistoryExtent.name,
+              if (version >= 2)
                 'supportHistoryExtent': s.supportHistoryExtent.name,
               'safeCategories': s.safeCategories.map((c) => c.name).toList(),
               'data': {
@@ -215,8 +228,8 @@ final class SupportPermissionCodec {
       'supportHistory',
       'safeCategories',
       'data',
-      if (version == 2) 'gameHistoryExtent',
-      if (version == 2) 'supportHistoryExtent',
+      if (version >= 2) 'gameHistoryExtent',
+      if (version >= 2) 'supportHistoryExtent',
     });
     final data = m['data'];
     if (data is! Map<String, dynamic> ||

@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/models/support_consent_selection.dart';
 import '../../../shared/widgets/sheet_view.dart';
 import '../models/support_guidance_target.dart';
 import '../services/support_native_consent_controller.dart';
 import '../state/support_native_provider.dart';
-import 'support_privacy_group.dart';
 import 'support_settings_focus.dart';
 import 'support_settings_panel.dart';
 import 'support_surface_layout.dart';
@@ -76,13 +74,6 @@ class _GuidanceSheetState extends ConsumerState<SupportGuidanceSheet> {
     ref.watch(supportNativeConsentControllerProvider);
     final current = _current();
     final target = widget.target;
-    final sessionSource = switch (target) {
-      SupportGuidanceTarget.gameSession =>
-        SupportConsentSelectionSource.roleplay,
-      SupportGuidanceTarget.supportSession =>
-        SupportConsentSelectionSource.support,
-      _ => null,
-    };
     final focus = switch (target) {
       SupportGuidanceTarget.mode => SupportSettingsFocus.mode,
       SupportGuidanceTarget.connection => SupportSettingsFocus.connection,
@@ -94,10 +85,14 @@ class _GuidanceSheetState extends ConsumerState<SupportGuidanceSheet> {
       _ => SupportSettingsFocus.privacy,
     };
     return SheetView(
-      title: target.title,
+      title: focus == SupportSettingsFocus.privacy
+          ? 'Доступ к данным приложения'
+          : target.title,
       showBack: false,
       titleWidget: SupportSheetTitle(
-        title: target.title,
+        title: focus == SupportSettingsFocus.privacy
+            ? 'Доступ к данным приложения'
+            : target.title,
         onBack: () => Navigator.of(context).pop(),
       ),
       onBack: () => Navigator.of(context).pop(),
@@ -105,15 +100,6 @@ class _GuidanceSheetState extends ConsumerState<SupportGuidanceSheet> {
         builder: (bodyContext) => !current
             ? const Center(
                 child: Text('Сессия изменилась. Предложение устарело.'),
-              )
-            : sessionSource != null || target == SupportGuidanceTarget.recipient
-            ? SingleChildScrollView(
-                padding: supportSurfacePadding(bodyContext),
-                child: SupportPrivacyGroup(
-                  initialSessionSource: sessionSource,
-                  initialRecipientReview:
-                      target == SupportGuidanceTarget.recipient,
-                ),
               )
             : SupportSettingsPanel(
                 sheetHosted: true,

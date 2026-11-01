@@ -1,16 +1,15 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../shared/theme/theme_provider.dart';
-import '../../../shared/widgets/sheet_view.dart';
 import '../models/support_permission_preferences.dart';
 import '../state/support_native_provider.dart';
 import '../state/support_theme_provider.dart';
 import 'support_theme_screen_controller.dart';
 import 'support_theme_sheet.dart';
 import 'support_action_strip.dart';
-import 'support_surface_layout.dart';
 
 /// Installed-theme native entry, independent of model/recipient configuration.
 /// Ordinary theme_setup navigation remains a separate escape hatch.
@@ -37,13 +36,9 @@ class SupportThemeEntryState extends ConsumerState<SupportThemeEntry> {
     }
     setState(() => _open = true);
     try {
-      await showModalBottomSheet<void>(
-        context: context,
-        useRootNavigator: true,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (_) => const _PermissionSheet(),
-      );
+      // The old native wizard needs hidden pregrants. Normal app settings are
+      // user-owned and do not turn read consent into permission for AI edits.
+      await context.push<void>('/menu/themes');
     } finally {
       if (mounted) setState(() => _open = false);
     }
@@ -95,6 +90,13 @@ class SupportThemeEntryState extends ConsumerState<SupportThemeEntry> {
   Widget build(BuildContext context) {
     final view = ref.watch(supportNativeViewProvider);
     final allowed =
+        ref
+                .read(supportNativeConsentControllerProvider)
+                .runtime
+                .snapshot
+                .preferences
+                ?.isGlobal !=
+            true &&
         view.themeSelected &&
         view.rights.any(
           (right) =>
@@ -154,30 +156,4 @@ class SupportThemeEntryState extends ConsumerState<SupportThemeEntry> {
           isSelected: _open,
           onPressed: onTap,
         );
-}
-
-class _PermissionSheet extends StatelessWidget {
-  const _PermissionSheet();
-
-  @override
-  Widget build(BuildContext context) => SheetView(
-    title: 'support_theme_title'.tr(),
-    showBack: false,
-    titleWidget: SupportSheetTitle(
-      title: 'support_theme_title'.tr(),
-      onBack: () => Navigator.of(context).pop(),
-    ),
-    onBack: () => Navigator.of(context).pop(),
-    body: Builder(
-      builder: (bodyContext) => ListView(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          MediaQuery.paddingOf(bodyContext).top + 12,
-          16,
-          MediaQuery.paddingOf(bodyContext).bottom + 24,
-        ),
-        children: [Text('support_theme_permissions'.tr())],
-      ),
-    ),
-  );
 }

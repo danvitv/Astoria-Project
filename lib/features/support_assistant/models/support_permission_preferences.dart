@@ -6,6 +6,9 @@ enum SupportPermissionAvailability { available, locked, corrupt, unavailable }
 /// Separate product rights, not a generic capability framework. These are
 /// prerequisites ONLY: actions/tests/reports still need exact native approval.
 enum SupportPermission {
+  /// One revocable native consent for bounded redacted application sources.
+  /// It does not authorize reports, configuration changes or other effects.
+  readApplicationData,
   readSafeSettings,
   readGameData,
   readDiagnostics,
@@ -78,6 +81,7 @@ final class SupportPermissionPreferences {
     final gameData =
         s?.selectedData.keys.any(_localGameCategories.contains) ?? false;
     return switch (right) {
+      SupportPermission.readApplicationData => true,
       SupportPermission.readSafeSettings =>
         s != null &&
             s.safeCategories.any((c) => c != SupportSafeCategory.diagnostics),
@@ -131,8 +135,21 @@ final class SupportPermissionPreferences {
           scope: scope,
           recipient: recipient,
           grants: enabled
-              ? {...grants, right}
-              : (Set.of(grants)..remove(right)),
+              ? {
+                  ...grants.where(
+                    (r) =>
+                        right != SupportPermission.readApplicationData ||
+                        !_legacyDataReads.contains(r),
+                  ),
+                  right,
+                }
+              : (Set.of(
+                  grants.where(
+                    (r) =>
+                        right != SupportPermission.readApplicationData ||
+                        !_legacyDataReads.contains(r),
+                  ),
+                )..remove(right)),
         );
 
   /// A new scope revokes every scope-dependent grant. Conservative revocation
@@ -194,6 +211,7 @@ final class SupportPermissionPreferences {
           : grants.where(
               (r) =>
                   r == SupportPermission.confirmedSettingsChanges ||
+                  r == SupportPermission.readApplicationData ||
                   r == SupportPermission.confirmedConnectionTests,
             ),
     );
@@ -251,6 +269,20 @@ final class SupportPermissionPreferences {
     SupportPermission.modelPromptProviderSnippets,
     SupportPermission.modelAttachments,
     SupportPermission.confirmedConnectionTests,
+  };
+  // The global application-data switch replaces old hidden read/model toggles.
+  // It never enables or revokes report/mutation/test consent. In particular OFF
+  // must not rediscover an old whole-session grant through a legacy fallback.
+  static const _legacyDataReads = {
+    SupportPermission.readSafeSettings,
+    SupportPermission.readGameData,
+    SupportPermission.readDiagnostics,
+    SupportPermission.modelGameHistory,
+    SupportPermission.modelSupportHistory,
+    SupportPermission.modelSafeSettingsDiagnostics,
+    SupportPermission.modelGameData,
+    SupportPermission.modelPromptProviderSnippets,
+    SupportPermission.modelAttachments,
   };
   static const _localGameCategories = {
     SupportDataCategory.character,

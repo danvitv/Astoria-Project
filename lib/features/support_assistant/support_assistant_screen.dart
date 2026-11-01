@@ -15,10 +15,11 @@ import '../settings/app_settings_provider.dart';
 import 'state/support_workspace_provider.dart';
 import 'state/support_model_provider.dart';
 import 'widgets/support_composer_bar.dart';
-import 'widgets/support_action_strip.dart';
 import 'widgets/support_surface_layout.dart';
-import 'widgets/support_source_preparation_entry.dart';
-import 'models/support_source_tool_names.dart';
+import 'widgets/support_application_data_consent.dart';
+import 'widgets/support_report_status.dart';
+import 'state/support_data_consent_admission.dart';
+import 'models/support_permission_preferences.dart';
 import 'widgets/support_message_list.dart';
 import 'widgets/support_message_text.dart';
 import 'widgets/support_user_message_editor.dart';
@@ -31,9 +32,7 @@ import 'widgets/support_provider_entry.dart';
 import 'widgets/support_guidance_sheet.dart';
 import 'widgets/support_card_view.dart';
 import 'widgets/support_send_settings_snapshot.dart';
-import 'services/support_guidance_planner.dart';
 import 'services/support_message_display_projection.dart';
-import 'models/support_permission_scope.dart';
 import 'state/support_native_provider.dart';
 
 part 'support_screen_guidance.dart';
@@ -87,12 +86,14 @@ class _SupportAssistantScreenState
   bool _sheetOpen = false;
   String? _openPanel;
   Object _messageMenuLifetime = Object();
+  Object _dataConsentLifetime = Object();
 
   void _setSheetOpen(bool open) => setState(() => _sheetOpen = open);
 
   @override
   void deactivate() {
     _messageMenuLifetime = Object();
+    _dataConsentLifetime = Object();
     super.deactivate();
   }
 
@@ -124,10 +125,6 @@ class _SupportAssistantScreenState
       _guidanceBlocking = blocking;
       _showSendSnapshot = true;
     });
-  }
-
-  void _retainGuidance() {
-    setState(() => _guidancePersistent = true);
   }
 
   void _clearSendGuidance() {
@@ -278,31 +275,108 @@ class _SupportAssistantScreenState
         );
       case 'connection_diagnostics':
       case 'diagnostics':
-        final workspace = ref.read(supportWorkspaceProvider);
-        if (!workspace.settingsAvailable ||
-            workspace.activeSessionId.isEmpty ||
-            workspace.isBusy ||
-            _modelUi.active != null) {
-          return;
-        }
-        // A native start button is not a fabricated user message or a data grant.
-        // Show the current snapshot/catalog invitation without writing history.
-        _publishGuidance(
-          const [SupportGuidanceTarget.gameSession],
-          null,
-          workspace.activeSessionId,
-          blocking: false,
+        GlazeToast.show(
+          context,
+          'Опиши проблему в сообщении. С доступом к данным Астория сама найдёт нужные сессии и настройки.',
         );
+      case 'support_report':
+        showSupportReportStatus(context);
       default:
         GlazeToast.show(context, 'Исполнитель этого действия пока недоступен.');
     }
+  }
+
+  Future<SupportComposerAdmission> _beforeNativeSend() async {
+    final workspace = ref.read(supportWorkspaceProvider);
+    if (!workspace.settings.hasConfiguredModel) {
+      return SupportComposerAdmission.unchanged;
+    }
+    final controller = ref.read(supportNativeConsentControllerProvider);
+    final runtime = controller.runtime;
+    if (runtime.permissions.applicationDataReadDenied ||
+        runtime.snapshot.preferences?.allows(
+              SupportPermission.readApplicationData,
+            ) ==
+            true ||
+        ref.read(supportDataConsentAdmissionProvider)) {
+      return SupportComposerAdmission.unchanged;
+    }
+    // The invitation belongs to this Send, never to screen startup or a source.
+    final admission = ref.read(supportDataConsentAdmissionProvider.notifier);
+    final lifetime = _dataConsentLifetime;
+    final session = runtime.sessionId, runtimeLifetime = runtime.lifetime;
+    final configuration = runtime.configurationRevision();
+    bool current() =>
+        mounted &&
+        identical(lifetime, _dataConsentLifetime) &&
+        identical(
+          controller,
+          ref.read(supportNativeConsentControllerProvider),
+        ) &&
+        runtime.alive &&
+        runtime.sessionId == session &&
+        runtime.lifetime == runtimeLifetime &&
+        runtime.configurationStable() &&
+        runtime.configurationRevision() == configuration;
+    admission.markOffered();
+    final result = await requestSupportApplicationDataConsent(
+      context: context,
+      controller: controller,
+      displayedIntent: controller.view.displayedIntent,
+      isCurrent: current,
+    );
+    if (!mounted || !current()) {
+      return SupportComposerAdmission.rejected;
+    }
+    if (result == false) {
+      GlazeToast.show(
+        context,
+        'Чтение данных недоступно. Можно продолжить обычный разговор.',
+      );
+    }
+    if (result != true) return SupportComposerAdmission.unchanged;
+    // Grant changes retire idle emitters. Wait for the current-policy composer
+    // to bind a fresh emitter before it captures this unchanged input as a draft.
+    await WidgetsBinding.instance.endOfFrame;
+    return current()
+        ? SupportComposerAdmission.consentGranted
+        : SupportComposerAdmission.rejected;
+  }
+
+  Future<bool> _sendAfterDataAdmission(
+    SupportModelUiEmitter? emitter,
+    SupportComposerDraft draft,
+  ) {
+    if (!mounted || !draft.isCurrent()) return Future.value(false);
+    if (emitter == null) {
+      _publishGuidance(
+        const [
+          SupportGuidanceTarget.connection,
+          SupportGuidanceTarget.providerSetup,
+        ],
+        draft,
+        ref.read(supportWorkspaceProvider).activeSessionId,
+      );
+      return _modelUi.rejectNoModel();
+    }
+    if (!emitter.isCurrent) return Future.value(false);
+    _clearSendGuidance();
+    return _modelUi.send(emitter, draft, context);
   }
 
   @override
   Widget build(BuildContext context) {
     // Runtime consent changes also expire idle emitters. Rebuild the displayed
     // composer so the NEXT explicit Send binds a fresh owner, never an old draft.
-    ref.watch(supportNativeViewProvider);
+    final nativeView = ref.watch(supportNativeViewProvider);
+    final dataAccess =
+        nativeView.rights
+            .where(
+              (right) => right.right == SupportPermission.readApplicationData,
+            )
+            .firstOrNull
+            ?.enabled ==
+        true;
     // Match the feed's current-policy body projection. Watching this snapshot
     // also refreshes idle emitters when policy changes but stored bodies do not.
     // Active original sends retain their existing snapshot and custody fences.
@@ -436,8 +510,7 @@ class _SupportAssistantScreenState
                       hasConfiguredModel: workspace.settings.hasConfiguredModel,
                       run: run,
                       welcomeAvatar: widget.welcomeAvatar,
-                      // Full capability copy scrolls with the feed instead of crowding
-                      // out the composer on narrow screens with large text.
+                      // Keep current access truthful and compact beside the feed.
                       notice: Column(
                         children: [
                           if (workspace.error != null)
@@ -452,35 +525,14 @@ class _SupportAssistantScreenState
                                 'Настройки сессии недоступны. Отправка заблокирована; открой настройки Астории.',
                               ),
                             ),
-                          const Padding(
-                            key: ValueKey('support_text_only_notice'),
-                            padding: EdgeInsets.symmetric(vertical: 8),
+                          Padding(
+                            key: const ValueKey('support_text_only_notice'),
+                            padding: const EdgeInsets.symmetric(vertical: 8),
                             child: Text(
-                              '«Отправить» и Enter (если включён в общих настройках) сразу '
-                              'отправляют вопрос и видимый текущий диалог выбранной модели. '
-                              'Другие чаты и приватные источники требуют отдельных разрешений. '
-                              'При нативном подключении модель может читать и менять безопасные '
-                              'настройки интерфейса, энергосбережение и установленную тему без '
-                              'повторного подтверждения отправки. Метаданные подключений доступны '
-                              'без ключей; создание и ограниченные изменения профиля требуют точного '
-                              'нативного подтверждения. Переход по разделам не изменяет их данные. '
-                              'Защищённый ввод ключа остаётся отдельным нативным действием. '
-                              'Диагностику можно обсудить без выбора игровой сессии. '
-                              'Подключены конечные операции карточек, персон, лора, обычных и Studio-пресетов, '
-                              'настроек Memory и отключения блока расширения с точным подтверждением. '
-                              'Доступны метаданные сессий и диагностики, ограниченная проверка всех зарегистрированных '
-                              'таблиц БД, выбранные скалярные исправления и условный Undo по сохранённой квитанции. '
-                              'Collector/Ledger требуют существующего безопасного владельца сессии; спящие цели '
-                              'могут быть недоступны. Проверка записанных хешей внутренняя, не оценка правды текста. '
-                              'Чтение приватных тел, сборка каталога без отдельного разрешения, произвольное удаление, '
-                              'каноническая перепись истории, экспорт и универсальное восстановление БД не подключены. '
-                              'Компакт сжимает старый контекст выбранной моделью, не удаляя историю. '
-                              'DCP автоматически запускает компакт при давлении на контекст; '
-                              'внутри одного запроса также убирает точные дубли метаданных инструментов. '
-                              'Между запросами сохраняются ответы, но не скрытый журнал инструментов. '
-                              'счётчик показывает только токены из ответа провайдера. '
-                              'Локальная помощь — отдельно, без сети.',
-                              style: TextStyle(fontSize: 12),
+                              dataAccess
+                                  ? 'Доступ к данным включён: Астория сама находит нужные источники без ключей и токенов. Отключить можно в настройках.'
+                                  : 'Чтение данных отключено. Обычный разговор доступен; доступ к истории и другим данным можно включить в настройках.',
+                              style: const TextStyle(fontSize: 12),
                             ),
                           ),
                           ..._pendingGuidance(workspace.activeSessionId),
@@ -519,10 +571,7 @@ class _SupportAssistantScreenState
                       key: _composer,
                       useActionDrawer: !isDesktop,
                       auxiliaryActions: isDesktop
-                          ? [
-                              if (supportSourceNavigationExperimentalEnabled)
-                                const SupportSourcePreparationEntry(),
-                            ]
+                          ? [const SupportReportStatusAction()]
                           : [
                               SupportThemeEntry(
                                 key: _themeEntry,
@@ -533,18 +582,7 @@ class _SupportAssistantScreenState
                                 compact: true,
                                 onOpenPermissions: _openSettingsSheet,
                               ),
-                              if (supportSourceNavigationExperimentalEnabled)
-                                const SupportSourcePreparationEntry(),
-                              SupportActionTile(
-                                key: const ValueKey(
-                                  'support_panel_report_action',
-                                ),
-                                icon: Icons.enhanced_encryption_rounded,
-                                label: 'Отчёт недоступен',
-                                tooltip:
-                                    '.astoria-report — экспорт пока недоступен',
-                                onTap: null,
-                              ),
+                              const SupportReportStatusAction(),
                             ],
                       controller: _composerCtrl,
                       sessionId: workspace.activeSessionId,
@@ -559,11 +597,9 @@ class _SupportAssistantScreenState
                           workspace.activeSessionId.isNotEmpty,
                       onSend: notifier.sendUserMessage,
                       nativeOwner: emitter,
-                      onNativeSend: (draft) => _sendWithGuidance(
-                        emitter,
-                        draft,
-                        workspace.activeSessionId,
-                      ),
+                      onBeforeNativeSend: _beforeNativeSend,
+                      onNativeSend: (draft) =>
+                          _sendAfterDataAdmission(emitter, draft),
                       onLocalHelp: notifier.sendLocalHelp,
                       onStop: activeSend?.stop,
                       onCompact: emitter == null

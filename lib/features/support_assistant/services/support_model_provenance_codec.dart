@@ -247,6 +247,7 @@ SupportModelToolDisclosure _disclosure(Object? value) {
     operation: !item.containsKey('operation')
         ? null
         : switch (item['operation']) {
+            'list' => SupportModelToolDisclosureOperation.list,
             'contents' => SupportModelToolDisclosureOperation.contents,
             'search' => SupportModelToolDisclosureOperation.search,
             'read' => SupportModelToolDisclosureOperation.read,

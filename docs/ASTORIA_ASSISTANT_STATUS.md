@@ -1,13 +1,65 @@
 # Astoria Assistant — implementation status
 
-Updated: 2026-10-31. Documentation audit baseline: `1546a53f` on
-`feat/astoria-assistant`. The two commits after the initial `21426960` audit concern
-Card Evolution/rewrite, not the assistant's tool composition.
+Updated: 2026-11-01. Read-access redesign baseline: `4f1f9d58` on
+`feat/astoria-assistant`; the current implementation changes are uncommitted.
+The earlier October 31 documentation audit used `1546a53f`.
 
 **The assistant is integrated and enabled, but the complete original product plan
-is not finished.** Implementation remains paused; this update changes documentation
-only. It does not authorize more feature work, runtime access, installation or
-release actions.
+is not finished.** The November 1 request resumes a bounded implementation slice:
+one global data-read consent, autonomous multi-source reading and a simpler UI.
+It does not resume the entire original backlog or authorize private runtime access,
+installation or release actions. The read-access backend and simplified UI are
+implemented. Native source/permission evidence is accepted; some UI verification
+remains blocked. This is not full product or device acceptance.
+
+## November 1 product decision
+
+Replace per-category, per-session and per-body reading approvals with one native
+consent to use application data. After enabling it, Astoria independently discovers
+and reads needed sources, including several sessions. One switch revokes access.
+API keys, tokens and other credential material remain excluded. The selected model
+connection may be external or local; no additional per-provider consent flow is
+part of this redesign. Technical source ownership, bounded projections and Stop
+checks remain mandatory, not user-facing permission puzzles.
+
+Sending a support report to the developer is a separate decision. Its exact preview
+must say whether session titles/history or other personal content are included and
+allow exclusion or cancellation. Read consent never authorizes export or upload.
+The original recipient-encrypted report/export/decoder is still unfinished; this
+read-access slice must not present an unavailable report as already created or sent.
+
+### Delivered access slice and limits
+
+- The single read grant is stored in the existing encrypted global profile. New
+  grant-bearing policies use strict version 3; legacy policies never automatically
+  consent to application-wide reading. Normal source/model/category/recipient
+  switches and mandatory source pickers are removed from the UI.
+- The first configured-model Send offers consent. Declining allows ordinary chat
+  and suppresses further invitations for the current app lifetime; an accepted
+  grant persists independently of the conversation. Later enabling is explicit.
+- Authorized source catalogs return bounded redacted labels, dates, session
+  numbers and all original opaque handles on a page, rather than one manually
+  selected target. Native code establishes run-local frozen scopes automatically;
+  catalog and body disclosures retain encrypted provenance before actual POSTs.
+- Trusted history-index preparation runs before source snapshots, with a bounded
+  newest-session window and time/step budgets. It does not rewrite canonical
+  history. Large or older unprepared sources may remain incomplete; this is not
+  an unlimited scan or a promise that every stored row is immediately readable.
+  Advanced native index diagnostics remain available separately.
+- OFF retires reads immediately, including across runtimes/repositories sharing
+  the same actual database owner. A failed encrypted denial write stays locally
+  blocked and exposes a save retry; fresh native consent cannot resurrect an old
+  run. An unsaved denial is in-process protection, not a durable guarantee after
+  restarting the process or replacing the database owner.
+- Credentials and secret-bearing JSON/header containers remain excluded before
+  searching, slicing and transmission. Read consent grants no mutation, repair,
+  backup, export, report, connection-test or upload authority.
+- Theme/provider entry cards now route global-profile users to ordinary native
+  settings instead of asking for hidden legacy prerequisite toggles. Historical
+  nonglobal wizard composition remains compatibility code, not the normal UI.
+- This policy does not implement a new local-model transport. Existing native
+  model routes still require HTTPS; local HTTP endpoints and live models were not
+  exercised or newly enabled by this read-access change.
 
 ## Integrated capabilities
 
@@ -16,14 +68,15 @@ release actions.
 | Native workspace | Desktop/mobile UI, separate conversations, encrypted local history, Send/Stop, guarded edit/delete/retry/regeneration. These are Astoria conversations, not full roleplay-session CRUD. |
 | Model connection | Independent Astoria provider/model profile shared across its conversations, model catalog, native key entry and finite typed tool rounds for the supported provider protocols. |
 | Context | Manual and automatic compaction with an encrypted checkpoint and the remaining conversation suffix; compaction does not delete stored history. |
-| Permissions | Global encrypted profile, source/recipient constraints, revocation and separate dangerous-action confirmation. See [global permissions](ASTORIA_GLOBAL_PERMISSIONS.md). |
-| Setup and actions | Installed theme/mode, provider preparation, bounded UI/configuration and character/persona/lorebook/preset/Studio/Memory operations. This is not arbitrary application control or a universal mutation/Undo engine. |
+| Permissions | One global encrypted application-data read consent, frozen technical source ownership, revocation and separate dangerous-action authority. Legacy exact-source/recipient policies remain compatibility-only. See [global permissions](ASTORIA_GLOBAL_PERMISSIONS.md). |
+| Setup and actions | Theme/provider entries open native settings. Existing bounded UI/configuration and character/persona/lorebook/preset/Studio/Memory tools retain their original action-specific restrictions; the read grant does not enable every action. This is not arbitrary application control or a universal mutation/Undo engine. |
 | Integrity and recovery | Bounded database/session/Collector/Ledger checks and specific repairs, conditional repair Undo, native SQLite snapshots, separate cold-start restore on Windows/Android. Restore preparation in chat is informational; it does not perform restore or restart. |
-| Source navigation | Four read-only tools across nine domains, local target selection/index preparation, contents/search/selected reading and encrypted disclosure provenance before the actual model POST. |
+| Source navigation | Four read-only tools across nine domains, autonomous bounded catalog/search/read after one consent, trusted bounded index preparation and encrypted catalog/body disclosure provenance before the actual model POST. |
 
 Ordinary DirectSend uses the current Astoria conversation without a separate
-recipient/prompt approval on every request. Other conversations and private source
-bodies do not inherit that permission. Tool reads can return bounded factual
+recipient/prompt approval on every request. Other conversations/private source
+bodies require the separate application-data grant, not inherited DirectSend
+authority. Existing finite metadata tools can return bounded factual
 projections to the model; they must not be described as zero data egress.
 
 ## Source navigation: current, not the old disabled checkpoint
@@ -37,8 +90,9 @@ ordinary presets, Studio presets, Memory, saved summaries, Ledger state, Ledger
 snapshots, reconciliation and character knowledge. The model gets no SQL, paths,
 regex, grant, mutation or index-maintenance tool.
 
-Local native preparation and target labels are not body/model grants. Navigation
-requires a fresh exact run/source/snapshot/scope/recipient/model authority; Stop,
+Index preparation is not a grant. Authorized redacted catalog labels can now reach
+the selected model. Navigation still requires fresh exact technical
+run/source/snapshot/scope/recipient/model custody derived from native consent; Stop,
 route/model changes, source mutation and ABA retire it. Retry/regeneration expose
 only source tools, not the action/backup graph, and cannot replay earlier effects.
 
@@ -53,10 +107,11 @@ Later commits supersede the October 27–28 incomplete checkpoints:
 - `bcb40025`: compiler-target-aware SQLite exports for Windows and Android;
   `tool/sqlite3_source.c` makes manual target switching/restoration unnecessary.
 
-Current tests cover genuine local preparation and native/model flows across all
+Earlier tests cover genuine local preparation and native/model flows across all
 nine domains. The old ordinary-preset `updated_at` SQL error, overwritten ABA
 failure category and obsolete two-tool/offset protocol fixtures have been corrected.
-This audit read their code and recorded validation; it did not rerun those suites.
+The October audit read their code and recorded validation. The November checks
+below verify the new access slice, not a rerun of every nine-domain legacy case.
 
 ## Remaining product scope
 
@@ -64,7 +119,7 @@ This audit read their code and recorded validation; it did not rerun those suite
 |---|---|
 | Security foundation | Assistant credential/broker/redaction path is integrated. Compatibility deliberately retains legacy Drift fallback; full migration of every original secret family is not established as complete. |
 | Workspace and history | Integrated. Rich list/code-block rendering and some originally proposed generation overrides remain outside the current narrower UI. |
-| Guided setup | Theme and provider flows are integrated within their boundaries. The complete Memory Books wizard is not implemented. |
+| Guided setup | Theme/provider entry uses ordinary native settings for global-profile users. The complete Memory Books wizard is not implemented. |
 | Tools, skills, agents and DCP | Actual tool execution and compaction are integrated. Curated diagnostic skills, bounded specialist agents and the full structured diagnostic product remain open. Tool rounds use the dedicated native transport, not the originally proposed streaming tool-event extension to `ChatTransport`. |
 | Support reports | Detached facts/diagnosis/remediation snapshot, immutable preview/exclusions, recipient encryption, `.astoria-report` export and the local HELGA decrypt CLI are not implemented. |
 
@@ -101,14 +156,38 @@ Missing unsafe owner seams are deliberate refusals, not permission to bypass the
 
 ## Evidence and supported limits
 
+- November access-slice verification: five permission/codec cases and fourteen
+  real native-file/scripted-provider source cases passed. The latter include two
+  named sessions plus the current saved Studio preset in one run without picker
+  or body-confirmation callbacks, eight encrypted disclosures before respective
+  continuation POSTs, canonical-history preservation, credential exclusion,
+  failed-OFF persistence, cross-runtime revoke/re-enable, Stop and mutation.
+- Two existing native source-only retry/regeneration cases passed without adding
+  the action/backup graph. These are compatibility regression cases, not live
+  provider evidence or complete global-consent retry certification.
+- One new UI case passed: editing the draft during first-consent admission never
+  sends that changed draft. The first-Send grant/decline cases progress through
+  initial and repeated Sends but fail `pumpAndSettle` after switching conversations;
+  neither whole case is counted as passed. The new settings/OFF widget suite also
+  remains blocked by a timeout. Their remaining cause is not established; do not
+  mark them passing or assume the problem is confined to a test harness.
+- Scoped analysis of the assistant/source boundary reported no errors/warnings;
+  remaining backend/test hints are informational. The final five UI/composer/test
+  files reported no issues after explicit mounted guards and import cleanup.
+  A whole-project analyzer attempt timed out and is not completed evidence.
+- Current Android release APK build passed: `build/app/outputs/flutter-apk/app-release.apk`
+  (155.0 MB), default dev channel, without manual SQLite target switching. Kotlin
+  Gradle migration advisories remain nonblocking. No current Windows release build,
+  GUI/device launch, installation, live provider, actual user database, OS-vault
+  restart or full regression suite is included in this delivery evidence.
 - At the runnable `bcb40025` checkpoint, Windows release and Android release APK
   builds passed with the same unchanged SQLite configuration; 15 targeted
   startup/native-ABI tests passed. The analyzer had zero errors/warnings and 15
   deferred infos. Kotlin Gradle migration advisories were nonblocking. These are
   checkpoint results, not fresh results for the current HEAD or full assistant.
-- Earlier native/model/UI validation uses synthetic fixtures and scripted
-  providers. No new tests/builds, live providers, user databases, GUI/device launch,
-  real OS-vault restart or full regression suite were exercised by this audit.
+- Native/model/UI validation uses declared synthetic fixtures and scripted
+  providers. It establishes controlled integration behavior, not the quality of
+  a live model's autonomous tool selection or exact diagnosis of the old screenshot.
 - SQLite VM progress callbacks and chunk checks provide bounded best-effort work,
   not a hard deadline during overflow-page/OS I/O. Do not promise absolute Stop or
   physical-disk latency guarantees.
@@ -120,7 +199,7 @@ Missing unsafe owner seams are deliberate refusals, not permission to bypass the
   target headers, exact main/WAL/SHM bytes, power-loss atomicity and missing vault
   key recovery are not supported guarantees.
 - Reuse accepted unchanged evidence. Resume only a named delivery slice; this
-  documentation refresh does not reopen all old gates or create a new full-suite
+  bounded redesign does not reopen all old gates or create a new full-suite
   certification project.
 
 ## Plan and history pointers

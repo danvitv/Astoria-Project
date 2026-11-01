@@ -36,6 +36,13 @@ final class _ModelContextPlan {
 
 extension _ModelContext on _ModelRun {
   List<SupportPermissionSource> get sources {
+    // Production direct chat discovers sources on demand under the single
+    // global consent. Legacy selected-history grants must neither eagerly send
+    // whole history nor survive OFF through an invisible fallback. Own visible
+    // support conversation remains a separate direct-input authority.
+    if (binding.policy.isGlobal && binding.configuration.directConversation) {
+      return const [];
+    }
     final scope = binding.policy.scope;
     if (scope == null) return const [];
     return [

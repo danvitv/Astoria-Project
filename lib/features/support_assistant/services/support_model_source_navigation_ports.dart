@@ -8,7 +8,7 @@ final class _ModelSourceApproval implements nav.ApprovalPort {
     final context = owner._context, call = owner._call;
     if (context == null ||
         call == null ||
-        context.confirmation == null ||
+        (!owner.automaticAccess && context.confirmation == null) ||
         !identical(request.run, owner.navigationRun)) {
       return null;
     }
@@ -24,6 +24,20 @@ final class _ModelSourceApproval implements nav.ApprovalPort {
         SupportModelProvenanceLimits.maxToolDisclosures -
         (owner.run.context!.recipe.toolDisclosures?.length ?? 0);
     if (bytes <= 0 || count <= 0) return null;
+    if (owner.automaticAccess) {
+      // A host-owned grant minted from the actual frozen observation under the
+      // retained global policy. No UI lease is fabricated. Durable policy and
+      // all original source fences are checked again by the writer-excluding
+      // ROOT at provenance admission and immediately before every real POST.
+      return nav.NativeGrant(
+        run: request.run,
+        source: request.source.key,
+        snapshot: request.source.snapshot,
+        scope: plan.scope,
+        disclosureBytes: bytes,
+        lease: _ModelApplicationSourceLease(owner, request),
+      );
+    }
     final config = owner.run.binding.configuration;
     final redactor = owner.run.service._redaction.redactor;
     final label = _safeText(redactor, plan.label, 256);
@@ -96,6 +110,25 @@ final class _ModelSourceApproval implements nav.ApprovalPort {
   }
 }
 
+final class _ModelApplicationSourceLease implements nav.ApprovalLease {
+  _ModelApplicationSourceLease(this.owner, this.approval);
+  final _ModelSourceToolRun owner;
+  final nav.ApprovalRequest approval;
+  bool _retired = false;
+  @override
+  bool isCurrent() {
+    if (_retired) return false;
+    if (!owner.current ||
+        !owner.automaticAccess ||
+        !identical(approval.run, owner.navigationRun) ||
+        !approval.source.lease.isCurrent() ||
+        !owner.current) {
+      _retired = true;
+    }
+    return !_retired;
+  }
+}
+
 final class _ModelSourceScopeLease implements nav.ApprovalLease {
   _ModelSourceScopeLease(this.owner, this.approval, this.native);
   final _ModelSourceToolRun owner;
@@ -140,7 +173,15 @@ final class _ModelSourceProjection implements nav.ProjectionPort {
     final stamp = _stamp();
     Object? project(Object? value) {
       if (value is String) {
-        return _safeText(_redactor!, value, nav.Limits.rawBytes);
+        final safe = SupportSourceJson.redactText(
+          value,
+          _redactor!.withKnownSecrets(
+            const [],
+            maxInputLength: nav.Limits.rawBytes,
+            maxOutputLength: nav.Limits.rawBytes,
+          ),
+        );
+        return _safeText(_redactor!, safe, nav.Limits.rawBytes);
       }
       if (value is List) return value.map(project).toList(growable: false);
       if (value is Map<String, Object?>) {

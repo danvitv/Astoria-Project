@@ -50,6 +50,10 @@ class SupportRepo {
   /// Identity check only; never opens/replaces a database or grants custody.
   bool usesDatabase(AppDatabase db) => identical(_journal.db, db);
 
+  /// Opaque, in-process global-permission owner shared by repositories on this
+  /// database. No source contents, path, SQL or new custody are exposed.
+  Object get assistantPermissionStorageOwner => _journal.db;
+
   Future<SupportSession> createSession(SupportSession session) =>
       _sessions.put(session, createOnly: true);
   Future<SupportSession> putSession(SupportSession session) =>

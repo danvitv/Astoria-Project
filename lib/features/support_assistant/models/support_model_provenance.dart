@@ -31,7 +31,7 @@ enum SupportModelToolDisclosureDomain {
   characterKnowledge,
 }
 
-enum SupportModelToolDisclosureOperation { contents, search, read }
+enum SupportModelToolDisclosureOperation { list, contents, search, read }
 
 /// New navigation declarations distinguish source identity / approved metadata
 /// from actual message selections. Absent on legacy v4 source-read declarations.
@@ -57,12 +57,18 @@ final class SupportModelToolDisclosure {
     if ((operation == null) != (extent == null)) {
       _fail(SupportModelProvenanceFailure.invalidSource);
     }
+    if (operation == SupportModelToolDisclosureOperation.list &&
+        (extent != SupportModelToolDisclosureExtent.scopeMetadata ||
+            this.orderedSourceIds.first != this.sourceId)) {
+      _fail(SupportModelProvenanceFailure.invalidSource);
+    }
     if (orderedSourceIds.length >
             SupportModelProvenanceLimits.maxToolDisclosureIds ||
         (const {
               SupportModelToolDisclosureDomain.studioPreset,
               SupportModelToolDisclosureDomain.ordinaryPreset,
             }.contains(domain) &&
+            operation != SupportModelToolDisclosureOperation.list &&
             (orderedSourceIds.length != 1 ||
                 orderedSourceIds.single != sourceId))) {
       _fail(SupportModelProvenanceFailure.invalidSource);

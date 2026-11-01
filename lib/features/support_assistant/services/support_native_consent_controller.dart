@@ -39,6 +39,7 @@ final class SupportNativeReview {
     this._owner,
     this._lifetime,
     this._policy,
+    this._applicationDataRevision,
     this.view,
   );
   final SupportNativeConsentController _issuer;
@@ -46,6 +47,7 @@ final class SupportNativeReview {
   final int _owner;
   final int _lifetime;
   final SupportPermissionPreferences? _policy;
+  final int _applicationDataRevision;
   final SupportNativeView view;
 }
 
@@ -67,6 +69,63 @@ final class SupportNativeConsentController {
   /// already admitted write. Does not invalidate a replacement controller's
   /// runtime or cancel unrelated grant merges under this same live issuer.
   void invalidateDisplayedIntents() => _issuerLifetime++;
+
+  /// Native OFF gesture only. Unlike granting/reviewing, revocation must not
+  /// wait for model/source work, configuration stability or a decrypt preview.
+  /// Retires active reads and all older grant reviews synchronously BEFORE the
+  /// first await, then joins the exact encrypted global denial write. It cannot
+  /// enable a right, approve an effect or repair an invalid/locked profile.
+  Future<bool> revokeApplicationDataFromDisplayedIntent(
+    SupportNativeDisplayedIntent? displayedIntent,
+  ) async {
+    if (displayedIntent is! _DisplayedIntent ||
+        !identical(displayedIntent._issuer, this) ||
+        !runtime.alive ||
+        !runtime.ownsApplicationDataRevocation(
+          displayedIntent._session,
+          displayedIntent._lifetime,
+        ) ||
+        displayedIntent._policy?.isGlobal != true ||
+        displayedIntent._policy?.policyIdentity !=
+            runtime.snapshot.preferences?.policyIdentity) {
+      return false;
+    }
+    final session = displayedIntent._session;
+    final lifetime = runtime.lifetime;
+    _issuerLifetime++;
+    final permissions = runtime.permissions;
+    final revision = permissions.latchApplicationDataRevocation();
+    bool current() =>
+        runtime.ownsApplicationDataRevocation(session, lifetime) &&
+        permissions.applicationDataRevocationRevision == revision;
+    runtime.invalidateLease();
+    runtime.pending++;
+    runtime.error = null;
+    runtime.notify();
+    var success = false;
+    try {
+      success =
+          await runtime.permissions.setGrantFromNative(
+                session,
+                SupportPermission.readApplicationData,
+                false,
+                isCurrent: current,
+              ) !=
+              null &&
+          current();
+      if (success) permissions.settleApplicationDataRevocation(revision);
+    } catch (_) {
+      if (current()) {
+        runtime.error =
+            'Чтение остановлено, но отзыв доступа не удалось сохранить. Повтори выключение.';
+      }
+    } finally {
+      runtime.pending--;
+      if (current()) await runtime.refresh();
+      runtime.notify();
+    }
+    return success;
+  }
 
   SupportNativeView get view => _buildView();
 
@@ -112,6 +171,7 @@ final class SupportNativeConsentController {
             runtime.snapshot.isAvailable &&
             runtime.settingsPending == 0 &&
             p!.hasScopeFor(right) &&
+            (right != SupportPermission.readApplicationData || p.isGlobal) &&
             _implementedSelection(right, p.scope) &&
             (right != SupportPermission.readSafeSettings ||
                 p.scope!.safeCategories.any(_implementedSafeCategory)) &&
@@ -122,12 +182,15 @@ final class SupportNativeConsentController {
             (!_recipientDependent(right) || runtime.recipientConfirmed);
         return SupportNativeRightView(
           right,
-          contextAvailable &&
-              (p?.isGlobal == true
-                  ? p!.isConfigured(right)
-                  : p?.allows(right) == true &&
-                        (!_recipientDependent(right) ||
-                            runtime.recipientConfirmed)),
+          right == SupportPermission.readApplicationData && p?.isGlobal == true
+              ? p!.isConfigured(right) &&
+                    !runtime.permissions.applicationDataReadDenied
+              : contextAvailable &&
+                    (p?.isGlobal == true
+                        ? p!.isConfigured(right)
+                        : p?.allows(right) == true &&
+                              (!_recipientDependent(right) ||
+                                  runtime.recipientConfirmed)),
           available,
           available
               ? null
@@ -193,6 +256,7 @@ final class SupportNativeConsentController {
       runtime.writeOwner,
       runtime.lifetime,
       runtime.snapshot.preferences,
+      runtime.permissions.applicationDataRevocationRevision,
       _buildView(includeInspection: false),
     );
   }
@@ -218,6 +282,12 @@ final class SupportNativeConsentController {
     bool enabled,
   ) async {
     if (!_current(review) || review._policy == null) return false;
+    if (right == SupportPermission.readApplicationData &&
+        enabled &&
+        review._applicationDataRevision !=
+            runtime.permissions.applicationDataRevocationRevision) {
+      return false;
+    }
     if (enabled &&
         (!review.view.rights.firstWhere((v) => v.right == right).available ||
             !_implementedSelection(right, review._policy.scope))) {
@@ -238,6 +308,13 @@ final class SupportNativeConsentController {
     bool enabled,
   ) async {
     if (!_current(review) || review._policy == null) return false;
+    bool grantCurrent() =>
+        _current(review) &&
+        (right != SupportPermission.readApplicationData ||
+            !enabled ||
+            review._applicationDataRevision ==
+                runtime.permissions.applicationDataRevocationRevision);
+    if (!grantCurrent()) return false;
     // Independent queued toggles fence data, NOT other admitted write owners.
     runtime.invalidateLease();
     if (enabled && _recipientDependent(right)) {
@@ -255,7 +332,7 @@ final class SupportNativeConsentController {
           ? runtime.permissions.changeReviewedFromNative(
               review._policy,
               change: (p) => p.withNativeGrant(right, true),
-              isCurrent: () => _current(review),
+              isCurrent: grantCurrent,
             )
           : runtime.permissions.setGrantFromNative(
               review.view.sessionId,
@@ -264,6 +341,15 @@ final class SupportNativeConsentController {
               isCurrent: () => _current(review),
             ),
     );
+    if (success && enabled && right == SupportPermission.readApplicationData) {
+      if (!grantCurrent() ||
+          !runtime.permissions.confirmApplicationDataConsent(
+            review._applicationDataRevision,
+          )) {
+        return false;
+      }
+      runtime.invalidateLease();
+    }
     if (!success || !enabled || !_recipientDependent(right)) return success;
     final stamp = runtime.writeOwner;
     final result = await runtime.resolveRecipient(review.view.sessionId);
@@ -365,6 +451,7 @@ final class SupportNativeConsentController {
       runtime.writeOwner,
       runtime.lifetime,
       review._policy,
+      review._applicationDataRevision,
       review.view,
     );
   }

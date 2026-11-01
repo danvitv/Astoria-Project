@@ -49,14 +49,28 @@ final class _ModelSourceToolRun
   bool _closed = false;
   bool _bound = false;
   int _wireSpent = 0;
+  int _catalogBytes = 0;
+  bool get automaticAccess =>
+      !run.service._runtime.permissions.applicationDataReadDenied &&
+      run.binding.policy.isGlobal &&
+      run.binding.policy.allows(SupportPermission.readApplicationData);
+  bool get hasSourceAuthority =>
+      !run.service._runtime.permissions.applicationDataReadDenied &&
+      (run.binding.policy.isGlobal
+          ? automaticAccess
+          : run.binding.toolUi?.confirmation != null);
+  bool referencesGameSource(String sessionId) =>
+      _discovered.any((o) => o.binding.sessionId == sessionId) ||
+      _admitted.any((e) => e.source.binding.sessionId == sessionId);
 
   @override
   List<SupportAppActionDefinition> get definitions => [
     SupportAppActionDefinition(
       name: SupportSourceToolNames.list,
       description:
-          'Discover bounded source metadata. Names and text are not '
-          'disclosed before native approval. Use returned run-local handles; '
+          'Discover a bounded redacted catalog of names, titles and saved activity '
+          'under application-data consent. Choose matching/newest sources yourself '
+          'using all returned run-local handles and nextCursor, not raw IDs; '
           'ordinary and Studio presets are different namespaces.',
       risk: SupportAppActionRisk.metadata,
       fields: {
@@ -120,7 +134,7 @@ final class _ModelSourceToolRun
     if (_context != null ||
         !identical(
           context.sourceToolAccess,
-          run.binding.toolUi?.confirmation == null ? null : this,
+          hasSourceAuthority ? this : null,
         )) {
       throw const SupportAppActionRefused(SupportAppActionCode.denied);
     }
@@ -179,9 +193,9 @@ final class _ModelSourceToolRun
     SupportAppActionContext context,
   ) =>
       SupportSourceToolNames.body.contains(action) &&
-      _call?.name == action &&
+      run.toolCall?.name == action &&
       identical(context.sourceToolAccess, this) &&
-      context.confirmation != null &&
+      hasSourceAuthority &&
       original(context);
 
   @override
@@ -266,6 +280,61 @@ final class _ModelSourceToolRun
     final pieces = result.wire['pieces'] as List;
     if (pieces.length != observations.length || pieces.length > 16) {
       throw const SupportAppActionRefused(SupportAppActionCode.denied);
+    }
+    if (automaticAccess) {
+      // Discovery checks before/after SQL. Catalog provenance below revalidates
+      // all original observations in the actual native ROOT; do not spend a
+      // redundant per-source pass outside that writer-excluding ROOT.
+      check(context);
+      final redactor = run.service._redaction.redactor;
+      String boundedLabel(String raw) {
+        final safe = _safeText(
+          redactor,
+          SupportSourceJson.redactText(
+            raw,
+            redactor.withKnownSecrets(const [], maxOutputLength: 1024),
+          ),
+          1024,
+        );
+        return safe.length <= 256
+            ? safe
+            : '${String.fromCharCodes(safe.runes.take(120))}…';
+      }
+
+      final catalog = <Map<String, Object?>>[];
+      for (var i = 0; i < observations.length; i++) {
+        final observation = observations[i];
+        if (!_discovered.contains(observation)) _discovered.add(observation);
+        final label = _safeText(
+          redactor,
+          SupportSourceJson.redactText(
+            repo.nativeLabel(observation) ?? observation.key.domain.name,
+            redactor.withKnownSecrets(const [], maxOutputLength: 1024),
+          ),
+          1024,
+        );
+        catalog.add({
+          ...Map<String, Object?>.from(pieces[i] as Map),
+          'label': label.length <= 256
+              ? label
+              : '${String.fromCharCodes(label.runes.take(120))}…',
+          'labelTruncated': label.length > 256,
+          'title': repo.nativeTitle(observation) == null
+              ? null
+              : boundedLabel(repo.nativeTitle(observation)!),
+          ...repo.nativeCatalogMetadata(observation),
+        });
+      }
+      // Original pointers/cursors and completeness are unchanged. This is
+      // metadata, not a body or a forged UI confirmation.
+      final wire = {...result.wire, 'pieces': catalog};
+      if (utf8.encode(jsonEncode(wire)).length > nav.Limits.wireBytes) {
+        throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
+      }
+      if (observations.isNotEmpty)
+        await _persistCatalog(observations, wire, context);
+      check(context);
+      return wire;
     }
     if (pieces.isEmpty && result.wire['nextCursor'] == null) return result.wire;
     var selectedResult = result;
@@ -405,6 +474,94 @@ final class _ModelSourceToolRun
     };
   }
 
+  Future<void> _persistCatalog(
+    List<nav.SourceObservation> observations,
+    Map<String, Object?> wire,
+    SupportAppActionContext context,
+  ) async {
+    check(context);
+    final digest = repo.privateCatalogDigest(observations, jsonEncode(wire));
+    final old = run.context!.recipe;
+    final prior = old.toolDisclosures ?? const <SupportModelToolDisclosure>[];
+    final bytes = utf8.encode(jsonEncode(jsonEncode(wire))).length + 512;
+    if (digest == null ||
+        prior.length >= SupportModelProvenanceLimits.maxToolDisclosures ||
+        _wireSpent + bytes > nav.Limits.disclosureBytes) {
+      throw const SupportAppActionRefused(SupportAppActionCode.unavailable);
+    }
+    if (!await run.admitOriginalRoot(
+      capsuleCurrent: () => original(context),
+      dispatch: () {},
+    )) {
+      throw const SupportAppActionRefused(SupportAppActionCode.stale);
+    }
+    check(context);
+    final next = SupportModelProvenance(
+      supportSessionId: old.supportSessionId,
+      replyMessageId: old.replyMessageId,
+      runId: old.runId,
+      currentUserMessageId: old.currentUserMessageId,
+      originalRanges: old.originalRanges,
+      directReplies: old.directReplies,
+      currentConversationMessageIds: old.currentConversationMessageIds,
+      compactedThroughMessageId: old.compactedThroughMessageId,
+      toolDisclosures: [
+        ...prior,
+        SupportModelToolDisclosure(
+          domain: SupportModelToolDisclosureDomain.values.byName(
+            observations.first.key.domain.name,
+          ),
+          sourceId: observations.first.key.nativeId,
+          orderedSourceIds: observations.map((o) => o.key.nativeId).toList(),
+          snapshotDigest: digest,
+          operation: SupportModelToolDisclosureOperation.list,
+          extent: SupportModelToolDisclosureExtent.scopeMetadata,
+        ),
+      ],
+    );
+    _checkRecipeIdentifiers(run.service._redaction.redactor, next);
+    final encoded = SupportModelProvenanceCodec.encodeForEncryptedStorage(next);
+    _wireSpent += bytes;
+    _catalogBytes += bytes;
+    final written = await run.service._writes.enqueue(() async {
+      check(context);
+      final pending = await run.service._writer.readReplyForSourceExtension(
+        expected: run.expected!,
+        originatingUser: run.durableUser!,
+        isCurrent: () => original(context),
+      );
+      check(context);
+      if (pending == null)
+        throw const SupportAppActionRefused(SupportAppActionCode.conflict);
+      final actual = await run.service._writer.extendReplySourcesAttested(
+        expected: pending,
+        provenanceJson: encoded,
+        isCurrent: () => original(context),
+      );
+      if (actual == null)
+        throw const SupportAppActionRefused(SupportAppActionCode.conflict);
+      run.expected = actual.reservation;
+      return actual;
+    });
+    check(context);
+    if (written.reservation.provenance.protectedFactsJson != encoded ||
+        !await repo.refreshAfterOwnSourceExtension(written)) {
+      throw const SupportAppActionRefused(SupportAppActionCode.conflict);
+    }
+    check(context);
+    final fresh = await run.history.refreshAfterOwnSourceExtension(
+      snapshots: run.snapshots,
+      checkpoint: () => check(context),
+    );
+    check(context);
+    run.snapshots = fresh;
+    run.context = _ModelContextPlan(
+      fresh.take(run.context!.snapshots.length),
+      run.context!.custody,
+      next,
+    );
+  }
+
   void _refuseNavigation(Object? status) => run.refuseTool(switch (status) {
     'approvalRequired' ||
     'denied' => 'Нативное согласие на эту область не получено или отозвано',
@@ -491,7 +648,7 @@ final class _ModelSourceToolRun
     if (!_bound) return false;
     var accepted = false;
     final ok = await engine.withPost(_published, (_) async {
-      var bytes = 0;
+      var bytes = _catalogBytes;
       final scopeBytes = Map<nav.NativeGrant, int>.identity();
       for (final entry in _admitted) {
         final bound = _wireBounds[entry];

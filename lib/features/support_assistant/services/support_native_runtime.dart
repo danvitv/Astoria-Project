@@ -216,6 +216,11 @@ final class SupportNativeRuntime {
         (settingsPending > 0 || (gameSourceStable?.call() ?? true));
   }
 
+  /// Revocation-only custody. Grant/source/configuration fences must not prevent
+  /// the original native user from withdrawing application-wide read consent.
+  bool ownsApplicationDataRevocation(String id, int originalLifetime) =>
+      alive && sessionId == id && lifetime == originalLifetime;
+
   Future<bool> refresh({bool resolve = false}) async {
     checkConfiguration();
     final id = sessionId, owner = writeOwner, serial = ++_reload;

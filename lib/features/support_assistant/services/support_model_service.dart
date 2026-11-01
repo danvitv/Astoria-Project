@@ -15,6 +15,7 @@ import '../../../core/db/repositories/api_config_repo.dart';
 import '../../../core/db/repositories/support_repo.dart';
 import '../../../core/db/repositories/support_text_context_repo.dart';
 import '../../../core/db/repositories/support_source_text_repo.dart';
+import '../../../core/db/repositories/support_source_text/support_source_json.dart';
 import '../../../core/llm/transport/chat_transport_request.dart';
 import '../../../core/llm/native_saved_connection_source.dart';
 import '../../../core/llm/transport/native_provider_transport.dart';
@@ -242,7 +243,8 @@ final class SupportModelService {
     if (run == null) return;
     if (run.sessionId == sessionId) run.settlementValid = false;
     if (run.sessionId == sessionId ||
-        run.binding.policy.scope?.gameSessionId == sessionId) {
+        run.binding.policy.scope?.gameSessionId == sessionId ||
+        run.originalSourceTools?.referencesGameSource(sessionId) == true) {
       run.cancel(SupportModelRefusal.stale);
     }
   }
@@ -263,7 +265,9 @@ final class SupportModelService {
             ids == null ||
             scope.gameHistory!.messageIds.any(ids.contains));
     final run = _active;
-    if (run != null && affects(run.binding.policy.scope)) {
+    if (run != null &&
+        (affects(run.binding.policy.scope) ||
+            run.originalSourceTools?.referencesGameSource(sessionId) == true)) {
       run.cancel(SupportModelRefusal.stale);
     }
     // Emissions have no accepted run yet. An unchanged original native scope

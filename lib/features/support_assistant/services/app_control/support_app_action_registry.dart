@@ -165,6 +165,15 @@ final class SupportAppActionRegistry {
       final sourceAccess = sourceAction
           ? context.sourceToolAccess
           : context.sourceAccess;
+      // Only the exact original source adapter can own source approval. Its
+      // host-owned per-source grants may derive from global native consent;
+      // this exception never applies to any report or mutation adapter.
+      final sourceOwnsApproval =
+          sourceAction &&
+          identical(adapter, sourceAccess) &&
+          sourceAccess is SupportAppNativeSourceApprovalPort &&
+          (sourceAccess as SupportAppNativeSourceApprovalPort)
+              .ownsOriginalSourceApproval(call.name, context);
       if ((context.readOnlySources &&
               !const {
                 SupportAppActionRisk.metadata,
@@ -186,7 +195,9 @@ final class SupportAppActionRegistry {
       if (risk == SupportAppActionRisk.bodyRead && sourceAccess == null ||
           risk == SupportAppActionRisk.navigation &&
               context.navigation == null ||
-          _needsConfirmation(risk) && context.confirmation == null) {
+          _needsConfirmation(risk) &&
+              context.confirmation == null &&
+              !sourceOwnsApproval) {
         return result(
           call,
           SupportAppActionOutcome(SupportAppActionCode.unavailable),
@@ -210,12 +221,6 @@ final class SupportAppActionRegistry {
         );
       }
       SupportAppConfirmationLease? lease;
-      final sourceOwnsApproval =
-          sourceAction &&
-          identical(adapter, sourceAccess) &&
-          sourceAccess is SupportAppNativeSourceApprovalPort &&
-          (sourceAccess as SupportAppNativeSourceApprovalPort)
-              .ownsOriginalSourceApproval(call.name, context);
       if (!current()) return result(call, interrupted());
       if (_needsConfirmation(risk) && !sourceOwnsApproval) {
         if (!_safeJson(prepared.preview) || !current()) {

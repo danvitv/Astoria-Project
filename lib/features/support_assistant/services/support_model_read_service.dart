@@ -3,7 +3,9 @@ part of 'support_model_service.dart';
 /// ONLY pure decrypt reads are raced. Repository/SQL callbacks await
 /// their normal completion, checkpoint before the next query, and unwind H.
 final class _ModelReadOperation {
-  _ModelReadOperation(this.service, this.isCurrent) {
+  _ModelReadOperation(this.service, this.isCurrent)
+    : _applicationDataRevision =
+          service._runtime.permissions.applicationDataRevocationRevision {
     reader = SupportRepo(
       service._db,
       SupportPayloadCipher.readOnly(
@@ -28,6 +30,7 @@ final class _ModelReadOperation {
   }
   final SupportModelService service;
   final bool Function() isCurrent;
+  final int _applicationDataRevision;
   final token = CancelToken();
   late final SupportRepo reader;
   late final SupportTextContextRepo history;
@@ -36,7 +39,10 @@ final class _ModelReadOperation {
 
   bool current() {
     try {
-      return !token.isCancelled && isCurrent();
+      return !token.isCancelled &&
+          service._runtime.permissions.applicationDataRevocationRevision ==
+              _applicationDataRevision &&
+          isCurrent();
     } catch (_) {
       return false;
     }

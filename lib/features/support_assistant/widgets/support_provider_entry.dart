@@ -1,6 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/state/credential_vault_provider.dart';
 import '../../../core/state/db_provider.dart';
@@ -50,6 +51,16 @@ class SupportProviderEntryState extends ConsumerState<SupportProviderEntry> {
         p?.allows(SupportPermission.readSafeSettings) == true &&
         p?.scope?.safeCategories.contains(SupportSafeCategory.connections) ==
             true;
+    if (p?.isGlobal == true || !allowed) {
+      // Never redirect to permission switches that no longer exist. Creating
+      // or editing a connection remains a native user action in normal settings.
+      try {
+        await context.push<void>('/tools/api');
+      } finally {
+        if (mounted) setState(() => _open = false);
+      }
+      return;
+    }
     SupportProviderScreenController? owner;
     // DEFAULT-OFF is a passive prerequisite sheet: do not evaluate native/vault
     // owners, safe saved fields, recipient resolvers or transports here.

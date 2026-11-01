@@ -27,6 +27,8 @@ enum SupportPermissionHelp {
   }) {
     final scope = policy.scope;
     switch (right) {
+      case SupportPermission.readApplicationData:
+        break;
       case SupportPermission.readDiagnostics:
         return diagnosticsUnavailable;
       case SupportPermission.modelGameData:

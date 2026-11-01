@@ -12,11 +12,13 @@ import '../models/support_permission_preferences.dart';
 import 'support_settings_focus.dart';
 import 'support_settings_pickers.dart';
 import 'support_settings_unavailable.dart';
-import 'support_settings_start_session.dart';
 import 'support_privacy_group.dart';
 import 'support_output_token_field.dart';
 import 'support_connection_selector.dart';
 import 'support_surface_layout.dart';
+import 'support_report_status.dart';
+import 'support_source_preparation_entry.dart';
+import '../models/support_source_tool_names.dart';
 
 /// Right panel for Astoria Assistant: mode selector (`Onboarding / Diagnostics / Hybrid`),
 /// independent API connection & model selector using safe `CredentialMetadata`
@@ -157,7 +159,7 @@ class SupportSettingsPanel extends ConsumerWidget {
                 header: 'Общий профиль Астории',
                 description:
                     'API, модель и параметры применяются ко всем чатам Астории. '
-                    'Выбор профиля не даёт разрешения на чтение или передачу других данных.',
+                    'Выбор модели не включает доступ к данным приложения.',
                 items: [
                   if (focus.includes(SupportSettingsFocus.connection))
                     SupportConnectionSelector(
@@ -256,12 +258,27 @@ class SupportSettingsPanel extends ConsumerWidget {
               ),
             ),
           if (focus.includes(SupportSettingsFocus.privacy))
-            if (workspace.activeSessionId.isEmpty)
-              SupportSettingsStartSession(
-                enabled: !workspace.isLoading && !workspace.isBusy,
-              )
-            else
-              SupportPrivacyGroup(focusedPermission: focusedPermission),
+            SupportPrivacyGroup(focusedPermission: focusedPermission),
+          if (focus == SupportSettingsFocus.all) ...[
+            MenuGroup(
+              header: 'Репорт разработчику',
+              description:
+                  'Экспорт пока недоступен. Доступ к данным не разрешает отправлять их разработчику.',
+              items: [
+                MenuItem(
+                  label: 'О передаче репорта',
+                  icon: Icons.description_outlined,
+                  onTap: () => showSupportReportStatus(context),
+                ),
+              ],
+            ),
+            if (supportSourceNavigationExperimentalEnabled)
+              const MenuCollapsibleSection(
+                key: ValueKey('support_advanced_diagnostics'),
+                label: 'Дополнительно: диагностика источников',
+                children: [SupportSourcePreparationEntry()],
+              ),
+          ],
         ],
       ),
     );

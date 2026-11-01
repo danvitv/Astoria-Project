@@ -32,7 +32,6 @@ class SupportSendSettingsSnapshot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scope = permissions?.scope;
     return Padding(
       key: const ValueKey('support_send_settings_snapshot'),
       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -45,8 +44,7 @@ class SupportSendSettingsSnapshot extends StatelessWidget {
           Text(reason, key: const ValueKey('support_send_block_reason')),
           Text(
             'Профиль выбран: ${_yes(settings.apiConfigId?.isNotEmpty == true)}; '
-            'модель выбрана: ${_yes(settings.modelId?.isNotEmpty == true)}; '
-            'получатель для внешних источников подтверждён: ${_yes(recipientConfirmed)}.',
+            'модель выбрана: ${_yes(settings.modelId?.isNotEmpty == true)}.',
           ),
           Text(
             'Лимит ответа: ${settings.maxTokens == -1 ? "не передаётся (-1)" : settings.maxTokens}; '
@@ -54,8 +52,7 @@ class SupportSendSettingsSnapshot extends StatelessWidget {
             'reasoning: ${settings.reasoningEffort.name}.',
           ),
           Text(
-            'Ролевая сессия выбрана: ${_yes(scope?.gameSessionId != null)}; '
-            'передача ролевой истории: ${_yes(permissions?.allows(SupportPermission.modelGameHistory) == true)}; '
+            'Сохранённое согласие на чтение: ${_yes(permissions?.allows(SupportPermission.readApplicationData) == true)}; '
             'видимый текущий диалог Астории передаётся с отправкой.',
           ),
           const Text(
@@ -64,8 +61,8 @@ class SupportSendSettingsSnapshot extends StatelessWidget {
           ),
           const Text(
             'Для обычного разговора и начала диагностики игровая сессия '
-            'не нужна. Другие чаты и диагностические данные без отдельных '
-            'разрешений не читаются и не отправляются.',
+            'не нужна. История и другие данные приложения читаются только '
+            'с общим согласием. Репорт разработчику требует отдельного просмотра и согласия.',
           ),
         ],
       ),

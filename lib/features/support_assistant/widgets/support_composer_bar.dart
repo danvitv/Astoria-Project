@@ -22,6 +22,10 @@ final class SupportComposerDraft {
   final bool Function() isCurrent;
 }
 
+/// Rebinding is permitted only after an explicit first-send consent, never for
+/// an ordinary send whose provider, route or native owner changed underneath it.
+enum SupportComposerAdmission { unchanged, consentGranted, rejected }
+
 /// Clears only a durably accepted draft, never a failed or superseded one.
 class SupportComposerBar extends StatefulWidget {
   final TextEditingController controller;
@@ -31,6 +35,11 @@ class SupportComposerBar extends StatefulWidget {
   final String? sessionId;
   final VoidCallback? onRunQuickDiagnostics;
   final Future<bool> Function(SupportComposerDraft)? onNativeSend;
+
+  /// First-send consent happens before binding the native draft. A successful
+  /// permission change retires the old emitter; only the unchanged input may
+  /// continue through the freshly displayed emitter after admission.
+  final Future<SupportComposerAdmission> Function()? onBeforeNativeSend;
   final Future<bool> Function(String)? onLocalHelp;
   final VoidCallback? onStop;
   final Object? nativeOwner;
@@ -50,6 +59,7 @@ class SupportComposerBar extends StatefulWidget {
     this.sessionId,
     this.onRunQuickDiagnostics,
     this.onNativeSend,
+    this.onBeforeNativeSend,
     this.onLocalHelp,
     this.onStop,
     this.nativeOwner,
@@ -78,6 +88,7 @@ class SupportComposerBarState extends State<SupportComposerBar> {
   bool _sending = false;
   String? _error;
   int _ownership = 0;
+  int _inputOwnership = 0;
   int _draftRevision = 0;
   late String _lastText;
   final _inputFocus = FocusNode();
@@ -105,12 +116,17 @@ class SupportComposerBarState extends State<SupportComposerBar> {
     _inputFocus.dispose();
     widget.controller.removeListener(_draftChanged);
     _ownership++;
+    _inputOwnership++;
     super.dispose();
   }
 
   @override
   void didUpdateWidget(covariant SupportComposerBar oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.sessionId != widget.sessionId ||
+        !identical(oldWidget.controller, widget.controller)) {
+      _inputOwnership++;
+    }
     if (oldWidget.sessionId != widget.sessionId ||
         !identical(oldWidget.controller, widget.controller) ||
         !identical(oldWidget.nativeOwner, widget.nativeOwner)) {
@@ -143,10 +159,11 @@ class SupportComposerBarState extends State<SupportComposerBar> {
     final draft = controller.text;
     if (draft.trim().isEmpty) return;
     final sessionId = emitted.sessionId;
-    final ownership = _ownership;
+    var ownership = _ownership;
+    final inputOwnership = _inputOwnership;
     final revision = _draftRevision;
-    final nativeOwner = emitted.nativeOwner;
-    final nativeSend = local ? null : emitted.onNativeSend;
+    var nativeOwner = emitted.nativeOwner;
+    var nativeSend = local ? null : emitted.onNativeSend;
     final send = local ? emitted.onLocalHelp : emitted.onSend;
     bool ownsDraft() =>
         mounted &&
@@ -161,6 +178,27 @@ class SupportComposerBarState extends State<SupportComposerBar> {
       _error = null;
     });
     try {
+      if (!local && emitted.onBeforeNativeSend != null) {
+        final admission = await emitted.onBeforeNativeSend!();
+        if (admission == SupportComposerAdmission.rejected ||
+            !mounted ||
+            inputOwnership != _inputOwnership ||
+            revision != _draftRevision ||
+            !identical(controller, widget.controller) ||
+            widget.sessionId != sessionId ||
+            controller.text != draft) {
+          return;
+        }
+        if (admission == SupportComposerAdmission.consentGranted) {
+          // Native permission admission may legitimately replace the emitter.
+          // Rebind only here, before creating a draft or authorizing any send.
+          ownership = _ownership;
+          nativeOwner = widget.nativeOwner;
+          nativeSend = widget.onNativeSend;
+        } else if (!ownsDraft()) {
+          return;
+        }
+      }
       final accepted = nativeSend != null
           ? await nativeSend(
               SupportComposerDraft(
@@ -240,7 +278,8 @@ class SupportComposerBarState extends State<SupportComposerBar> {
           key: const ValueKey('support_composer_diag_btn'),
           icon: Icons.troubleshoot_rounded,
           label: 'Диагностика',
-          tooltip: 'Обсудить диагностику; выбор данных требует разрешения',
+          tooltip:
+              'Обсудить диагностику; чтение использует общий доступ к данным',
           onTap: busy || !widget.available
               ? null
               : widget.onRunQuickDiagnostics,

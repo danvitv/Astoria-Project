@@ -87,6 +87,56 @@ final class SupportSourceTextRepo {
 
   bool usesDatabase(AppDatabase db) => identical(db, _db);
 
+  /// Trusted native run setup only, not a tool/approval/mutation API. Prepare
+  /// at most the first 16 newest session candidates before the run freezes any
+  /// snapshots. Existing authenticated indexes are read-only; canonical history
+  /// is never edited. Large histories remain honestly incomplete at the budget.
+  Future<void> prepareAutomaticHistory({
+    required bool Function() isCurrent,
+  }) async {
+    final native = _db.nativeDataSourceIdentity;
+    bool current() =>
+        isCurrent() &&
+        native != null &&
+        identical(native, _db.nativeDataSourceIdentity) &&
+        _text.retainsNativeDataSource(native);
+    if (!current()) _deny(SupportSourceReadFailure.changed);
+    final clock = Stopwatch()..start();
+    // Bound both mixed timestamp streams before eligibility joins, matching
+    // the navigation catalog's native order without parsing authored bodies.
+    final rows = await _db.customSelect('''
+      SELECT s.session_id,s.updated_at,c.hidden FROM (
+        SELECT * FROM (SELECT session_id,character_id,updated_at,rowid AS native_rowid
+          FROM chat_sessions INDEXED BY idx_chat_sessions_updated_at
+          WHERE updated_at < 100000000000 ORDER BY updated_at DESC,rowid DESC LIMIT 16)
+        UNION ALL SELECT * FROM (SELECT session_id,character_id,updated_at,rowid AS native_rowid
+          FROM chat_sessions INDEXED BY idx_chat_sessions_updated_at
+          WHERE updated_at >= 100000000000 ORDER BY updated_at DESC,rowid DESC LIMIT 16)
+      ) s JOIN characters c ON c.char_id=s.character_id
+      ORDER BY CASE WHEN s.updated_at<=0 THEN 0 WHEN s.updated_at<100000000000
+        THEN s.updated_at*1000 ELSE s.updated_at END DESC,s.updated_at DESC,s.native_rowid DESC LIMIT 16
+    ''').get();
+    if (!current()) _deny(SupportSourceReadFailure.changed);
+    for (final row in rows) {
+      if (!current()) _deny(SupportSourceReadFailure.changed);
+      if (clock.elapsed >= const Duration(seconds: 3)) break;
+      final id = row.data['session_id'];
+      if (row.data['hidden'] != 0 || !SupportSourceJson.identity(id)) continue;
+      final status = await _db.historySourceIndex.observe(id as String);
+      if (!current()) _deny(SupportSourceReadFailure.changed);
+      if (status['status'] == 'ready' || status['status'] == 'unsupported') {
+        continue;
+      }
+      await _db.historySourceIndex.maintain(
+        sessionId: id,
+        isCurrent: current,
+        maxSteps: 16,
+        deadline: const Duration(milliseconds: 250),
+      );
+      if (!current()) _deny(SupportSourceReadFailure.changed);
+    }
+  }
+
   Future<SupportSourceCatalogPage> catalog({
     required SupportSourceDomain domain,
     int offset = 0,

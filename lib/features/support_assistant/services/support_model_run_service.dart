@@ -179,6 +179,22 @@ final class _ModelRun {
         publish(user);
       }
       operation.check();
+      final source = service._sourceRepo;
+      if (!service._runtime.permissions.applicationDataReadDenied &&
+          binding.policy.isGlobal &&
+          binding.policy.allows(SupportPermission.readApplicationData) &&
+          source != null) {
+        // Derived native maintenance settles BEFORE any conversation/source
+        // snapshots. Never write inside ROOT or rebase an issued source fence.
+        if (!source.usesDatabase(service._db))
+          _refuse(SupportModelRefusal.stale);
+        final latest = await operation.policy(sessionId);
+        operation.check();
+        if (!_samePolicy(binding.policy, latest))
+          _refuse(SupportModelRefusal.stale);
+        await source.prepareAutomaticHistory(isCurrent: current);
+        operation.check();
+      }
       var initial = isReattempt
           ? await loadContext()
           : await loadManagedContext();

@@ -29,6 +29,7 @@ import 'package:glaze_flutter/features/support_assistant/services/support_worksp
 import 'package:glaze_flutter/features/support_assistant/state/support_model_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_model_catalog_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_native_provider.dart';
+import 'package:glaze_flutter/features/support_assistant/state/support_data_consent_admission.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_workspace_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/support_assistant_screen.dart';
 import 'package:glaze_flutter/shared/shell/nav_height_provider.dart';
@@ -221,6 +222,7 @@ final class ModelScreenFixture {
       supportConnectionsProvider,
       nativeProviderAdapterFactoryProvider,
       supportModelCatalogProvider,
+      supportDataConsentAdmissionProvider,
     });
     container = ProviderContainer(
       observers: [isolation],

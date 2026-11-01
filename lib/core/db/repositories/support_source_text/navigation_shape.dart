@@ -123,13 +123,14 @@ extension _NavShapes on SupportSourceNavigationRepo {
   String _projectComplete(String raw) {
     _guard();
     final policy = _projectionPolicy!;
-    final safe = policy
-        .withKnownSecrets(
-          const [],
-          maxInputLength: max(policy.maxInputLength, nav.Limits.rawBytes),
-          maxOutputLength: nav.Limits.rawBytes,
-        )
-        .redactText(raw);
+    final safe = SupportSourceJson.redactText(
+      raw,
+      policy.withKnownSecrets(
+        const [],
+        maxInputLength: max(policy.maxInputLength, nav.Limits.rawBytes),
+        maxOutputLength: nav.Limits.rawBytes,
+      ),
+    );
     if (safe.contains(SecretRedactor.limited) ||
         safe.length > nav.Limits.rawBytes) {
       _fail(SupportSourceReadFailure.tooLarge);

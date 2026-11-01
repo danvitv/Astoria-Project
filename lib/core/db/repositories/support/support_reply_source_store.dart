@@ -400,6 +400,7 @@ abstract final class _ReplySourceHeader {
           }
           if (navigation &&
               (!const [
+                    'list',
                     'contents',
                     'search',
                     'read',
@@ -413,10 +414,16 @@ abstract final class _ReplySourceHeader {
           }
           ids(disclosure['orderedSourceIds'], max: 16);
           final sourceIds = disclosure['orderedSourceIds'] as List;
+          if (disclosure['operation'] == 'list' &&
+              (disclosure['extent'] != 'scopeMetadata' ||
+                  sourceIds.first != disclosure['sourceId'])) {
+            bad();
+          }
           if (const [
                 'studioPreset',
                 'ordinaryPreset',
               ].contains(disclosure['domain']) &&
+              disclosure['operation'] != 'list' &&
               (sourceIds.length != 1 ||
                   sourceIds.single != disclosure['sourceId'])) {
             bad();

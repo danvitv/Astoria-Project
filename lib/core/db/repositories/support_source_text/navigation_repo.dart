@@ -96,6 +96,52 @@ final class SupportSourceNavigationRepo
   String? nativeLabel(nav.SourceObservation observation) =>
       _owned(observation)?.label;
 
+  String? nativeTitle(nav.SourceObservation observation) =>
+      _owned(observation)?.header['title'] as String?;
+
+  /// Finite authored-free metadata; the host separately redacts the label.
+  Map<String, Object?> nativeCatalogMetadata(
+    nav.SourceObservation observation,
+  ) {
+    final source = _owned(observation);
+    if (source == null || !_alive()) _fail();
+    final activity = source.header['updated_at'];
+    return {
+      'savedActivityAt': activity is int && activity > 0
+          ? _navActivity(activity)
+          : null,
+      if (source.header['session_index'] is int)
+        'sessionNumber': (source.header['session_index'] as int) + 1,
+    };
+  }
+
+  String? privateCatalogDigest(
+    List<nav.SourceObservation> observations,
+    String exactWire,
+  ) {
+    if (!_alive() ||
+        observations.isEmpty ||
+        observations.length > 16 ||
+        observations.any((o) => _owned(o) == null))
+      return null;
+    return sha256
+        .convert(
+          utf8.encode(
+            jsonEncode([
+              for (final observation in observations)
+                [
+                  observation.key.domain.name,
+                  observation.key.nativeId,
+                  _owned(observation)!.header,
+                  observation.snapshot.privateIntegrity,
+                ],
+              exactWire,
+            ]),
+          ),
+        )
+        .toString();
+  }
+
   String nativeIdentityHint(nav.SourceObservation observation) {
     final source = _owned(observation);
     if (source == null || !_alive()) return '';
