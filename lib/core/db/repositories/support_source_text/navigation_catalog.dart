@@ -125,6 +125,12 @@ extension _NavCatalog on SupportSourceNavigationRepo {
     Object? cursor,
     nav.WorkBound bound,
   ) async {
+    if (domain == nav.SourceDomain.applicationData) {
+      return _discoverApplication(parent, cursor, bound);
+    }
+    if (domain == nav.SourceDomain.astoriaConversation) {
+      return _discoverAstoria(parent, cursor, bound);
+    }
     if (parent != null && !_sources.containsKey(parent)) _fail();
     var after = 0;
     _NavListCursor? issued;
@@ -298,6 +304,9 @@ extension _NavCatalog on SupportSourceNavigationRepo {
     _shape.id(key.nativeId);
     final retained = _sources[key];
     if (retained != null) return retained.observation;
+    if (key.domain == nav.SourceDomain.applicationData ||
+        key.domain == nav.SourceDomain.astoriaConversation)
+      return null;
     final session =
         key.domain != nav.SourceDomain.ordinaryPreset &&
         key.domain != nav.SourceDomain.studioPreset;

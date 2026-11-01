@@ -12,14 +12,29 @@ final class SupportSourceNavigationRepo
     required bool Function() isCurrent,
     Future<String> Function()? activeStudioPresetId,
     Future<String?> Function()? activeOrdinaryPresetId,
+    String? ownSupportSessionId,
   }) : _current = isCurrent,
        _activeStudio = activeStudioPresetId,
-       _activeOrdinary = activeOrdinaryPresetId;
+       _activeOrdinary = activeOrdinaryPresetId,
+       _ownSupportSessionId = ownSupportSessionId;
 
   final SupportSourceTextRepo _boundary;
   final bool Function() _current;
   final Future<String> Function()? _activeStudio;
   final Future<String?> Function()? _activeOrdinary;
+  final String? _ownSupportSessionId;
+  late final SupportPayloadCipher _readCipher = SupportPayloadCipher.readOnly(
+    delegate: _boundary._cipher,
+    gate: (decrypt) async {
+      _guard();
+      // Only pure crypto/vault work races this deadline. SQL remains joined in
+      // the original owner/ROOT; late plaintext cannot escape the cipher gate.
+      final value = await decrypt().timeout(const Duration(seconds: 2));
+      _guard();
+      _rootValidation?._check();
+      return value;
+    },
+  );
   List<nav.SourceObservation> _lastDiscovery = const [];
 
   /// Exact observations from the last bounded page, for LOCAL target selection.
@@ -33,6 +48,7 @@ final class SupportSourceNavigationRepo
   bool _retired = false, _checking = false, _busy = false;
   final Map<nav.SourceKey, _NavSource> _sources = {};
   final Map<String, _NavCapture> _captures = {};
+  final Map<String, int> _applicationPositions = {};
   int _captureBytes = 0;
   SupportSourceReadFailure? _failure;
   _NavRootRevalidation? _rootValidation;
@@ -107,6 +123,13 @@ final class SupportSourceNavigationRepo
     if (source == null || !_alive()) _fail();
     final activity = source.header['updated_at'];
     return {
+      if (observation.key.domain == nav.SourceDomain.applicationData) ...{
+        'coverage': 'bounded_safe_logical_projections_not_full_rows',
+        'privateFieldsOmitted': true,
+        if (observation.key.nativeId == 'sessionSavedData')
+          'storedVariationsCoverage':
+              'ready_authenticated_indexed_units_only; missing_index_is_not_no_history',
+      },
       'savedActivityAt': activity is int && activity > 0
           ? _navActivity(activity)
           : null,
@@ -384,8 +407,13 @@ final class SupportSourceNavigationRepo
       _guard();
       _rootValidation?._check();
       return value;
-    } on SupportSourceReadException catch (error) {
-      _fail(error.failure);
+    } on SupportSourceReadException catch (error, stack) {
+      _failure ??= error.failure;
+      _retired = true;
+      Error.throwWithStackTrace(
+        SupportSourceReadException(failure: _failure!),
+        stack,
+      );
     } on FormatException {
       _fail(SupportSourceReadFailure.unsupportedFormat);
     } catch (_) {

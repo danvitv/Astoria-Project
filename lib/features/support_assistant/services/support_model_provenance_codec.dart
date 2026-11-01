@@ -239,6 +239,9 @@ SupportModelToolDisclosure _disclosure(Object? value) {
       'reconciliation' => SupportModelToolDisclosureDomain.reconciliation,
       'characterKnowledge' =>
         SupportModelToolDisclosureDomain.characterKnowledge,
+      'applicationData' => SupportModelToolDisclosureDomain.applicationData,
+      'astoriaConversation' =>
+        SupportModelToolDisclosureDomain.astoriaConversation,
       _ => _reject(SupportModelProvenanceFailure.invalidSource),
     },
     sourceId: _string(item['sourceId']),

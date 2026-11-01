@@ -69,10 +69,13 @@ class MainActivity : FlutterActivity() {
     private var pendingPermissionResult: MethodChannel.Result? = null
     private val wallpaperPermissionCode = 9911
     private var powerSaveReceiver: BroadcastReceiver? = null
+    private var supportReportSave: SupportReportSaveChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         SnapshotStorageChannel.register(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+        supportReportSave?.close()
+        supportReportSave = SupportReportSaveChannel(this, flutterEngine.dartExecutor.binaryMessenger)
 
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -271,6 +274,21 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             null
         }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (supportReportSave?.onActivityResult(requestCode, resultCode, data) == true) return
+        super.onActivityResult(requestCode, resultCode, data)
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        supportReportSave?.close()
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    override fun onDestroy() {
+        supportReportSave?.close()
+        super.onDestroy()
     }
 
     override fun onRequestPermissionsResult(

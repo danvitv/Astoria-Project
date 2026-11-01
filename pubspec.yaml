@@ -24,6 +24,11 @@ dependencies:
   flutter_secure_storage:
     path: third_party/flutter_secure_storage
   cryptography: ^2.9.0
+  # Pinned: newer sodium releases require Dart 3.13. Report sealed-box uses
+  # the native libsodium implementation, not a custom key-wrapping protocol.
+  sodium: 4.0.3
+  ffi: 2.2.0
+  win32: 5.15.0
   gpt_markdown: ^1.1.6
   url_launcher: ^6.3.0
   archive: ^4.0.0
@@ -77,6 +82,7 @@ flutter:
     - assets/chat_webview/formatter/
     - assets/chat_webview/renderer/
     - assets/translations/
+    - assets/support_report/
     - .env
   fonts:
     - family: Inter

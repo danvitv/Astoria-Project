@@ -11,6 +11,19 @@ final class NativeDataSourceIdentity {
   bool belongsTo(AppDatabase database) =>
       identical(_database, database) && isCurrent;
 
+  /// Joins work to this already-open original native lifetime. It does not open,
+  /// reconnect, reveal a file/handle, establish a transaction or grant data access.
+  /// Native ROOT repositories must still establish their own audited admission.
+  Future<T> withBorrowedLifetime<T>(Future<T> Function() work) async {
+    if (!isCurrent) throw StateError('Native source retired');
+    late T result;
+    await _native.borrow(() async {
+      if (!isCurrent) throw StateError('Native source retired');
+      result = await work();
+    });
+    return result;
+  }
+
   /// A proposal only: no directory/file, key, body, SQL or OS dialog is touched.
   /// The opaque destination is private native UI metadata, never tool JSON.
   String? proposeAppPrivateSnapshotDestination() {

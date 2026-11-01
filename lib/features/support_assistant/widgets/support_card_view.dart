@@ -95,9 +95,17 @@ class SupportCardView extends StatelessWidget {
         ),
       ],
       SupportReportCard() => <Widget>[
-        _title(context, '.astoria-report'),
+        _title(context, 'Зашифрованный репорт'),
         const Text(
-          'Экспорт отчёта пока не реализован. Файл и диагностический снимок не созданы.',
+          'Эта карточка не подтверждает создание файла. Открой новый нативный '
+          'просмотр, выбери включённые данные и сохрани зашифрованный файл отдельно.',
+        ),
+        _CardAction(
+          key: const ValueKey('support_report_card_prepare'),
+          label: 'Подготовить новый репорт',
+          onTap: onSetupAction == null
+              ? null
+              : () => onSetupAction!('support_report'),
         ),
       ],
     };

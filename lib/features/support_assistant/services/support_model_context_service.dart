@@ -476,6 +476,7 @@ extension _ModelAdmission on _ModelRun {
     required bool Function() capsuleCurrent,
     required void Function() dispatch,
     nav.SourceObservation? additionalSource,
+    Future<bool> Function(void Function() checkpoint)? sourceValidation,
   }) {
     final configuration = binding.configuration;
     Future<bool> checkReadOnly(void Function() checkpoint) async {
@@ -525,10 +526,13 @@ extension _ModelAdmission on _ModelRun {
           () => operation.reader.getContextBlockById(expected!.provenance.id),
           checkpoint,
         );
-        if (!await sourceToolsRevalidate(
-          checkpoint,
-          additionalSource: additionalSource,
-        )) {
+        final sourceValid = sourceValidation == null
+            ? await sourceToolsRevalidate(
+                checkpoint,
+                additionalSource: additionalSource,
+              )
+            : await sourceValidation(checkpoint);
+        if (!sourceValid) {
           return false;
         }
         checkpoint();
@@ -549,7 +553,9 @@ extension _ModelAdmission on _ModelRun {
       );
     }
     // No native source owner means no batch and no additional source admission.
-    if (additionalSource != null) return Future.value(false);
+    if (additionalSource != null || sourceValidation != null) {
+      return Future.value(false);
+    }
     return history.admitDispatch(
       snapshots: snapshots,
       isCurrent: () => current() && capsuleCurrent(),

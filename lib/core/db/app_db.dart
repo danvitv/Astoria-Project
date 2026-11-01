@@ -120,9 +120,12 @@ class AppDatabase extends _$AppDatabase {
 
   AppDatabase._native(_AppDatabaseNativeFile native, {File? fixedFile})
     : _nativeFile = native,
+      _stockSingleConnectionExecutor = true,
       super(_openConnection(native, fixedFile: fixedFile));
 
-  AppDatabase.forTesting(super.e) : _nativeFile = null;
+  AppDatabase.forTesting(super.e)
+    : _nativeFile = null,
+      _stockSingleConnectionExecutor = false;
 
   /// Native composition only: file identity comes from THIS opened SQLite
   /// connection, not from a separately supplied path. Memory/attached sources
@@ -161,9 +164,19 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
-  AppDatabase._openedNative(super.executor, this._nativeFile);
+  AppDatabase._openedNative(super.executor, this._nativeFile)
+    : _stockSingleConnectionExecutor = false;
 
   final _AppDatabaseNativeFile? _nativeFile;
+  final bool _stockSingleConnectionExecutor;
+
+  /// Constructor attestation, not FILE identity or runtime read authority.
+  /// Only our private lazy factory selects the fixed background executor with
+  /// readPool: 0 and known worker setup. Externally opened/testing executors are
+  /// unknown even if they have a real file. Actual ROOT admission still checks
+  /// the original opened owner and busy_timeout=0 before reserving its writer.
+  bool get hasAuditedStockSingleConnectionExecutor =>
+      _stockSingleConnectionExecutor;
   NativeDataSourceIdentity? _nativeIdentity;
   bool _completedOpening = false;
 

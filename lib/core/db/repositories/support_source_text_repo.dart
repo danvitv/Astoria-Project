@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import '../native_history/history_message_unit.dart' as history;
@@ -27,6 +28,10 @@ part 'support_source_text/navigation_memory.dart';
 part 'support_source_text/navigation_ledger.dart';
 part 'support_source_text/navigation_reconciliation.dart';
 part 'support_source_text/navigation_shape.dart';
+part 'support_source_text/application_dataset_registry.dart';
+part 'support_source_text/application_json_projection.dart';
+part 'support_source_text/navigation_application.dart';
+part 'support_source_text/navigation_astoria.dart';
 
 /// MODEL tools may request metadata; only the original exact native lease may
 /// implement this port after confirmation of extent AND the same destination.
@@ -66,6 +71,7 @@ final class SupportSourceTextRepo {
     required SupportPayloadCipher cipher,
     required SecretRedactor Function() currentRedactor,
   }) : _db = db,
+       _cipher = cipher,
        _currentRedactor = currentRedactor,
        _text = SupportTextContextRepo(
          db: db,
@@ -82,6 +88,7 @@ final class SupportSourceTextRepo {
   static const maxStudioPartCharacters = 32768;
   static const maxStudioPartDoubleJsonBytes = 40000;
   final AppDatabase _db;
+  final SupportPayloadCipher _cipher;
   final SecretRedactor Function() _currentRedactor;
   final SupportTextContextRepo _text;
 

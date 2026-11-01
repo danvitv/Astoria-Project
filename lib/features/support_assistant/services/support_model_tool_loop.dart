@@ -38,9 +38,19 @@ const _supportToolInstruction =
 
 const _supportSourceInstruction =
     'The exact read-only source operations are astoria_sources_list, astoria_source_contents, '
-    'astoria_source_search and astoria_source_read. The nine domains are game, ordinaryPreset, '
+    'astoria_source_search and astoria_source_read. The domains are game, ordinaryPreset, '
     'studioPreset, memory, savedSummary, ledgerState, ledgerSnapshot, reconciliation and '
-    'characterKnowledge. Ordinary and Studio CURRENT SAVED presets are separate namespaces. '
+    'characterKnowledge, applicationData and astoriaConversation. applicationData lists '
+    'fixed named logical datasets: character cards, personas, lorebooks/folders, session '
+    'notes/variables/stored variations, canon/revisions, rewrite/evolution records, '
+    'transport captures, extension definitions/outputs, API settings, embedding and maintenance '
+    'status, and Astoria saved summaries/settings/action/report status. astoriaConversation '
+    'lists OTHER encrypted Astoria conversations; this run uses its own already-admitted '
+    'conversation, not a new self-reading snapshot. Credentials and execution authority are '
+    'never projected. Gallery/attachment paths are inert metadata, never file access. '
+    'Typed dataset omissions and locked/oversized/unknown units are not complete content. '
+    'SQLite snapshot fences do NOT attest SharedPreferences global memory/pipeline/regex/bindings; '
+    'these stores are not connected by this catalog. Ordinary and Studio CURRENT SAVED presets are separate namespaces. '
     'With application-data consent, list supplies bounded redacted names, session numbers, '
     'saved activity dates and ALL original opaque handles on the page. Identify the named '
     'source and newest session yourself; inspect MULTIPLE relevant sessions and the active '
@@ -160,6 +170,7 @@ extension _ModelTools on _ModelRun {
       isCurrent: current,
       activeStudioPresetId: service._activeStudioPresetId,
       activeOrdinaryPresetId: service._activeOrdinaryPresetId,
+      ownSupportSessionId: binding.sessionId,
     );
     return _ModelSourceToolRun(
       this,

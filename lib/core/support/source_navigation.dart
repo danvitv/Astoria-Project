@@ -12,6 +12,8 @@ enum SourceDomain {
   ledgerSnapshot,
   reconciliation,
   characterKnowledge,
+  applicationData,
+  astoriaConversation,
 }
 
 enum SourceState {
@@ -55,6 +57,8 @@ enum SectionKind {
   reconciliationSavedResult,
   reconciliationEvidence,
   knowledgeFact,
+  applicationRecord,
+  astoriaMessage,
 }
 
 enum EvidenceState { attested, unknown, invalid, missing }
@@ -313,11 +317,15 @@ class SectionDescriptor {
   final SectionKind kind;
   final SourceState state;
   final Binding binding;
+
+  /// Optional native fixed-schema description; never a raw database identity.
+  final String? label;
   const SectionDescriptor(
     this.selection,
     this.kind, {
     this.state = SourceState.unknown,
     this.binding = const Binding(),
+    this.label,
   });
 }
 
@@ -335,6 +343,7 @@ class DataRecord {
   final bool completeUnit;
   final bool schemaKeysAttested;
   final String? role;
+  final String? label;
   DataRecord({
     required this.selection,
     required this.kind,
@@ -346,6 +355,7 @@ class DataRecord {
     this.completeUnit = true,
     this.schemaKeysAttested = false,
     this.role,
+    this.label,
   }) : payload = _freeze(payload);
 }
 
@@ -654,7 +664,8 @@ class PostEnvelope {
 
 class _Failure implements Exception {
   final String status;
-  const _Failure(this.status);
+  final String? hostRefusal;
+  const _Failure(this.status, {this.hostRefusal});
 }
 
 class _SourceRef {
@@ -744,6 +755,11 @@ class SourceNavigationEngine {
   int _bodyResults = 0;
   int _spent = 0;
   int _material = 0;
+  String? _hostRefusal;
+
+  /// Finite refusal category only, not an exception, source or reusable permit.
+  /// Hosts must not turn a blocked continuation into an unexplained blank reply.
+  String? get lastHostRefusal => _hostRefusal;
   SourceNavigationEngine({
     required this.run,
     required this.repository,
@@ -770,6 +786,7 @@ class SourceNavigationEngine {
     Iterable<SourceObservation> observations,
     void Function() checkpoint,
   ) async {
+    _hostRefusal = null;
     try {
       final native = repository;
       final originalRoot = native is OriginalRootNavigationRepository
@@ -782,6 +799,7 @@ class SourceNavigationEngine {
         _checkpoint();
         final source = _sources[observation.key];
         if (source == null || !identical(source.source, observation)) {
+          _hostRefusal = 'invalidCustody';
           return false;
         }
         if (!checked.add(observation)) continue;
@@ -797,6 +815,7 @@ class SourceNavigationEngine {
       }
       if (!identical(originalRoot.repository, repository) ||
           !originalRoot.isCurrent) {
+        _hostRefusal = 'staleSource';
         return false;
       }
       void leases() {
@@ -821,11 +840,18 @@ class SourceNavigationEngine {
         );
         checkpoint();
         _checkpoint();
-        if (!valid) return false;
+        if (!valid) {
+          _hostRefusal = 'staleSource';
+          return false;
+        }
       }
       leases();
       return true;
+    } on _Failure catch (failure) {
+      _hostRefusal = failure.hostRefusal ?? failure.status;
+      return false;
     } catch (_) {
+      _hostRefusal = 'stopped';
       return false;
     }
   }
@@ -867,7 +893,10 @@ class SourceNavigationEngine {
   }) async {
     _checkpoint();
     if (repo && ++_steps > Limits.repositorySteps) {
-      throw const _Failure('budgetExceeded');
+      throw const _Failure(
+        'budgetExceeded',
+        hostRefusal: 'repositoryWorkBudget',
+      );
     }
     // Start, join and settle private work even if a synchronous callback retires
     // the owner before returning its already-started future.
@@ -1311,7 +1340,7 @@ class SourceNavigationEngine {
       pieces.add({
         'selector': selector,
         'kind': item.kind.name,
-        'label': item.kind.name,
+        'label': item.label ?? item.kind.name,
         'state': item.state.name,
         'readable': item.selection.readable,
         'selectionKind': item.selection.kind.name,
@@ -1394,6 +1423,7 @@ class SourceNavigationEngine {
         record.kind,
         state: record.state,
         binding: record.binding,
+        label: record.label,
       );
       final selector = _issue(_SelectionRef(source, grant, descriptor));
       final matchStart = _scalarOffset(text, index);
@@ -1401,6 +1431,7 @@ class SourceNavigationEngine {
       pieces.add({
         'selector': selector,
         'kind': record.kind.name,
+        if (record.label != null) 'label': record.label,
         'state': record.state.name,
         'occurrence': 'first_visible_literal_per_record',
         'excerpt': excerpt.text,
@@ -1550,6 +1581,7 @@ class SourceNavigationEngine {
             record.kind,
             state: record.state,
             binding: record.binding,
+            label: record.label,
           ),
         ),
       );
@@ -1558,6 +1590,7 @@ class SourceNavigationEngine {
       pieces.add({
         'selector': selector,
         'kind': record.kind.name,
+        if (record.label != null) 'label': record.label,
         'state': record.state.name,
         'role': record.role,
         'payload': text,
@@ -1623,6 +1656,7 @@ class SourceNavigationEngine {
         state: record.state,
         binding: record.binding,
         role: record.role,
+        label: record.label,
         payload: null,
       );
       next = _issue(
@@ -1638,6 +1672,7 @@ class SourceNavigationEngine {
           record.kind,
           state: record.state,
           binding: record.binding,
+          label: record.label,
         ),
       ),
     );
@@ -1647,6 +1682,7 @@ class SourceNavigationEngine {
         {
           'selector': selector,
           'kind': record.kind.name,
+          if (record.label != null) 'label': record.label,
           'state': record.state.name,
           'role': record.role,
           'payload': chunk.text,
@@ -1777,13 +1813,19 @@ class SourceNavigationEngine {
   /// immediately before real transport POST. Engine never calls a provider itself.
   Future<bool> withPost(
     List<Object> candidates,
-    Future<void> Function(PostEnvelope originals) dispatch,
-  ) async {
+    Future<void> Function(PostEnvelope originals) dispatch, {
+    Future<bool> Function(
+      Future<bool> Function(Iterable<SourceObservation> additional) validate,
+    )?
+    validateInsideOriginalRoot,
+  }) async {
     if (_busy) {
+      _hostRefusal = 'stopped';
       _retired = true;
       return false;
     }
     _busy = true;
+    _hostRefusal = null;
     try {
       _checkpoint();
       if (candidates.length > Limits.collection) {
@@ -1805,11 +1847,53 @@ class SourceNavigationEngine {
         if (!stamp.same(retained.projection)) {
           throw const _Failure('staleProjection');
         }
-        if (checked.add(retained.source)) {
-          await _fresh(retained.source, retained.grant);
-          _checkpoint();
-        }
+        checked.add(retained.source);
       }
+      // This existing host validator batches ONLY inside the repository's actual
+      // current writer-excluding ROOT. Outside it, every source still receives
+      // its original separate _fresh check. Lease/projection checks on BOTH sides
+      // and all disclosure/retransmission charges below remain unchanged.
+      final observations = List<SourceObservation>.unmodifiable(
+        checked.map((source) => source.source),
+      );
+      var valid = false;
+      if (validateInsideOriginalRoot == null) {
+        valid = await revalidateForHost(observations, _checkpoint);
+      } else {
+        var invoked = false, verified = false;
+        Future<bool> validate(Iterable<SourceObservation> additional) async {
+          _checkpoint();
+          final native = repository;
+          final root = native is OriginalRootNavigationRepository
+              ? native.currentOriginalRootRevalidation
+              : null;
+          // A callback's boolean is NOT a native ROOT. Require its actual
+          // repository-issued, current scope and consume our verifier once.
+          if (invoked ||
+              root == null ||
+              !identical(root.repository, repository) ||
+              !root.isCurrent) {
+            throw const _Failure('invalidCustody');
+          }
+          invoked = true;
+          verified = await revalidateForHost(
+            List.unmodifiable([...observations, ...additional]),
+            _checkpoint,
+          );
+          _checkpoint();
+          return verified;
+        }
+
+        final admitted = await _await(
+          () => validateInsideOriginalRoot(validate),
+        );
+        _checkpoint();
+        valid = admitted && invoked && verified;
+      }
+      if (!valid) {
+        throw _Failure(_hostRefusal ?? 'stopped');
+      }
+      _checkpoint();
       // Check synchronous leases again after all async fences.
       for (final retained in _retained) {
         _grantCurrent(retained.source, retained.grant);
@@ -1840,7 +1924,10 @@ class SourceNavigationEngine {
                 entry.key.spent + entry.value >
                 entry.key.grant!.disclosureBytes,
           )) {
-        throw const _Failure('budgetExceeded');
+        throw const _Failure(
+          'budgetExceeded',
+          hostRefusal: 'sourceDisclosureBudget',
+        );
       }
       _spent += total;
       for (final entry in charges.entries) {
@@ -1849,7 +1936,11 @@ class SourceNavigationEngine {
       await _await(() => dispatch(PostEnvelope._(results, run)));
       _checkpoint();
       return true;
+    } on _Failure catch (failure) {
+      _hostRefusal = failure.hostRefusal ?? failure.status;
+      return false;
     } catch (_) {
+      _hostRefusal = 'stopped';
       return false;
     } finally {
       _busy = false;
@@ -1911,6 +2002,7 @@ class SourceNavigationEngine {
         record.kind,
         state: record.state,
         binding: record.binding,
+        label: record.label,
       ),
       source.source.key.domain,
     );
@@ -2084,9 +2176,16 @@ const _domainSections = <SourceDomain, Set<SectionKind>>{
     SectionKind.reconciliationEvidence,
   },
   SourceDomain.characterKnowledge: {SectionKind.knowledgeFact},
+  SourceDomain.applicationData: {SectionKind.applicationRecord},
+  SourceDomain.astoriaConversation: {SectionKind.astoriaMessage},
 };
 
 void _descriptor(SectionDescriptor descriptor, SourceDomain domain) {
+  if (descriptor.label != null &&
+      (!_validScalars(descriptor.label!) ||
+          utf8.encode(descriptor.label!).length > Limits.metadataBytes)) {
+    throw const _Failure('unavailable');
+  }
   final selection = descriptor.selection;
   _privateId(selection.sectionId);
   if (selection.recordId != null) _privateId(selection.recordId!);

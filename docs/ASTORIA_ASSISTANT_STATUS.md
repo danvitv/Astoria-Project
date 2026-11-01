@@ -6,6 +6,39 @@ verification fixes are complete for the named Send/settings debts and recorded
 in the follow-up repository history.
 The earlier October 31 documentation audit used `1546a53f`.
 
+## Temporary restart checkpoint — November 1
+
+At the user's request, work on the remaining DB-reader/report slice is stopping
+after a runnable Windows checkpoint, not after full feature acceptance. The
+follow-up source changes are recorded as a restart checkpoint in repository history;
+the prior UI-debt commit is `6f9b9476`.
+Windows release compilation passed in 89.1 seconds:
+`build/windows/x64/runner/Release/Astoria.exe`. All 15 selected startup/native-ABI
+tests passed. Work is now temporarily paused. The GUI/device was not launched;
+no running application, private database or operator key was opened or changed.
+This is a runnable restart checkpoint, not full reader/report acceptance.
+
+- New readers now map the 64 SQLite tables to bounded logical projections or
+  explicit private exclusions through 11 domains. Ten new native cases passed;
+  three successful end-to-end cases still need verification after the final
+  native-ROOT budget correction. Source and disclosure limits were not increased.
+  Non-SQLite global preferences remain outside this completed coverage.
+- Report snapshot/preview/exclusions, real libsodium encryption, native save ports
+  and the DPAPI-protected local CLI are implemented, but not fully accepted.
+  Earlier native evidence covers 25 core/crypto/ROOT/DPAPI and 33 save-port cases.
+  The latest sanitizer/UI/cleanup corrections, compiled CLI, report UI/factory,
+  remaining privacy reviews and Android native behavior are still pending.
+- The bundled recipient descriptor is intentionally unconfigured. Preparing a
+  preview does not create or send a report; production export remains unavailable
+  until a trusted operator provisions only the public descriptor and rebuilds.
+  No operator private key was generated, read or placed in the conversation.
+- Cancellation before ciphertext admission prevents report-byte transfer; Android
+  selection can leave an empty document if best-effort deletion fails. Admitted
+  OS I/O cannot be advertised as undoable.
+
+The accepted access/UI evidence below describes the earlier delivery, not a new
+certification of every checkpointed reader/report path or a manual device launch.
+
 **The assistant is integrated and enabled, but the complete original product plan
 is not finished.** The November 1 request resumes a bounded implementation slice:
 one global data-read consent, autonomous multi-source reading and a simpler UI.
@@ -27,8 +60,9 @@ checks remain mandatory, not user-facing permission puzzles.
 Sending a support report to the developer is a separate decision. Its exact preview
 must say whether session titles/history or other personal content are included and
 allow exclusion or cancellation. Read consent never authorizes export or upload.
-The original recipient-encrypted report/export/decoder is still unfinished; this
-read-access slice must not present an unavailable report as already created or sent.
+The recipient-encrypted report/export/decoder has now been implemented in the
+follow-up slice, with incomplete integration evidence and no configured production
+recipient. An unavailable export must not be presented as already created or sent.
 
 ### Delivered access slice and limits
 
@@ -123,13 +157,14 @@ below verify the new access slice, not a rerun of every nine-domain legacy case.
 | Workspace and history | Integrated. Rich list/code-block rendering and some originally proposed generation overrides remain outside the current narrower UI. |
 | Guided setup | Theme/provider entry uses ordinary native settings for global-profile users. The complete Memory Books wizard is not implemented. |
 | Tools, skills, agents and DCP | Actual tool execution and compaction are integrated. Curated diagnostic skills, bounded specialist agents and the full structured diagnostic product remain open. Tool rounds use the dedicated native transport, not the originally proposed streaming tool-event extension to `ChatTransport`. |
-| Support reports | Detached facts/diagnosis/remediation snapshot, immutable preview/exclusions, recipient encryption, `.astoria-report` export and the local HELGA decrypt CLI are not implemented. |
+| Support reports | Follow-up code implements bounded native facts/commentary, immutable preview/exclusions, recipient encryption, `.astreport` save and a DPAPI-protected local decoder. Current-snapshot UI/CLI/privacy/platform acceptance and trusted public-recipient provisioning remain unfinished; see the temporary checkpoint above. |
 
 The Memory Books quick action currently reports that the assistant entry is
 unavailable. Existing Memory settings tools do not replace the planned 4–6-question
 wizard, global/session distinction, end-to-end readiness check and rollback.
 
-The report UI explicitly says no diagnostic snapshot/file has been created.
+The report UI now prepares an explicit preview. No file is implied before an
+actual successful native save, and an unconfigured recipient disables export.
 Per-install history encryption is not report encryption for the support recipient.
 Production public recipient key/keyId and trusted private-key provisioning for the
 local decoder remain an unresolved trust seam; do not embed a demo production key.

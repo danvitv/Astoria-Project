@@ -112,6 +112,10 @@ extension _NavRecords on SupportSourceNavigationRepo {
     Object? cursor,
     nav.WorkBound bound,
   ) async {
+    if (source.observation.key.domain == nav.SourceDomain.applicationData ||
+        source.observation.key.domain == nav.SourceDomain.astoriaConversation) {
+      return _applicationContents(source, scope, section, cursor, bound);
+    }
     if (source.observation.key.domain == nav.SourceDomain.game) {
       if (section != null) _fail();
       final page = await _gamePage(
@@ -204,6 +208,18 @@ extension _NavRecords on SupportSourceNavigationRepo {
     // Validate scalars before SQLite receives the literal; no regex/collation.
     SupportSourceJson.decode(jsonEncode(literal), maxBytes: 2048);
     if (literal.isEmpty || literal.runes.length > 256) _fail();
+    if (source.observation.key.domain == nav.SourceDomain.applicationData ||
+        source.observation.key.domain == nav.SourceDomain.astoriaConversation) {
+      return _applicationPage(
+        source,
+        scope,
+        'search',
+        section,
+        literal,
+        cursor,
+        bound,
+      );
+    }
     if (source.observation.key.domain == nav.SourceDomain.game) {
       if (section != null) _fail();
       return _gamePage(source, scope, 'search', literal, cursor, bound);
@@ -234,6 +250,13 @@ extension _NavRecords on SupportSourceNavigationRepo {
     }
     final capture = source.captures[_selectionKey(query.selection)];
     if (capture == null) _fail();
+    if (source.observation.key.domain == nav.SourceDomain.astoriaConversation) {
+      if (query.before != 0 ||
+          query.after != 0 ||
+          query.selection.kind != nav.SelectionKind.record)
+        _fail();
+      return _astoriaRead(source, query.selection, bound);
+    }
     if (query.selection.range != null) {
       final range = query.selection.range!;
       final start = range.start.ordinal - query.before;

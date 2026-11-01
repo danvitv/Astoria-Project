@@ -93,9 +93,13 @@ any necessary session titles/history, diagnosis and content-derived quotations.
 They may exclude material or cancel. Cancellation means no export/upload/transfer;
 the UI must not promise that a bug will necessarily be fixed after submission.
 
-The detached recipient-encrypted `.astoria-report` exporter and local decoder are
-not implemented. Do not present history encryption or reading consent as a working
-report product, invent a support key, or silently downgrade its encryption design.
+The detached recipient-encrypted `.astreport` save flow and local DPAPI-protected
+decoder are implemented in the current follow-up, but full integration verification
+and trusted public-recipient provisioning are unfinished. Work is paused at the
+Windows restart checkpoint described in the status document. Do not present history
+encryption or reading consent as export approval, invent a support key, or silently
+downgrade the report encryption design. A preview is not a saved/sent report; Android
+destination selection may leave an empty document if best-effort cleanup fails.
 
 Read consent does not authorize edits, destructive repairs, connection tests,
 backup export, restore, uploads or other public actions. Existing action-specific

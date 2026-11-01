@@ -390,6 +390,8 @@ abstract final class _ReplySourceHeader {
                 'ledgerSnapshot',
                 'reconciliation',
                 'characterKnowledge',
+                'applicationData',
+                'astoriaConversation',
               ].contains(disclosure['domain']) ||
               !SupportSourceJson.identity(disclosure['sourceId']) ||
               disclosure['snapshotDigest'] is! String ||
@@ -412,6 +414,12 @@ abstract final class _ReplySourceHeader {
                   ].contains(disclosure['extent']))) {
             bad();
           }
+          if (const [
+                'applicationData',
+                'astoriaConversation',
+              ].contains(disclosure['domain']) &&
+              !navigation)
+            bad();
           ids(disclosure['orderedSourceIds'], max: 16);
           final sourceIds = disclosure['orderedSourceIds'] as List;
           if (disclosure['operation'] == 'list' &&

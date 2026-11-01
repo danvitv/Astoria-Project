@@ -205,6 +205,14 @@ final class _ModelSourceToolRun
     SupportAppActionContext context,
   ) async {
     check(context);
+    if (action == SupportSourceToolNames.list &&
+        !automaticAccess &&
+        const {
+          'applicationData',
+          'astoriaConversation',
+        }.contains(arguments['domain'])) {
+      throw const SupportAppActionRefused(SupportAppActionCode.denied);
+    }
     final call = run.toolCall;
     if (call == null ||
         call.name != action ||
@@ -569,6 +577,12 @@ final class _ModelSourceToolRun
       'Исходный снимок изменился; область не расширялась и не подменялась',
     'budgetExceeded' =>
       'Лимит навигации исчерпан; прочитанную часть нельзя считать всем источником',
+    'repositoryWorkBudget' =>
+      'Лимит операций чтения БД исчерпан; продолжение не передано',
+    'sourceDisclosureBudget' =>
+      'Лимит передачи сохранённых фрагментов исчерпан; продолжение не передано',
+    'nestedWireDisclosureBudget' =>
+      'Лимит передачи вложенных результатов исчерпан; продолжение не передано',
     'invalidReference' || 'invalidArguments' =>
       'Модель передала невыданную ссылку или неподдерживаемые параметры',
     'stopped' =>
@@ -614,15 +628,23 @@ final class _ModelSourceToolRun
   Future<bool> revalidate(
     void Function() checkpoint, {
     nav.SourceObservation? additionalSource,
+    Future<bool> Function(Iterable<nav.SourceObservation> sources)?
+    originalRootValidation,
   }) async {
     if (!_bound) {
       return additionalSource == null && _admitted.isEmpty && current;
     }
-    if (!await engine.revalidateForHost([
+    final observations = <nav.SourceObservation>[
       ..._discovered,
       ..._admitted.map((e) => e.source),
       ?additionalSource,
-    ], checkpoint)) {
+    ];
+    final valid = originalRootValidation == null
+        ? await engine.revalidateForHost(observations, checkpoint)
+        : await originalRootValidation(observations);
+    checkpoint();
+    if (!valid) {
+      _refuseNavigation(engine.lastHostRefusal ?? 'stopped');
       return false;
     }
     for (final entry in _admitted) {
@@ -647,27 +669,50 @@ final class _ModelSourceToolRun
   Future<bool> withPost(Future<bool> Function() dispatch) async {
     if (!_bound) return false;
     var accepted = false;
-    final ok = await engine.withPost(_published, (_) async {
-      var bytes = _catalogBytes;
-      final scopeBytes = Map<nav.NativeGrant, int>.identity();
-      for (final entry in _admitted) {
-        final bound = _wireBounds[entry];
-        if (bound == null) return;
-        bytes += bound;
-        scopeBytes.update(entry.grant, (n) => n + bound, ifAbsent: () => bound);
-      }
-      if (_wireSpent + bytes > nav.Limits.disclosureBytes ||
-          scopeBytes.entries.any(
-            (e) => (_scopeSpent[e.key] ?? 0) + e.value > e.key.disclosureBytes,
-          )) {
-        return;
-      }
-      _wireSpent += bytes;
-      for (final e in scopeBytes.entries) {
-        _scopeSpent.update(e.key, (n) => n + e.value, ifAbsent: () => e.value);
-      }
-      accepted = await dispatch();
-    });
+    final ok = await engine.withPost(
+      _published,
+      (_) async {
+        var bytes = _catalogBytes;
+        final scopeBytes = Map<nav.NativeGrant, int>.identity();
+        for (final entry in _admitted) {
+          final bound = _wireBounds[entry];
+          if (bound == null) {
+            _refuseNavigation('invalidCustody');
+            return;
+          }
+          bytes += bound;
+          scopeBytes.update(
+            entry.grant,
+            (n) => n + bound,
+            ifAbsent: () => bound,
+          );
+        }
+        if (_wireSpent + bytes > nav.Limits.disclosureBytes ||
+            scopeBytes.entries.any(
+              (e) =>
+                  (_scopeSpent[e.key] ?? 0) + e.value > e.key.disclosureBytes,
+            )) {
+          _refuseNavigation('nestedWireDisclosureBudget');
+          return;
+        }
+        _wireSpent += bytes;
+        for (final e in scopeBytes.entries) {
+          _scopeSpent.update(
+            e.key,
+            (n) => n + e.value,
+            ifAbsent: () => e.value,
+          );
+        }
+        accepted = await dispatch();
+      },
+      validateInsideOriginalRoot: (validate) => run.admitOriginalRoot(
+        capsuleCurrent: () => current,
+        sourceValidation: (checkpoint) =>
+            revalidate(checkpoint, originalRootValidation: validate),
+        dispatch: () {},
+      ),
+    );
+    if (!ok) _refuseNavigation(engine.lastHostRefusal ?? 'stopped');
     return ok && accepted;
   }
 

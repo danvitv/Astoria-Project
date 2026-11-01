@@ -29,6 +29,8 @@ enum SupportModelToolDisclosureDomain {
   ledgerSnapshot,
   reconciliation,
   characterKnowledge,
+  applicationData,
+  astoriaConversation,
 }
 
 enum SupportModelToolDisclosureOperation { list, contents, search, read }
@@ -55,6 +57,13 @@ final class SupportModelToolDisclosure {
        orderedSourceIds = _disclosureIds(orderedSourceIds),
        snapshotDigest = _snapshotDigest(snapshotDigest) {
     if ((operation == null) != (extent == null)) {
+      _fail(SupportModelProvenanceFailure.invalidSource);
+    }
+    if (const {
+          SupportModelToolDisclosureDomain.applicationData,
+          SupportModelToolDisclosureDomain.astoriaConversation,
+        }.contains(domain) &&
+        operation == null) {
       _fail(SupportModelProvenanceFailure.invalidSource);
     }
     if (operation == SupportModelToolDisclosureOperation.list &&
