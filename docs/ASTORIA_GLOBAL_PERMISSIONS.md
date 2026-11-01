@@ -1,5 +1,8 @@
 # Astoria global permissions
 
+For delivered capabilities, remaining scope and verification limits, see
+[Astoria Assistant implementation status](ASTORIA_ASSISTANT_STATUS.md).
+
 Astoria's native workspace uses one encrypted permission profile, shared across
 all Astoria conversations. Opening another chat, restarting, or deleting chats
 does not reset its switches. The fixed inactive `workspace-permissions-global-v1`
