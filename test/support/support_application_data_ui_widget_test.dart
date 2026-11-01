@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,6 +20,37 @@ const _access = ValueKey('support_application_data_switch');
 const _accept = ValueKey('support_application_data_consent_accept');
 const _decline = ValueKey('support_application_data_consent_decline');
 
+Future<T> _native<T>(
+  WidgetTester tester,
+  Future<T> Function() operation,
+) async {
+  var done = false;
+  T? result;
+  Object? error;
+  unawaited(
+    operation().then(
+      (value) {
+        result = value;
+        done = true;
+      },
+      onError: (Object e) {
+        error = e;
+        done = true;
+      },
+    ),
+  );
+  // Reuse the established privacy-test driver. After a real widget gesture the
+  // cipher key FIFO retains a completed fake-zone future; awaiting the next
+  // decrypt entirely inside runAsync strands its late callback in that zone.
+  for (var i = 0; !done && i < 100; i++) {
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pump(const Duration(milliseconds: 10));
+  }
+  if (error != null) throw error!;
+  expect(done, true, reason: 'Synthetic native operation completed');
+  return result as T;
+}
+
 Future<void> _turns(WidgetTester tester) async {
   for (var i = 0; i < 24; i++) {
     await tester.runAsync(() => Future<void>.delayed(Duration.zero));
@@ -26,8 +59,32 @@ Future<void> _turns(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+Future<void> _show(WidgetTester tester, Key key) async {
+  final finder = find.byKey(key);
+  if (finder.evaluate().isEmpty) {
+    // ListView creates lower groups lazily on narrow panels. Scroll the real
+    // settings view before asking ensureVisible for an element that exists.
+    await tester.scrollUntilVisible(
+      finder,
+      250,
+      scrollable: find
+          .byWidgetPredicate(
+            (widget) =>
+                widget is Scrollable &&
+                widget.axisDirection == AxisDirection.down,
+          )
+          .last,
+      maxScrolls: 20,
+    );
+  }
+  await tester.ensureVisible(finder);
+  // ensureVisible updates the scroll position; advance layout before hit-testing
+  // the actual gesture, as in the established native privacy widget tests.
+  await tester.pumpAndSettle();
+}
+
 Future<void> _tap(WidgetTester tester, Key key) async {
-  await tester.ensureVisible(find.byKey(key));
+  await _show(tester, key);
   await tester.tap(find.byKey(key));
   await _turns(tester);
 }
@@ -65,7 +122,7 @@ void main() {
     testWidgets('$busyMode instability does not disable the real OFF gesture', (
       tester,
     ) async {
-      await tester.runAsync(() async {
+      await _native(tester, () async {
         await fixture.database.a.setGrantFromNative(
           NativeFixture.id,
           SupportPermission.readApplicationData,
@@ -88,7 +145,7 @@ void main() {
         );
         addTearDown(runtime.dispose);
         runtime.selectSession(NativeFixture.id);
-        await tester.runAsync(runtime.refresh);
+        await _native(tester, runtime.refresh);
         controller = SupportNativeConsentController(
           runtime: runtime,
           readMessages: (_, _, _) =>
@@ -121,7 +178,7 @@ void main() {
         expect(find.byType(SupportApplicationDataConsentSheet), findsNothing);
         expect(_switch(tester).value, false);
         expect(runtime.pending, busyMode == 'pending' ? 1 : 0);
-        await tester.runAsync(() async {
+        await _native(tester, () async {
           expect(
             (await fixture.database.b.readForNative(
               NativeFixture.id,
@@ -141,7 +198,7 @@ void main() {
   testWidgets(
     'failed OFF stays blocked and can be saved again without consent',
     (tester) async {
-      await tester.runAsync(() async {
+      await _native(tester, () async {
         await fixture.database.a.setGrantFromNative(
           NativeFixture.id,
           SupportPermission.readApplicationData,
@@ -168,7 +225,7 @@ void main() {
         find.byKey(const ValueKey('support_application_data_revoke_retry')),
         findsOneWidget,
       );
-      await tester.runAsync(() async {
+      await _native(tester, () async {
         expect(
           (await fixture.database.b.readForNative(
             NativeFixture.id,
@@ -187,7 +244,7 @@ void main() {
         findsNothing,
       );
       expect(_switch(tester).value, false);
-      await tester.runAsync(() async {
+      await _native(tester, () async {
         expect(
           (await fixture.database.b.readForNative(
             NativeFixture.id,
@@ -217,7 +274,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.byKey(_access));
+      await _show(tester, _access);
       expect(_switch(tester).value, false);
       final privacy = find.byType(SupportPrivacyGroup);
       expect(
@@ -241,7 +298,7 @@ void main() {
       await _tap(tester, _accept);
       expect(find.byType(SupportApplicationDataConsentSheet), findsNothing);
       expect(_switch(tester).value, true);
-      await tester.runAsync(() async {
+      await _native(tester, () async {
         final policy = (await fixture.database.b.readForNative(
           NativeFixture.id,
         )).preferences!;
@@ -252,7 +309,7 @@ void main() {
       await _tap(tester, _access);
       expect(find.byType(SupportApplicationDataConsentSheet), findsNothing);
       expect(_switch(tester).value, false);
-      await tester.runAsync(() async {
+      await _native(tester, () async {
         final policy = (await fixture.database.b.readForNative(
           NativeFixture.id,
         )).preferences!;
@@ -287,7 +344,7 @@ void main() {
       expect(find.byType(SupportApplicationDataConsentSheet), findsOneWidget);
       await _tap(tester, _decline);
       expect(_switch(tester).value, false);
-      await tester.runAsync(() async {
+      await _native(tester, () async {
         expect(
           (await fixture.database.b.readForNative(
             NativeFixture.id,

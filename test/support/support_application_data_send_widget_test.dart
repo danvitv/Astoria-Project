@@ -166,13 +166,25 @@ void main() {
             tester,
             () => fixture.workspace.selectSession(ModelScreenFixture.other),
           );
-          await _drive(
-            tester,
-            fixture,
-            () =>
-                fixture.state.activeSessionId == ModelScreenFixture.other &&
-                !fixture.state.isLoading,
-          );
+          await _drive(tester, fixture, () {
+            final selectedRuntime = fixture.container.read(
+              supportNativeRuntimeProvider,
+            );
+            final selectedComposer = tester.widget<SupportComposerBar>(
+              find.byType(SupportComposerBar),
+            );
+            // Selection publishes the new ID before its queued encrypted read.
+            // Advance the existing real/Flutter turn driver until that read and
+            // the displayed emitter settle, not merely until isLoading is false.
+            return fixture.state.activeSessionId == ModelScreenFixture.other &&
+                !fixture.state.isLoading &&
+                !fixture.state.isBusy &&
+                selectedRuntime.sessionId == ModelScreenFixture.other &&
+                selectedRuntime.snapshot.isAvailable &&
+                selectedComposer.sessionId == ModelScreenFixture.other &&
+                !selectedComposer.busy &&
+                !fixture.bridge.view.busy;
+          });
           await tester.pumpAndSettle();
           // The shared model profile and read decision survive assistant-chat selection.
           final secondCount = fixture.adapters.length;

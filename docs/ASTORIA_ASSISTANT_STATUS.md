@@ -1,7 +1,9 @@
 # Astoria Assistant — implementation status
 
-Updated: 2026-11-01. Read-access redesign baseline: `4f1f9d58` on
-`feat/astoria-assistant`; the current implementation changes are uncommitted.
+Updated: 2026-11-01. Read-access redesign commit: `d73093fb` on
+`feat/astoria-assistant` (original baseline `4f1f9d58`). Subsequent bounded UI
+verification fixes are complete for the named Send/settings debts and recorded
+in the follow-up repository history.
 The earlier October 31 documentation audit used `1546a53f`.
 
 **The assistant is integrated and enabled, but the complete original product plan
@@ -9,8 +11,8 @@ is not finished.** The November 1 request resumes a bounded implementation slice
 one global data-read consent, autonomous multi-source reading and a simpler UI.
 It does not resume the entire original backlog or authorize private runtime access,
 installation or release actions. The read-access backend and simplified UI are
-implemented. Native source/permission evidence is accepted; some UI verification
-remains blocked. This is not full product or device acceptance.
+implemented. Native source/permission and the bounded Send/settings UI evidence
+are accepted. This is not full product or device acceptance.
 
 ## November 1 product decision
 
@@ -165,19 +167,33 @@ Missing unsafe owner seams are deliberate refusals, not permission to bypass the
 - Two existing native source-only retry/regeneration cases passed without adding
   the action/backup graph. These are compatibility regression cases, not live
   provider evidence or complete global-consent retry certification.
-- One new UI case passed: editing the draft during first-consent admission never
-  sends that changed draft. The first-Send grant/decline cases progress through
-  initial and repeated Sends but fail `pumpAndSettle` after switching conversations;
-  neither whole case is counted as passed. The new settings/OFF widget suite also
-  remains blocked by a timeout. Their remaining cause is not established; do not
-  mark them passing or assume the problem is confined to a test harness.
+- The first-Send grant and decline UI cases now pass through repeated Sends and
+  another conversation without extra read dialogs. Their former timeout was a
+  test readiness error: selection publishes the new ID before the queued encrypted
+  read completes. The existing real/Flutter turn driver now waits for the native
+  snapshot and displayed composer to be ready; no production guard was changed.
+  The earlier changed-draft-during-consent case remains passed and unchanged.
+  All eight settings/access widget cases now pass: OFF during native work,
+  configuration/source instability, failed persistence with explicit retry,
+  one-consent grant/revoke at widths 236/360/1120 and cancellation without grants.
+  The timeout was a test-zone deadlock: the cipher key FIFO retained a completed
+  widget-zone Future, while a subsequent runAsync decrypt waited for a late callback
+  in that unadvanced zone. The existing bounded real-turn/pump driver resolves it
+  without changing the cipher, controller, production widgets or assertions.
+  Narrow-panel tests scroll lazily built groups and advance layout before actual
+  hit-tested gestures. Two existing desktop/mobile settings layout cases also pass,
+  with current output-limit/DCP labels and the application-data control reachable.
 - Scoped analysis of the assistant/source boundary reported no errors/warnings;
   remaining backend/test hints are informational. The final five UI/composer/test
   files reported no issues after explicit mounted guards and import cleanup.
+  The three changed Send/settings test files also report no issues after the
+  post-commit driver/readiness/scroll corrections.
   A whole-project analyzer attempt timed out and is not completed evidence.
 - Current Android release APK build passed: `build/app/outputs/flutter-apk/app-release.apk`
   (155.0 MB), default dev channel, without manual SQLite target switching. Kotlin
-  Gradle migration advisories remain nonblocking. No current Windows release build,
+  Gradle migration advisories remain nonblocking. Post-commit corrections changed
+  tests/documentation only, so this unchanged production build remains valid.
+  No current Windows release build,
   GUI/device launch, installation, live provider, actual user database, OS-vault
   restart or full regression suite is included in this delivery evidence.
 - At the runnable `bcb40025` checkpoint, Windows release and Android release APK

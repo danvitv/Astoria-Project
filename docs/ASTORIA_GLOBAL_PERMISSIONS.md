@@ -29,8 +29,8 @@ the repository transaction, with ownership checked after encryption and SQL.
 ## One application-data consent — November 1 redesign
 
 This is the implemented product contract for the current access slice. Native
-source/permission checks passed; UI evidence has explicit remaining gaps in the
-status document. Do not interpret this contract as full device acceptance.
+source/permission and bounded Send/settings UI checks passed; supported evidence
+and limits are in the status document. This is not full device acceptance.
 
 - The normal UI exposes one **application-data access** control, not independent
   local/model/category/session/recipient/report switches. Enabling requires one

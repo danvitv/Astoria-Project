@@ -21,6 +21,26 @@ Widget _panel() => NativeWidgetIsolation(
   child: const SupportSettingsPanel(),
 );
 
+Future<void> _showControl(WidgetTester tester, String key) async {
+  final finder = find.byKey(ValueKey(key));
+  if (finder.evaluate().isEmpty) {
+    await tester.scrollUntilVisible(
+      finder,
+      250,
+      scrollable: find
+          .byWidgetPredicate(
+            (widget) =>
+                widget is Scrollable &&
+                widget.axisDirection == AxisDirection.down,
+          )
+          .last,
+      maxScrolls: 20,
+    );
+  }
+  await tester.ensureVisible(finder);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   setUpAll(initializeNativeWidgetLocalization);
   testWidgets('settings controls fit the narrow desktop sidebar', (
@@ -48,7 +68,11 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Temperature'), findsOneWidget);
-    expect(find.text('Max Tokens'), findsOneWidget);
+    await _showControl(tester, 'support_settings_max_tokens');
+    expect(find.text('Лимит ответа'), findsOneWidget);
+    await _showControl(tester, 'support_application_data_switch');
+    expect(find.text('Доступ к данным приложения'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('settings controls fit a mobile-width panel', (tester) async {
@@ -60,7 +84,14 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.byType(SupportSettingsPanel), findsOneWidget);
-    expect(find.text('Предпочтение сжатия контекста (DCP)'), findsOneWidget);
+    await _showControl(tester, 'support_settings_dcp');
+    expect(
+      find.text('Автоматическое управление контекстом (DCP)'),
+      findsOneWidget,
+    );
+    await _showControl(tester, 'support_application_data_switch');
+    expect(find.text('Доступ к данным приложения'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
 
