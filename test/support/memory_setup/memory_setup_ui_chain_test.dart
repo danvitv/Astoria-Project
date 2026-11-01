@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +10,14 @@ import 'package:glaze_flutter/core/llm/memory_injection_service.dart';
 import 'package:glaze_flutter/core/llm/transport/llm_capture_context.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/state/memory_settings_provider.dart';
+import 'package:glaze_flutter/core/state/memory_book_ops_provider.dart';
+import 'package:glaze_flutter/core/state/lorebook_embedding_provider.dart';
+import 'package:glaze_flutter/features/settings/api_list_provider.dart';
+import 'package:glaze_flutter/features/memory/state/memory_draft_jobs_provider.dart';
+import 'package:glaze_flutter/features/chat/widgets/memory_books_tab.dart';
+import 'package:glaze_flutter/features/chat/widgets/memory_sheet.dart';
+import 'package:glaze_flutter/shared/widgets/glaze_action_button.dart';
+import 'package:glaze_flutter/shared/widgets/menu_group.dart';
 import 'package:glaze_flutter/features/support_assistant/support_assistant_screen.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_memory_setup_sheet.dart';
 
@@ -17,6 +27,8 @@ void main() {
   memorySetupTest(
     'five native questions paint exact separate plan; only explicit native confirm commits',
     (tester, f) async {
+      final beforeMemory = f.prefs.getString('memorySettings');
+      final beforePipeline = f.prefs.getString('pipelineSettings');
       final context = tester.element(find.byType(SupportAssistantScreen));
       final modal = showModalBottomSheet<void>(
         context: context,
@@ -26,56 +38,119 @@ void main() {
         builder: (_) => SupportMemorySetupSheet(service: f.service),
       );
       await tester.pump();
-      final route = ModalRoute.of<void>(tester.element(find.byType(SupportMemorySetupSheet)))!;
+      final route = ModalRoute.of<void>(
+        tester.element(find.byType(SupportMemorySetupSheet)),
+      )!;
       await tester.pump(route.transitionDuration);
       await tester.pump(const Duration(microseconds: 1));
       expect(route.isCurrent, isTrue);
       expect(route.animation!.status, AnimationStatus.completed);
+      bool wizardBusy() {
+        final list = tester.widget<ListView>(
+          find.descendant(
+            of: find.byType(SupportMemorySetupSheet),
+            matching: find.byType(ListView),
+          ),
+        );
+        // The trailing spinner can be outside the lazy viewport, so a finder
+        // sees no spinner while metadata/SQL work is still pending. Inspect the
+        // actual declared presentation, not only its mounted list children.
+        final children =
+            (list.childrenDelegate as SliverChildListDelegate).children;
+        return children.any(
+          (child) =>
+              child is Center && child.child is CircularProgressIndicator,
+        );
+      }
+
       Future<void> tap(String key) async {
         final finder = find.byKey(ValueKey(key));
         if (finder.evaluate().isEmpty) {
+          final scrollable = find
+              .descendant(
+                of: find.byType(SupportMemorySetupSheet),
+                matching: find.byType(Scrollable),
+              )
+              .first;
+          // Later Undo/overview buttons are above the long plan just read.
+          // Search from a known edge, rather than scrolling past them forever.
+          tester.state<ScrollableState>(scrollable).position.jumpTo(0);
+          await tester.pump();
           await tester.scrollUntilVisible(
             finder,
-            100,
-            scrollable: find.descendant(
-              of: find.byType(SupportMemorySetupSheet),
-              matching: find.byType(Scrollable),
-            ).first,
+            300,
+            scrollable: scrollable,
             maxScrolls: 20,
           );
         }
-        await tester.ensureVisible(finder);
+        // Top alignment puts a nested plan's Confirm at y=90..129, entirely
+        // behind SheetView's pinned header (y=90..152 at 800x600).
+        await Scrollable.ensureVisible(tester.element(finder), alignment: 0.5);
         await tester.pump();
-        expect(finder.hitTestable(), findsOneWidget);
+        expect(
+          finder.hitTestable(),
+          findsOneWidget,
+          reason: '$key must be reachable below the pinned sheet header',
+        );
+        expect(
+          tester.widget<GlazeActionButton>(finder).onTap,
+          isNotNull,
+          reason: '$key must be enabled before the native gesture',
+        );
         await configurationAction(tester, () => tester.tap(finder));
         // The original SQL/AEAD/metadata work runs on the real event queue;
         // advancing only FakeAsync frames strands it behind the busy spinner.
         await tester.pump();
-        for (var turn = 0;
-            turn < 128 && find.byType(CircularProgressIndicator).evaluate().isNotEmpty;
-            turn++) {
+        for (var turn = 0; turn < 128 && wizardBusy(); turn++) {
           await tester.runAsync(() => Future<void>.delayed(Duration.zero));
           await tester.pump();
         }
-        expect(find.byType(CircularProgressIndicator), findsNothing);
+        expect(
+          wizardBusy(),
+          isFalse,
+          reason: '$key must finish its native work',
+        );
         // As in configurationModal: finite local frames, not global idleness.
         await tester.pump(const Duration(milliseconds: 350));
         await tester.pump(const Duration(microseconds: 1));
-        expect(route.isCurrent, isTrue);
+        expect(
+          route.isCurrent,
+          key != 'memory_setup_open_books',
+          reason: 'Only the explicit books action may cover the wizard route',
+        );
+      }
+
+      Future<void> choose(String key) async {
+        final finder = find.byKey(ValueKey(key));
+        await Scrollable.ensureVisible(tester.element(finder), alignment: 0.5);
+        await tester.pump();
+        expect(finder.hitTestable(), findsOneWidget);
+        await configurationAction(tester, () => tester.tap(finder));
+        await tester.pump();
+      }
+
+      String paintedPlan() {
+        final painted = tester
+            .widget<SelectableText>(find.byType(SelectableText).last)
+            .data!;
+        expect(painted, contains('ДО'));
+        expect(painted, contains('ПОСЛЕ'));
+        expect(painted, isNot(contains(f.secret)));
+        expect(painted, isNot(contains('generationApiKey')));
+        f.domain.noEgress(painted);
+        return painted;
       }
 
       await tap('memory_setup_target_${DomainLoopFixture.session}');
       for (var n = 1; n <= 5; n++) {
         final heading = find.text('Вопрос $n из 5');
         expect(heading, findsOneWidget);
+        if (n == 1) await choose('memory_setup_choice_llmDrafts');
+        if (n == 5) await choose('memory_setup_choice_semantic');
         await tap('memory_setup_next');
       }
       await tap('memory_setup_plan_session');
-      final painted = tester
-          .widget<SelectableText>(find.byType(SelectableText).last)
-          .data!;
-      expect(painted, contains('ДО'));
-      expect(painted, contains('ПОСЛЕ'));
+      final painted = paintedPlan();
       expect(painted, contains('creationSettings'));
       await configurationAction(tester, () async {
         expect(
@@ -104,6 +179,137 @@ void main() {
           contains('"generationSource":"custom"'),
         );
       });
+      await tap('memory_setup_readiness');
+      final declared = tester.widget<ListView>(
+        find.descendant(
+          of: find.byType(SupportMemorySetupSheet),
+          matching: find.byType(ListView),
+        ),
+      );
+      expect(
+        (declared.childrenDelegate as SliverChildListDelegate).children.any(
+          (w) =>
+              w is MenuGroup &&
+              w.header == 'Готовность: локальные факты, не live-тест',
+        ),
+        isTrue,
+      );
+      await tap('memory_setup_undo_session');
+      expect(paintedPlan(), contains('creationSettings'));
+      await configurationAction(tester, () async {
+        expect(
+          await f.domain.screen.core.container
+              .read(memoryBookRepoProvider)
+              .getBySessionId(DomainLoopFixture.session),
+          isNotNull,
+        );
+      });
+      await tap('memory_setup_confirm');
+      await configurationAction(tester, () async {
+        expect(
+          await f.domain.screen.core.container
+              .read(memoryBookRepoProvider)
+              .getBySessionId(DomainLoopFixture.session),
+          isNull,
+        );
+      });
+
+      // Both global scopes are native gestures on separately painted plans.
+      // Preparing either plan or Undo must leave every store untouched.
+      for (final scope in ['automation', 'draftConnection']) {
+        await tap('memory_setup_plan_$scope');
+        final painted = paintedPlan();
+        expect(painted, contains('global_all_sessions'));
+        expect(f.prefs.getString('memorySettings'), beforeMemory);
+        expect(f.prefs.getString('pipelineSettings'), beforePipeline);
+        await tap('memory_setup_confirm');
+        final memory = jsonDecode(f.prefs.getString('memorySettings')!) as Map;
+        final pipeline =
+            jsonDecode(f.prefs.getString('pipelineSettings')!) as Map;
+        if (scope == 'automation') {
+          expect(memory['autoCreateEnabled'], true);
+          expect(memory['autoGenerateEnabled'], true);
+          expect(memory['vectorSearchEnabled'], true);
+          expect(f.prefs.getString('pipelineSettings'), beforePipeline);
+        } else {
+          expect(
+            (pipeline['memoryBookApi'] as Map)['generationSource'],
+            'current',
+          );
+          expect(f.prefs.getString('memorySettings'), beforeMemory);
+        }
+        expect(memory['unknownMemory'], {'retained': f.secret});
+        expect(pipeline['unknownRoot'], {'retained': f.secret});
+        expect(
+          (pipeline['memoryBookApi'] as Map)['generationApiKey'],
+          f.secret,
+        );
+        expect((pipeline['memoryBookApi'] as Map)['unknownSlot'], {
+          'retained': f.secret,
+        });
+        final savedMemory = f.prefs.getString('memorySettings');
+        final savedPipeline = f.prefs.getString('pipelineSettings');
+        await tap('memory_setup_undo_$scope');
+        expect(paintedPlan(), contains('global_all_sessions'));
+        expect(f.prefs.getString('memorySettings'), savedMemory);
+        expect(f.prefs.getString('pipelineSettings'), savedPipeline);
+        await tap('memory_setup_confirm');
+        expect(f.prefs.getString('memorySettings'), beforeMemory);
+        expect(f.prefs.getString('pipelineSettings'), beforePipeline);
+        await configurationAction(tester, () async {
+          expect(
+            await f.domain.screen.core.container
+                .read(memoryBookRepoProvider)
+                .getBySessionId(DomainLoopFixture.session),
+            isNull,
+          );
+        });
+      }
+      // Recreate only through a fresh painted session plan, then open the
+      // ordinary books interface on the exact already-loaded native owner.
+      await tap('memory_setup_plan_session');
+      paintedPlan();
+      await tap('memory_setup_confirm');
+      f.domain.screen.core.isolation.extraAllowed.addAll({
+        memoryBookOpsProvider,
+        memoryDraftJobsProvider,
+        embeddingRepoProvider,
+        vectorSearchAvailableProvider,
+        activeEmbeddingConfigProvider,
+        activeEmbeddingPresetIdProvider,
+        embeddingPresetListProvider,
+      });
+      await tap('memory_setup_open_books');
+      expect(find.byType(MemorySheet), findsOneWidget);
+      final sheet = tester.widget<MemorySheet>(find.byType(MemorySheet));
+      expect(sheet.charId, DomainLoopFixture.character);
+      expect(sheet.expectedSessionId, DomainLoopFixture.session);
+      expect(sheet.initialTab, MemoryTab.books);
+      expect(sheet.isOwnerCurrent!(), true);
+      final booksList = find.descendant(
+        of: find.byType(MemoryBooksTab),
+        matching: find.byType(ListView),
+      );
+      for (var turn = 0; turn < 128 && booksList.evaluate().isEmpty; turn++) {
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+      }
+      expect(booksList, findsOneWidget);
+      expect(
+        tester.widget<MemoryBooksTab>(find.byType(MemoryBooksTab)).sessionId,
+        DomainLoopFixture.session,
+      );
+      final booksRoute = ModalRoute.of<void>(
+        tester.element(find.byType(MemorySheet)),
+      )!;
+      Navigator.of(tester.element(find.byType(MemorySheet))).pop();
+      await tester.pump();
+      await tester.pump(booksRoute.reverseTransitionDuration);
+      await tester.pump(const Duration(microseconds: 1));
+      expect(find.byType(MemorySheet), findsNothing);
+      expect(route.isCurrent, true);
+      expect(f.prefs.getString('memorySettings'), beforeMemory);
+      expect(f.prefs.getString('pipelineSettings'), beforePipeline);
       Navigator.of(tester.element(find.byType(SupportMemorySetupSheet))).pop();
       await tester.pump();
       await tester.pump(route.reverseTransitionDuration);

@@ -52,6 +52,7 @@ final class _ModelRun {
   final SupportModelService service;
   final _ModelBinding binding;
   final String text, userId, replyId, runId;
+  late final diagnosticSkills = SupportDiagnosticSkills.select(text);
   final bool isCompact;
   final SupportReplyRegenerationObservation? regeneration;
   final SupportMessage? regenerationUser;

@@ -15,6 +15,22 @@ final class MemorySetupTarget {
   final String sessionId;
   final int _revision;
   final Object _checkpoint;
+  bool _navigationRetired = false;
+  String get characterId => _owner.characterId;
+
+  /// Once opened, ordinary Scan/Generate need not keep the wizard's read lease
+  /// or idle state. Only the originally selected chat owner may feed the sheet.
+  bool get isActiveOwner {
+    final owners = _service.owners;
+    if (!_navigationRetired &&
+        (!owners.isCurrent ||
+            owners.revision != _revision ||
+            !owners.loaded.any((owner) => identical(owner, _owner)) ||
+            _owner.sessionId() != sessionId)) {
+      _navigationRetired = true;
+    }
+    return !_navigationRetired;
+  }
 }
 
 /// Five finite answers; saved connection choices are native-issued objects.

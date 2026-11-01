@@ -155,6 +155,19 @@ final class MemorySetupService {
     return _checkpoint != null;
   }
 
+  /// Admission for a separate native memory interface, never a session switch
+  /// or a lookup/build of a replacement ChatNotifier.
+  MemorySetupTarget? get activeTarget {
+    if (!_sourceCurrent(_checkpoint)) return null;
+    return MemorySetupTarget._(
+      this,
+      _target!,
+      _targetId!,
+      _ownerRevision!,
+      _checkpoint!,
+    );
+  }
+
   bool _sourceCurrent(Object? checkpoint, {bool admitted = false}) =>
       current &&
       _target != null &&

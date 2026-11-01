@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../shared/widgets/glaze_action_button.dart';
 import '../../../shared/widgets/menu_group.dart';
 import '../../../shared/widgets/sheet_view.dart';
+import '../../chat/widgets/memory_sheet.dart';
 import '../services/memory_setup/memory_setup_service.dart';
 import '../state/support_memory_setup_controller.dart';
 
@@ -16,6 +17,7 @@ class SupportMemorySetupSheet extends StatefulWidget {
 
 class _MemorySetupSheetState extends State<SupportMemorySetupSheet> {
   late final c = SupportMemorySetupController(widget.service);
+  bool _memoryOpen = false;
   @override
   void initState() {
     super.initState();
@@ -41,9 +43,31 @@ class _MemorySetupSheetState extends State<SupportMemorySetupSheet> {
       maxLabelLines: null,
       icon: Icons.chevron_right_rounded,
       expand: true,
-      onTap: c.busy || !widget.service.current ? null : tap,
+      onTap: c.busy || _memoryOpen || !widget.service.current ? null : tap,
     ),
   );
+
+  Future<void> _openMemoryBooks() async {
+    final target = widget.service.activeTarget;
+    if (_memoryOpen || target == null || !target.isActiveOwner) return;
+    setState(() => _memoryOpen = true);
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        useRootNavigator: true,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => MemorySheet(
+          charId: target.characterId,
+          initialTab: MemoryTab.books,
+          expectedSessionId: target.sessionId,
+          isOwnerCurrent: () => target.isActiveOwner,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _memoryOpen = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) => SheetView(
@@ -280,6 +304,11 @@ class _MemorySetupSheetState extends State<SupportMemorySetupSheet> {
       'Проверить локальную готовность (без сети)',
       c.checkReadiness,
       key: const ValueKey('memory_setup_readiness'),
+    ),
+    _action(
+      'Открыть Memory Books выбранной активной сессии',
+      _openMemoryBooks,
+      key: const ValueKey('memory_setup_open_books'),
     ),
     _action('Изменить ответы', c.back),
   ];

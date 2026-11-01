@@ -502,7 +502,12 @@ final class BackupLoopFixture {
     });
   }
 
-  Future<void> start(WidgetTester tester, {bool picker = true}) async {
+  Future<void> start(
+    WidgetTester tester, {
+    bool picker = true,
+    String text =
+        'Сохрани всю исходную базу локально с нативным подтверждением.',
+  }) async {
     await backupLoopReal(tester, () {
       settlement = BackupLoopSignal(
         native.repo
@@ -522,10 +527,7 @@ final class BackupLoopFixture {
             ),
       );
     });
-    await tester.enterText(
-      find.byType(TextField).first,
-      'Сохрани всю исходную базу локально с нативным подтверждением.',
-    );
+    await tester.enterText(find.byType(TextField).first, text);
     await backupLoopReal(
       tester,
       () => tester.tap(find.byKey(const ValueKey('support_composer_send_btn'))),

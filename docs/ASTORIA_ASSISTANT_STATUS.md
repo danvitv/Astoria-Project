@@ -1,6 +1,7 @@
 # Astoria Assistant — implementation status
 
-Updated: 2026-11-01. Read-access redesign commit: `d73093fb` on
+Updated: 2026-11-02. Active plan: [ASTORIA_ASSISTANT_PLAN.md](ASTORIA_ASSISTANT_PLAN.md).
+Read-access redesign commit: `d73093fb` on
 `feat/astoria-assistant` (original baseline `4f1f9d58`). Subsequent bounded UI
 verification fixes are complete for the named Send/settings debts and recorded
 in the follow-up repository history.
@@ -176,16 +177,17 @@ below verify the new access slice, not a rerun of every nine-domain legacy case.
 |---|---|
 | Security foundation | Assistant credential/broker/redaction path is integrated. Compatibility deliberately retains legacy Drift fallback; full migration of every original secret family is not established as complete. |
 | Workspace and history | Integrated. Rich list/code-block rendering and some originally proposed generation overrides remain outside the current narrower UI. |
-| Guided setup | Theme/provider entry uses ordinary native settings for global-profile users. Memory Books has a wired five-question native wizard with session/global plans and partial native evidence; graphical progression and complete UI Confirm/Undo acceptance remain open. |
+| Guided setup | Theme/provider entry uses ordinary native settings for global-profile users. Memory Books has a verified five-question native wizard with separately confirmed session/global plans, fresh Undo, local readiness and exact-owner Books navigation. Live/provider/device validation is not claimed. |
 | Tools, skills, agents and DCP | Actual tool execution and compaction are integrated. Curated diagnostic skills, bounded specialist agents and the full structured diagnostic product remain open. Tool rounds use the dedicated native transport, not the originally proposed streaming tool-event extension to `ChatTransport`. |
 | Support reports | The bounded native facts/commentary, immutable preview/exclusions, recipient encryption, `.astreport` save and DPAPI-protected decoder slice is integrated with targeted native/UI evidence and explicit public-recipient provisioning. Physical-device/provider I/O and the richer original diagnostic product are not claimed complete. |
 
-The Memory Books quick action is wired to the native wizard. Controller-level
-evidence covers all five question transitions, a session plan, confirmed apply,
-local readiness and fresh Undo with original native repositories and encrypted
-journal. This is not graphical acceptance: the existing widget case still fails
-to find the second question after the first Next. Its cause is not established.
-Global UI Confirm/Undo and dedicated readiness edge cases also remain open.
+The Memory Books quick action is wired to the native wizard. The extended graphical
+case now passes all five questions, shown session/global plans, separate native
+Confirm/Undo, local readiness and the real Books interface for the selected loaded
+session. The first-transition blocker was a test tapping disabled Next while an
+off-viewport lazy spinner hid pending metadata work, not a production controller
+defect. Dedicated stale-read and exact-owner navigation cases also pass. Original
+repositories, encrypted journal and existing security assertions remain in use.
 
 The report UI prepares an explicit preview. No file is implied before an
 actual successful native save; a null/unconfigured recipient disables export.
@@ -233,20 +235,21 @@ one-consent/SQLite/report slice above is not being implemented again.
    or substitute defaults for saved values. Credentials and private binding IDs
    are excluded; regex/scripts remain inert. Existing four source tools and all
    repository/disclosure/capture limits are unchanged.
-4. **Memory Books wizard is partial.** Five questions and three independent
+4. **Memory Books wizard native/UI delivery is verified.** Five questions and three independent
    session/global store plans are implemented. Native session CAS/journal/Undo,
    global acknowledged-write safeguards and the synthetic approval-to-injection
-   chain have targeted evidence. A separate native controller case now passes
-   question progression, session review/Confirm, local readiness and fresh Undo,
-   with unchanged global settings and no duplicate apply. The graphical first
-   Next transition remains unverified; two focused probes did not resolve it and
-   were removed without weakening or skipping the original widget assertions.
-   No full wizard release build or completed global UI Confirm/Undo is claimed.
-   Diagnostics and individually bounded extended actions follow after this gap,
-   not in parallel with an unfinished wizard.
+    chain have targeted evidence, reused without rerunning unchanged work. The
+    resumed root closed the first graphical Next blocker with its concrete lazy
+    busy-child cause, then confirmed graphical session/global Confirm/Undo,
+    readiness and opening the exact active owner's Books tab. Six held readiness
+    retirement edges and one fresh-global case passed; owner ABA and wrong-session
+    navigation refuse before mounting books workflows. Four ordinary MemorySheet
+    search cases remain green. Scoped analysis has no errors/warnings; baseline
+    informational hints remain. Windows release built successfully in 91.9s.
+    Diagnostics and individually bounded extended actions follow as separate slices.
 
-These follow-up changes are included in a local checkpoint, with the unfinished
-wizard explicitly marked partial. See [session handoff](ASTORIA_ASSISTANT_HANDOFF.md).
+The earlier integrations are in checkpoint `e5fd03d8`; the resumed wizard delivery
+is currently uncommitted. See [session handoff](ASTORIA_ASSISTANT_HANDOFF.md).
 The completed Memory integration
 passed its targeted native cases and 27 existing mutation/effect/fence regressions;
 Studio passed 44 repository/codec/toggle/control cases and scoped analysis.
@@ -323,6 +326,26 @@ raw-plugin writers, a manual GUI/device run or a live provider.
   bounded redesign does not reopen all old gates or create a new full-suite
   certification project.
 
+## Current diagnostic slice — partial
+
+The November 2 root continuation added five immutable diagnostic checklists and
+deterministic observations over already-admitted native metadata. They introduce
+no new tools, permissions, model calls, probes or effects. Observation counts,
+configured credentials and canon assembly are not proofs of causal diagnosis,
+credential validity or narrative truth; these helpers are not specialist agents.
+Current model/local help/report UI wording was aligned with global read consent,
+connected preferences and the existing encrypted report preview/save flow.
+
+Seventeen pure diagnostic cases plus one local-help and one existing native
+regeneration case pass. Scoped analysis has no errors/warnings. The four new
+diagnostic native UI cases remain failing before their first POST in the existing
+owned-file fixture; their intended integration assertions have not been reached.
+No new build or full diagnostic delivery is claimed. The fixture-repair loop is
+stopped without relaxing safety or increasing budgets; see the handoff for the
+concrete earlier memory-identity refusal and remaining file-fixture uncertainty.
+Diagnostics remains the active product slice; extended actions and credential
+migration have not been started by this continuation.
+
 ## Plan and history pointers
 
 The original design and detailed journals are local ignored artifacts, not files
@@ -333,7 +356,10 @@ distributed with a normal clone:
 - `.slim/deepwork/astoria-app-control/progress.md`
 - `.slim/deepwork/astoria-source-navigation-cleanroom/progress.md`
 
-Their dated historical failures, disabled flags, pending executors and build
-hashes are not current task state. This repository summary distinguishes remaining
+These artifacts are archived design/evidence, not a second active plan. Their
+old granular permissions, prompt/recipient approvals, transport proposals, report
+format, pending executors and build hashes are not current task state. The active
+tracked plan explicitly distinguishes superseded design from remaining product
+scope. This repository summary distinguishes remaining
 implementation, changed design and missing runtime evidence; no completion
 percentage or whole-product acceptance is claimed.

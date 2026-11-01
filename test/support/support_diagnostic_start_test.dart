@@ -105,7 +105,7 @@ void main() {
   );
 
   test(
-    'local diagnostic start offers native catalog before any game-session selection, not fabricated model knowledge',
+    'local diagnostic start explains global read consent without fabricated catalog or diagnosis',
     () {
       const replies = SupportLocalReplyService();
       final reply = replies.reply(
@@ -113,12 +113,13 @@ void main() {
         replies.topicForText('Начнём диагностику'),
         text: 'Начнём диагностику',
       );
-      expect(reply.body, contains('без выбора игровой сессии'));
-      expect(reply.body, contains('Вот список твоих последних сессий'));
-      expect(reply.body, contains('Сообщения не читались'));
+      expect(reply.body, contains('С единым доступом к данным'));
+      expect(reply.body, contains('данные не читал'));
+      expect(reply.body, contains('причины ошибки не устанавливал'));
+      expect(reply.body, isNot(contains('Вот список твоих последних сессий')));
       expect(
         reply.cards.whereType<SupportGuidanceCard>().map((c) => c.target),
-        contains(SupportGuidanceTarget.gameSession),
+        isNot(contains(SupportGuidanceTarget.gameSession)),
       );
       expect(reply.body, isNot(contains(ModelScreenFixture.excluded)));
     },

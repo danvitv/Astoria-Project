@@ -263,10 +263,10 @@ class SupportSettingsPanel extends ConsumerWidget {
             MenuGroup(
               header: 'Репорт разработчику',
               description:
-                  'Экспорт пока недоступен. Доступ к данным не разрешает отправлять их разработчику.',
+                  'Отдельный просмотр и локальное зашифрованное сохранение. Доступ к данным не разрешает автоматическую отправку разработчику.',
               items: [
                 MenuItem(
-                  label: 'О передаче репорта',
+                  label: 'Подготовить репорт',
                   icon: Icons.description_outlined,
                   onTap: () => showSupportReportStatus(context),
                 ),

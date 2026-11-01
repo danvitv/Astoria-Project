@@ -66,7 +66,7 @@ const kDefaultSupportQuickActions = [
   QuickActionItem(
     id: 'support_report',
     label: 'О репорте поддержки',
-    subtitle: 'Экспорт пока недоступен',
+    subtitle: 'Просмотр и локальное зашифрованное сохранение',
   ),
 ];
 

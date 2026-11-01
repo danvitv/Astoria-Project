@@ -49,8 +49,10 @@ const _supportSourceInstruction =
     'conversation, not a new self-reading snapshot. Credentials and execution authority are '
     'never projected. Gallery/attachment paths are inert metadata, never file access. '
     'Typed dataset omissions and locked/oversized/unknown units are not complete content. '
-    'SQLite snapshot fences do NOT attest SharedPreferences global memory/pipeline/regex/bindings; '
-    'these stores are not connected by this catalog. Ordinary and Studio CURRENT SAVED presets are separate namespaces. '
+    'Global preferences are separate typed logical datasets for memory, pipeline, regex, '
+    'bindings and summary settings. Their original preferences owner and revision fences '
+    'are independent of SQLite snapshots; unavailable or stale stores provide no evidence. '
+    'Ordinary and Studio CURRENT SAVED presets are separate namespaces. '
     'With application-data consent, list supplies bounded redacted names, session numbers, '
     'saved activity dates and ALL original opaque handles on the page. Identify the named '
     'source and newest session yourself; inspect MULTIPLE relevant sessions and the active '
@@ -79,7 +81,7 @@ const _supportReadOnlySourceInstruction =
     'astoria_source_search and astoria_source_read. '
     'No preferences, configuration, navigation, backup, repair or other application effects '
     'are connected; do not replay or claim them. Use source metadata to identify an exact '
-    'source in the nine supported domains, including multiple named/newest sessions. '
+    'source in the supplied supported domains, including multiple named/newest sessions. '
     'Global native application-data consent remains revocable; the host creates fresh '
     'frozen per-source scopes for this run, original model and budget without new dialogs. '
     'Never reuse cached grants or expand frozen sources to appended messages. '
@@ -424,10 +426,15 @@ extension _ModelTools on _ModelRun {
             return facts.finish(turn, interrupted: true);
           }
           results.add(
-            configuration.settings.dcpCompressionEnabled &&
+            SupportDiagnosticReview.annotate(
+              call,
+              configuration.settings.dcpCompressionEnabled &&
                     !SupportSourceToolNames.body.contains(call.name)
                 ? payloads.project(call, result)
                 : result,
+              diagnosticSkills,
+              service._redaction.redactor,
+            ),
           );
           if (facts.uncertain || facts.navigated) {
             return facts.finish(

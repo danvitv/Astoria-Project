@@ -28,7 +28,18 @@ class MemorySheet extends ConsumerStatefulWidget {
   /// (see [MemoryTabStore]).
   final MemoryTab? initialTab;
 
-  const MemorySheet({super.key, required this.charId, this.initialTab});
+  /// Optional native navigation binding. Check before watching chatProvider so
+  /// a retired owner cannot bootstrap a replacement chat through this sheet.
+  final String? expectedSessionId;
+  final bool Function()? isOwnerCurrent;
+
+  const MemorySheet({
+    super.key,
+    required this.charId,
+    this.initialTab,
+    this.expectedSessionId,
+    this.isOwnerCurrent,
+  });
 
   @override
   ConsumerState<MemorySheet> createState() => _MemorySheetState();
@@ -86,7 +97,14 @@ class _MemorySheetState extends ConsumerState<MemorySheet> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.isOwnerCurrent?.call() == false) {
+      return _unavailable();
+    }
     final session = ref.watch(chatProvider(widget.charId)).value?.session;
+    if (widget.expectedSessionId != null &&
+        session?.id != widget.expectedSessionId) {
+      return _unavailable();
+    }
     final tab = _tab;
 
     return SheetView(
@@ -171,6 +189,16 @@ class _MemorySheetState extends ConsumerState<MemorySheet> {
             ),
     );
   }
+
+  Widget _unavailable() => SheetView(
+    title: 'memory_sheet_title'.tr(),
+    showBack: true,
+    body: const Center(
+      child: Text(
+        'Выбранная сессия больше не активна. Открой Memory Books из нужного чата.',
+      ),
+    ),
+  );
 
   /// The Summary tab's settings, in the same place the Books tab keeps its
   /// own: one button in the header.

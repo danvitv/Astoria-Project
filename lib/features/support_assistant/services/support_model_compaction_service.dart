@@ -72,11 +72,20 @@ extension _ModelCompaction on _ModelRun {
     final messages = _coalesceSupportUsers(<SupportModelPreviewText>[
       SupportModelPreviewText(
         role: 'system',
-        text: isReattempt && !hasNativeTools
-            ? _supportRegenerationInstruction
-            : hasNativeTools && question != null
-            ? toolInstruction
-            : _supportModelInstruction,
+        text:
+            (isReattempt && !hasNativeTools
+                ? _supportRegenerationInstruction
+                : hasNativeTools && question != null
+                ? toolInstruction
+                : _supportModelInstruction) +
+            (question == null
+                ? ''
+                : SupportDiagnosticSkills.instruction(
+                    diagnosticSkills,
+                    hasNativeTools
+                        ? originalActions!.definitions.map((d) => d.name)
+                        : const <String>[],
+                  )),
       ),
       if (checkpoint != null)
         SupportModelPreviewText(
