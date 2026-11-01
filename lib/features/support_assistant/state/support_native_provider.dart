@@ -21,13 +21,17 @@ final supportPermissionStoreProvider = Provider(
     initializeGlobalOnRefresh: true,
   ),
 );
-final supportConsentSelectionRepoProvider = Provider(
-  (ref) => SupportConsentSelectionRepo(
+final supportConsentSelectionRepoProvider = Provider((ref) {
+  var originalOwnerCurrent = true;
+  ref.onDispose(() => originalOwnerCurrent = false);
+  final redactor = ref.watch(secretRedactorProvider);
+  return SupportConsentSelectionRepo(
     db: ref.watch(appDbProvider),
     supportRepo: ref.watch(supportRepoProvider),
-    currentRedactor: () => ref.read(secretRedactorProvider),
-  ),
-);
+    currentRedactor: () => redactor,
+    originalOwnerCurrent: () => originalOwnerCurrent,
+  );
+});
 
 /// Shared runtime for actual offline send and later native controls. No UI startup.
 final supportNativeRuntimeProvider = Provider<SupportNativeRuntime>((ref) {

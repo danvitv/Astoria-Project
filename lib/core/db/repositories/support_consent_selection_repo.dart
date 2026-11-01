@@ -18,8 +18,10 @@ final class SupportConsentSelectionRepo {
     required AppDatabase db,
     required SupportRepo supportRepo,
     required SecretRedactor Function() currentRedactor,
+    bool Function()? originalOwnerCurrent,
   }) : _roleplay = _RoleplaySelectionProjection(db, currentRedactor),
-       _support = _SupportSelectionProjection(db, supportRepo, currentRedactor);
+       _support = _SupportSelectionProjection(db, supportRepo, currentRedactor),
+       _originalOwnerCurrent = originalOwnerCurrent;
 
   static const maxSessionPageSize = 50;
   static const maxMessagePageSize = 100;
@@ -32,6 +34,11 @@ final class SupportConsentSelectionRepo {
 
   final _RoleplaySelectionProjection _roleplay;
   final _SupportSelectionProjection _support;
+  final bool Function()? _originalOwnerCurrent;
+
+  /// Native producer lifetime only. Consumers retain this exact repository;
+  /// observing retirement must not resolve or instantiate a replacement graph.
+  bool get isOriginalOwnerCurrent => _originalOwnerCurrent?.call() ?? true;
 
   /// Exact target, never a paginated-catalog search or message-body read.
   Future<SupportConsentSessionMetadata> readSessionMetadata({

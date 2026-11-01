@@ -698,133 +698,124 @@ void main() {
         } finally {
           reader.retire();
         }
-        late String cards, summaries, chat;
-        f.script = (round) async {
-          if (round == 1) {
-            return AutomaticSourcesFixture.calls([
-              (
-                'datasets',
-                'astoria_sources_list',
-                {'domain': 'applicationData'},
-              ),
-              (
-                'chats',
-                'astoria_sources_list',
-                {'domain': 'astoriaConversation'},
-              ),
-            ]);
-          }
-          if (round == 2) {
-            final datasets = f.result('datasets')['data']['pieces'] as List;
-            cards =
-                datasets.singleWhere(
-                      (p) => p['label'] == 'Saved character cards',
-                    )['source']
-                    as String;
-            summaries =
-                datasets.singleWhere(
-                      (p) =>
-                          p['label'] ==
-                          'Astoria saved summaries, settings and action/report status',
-                    )['source']
-                    as String;
-            chat =
-                (f.result('chats')['data']['pieces'] as List).singleWhere(
-                      (p) => (p['title'] as String).contains(
-                        'VISIBLE_ASTORIA_TITLE',
-                      ),
-                    )['source']
-                    as String;
-            return AutomaticSourcesFixture.calls([
-              (
-                'deny-card',
-                'astoria_source_search',
-                {'source': cards, 'literal': 'm7v9'},
-              ),
-              (
-                'deny-summary',
-                'astoria_source_search',
-                {'source': summaries, 'literal': 'm7v9'},
-              ),
-              (
-                'deny-chat',
-                'astoria_source_search',
-                {'source': chat, 'literal': 'm7v9'},
-              ),
-              (
-                'card',
-                'astoria_source_search',
-                {'source': cards, 'literal': 'VISIBLE_STRUCTURED_CARD'},
-              ),
-              (
-                'plain-card',
-                'astoria_source_search',
-                {'source': cards, 'literal': 'VISIBLE_PLAIN_CARD'},
-              ),
-              (
-                'summary',
-                'astoria_source_search',
-                {'source': summaries, 'literal': 'VISIBLE_STRUCTURED_SUMMARY'},
-              ),
-              (
-                'chat',
-                'astoria_source_search',
-                {'source': chat, 'literal': 'VISIBLE_STRUCTURED_ASTORIA'},
-              ),
-              (
-                'plain-chat',
-                'astoria_source_search',
-                {'source': chat, 'literal': 'VISIBLE_PLAIN_ASTORIA'},
-              ),
-            ]);
-          }
-          if (round == 3) {
-            for (final id in ['deny-card', 'deny-summary', 'deny-chat']) {
+      });
+      // Keep the unchanged repositorySteps64 budget. Every negative search
+      // and positive read still reaches an actual POST, but independent source
+      // analyses use the existing isolated native fixture. Do not grow a new
+      // inherited-conversation receipt-count driver for this privacy claim.
+      var totalPosts = 0;
+      for (final target in ['cards', 'summaries', 'chat']) {
+        await automaticSourcesTest((f) async {
+          await _seedProjectionCorrection(f);
+          late String source;
+          final witnesses = switch (target) {
+            'cards' => [
+              ('card', 'VISIBLE_STRUCTURED_CARD'),
+              ('plain-card', 'VISIBLE_PLAIN_CARD'),
+            ],
+            'summaries' => [('summary', 'VISIBLE_STRUCTURED_SUMMARY')],
+            _ => [
+              ('chat', 'VISIBLE_STRUCTURED_ASTORIA'),
+              ('plain-chat', 'VISIBLE_PLAIN_ASTORIA'),
+            ],
+          };
+          final previousPosts = f.wire.length;
+          f.script = (wireRound) async {
+            final round = wireRound - previousPosts;
+            if (round == 1) {
+              return AutomaticSourcesFixture.calls([
+                (
+                  'datasets',
+                  'astoria_sources_list',
+                  {'domain': 'applicationData'},
+                ),
+                (
+                  'chats',
+                  'astoria_sources_list',
+                  {'domain': 'astoriaConversation'},
+                ),
+              ]);
+            }
+            if (round == 2) {
+              await _encrypted(f, 2);
+              final datasets = f.result('datasets')['data']['pieces'] as List;
+              source = target == 'chat'
+                  ? (f.result('chats')['data']['pieces'] as List).singleWhere(
+                          (p) => (p['title'] as String).contains(
+                            'VISIBLE_ASTORIA_TITLE',
+                          ),
+                        )['source']
+                        as String
+                  : datasets.singleWhere(
+                          (p) =>
+                              p['label'] ==
+                              (target == 'cards'
+                                  ? 'Saved character cards'
+                                  : 'Astoria saved summaries, settings and action/report status'),
+                        )['source']
+                        as String;
+              return AutomaticSourcesFixture.calls([
+                (
+                  'denied',
+                  'astoria_source_search',
+                  {'source': source, 'literal': 'm7v9'},
+                ),
+                for (final (id, marker) in witnesses)
+                  (
+                    id,
+                    'astoria_source_search',
+                    {'source': source, 'literal': marker},
+                  ),
+              ]);
+            }
+            if (round == 3) {
               expect(
-                f.body(id)['pieces'],
+                f.body('denied')['pieces'],
                 isEmpty,
                 reason: 'No secret selector',
               );
+              await _encrypted(f, 3 + witnesses.length);
+              return AutomaticSourcesFixture.calls([
+                for (final (id, _) in witnesses)
+                  (
+                    '$id-read',
+                    'astoria_source_read',
+                    {
+                      'source': source,
+                      'selector': f.body(id)['pieces'][0]['selector'],
+                    },
+                  ),
+              ]);
             }
-            return AutomaticSourcesFixture.calls([
-              for (final (id, source) in [
-                ('card', cards),
-                ('plain-card', cards),
-                ('summary', summaries),
-                ('chat', chat),
-                ('plain-chat', chat),
-              ])
-                (
-                  '$id-read',
-                  'astoria_source_read',
-                  {
-                    'source': source,
-                    'selector': f.body(id)['pieces'][0]['selector'],
-                  },
-                ),
-            ]);
-          }
-          expect(round, 4);
-          for (final (id, marker) in [
-            ('card', 'VISIBLE_STRUCTURED_CARD'),
-            ('plain-card', 'VISIBLE_PLAIN_CARD'),
-            ('summary', 'VISIBLE_STRUCTURED_SUMMARY'),
-            ('chat', 'VISIBLE_STRUCTURED_ASTORIA'),
-            ('plain-chat', 'VISIBLE_PLAIN_ASTORIA'),
-          ]) {
-            expect(jsonEncode(f.body('$id-read')['pieces']), contains(marker));
-          }
-          await _encrypted(f, 15);
-          return AutomaticSourcesFixture.answer();
-        };
-        final result = await (await f.start()).finished.timeout(
-          const Duration(seconds: 30),
-        );
-        expect(result.message?.status, 'complete');
-        expect(f.wire, hasLength(4));
-        expect(jsonEncode(f.wire), isNot(contains(_projectionCanary)));
-        expect(jsonEncode(f.wire), isNot(contains('NEVER_PROVENANCE_RECEIPT')));
-      });
+            expect(round, 4);
+            for (final (id, marker) in witnesses) {
+              expect(
+                jsonEncode(f.body('$id-read')['pieces']),
+                contains(marker),
+              );
+            }
+            await _encrypted(f, 3 + witnesses.length * 2);
+            return AutomaticSourcesFixture.answer();
+          };
+          final result = await (await f.start()).finished.timeout(
+            const Duration(seconds: 30),
+          );
+          expect(
+            result.message?.status,
+            'complete',
+            reason:
+                '${result.reason.name}: ${f.scriptError}: ${f.activity.map((a) => a.detail).join(' | ')}',
+          );
+          expect(f.wire.length - previousPosts, 4);
+          totalPosts += f.wire.length;
+          expect(jsonEncode(f.wire), isNot(contains(_projectionCanary)));
+          expect(
+            jsonEncode(f.wire),
+            isNot(contains('NEVER_PROVENANCE_RECEIPT')),
+          );
+        });
+      }
+      expect(totalPosts, 12);
     },
     skip: !Platform.isWindows,
   );
@@ -1033,103 +1024,88 @@ void main() {
         } finally {
           reader.retire();
         }
-        late String rewrites, canon;
-        f.script = (round) async {
-          if (round == 1) {
-            return AutomaticSourcesFixture.calls([
-              (
-                'datasets',
-                'astoria_sources_list',
-                {'domain': 'applicationData'},
-              ),
-            ]);
-          }
-          if (round == 2) {
-            final datasets = f.result('datasets')['data']['pieces'] as List;
-            rewrites =
-                datasets.singleWhere(
-                      (p) =>
-                          p['label'] == 'Saved Card Rewriter jobs and evidence',
-                    )['source']
-                    as String;
-            canon =
-                datasets.singleWhere(
-                      (p) =>
-                          p['label'] == 'Saved character canon and revisions',
-                    )['source']
-                    as String;
-            return AutomaticSourcesFixture.calls([
-              (
-                'denied-rewrites',
-                'astoria_source_search',
-                {'source': rewrites, 'literal': 'DENIED_OWNER_BODY'},
-              ),
-              (
-                'denied-canon',
-                'astoria_source_search',
-                {'source': canon, 'literal': 'DENIED_OWNER_BODY'},
-              ),
-              (
-                'visible-rewrites',
-                'astoria_source_search',
-                {'source': rewrites, 'literal': 'VISIBLE_OWNER_BODY'},
-              ),
-              (
-                'visible-canon',
-                'astoria_source_search',
-                {'source': canon, 'literal': 'VISIBLE_OWNER_BODY'},
-              ),
-            ]);
-          }
-          if (round == 3) {
-            expect(f.body('denied-rewrites')['pieces'], isEmpty);
-            expect(f.body('denied-canon')['pieces'], isEmpty);
-            final rewritesFound = f.body('visible-rewrites')['pieces'] as List;
-            expect(rewritesFound, hasLength(4));
-            final canonFound = f.body('visible-canon')['pieces'] as List;
-            expect(canonFound, hasLength(2));
-            return AutomaticSourcesFixture.calls([
-              for (var i = 0; i < rewritesFound.length; i++)
+        // Separate native analyses keep every hidden-owner denial and every
+        // positive issued read while respecting the unchanged 64-step budget.
+        var inheritedDisclosures = 0;
+        for (final target in ['rewrites', 'canon']) {
+          late String source;
+          final expectedReads = target == 'rewrites' ? 4 : 2;
+          final previousPosts = f.wire.length;
+          f.script = (wireRound) async {
+            final round = wireRound - previousPosts;
+            if (round == 1) {
+              return AutomaticSourcesFixture.calls([
                 (
-                  'rewrite-read-$i',
-                  'astoria_source_read',
-                  {
-                    'source': rewrites,
-                    'selector': rewritesFound[i]['selector'],
-                  },
+                  'datasets',
+                  'astoria_sources_list',
+                  {'domain': 'applicationData'},
                 ),
-              for (var i = 0; i < canonFound.length; i++)
+              ]);
+            }
+            if (round == 2) {
+              await _encrypted(f, inheritedDisclosures + 1);
+              final datasets = f.result('datasets')['data']['pieces'] as List;
+              source =
+                  datasets.singleWhere(
+                        (p) =>
+                            p['label'] ==
+                            (target == 'rewrites'
+                                ? 'Saved Card Rewriter jobs and evidence'
+                                : 'Saved character canon and revisions'),
+                      )['source']
+                      as String;
+              return AutomaticSourcesFixture.calls([
                 (
-                  'canon-read-$i',
-                  'astoria_source_read',
-                  {'source': canon, 'selector': canonFound[i]['selector']},
+                  'denied',
+                  'astoria_source_search',
+                  {'source': source, 'literal': 'DENIED_OWNER_BODY'},
                 ),
-            ]);
-          }
-          expect(round, 4);
-          for (final id in [
-            'rewrite-read-0',
-            'rewrite-read-1',
-            'rewrite-read-2',
-            'rewrite-read-3',
-            'canon-read-0',
-            'canon-read-1',
-          ]) {
-            expect(
-              jsonEncode(f.body(id)['pieces']),
-              contains('VISIBLE_OWNER_BODY'),
-            );
-          }
-          await _encrypted(f, 11);
-          return AutomaticSourcesFixture.answer();
-        };
-        final result = await (await f.start()).finished.timeout(
-          const Duration(seconds: 30),
-        );
-        if (f.scriptError != null)
-          Error.throwWithStackTrace(f.scriptError!, f.scriptStack!);
-        expect(result.message?.status, 'complete');
-        expect(f.wire, hasLength(4));
+                (
+                  'visible',
+                  'astoria_source_search',
+                  {'source': source, 'literal': 'VISIBLE_OWNER_BODY'},
+                ),
+              ]);
+            }
+            if (round == 3) {
+              expect(f.body('denied')['pieces'], isEmpty);
+              final found = f.body('visible')['pieces'] as List;
+              expect(found, hasLength(expectedReads));
+              await _encrypted(f, inheritedDisclosures + 3);
+              return AutomaticSourcesFixture.calls([
+                for (var i = 0; i < found.length; i++)
+                  (
+                    'read-$i',
+                    'astoria_source_read',
+                    {'source': source, 'selector': found[i]['selector']},
+                  ),
+              ]);
+            }
+            expect(round, 4);
+            for (var i = 0; i < expectedReads; i++) {
+              expect(
+                jsonEncode(f.body('read-$i')['pieces']),
+                contains('VISIBLE_OWNER_BODY'),
+              );
+            }
+            await _encrypted(f, inheritedDisclosures + 3 + expectedReads);
+            return AutomaticSourcesFixture.answer();
+          };
+          final result = await (await f.start()).finished.timeout(
+            const Duration(seconds: 30),
+          );
+          if (f.scriptError != null)
+            Error.throwWithStackTrace(f.scriptError!, f.scriptStack!);
+          expect(
+            result.message?.status,
+            'complete',
+            reason:
+                '${result.reason.name}: ${f.scriptError}: ${f.activity.map((a) => a.detail).join(' | ')}',
+          );
+          expect(f.wire.length - previousPosts, 4);
+          inheritedDisclosures += 3 + expectedReads;
+        }
+        expect(f.wire, hasLength(8));
         for (final kind in ['hidden', 'unresolved']) {
           expect(
             jsonEncode(f.wire),

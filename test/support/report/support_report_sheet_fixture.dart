@@ -131,11 +131,18 @@ final class SupportReportSheetFixture {
     );
   }
 
-  List<Override> get overrides => [
+  List<Override> get overrides => overridesWith();
+
+  List<Override> overridesWith({
+    Override? controllerOverride,
+    Override? selectionsOverride,
+  }) => [
     appSettingsProvider.overrideWith(NativeWidgetAppSettings.new),
     supportNativeRuntimeProvider.overrideWithValue(runtime),
-    supportNativeConsentControllerProvider.overrideWithValue(controller),
-    supportConsentSelectionRepoProvider.overrideWithValue(selections),
+    controllerOverride ??
+        supportNativeConsentControllerProvider.overrideWithValue(controller),
+    selectionsOverride ??
+        supportConsentSelectionRepoProvider.overrideWithValue(selections),
     supportReportNativeFactoryProvider.overrideWithValue(capture),
   ];
 

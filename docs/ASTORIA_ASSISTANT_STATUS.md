@@ -6,41 +6,59 @@ verification fixes are complete for the named Send/settings debts and recorded
 in the follow-up repository history.
 The earlier October 31 documentation audit used `1546a53f`.
 
-## Temporary restart checkpoint — November 1
+## Remaining SQLite readers and reports — delivered bounded slice
 
-At the user's request, work on the remaining DB-reader/report slice is stopping
-after a runnable Windows checkpoint, not after full feature acceptance. The
-follow-up source changes are recorded as a restart checkpoint in repository history;
-the prior UI-debt commit is `6f9b9476`.
-Windows release compilation passed in 89.1 seconds:
-`build/windows/x64/runner/Release/Astoria.exe`. All 15 selected startup/native-ABI
-tests passed. Work is now temporarily paused. The GUI/device was not launched;
-no running application, private database or operator key was opened or changed.
-This is a runnable restart checkpoint, not full reader/report acceptance.
+The temporary Windows restart checkpoint was committed as `fead7a60`; the prior
+UI-debt commit is `6f9b9476`. The user's subsequent «Продолжай» resumed the two
+preserved tasks, not the complete original assistant backlog. Follow-up reader
+scenario corrections and report-selection ownership changes are recorded in the
+follow-up repository history.
 
-- New readers now map the 64 SQLite tables to bounded logical projections or
-  explicit private exclusions through 11 domains. Ten new native cases passed;
-  three successful end-to-end cases still need verification after the final
-  native-ROOT budget correction. Source and disclosure limits were not increased.
-  Non-SQLite global preferences remain outside this completed coverage.
-- Report snapshot/preview/exclusions, real libsodium encryption, native save ports
-  and the DPAPI-protected local CLI are implemented, but not fully accepted.
-  Earlier native evidence covers 25 core/crypto/ROOT/DPAPI and 33 save-port cases.
-  The latest sanitizer/UI/cleanup corrections, compiled CLI, report UI/factory,
-  remaining privacy reviews and Android native behavior are still pending.
-- The bundled recipient descriptor is intentionally unconfigured. Preparing a
-  preview does not create or send a report; production export remains unavailable
-  until a trusted operator provisions only the public descriptor and rebuilds.
-  No operator private key was generated, read or placed in the conversation.
+- Eleven domains now cover the 64 registered SQLite tables through fixed logical
+  readers or explicit private-infrastructure exclusions. The two added domains
+  expose 15 application datasets and bounded exact-AAD reads of other encrypted
+  Astoria conversations. Credentials, vectors, authority/CAS fields and source
+  receipts are excluded; credential columns are not selected by API readers.
+- All thirteen new-data cases passed across the bounded affected runs. Native
+  source regression also passed all fourteen cases. The three formerly failing
+  success flows are closed: actual retained validation is batched only inside the
+  original native ROOT; long exhaustive privacy scenarios use separate runs rather
+  than raising repository, capture or disclosure limits.
+- Report snapshot, full exact preview, exclusions with derivative closure,
+  real libsodium recipient encryption, native ciphertext save and the protected
+  local CLI are integrated. Seventeen latest targeted native report checks passed,
+  including the compiled standalone DPAPI/Sodium CLI and stock executor ROOT.
+  Eight report-widget cases passed, including retirement during content selection
+  without constructing/querying replacement provider graphs. Earlier unaffected
+  crypto/ROOT and 33 save-port checks remain separate, reusable evidence.
+- Current Android/Kotlin release build passed in 390.4 seconds (156.9 MB), the
+  standalone CLI bundle compiled with native assets, and Windows release passed
+  in 81.5 seconds. These first builds used the unconfigured recipient; following
+   explicit user approval, the configured-recipient APK rebuild passed in 49.7
+   seconds (156.9 MB) and Windows rebuild in 10.1 seconds. Both current clients
+   contain the real public recipient; the native CLI bundle is unchanged.
+  The prior checkpoint passed a Windows release build in 89.1 seconds
+  and fifteen selected startup/native-ABI cases; it is historical evidence, not a
+  substitute for the current distribution builds or a device launch.
+- The user explicitly chose local production key creation. The compiled native
+  CLI created recipient `astoria-support-20261101-62ba1e85`, keeping the private
+  DPAPI file outside the repository and bundling only its public descriptor.
+  No private bytes were read by the model or printed. With that recipient in the
+  rebuilt clients, export is enabled; a null descriptor still refuses safely. See
+  [native reports and operator CLI](ASTORIA_SUPPORT_REPORTS.md).
 - Cancellation before ciphertext admission prevents report-byte transfer; Android
-  selection can leave an empty document if best-effort deletion fails. Admitted
-  OS I/O cannot be advertised as undoable.
+  selection may leave an empty document if best-effort deletion fails. Admitted
+  OS I/O is not undoable. Non-SQLite global preferences still need their own
+  original revision/ABA owner and are not part of the 64-table coverage claim.
 
-The accepted access/UI evidence below describes the earlier delivery, not a new
-certification of every checkpointed reader/report path or a manual device launch.
+Controlled native/UI evidence is not a GUI/device launch, live-model diagnosis,
+private database inspection or full-project regression certification.
+The two resumed SQLite/report tasks are closed within these stated boundaries;
+follow-up source, test, public-descriptor and documentation changes are recorded
+in the local repository history. No push was performed.
 
 **The assistant is integrated and enabled, but the complete original product plan
-is not finished.** The November 1 request resumes a bounded implementation slice:
+is not finished.** The November 1 request delivered a bounded implementation slice:
 one global data-read consent, autonomous multi-source reading and a simpler UI.
 It does not resume the entire original backlog or authorize private runtime access,
 installation or release actions. The read-access backend and simplified UI are
@@ -60,9 +78,10 @@ checks remain mandatory, not user-facing permission puzzles.
 Sending a support report to the developer is a separate decision. Its exact preview
 must say whether session titles/history or other personal content are included and
 allow exclusion or cancellation. Read consent never authorizes export or upload.
-The recipient-encrypted report/export/decoder has now been implemented in the
-follow-up slice, with incomplete integration evidence and no configured production
-recipient. An unavailable export must not be presented as already created or sent.
+The recipient-encrypted report/export/decoder is implemented with controlled
+native/UI evidence and an explicitly provisioned public production recipient.
+No unavailable preview or unconfirmed save may be presented as already created
+or sent.
 
 ### Delivered access slice and limits
 
@@ -107,7 +126,8 @@ recipient. An unavailable export must not be presented as already created or sen
 | Permissions | One global encrypted application-data read consent, frozen technical source ownership, revocation and separate dangerous-action authority. Legacy exact-source/recipient policies remain compatibility-only. See [global permissions](ASTORIA_GLOBAL_PERMISSIONS.md). |
 | Setup and actions | Theme/provider entries open native settings. Existing bounded UI/configuration and character/persona/lorebook/preset/Studio/Memory tools retain their original action-specific restrictions; the read grant does not enable every action. This is not arbitrary application control or a universal mutation/Undo engine. |
 | Integrity and recovery | Bounded database/session/Collector/Ledger checks and specific repairs, conditional repair Undo, native SQLite snapshots, separate cold-start restore on Windows/Android. Restore preparation in chat is informational; it does not perform restore or restart. |
-| Source navigation | Four read-only tools across nine domains, autonomous bounded catalog/search/read after one consent, trusted bounded index preparation and encrypted catalog/body disclosure provenance before the actual model POST. |
+| Source navigation | Four read-only tools across eleven domains, fixed typed coverage of the 64 SQLite tables, autonomous bounded catalog/search/read after one consent, trusted bounded index preparation and encrypted catalog/body disclosure provenance before the actual model POST. Private infrastructure and non-SQLite preferences are not arbitrary raw sources. |
+| Support reports | Native safe facts and optional personal commentary, full immutable preview/exclusions, separate one-use native save approval, recipient-encrypted ciphertext and a Windows DPAPI-protected local decoder. A real public recipient is provisioned; private custody remains outside the client/Git. No upload/Discord automation. |
 
 Ordinary DirectSend uses the current Astoria conversation without a separate
 recipient/prompt approval on every request. Other conversations/private source
@@ -123,8 +143,9 @@ disables this composition; an enabled feature flag does not grant body access.
 The exact tools are `astoria_sources_list`, `astoria_source_contents`,
 `astoria_source_search` and `astoria_source_read`. Domains are game history,
 ordinary presets, Studio presets, Memory, saved summaries, Ledger state, Ledger
-snapshots, reconciliation and character knowledge. The model gets no SQL, paths,
-regex, grant, mutation or index-maintenance tool.
+snapshots, reconciliation, character knowledge, fixed `applicationData` datasets
+and `astoriaConversation` sources. The model gets no SQL, paths, regex, grant,
+mutation, report-export or index-maintenance tool.
 
 Index preparation is not a grant. Authorized redacted catalog labels can now reach
 the selected model. Navigation still requires fresh exact technical
@@ -157,17 +178,18 @@ below verify the new access slice, not a rerun of every nine-domain legacy case.
 | Workspace and history | Integrated. Rich list/code-block rendering and some originally proposed generation overrides remain outside the current narrower UI. |
 | Guided setup | Theme/provider entry uses ordinary native settings for global-profile users. The complete Memory Books wizard is not implemented. |
 | Tools, skills, agents and DCP | Actual tool execution and compaction are integrated. Curated diagnostic skills, bounded specialist agents and the full structured diagnostic product remain open. Tool rounds use the dedicated native transport, not the originally proposed streaming tool-event extension to `ChatTransport`. |
-| Support reports | Follow-up code implements bounded native facts/commentary, immutable preview/exclusions, recipient encryption, `.astreport` save and a DPAPI-protected local decoder. Current-snapshot UI/CLI/privacy/platform acceptance and trusted public-recipient provisioning remain unfinished; see the temporary checkpoint above. |
+| Support reports | The bounded native facts/commentary, immutable preview/exclusions, recipient encryption, `.astreport` save and DPAPI-protected decoder slice is integrated with targeted native/UI evidence and explicit public-recipient provisioning. Physical-device/provider I/O and the richer original diagnostic product are not claimed complete. |
 
 The Memory Books quick action currently reports that the assistant entry is
 unavailable. Existing Memory settings tools do not replace the planned 4–6-question
 wizard, global/session distinction, end-to-end readiness check and rollback.
 
-The report UI now prepares an explicit preview. No file is implied before an
-actual successful native save, and an unconfigured recipient disables export.
+The report UI prepares an explicit preview. No file is implied before an
+actual successful native save; a null/unconfigured recipient disables export.
 Per-install history encryption is not report encryption for the support recipient.
-Production public recipient key/keyId and trusted private-key provisioning for the
-local decoder remain an unresolved trust seam; do not embed a demo production key.
+The public production key/keyId was provisioned by explicit user approval through
+the documented local CLI, not simulated with a demo key. Private key material
+remains in the CurrentUser DPAPI file outside the repository and conversation.
 
 The broader application-control backlog includes full roleplay session/message
 operations, composite deletion and global selections/bindings, extended Memory
@@ -224,13 +246,13 @@ Missing unsafe owner seams are deliberate refusals, not permission to bypass the
   The three changed Send/settings test files also report no issues after the
   post-commit driver/readiness/scroll corrections.
   A whole-project analyzer attempt timed out and is not completed evidence.
-- Current Android release APK build passed: `build/app/outputs/flutter-apk/app-release.apk`
-  (155.0 MB), default dev channel, without manual SQLite target switching. Kotlin
-  Gradle migration advisories remain nonblocking. Post-commit corrections changed
-  tests/documentation only, so this unchanged production build remains valid.
-  No current Windows release build,
-  GUI/device launch, installation, live provider, actual user database, OS-vault
-  restart or full regression suite is included in this delivery evidence.
+- The earlier access-slice APK passed at 155.0 MB without manual SQLite target
+   switching. Current configured reader/report/Kotlin/CLI/Windows distribution
+   builds passed; their results belong to the delivered slice above, not this
+  historical APK. No GUI/device launch, installation, live provider, actual user
+  database or full regression suite is included. Production key creation was
+  separately approved and performed through the standalone native CLI without
+  reading private bytes into the model.
 - At the runnable `bcb40025` checkpoint, Windows release and Android release APK
   builds passed with the same unchanged SQLite configuration; 15 targeted
   startup/native-ABI tests passed. The analyzer had zero errors/warnings and 15

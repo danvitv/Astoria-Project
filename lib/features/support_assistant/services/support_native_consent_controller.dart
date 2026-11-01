@@ -129,6 +129,16 @@ final class SupportNativeConsentController {
 
   SupportNativeView get view => _buildView();
 
+  /// Read-only issuer custody across a consent await. Unlike granting, this
+  /// does not inspect a replacement provider or require pending writes to end.
+  bool ownsDisplayedIssuer(SupportNativeDisplayedIntent? intent) =>
+      intent is _DisplayedIntent &&
+      identical(intent._issuer, this) &&
+      intent._issuerLifetime == _issuerLifetime &&
+      runtime.alive &&
+      runtime.sessionId == intent._session &&
+      runtime.lifetime == intent._lifetime;
+
   SupportNativeView _buildView({bool includeInspection = true}) {
     runtime.checkConfiguration();
     final p = runtime.snapshot.preferences;

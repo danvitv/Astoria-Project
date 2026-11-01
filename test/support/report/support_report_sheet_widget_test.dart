@@ -2,12 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/features/support_assistant/models/support_permission_preferences.dart';
 import 'package:glaze_flutter/features/support_assistant/services/support_permission_store.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_native_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_report_sheet.dart';
 import 'package:glaze_flutter/shared/widgets/glaze_action_button.dart';
+import 'package:glaze_flutter/core/db/repositories/support_consent_selection_repo.dart';
 
 import '../helpers/support_native_widget_fixture.dart';
 import 'support_report_sheet_fixture.dart';
@@ -41,19 +43,29 @@ void main() {
   });
   tearDown(() => fixture.close());
 
-  Future<void> mount(WidgetTester tester) async {
+  Future<void> mount(
+    WidgetTester tester, {
+    List<Override>? overrides,
+    bool watchController = true,
+  }) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(
       ProviderScope(
-        overrides: fixture.overrides,
+        overrides: overrides ?? fixture.overrides,
         child: localizedNativeWidget(
           Consumer(
             builder: (context, ref, _) {
               ref.watch(supportNativeRuntimeProvider);
-              ref.watch(supportNativeConsentControllerProvider);
+              if (watchController) {
+                ref.watch(supportNativeConsentControllerProvider);
+              } else {
+                // No unrelated eager observer should recreate a retired graph;
+                // this case measures only the old report-selection flow.
+                ref.read(supportNativeConsentControllerProvider);
+              }
               return GlazeActionButton(
                 key: const ValueKey('open-report'),
                 icon: Icons.description_outlined,
@@ -68,6 +80,86 @@ void main() {
     await _turns(tester);
     await _tap(tester, const ValueKey('open-report'));
     expect(tester.takeException(), isNull);
+  }
+
+  for (final retired in ['controller', 'selections']) {
+    testWidgets(
+      'pending content consent retains $retired without constructing a replacement',
+      (tester) async {
+        var controllerConstructions = 0, selectionConstructions = 0;
+        var selectionAlive = true;
+        await mount(
+          tester,
+          watchController: false,
+          overrides: fixture.overridesWith(
+            controllerOverride: supportNativeConsentControllerProvider
+                .overrideWith((ref) {
+                  controllerConstructions++;
+                  if (controllerConstructions != 1)
+                    throw StateError(
+                      'Replacement controller must not be constructed',
+                    );
+                  ref.onDispose(fixture.controller.invalidateDisplayedIntents);
+                  return fixture.controller;
+                }),
+            selectionsOverride: supportConsentSelectionRepoProvider.overrideWith((
+              ref,
+            ) {
+              selectionConstructions++;
+              if (selectionConstructions != 1)
+                throw StateError(
+                  'Replacement selection graph must not be constructed or queried',
+                );
+              ref.onDispose(() => selectionAlive = false);
+              return SupportConsentSelectionRepo(
+                db: fixture.native.database,
+                supportRepo: fixture.repo,
+                currentRedactor: () => fixture.native.redactor,
+                originalOwnerCurrent: () => selectionAlive,
+              );
+            }),
+          ),
+        );
+        await _tap(tester, const ValueKey('support_report_include_game'));
+        expect(
+          find.byKey(
+            const ValueKey('support_application_data_consent_decline'),
+          ),
+          findsOneWidget,
+        );
+        expect(controllerConstructions, 1);
+        expect(
+          selectionConstructions,
+          1,
+          reason: 'Selection owner must be retained BEFORE the consent await',
+        );
+        final container = ProviderScope.containerOf(
+          tester.element(find.byType(SupportReportSheet)),
+        );
+        if (retired == 'controller') {
+          container.invalidate(supportNativeConsentControllerProvider);
+        } else {
+          container.invalidate(supportConsentSelectionRepoProvider);
+          expect(selectionAlive, false);
+        }
+        await _tap(
+          tester,
+          const ValueKey('support_application_data_consent_decline'),
+        );
+        expect(controllerConstructions, 1);
+        expect(selectionConstructions, 1);
+        expect(find.text('Одна игровая сессия для репорта'), findsNothing);
+        expect(fixture.saves.single.choices, 0);
+        expect(
+          fixture.runtime.snapshot.preferences!.allows(
+            SupportPermission.readApplicationData,
+          ),
+          false,
+        );
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
   }
 
   testWidgets(

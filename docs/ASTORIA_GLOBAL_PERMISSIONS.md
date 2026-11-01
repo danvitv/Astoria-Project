@@ -90,16 +90,22 @@ guarantee denial after process restart/new database owner until the denial is sa
 Reading data for an answer is not permission to send a report to the developer.
 Before export/sharing, the user must see the actual proposed contents, including
 any necessary session titles/history, diagnosis and content-derived quotations.
-They may exclude material or cancel. Cancellation means no export/upload/transfer;
-the UI must not promise that a bug will necessarily be fixed after submission.
+They may exclude material or cancel. Cancellation before ciphertext admission
+prevents report-byte transfer; an Android destination dialog can leave an empty
+document after failed cleanup. Already admitted OS I/O cannot be unsaved. There is
+no automatic upload/transfer to support, and the UI must not promise that a bug
+will necessarily be fixed after submission.
 
 The detached recipient-encrypted `.astreport` save flow and local DPAPI-protected
-decoder are implemented in the current follow-up, but full integration verification
-and trusted public-recipient provisioning are unfinished. Work is paused at the
-Windows restart checkpoint described in the status document. Do not present history
-encryption or reading consent as export approval, invent a support key, or silently
-downgrade the report encryption design. A preview is not a saved/sent report; Android
-destination selection may leave an empty document if best-effort cleanup fails.
+decoder are implemented with bounded native/UI evidence in the resumed follow-up.
+The user-approved local CLI provisioned a real public recipient; its private DPAPI
+file remains outside Git/client/model context. A null descriptor still safely
+disables export. See [native reports and the local operator
+CLI](ASTORIA_SUPPORT_REPORTS.md). Do not present history encryption or reading
+consent as export approval, invent a support key, or silently downgrade the report
+encryption design. A preview is not a saved/sent report. The content-selection UI
+retains original controller/repository producers before awaits; retired providers
+cannot be replaced to acquire fresh source custody during that selection.
 
 Read consent does not authorize edits, destructive repairs, connection tests,
 backup export, restore, uploads or other public actions. Existing action-specific

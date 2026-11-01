@@ -77,6 +77,13 @@ class _SupportReportSheetState extends ConsumerState<SupportReportSheet> {
     }
     final controller = ref.read(supportNativeConsentControllerProvider);
     final runtime = controller.runtime;
+    final issuer = controller.view.displayedIntent;
+    // Capture both producers synchronously. Their producer-owned retirement
+    // hooks/issuer generation are observed directly after awaits; no live
+    // provider lookup (including a comparison) may create a replacement graph.
+    final selectors = game
+        ? ref.read(supportConsentSelectionRepoProvider)
+        : null;
     final session = runtime.sessionId, lifetime = runtime.lifetime;
     final configuration = runtime.configurationRevision();
     int? contentEpoch, contentRevocation;
@@ -84,10 +91,8 @@ class _SupportReportSheetState extends ConsumerState<SupportReportSheet> {
         mounted &&
         !_closed &&
         runtime.alive &&
-        identical(
-          controller,
-          ref.read(supportNativeConsentControllerProvider),
-        ) &&
+        controller.ownsDisplayedIssuer(issuer) &&
+        (selectors?.isOriginalOwnerCurrent ?? true) &&
         runtime.sessionId == session &&
         runtime.lifetime == lifetime &&
         runtime.configurationRevision() == configuration &&
@@ -112,7 +117,7 @@ class _SupportReportSheetState extends ConsumerState<SupportReportSheet> {
         final accepted = await requestSupportApplicationDataConsent(
           context: context,
           controller: controller,
-          displayedIntent: controller.view.displayedIntent,
+          displayedIntent: issuer,
           isCurrent: current,
         );
         if (!current()) return;
@@ -128,14 +133,8 @@ class _SupportReportSheetState extends ConsumerState<SupportReportSheet> {
       if (game) {
         // Typed, bounded LOCAL report-content selection. This does not mutate
         // read permission scope or invoke the source consent dialogs.
-        final selectors = ref.read(supportConsentSelectionRepoProvider);
-        final page = await selectors.listRoleplaySessions();
-        if (!mounted ||
-            !current() ||
-            !identical(
-              selectors,
-              ref.read(supportConsentSelectionRepoProvider),
-            )) {
+        final page = await selectors!.listRoleplaySessions();
+        if (!mounted || !current()) {
           return;
         }
         final picked = await GlazeBottomSheet.show<SupportConsentSessionOption>(
