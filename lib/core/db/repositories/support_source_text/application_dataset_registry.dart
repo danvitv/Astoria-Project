@@ -510,6 +510,31 @@ const _applicationDatasets = [
       ),
     ],
   ),
+  _ApplicationDataset(
+    'savedMemoryPreferences',
+    'Saved global Memory preferences and prompts',
+    [],
+  ),
+  _ApplicationDataset(
+    'savedPipelinePreferences',
+    'Saved global pipeline settings',
+    [],
+  ),
+  _ApplicationDataset(
+    'savedRegexPreferences',
+    'Saved global and Studio regex scripts (inert)',
+    [],
+  ),
+  _ApplicationDataset(
+    'savedSelectionPreferences',
+    'Saved global selections and bindings',
+    [],
+  ),
+  _ApplicationDataset(
+    'savedGlobalVariables',
+    'Saved legacy and extension global variables',
+    [],
+  ),
 ];
 
 // Fixed ownership traversal for both descendant tables. Missing operations,

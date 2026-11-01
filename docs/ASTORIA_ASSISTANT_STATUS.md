@@ -48,8 +48,8 @@ follow-up repository history.
   [native reports and operator CLI](ASTORIA_SUPPORT_REPORTS.md).
 - Cancellation before ciphertext admission prevents report-byte transfer; Android
   selection may leave an empty document if best-effort deletion fails. Admitted
-  OS I/O is not undoable. Non-SQLite global preferences still need their own
-  original revision/ABA owner and are not part of the 64-table coverage claim.
+   OS I/O is not undoable. The subsequent global-preferences slice below adds a
+   separate original revision/ABA owner; it is not part of the 64-table claim.
 
 Controlled native/UI evidence is not a GUI/device launch, live-model diagnosis,
 private database inspection or full-project regression certification.
@@ -176,13 +176,16 @@ below verify the new access slice, not a rerun of every nine-domain legacy case.
 |---|---|
 | Security foundation | Assistant credential/broker/redaction path is integrated. Compatibility deliberately retains legacy Drift fallback; full migration of every original secret family is not established as complete. |
 | Workspace and history | Integrated. Rich list/code-block rendering and some originally proposed generation overrides remain outside the current narrower UI. |
-| Guided setup | Theme/provider entry uses ordinary native settings for global-profile users. The complete Memory Books wizard is not implemented. |
+| Guided setup | Theme/provider entry uses ordinary native settings for global-profile users. Memory Books has a wired five-question native wizard with session/global plans and partial native evidence; graphical progression and complete UI Confirm/Undo acceptance remain open. |
 | Tools, skills, agents and DCP | Actual tool execution and compaction are integrated. Curated diagnostic skills, bounded specialist agents and the full structured diagnostic product remain open. Tool rounds use the dedicated native transport, not the originally proposed streaming tool-event extension to `ChatTransport`. |
 | Support reports | The bounded native facts/commentary, immutable preview/exclusions, recipient encryption, `.astreport` save and DPAPI-protected decoder slice is integrated with targeted native/UI evidence and explicit public-recipient provisioning. Physical-device/provider I/O and the richer original diagnostic product are not claimed complete. |
 
-The Memory Books quick action currently reports that the assistant entry is
-unavailable. Existing Memory settings tools do not replace the planned 4–6-question
-wizard, global/session distinction, end-to-end readiness check and rollback.
+The Memory Books quick action is wired to the native wizard. Controller-level
+evidence covers all five question transitions, a session plan, confirmed apply,
+local readiness and fresh Undo with original native repositories and encrypted
+journal. This is not graphical acceptance: the existing widget case still fails
+to find the second question after the first Next. Its cause is not established.
+Global UI Confirm/Undo and dedicated readiness edge cases also remain open.
 
 The report UI prepares an explicit preview. No file is implied before an
 actual successful native save; a null/unconfigured recipient disables export.
@@ -198,20 +201,65 @@ regex/image/gallery operations, other imports/exports and general Undo. Some of
 these features exist elsewhere in the app; that does not make them assistant tools.
 Missing unsafe owner seams are deliberate refusals, not permission to bypass them.
 
-### Concrete integration follow-ups
+### Sequential original-plan follow-ups
 
-1. **Memory catalog rebuild is advertised but unreachable in normal model runs.**
-   [Memory adapter](../lib/features/support_assistant/services/app_control/session_memory/support_app_memory_adapter.dart)
-   requires `context.sourceAccess`; the production
-   [model tool loop](../lib/features/support_assistant/services/support_model_tool_loop.dart)
-   supplies only the separate `sourceToolAccess`
-   for navigation. The new read-only navigation graph does not authorize rebuild.
-2. **Studio dependency-restore bookkeeping does not round-trip through the ordinary
-   editor path.** [Native control](../lib/core/db/repositories/studio_preset_app_control.dart)
-   persists `agentEnabledBeforeDependencyOff`, but the general
-   [codec](../lib/core/models/studio_preset_codec.dart)/[upsert](../lib/core/db/repositories/studio_preset_repo.dart) does not retain
-   it. A later ordinary editor save can lose that restoration map. This is a
-   statically identified follow-up, not a newly executed runtime reproduction.
+The user resumed the remaining original-plan work in order. The completed
+one-consent/SQLite/report slice above is not being implemented again.
+
+1. **Memory catalog integration is closed.** A normal Send can invoke the exact
+   confirmed local rebuild through a private, consumed native effect/source lease.
+   This is not a navigation-body grant: the original model requester is retired
+   before the effect, no later provider POST is admitted, and canonical book,
+   drafts, settings, other sessions, vectors and entities stay unchanged. Missing
+   read consent refuses before private preparation reads. Actual native cases
+   cover CAS, Stop, shared-OFF, generic/OTHER-source retirement and reentrant
+   TARGET mutations; the effect's own observed source fence is the only exception.
+   Retry/regeneration have no catalog effect graph. The new authority boundary
+   passed its bounded independent review and relevant existing regressions.
+2. **Studio dependency restoration is closed.**
+   `agentEnabledBeforeDependencyOff` now survives the general codec, canonical
+   export/import and ordinary repository save. Tests exercise a real native agent
+   toggle followed by an editor rename/settings save and re-enable, preserving
+   both previously enabled and disabled dependents. Malformed restoration values
+   are not coerced into booleans; existing Main Writer/CAS safeguards remain.
+3. **Global saved-preferences reading is closed.** Five fixed datasets cover
+   Memory, pipeline, global/Studio regex, bindings and both variable stores, using
+   fifteen known keys and a separate original-store/producer revision owner.
+   Actual routed writers retire readers before optimistic publication, deferred
+   acquisition or queue admission, including backup/import/sync and whole-cache
+   theme reloads. Failed acknowledgements or overlapping stale reloads quarantine
+   affected keys; neither a successful later acknowledgement nor replacement
+   provider silently renews an old lease. Readers do not run load-time migrations
+   or substitute defaults for saved values. Credentials and private binding IDs
+   are excluded; regex/scripts remain inert. Existing four source tools and all
+   repository/disclosure/capture limits are unchanged.
+4. **Memory Books wizard is partial.** Five questions and three independent
+   session/global store plans are implemented. Native session CAS/journal/Undo,
+   global acknowledged-write safeguards and the synthetic approval-to-injection
+   chain have targeted evidence. A separate native controller case now passes
+   question progression, session review/Confirm, local readiness and fresh Undo,
+   with unchanged global settings and no duplicate apply. The graphical first
+   Next transition remains unverified; two focused probes did not resolve it and
+   were removed without weakening or skipping the original widget assertions.
+   No full wizard release build or completed global UI Confirm/Undo is claimed.
+   Diagnostics and individually bounded extended actions follow after this gap,
+   not in parallel with an unfinished wizard.
+
+These follow-up changes are included in a local checkpoint, with the unfinished
+wizard explicitly marked partial. See [session handoff](ASTORIA_ASSISTANT_HANDOFF.md).
+The completed Memory integration
+passed its targeted native cases and 27 existing mutation/effect/fence regressions;
+Studio passed 44 repository/codec/toggle/control cases and scoped analysis.
+The Memory+Studio Windows release checkpoint built successfully in 81.8s at
+`build/windows/x64/runner/Release/Astoria.exe` (the full Release folder is needed).
+The global-preferences slice then passed actual FILE/model discovery, contents,
+search and issued reads for all five families, encrypted provenance before each
+continuation POST, cold/malformed no-write cases, direct imports and owner/ABA/
+failure retirement. Four stale-reload orderings passed, along with one actual sync
+queue-admission case and 29 existing variable/settings/theme regressions. Scoped
+analysis has no errors/warnings; informational hints remain. Its Windows release
+build passed in 80.7s. This does not certify external processes/isolates, arbitrary
+raw-plugin writers, a manual GUI/device run or a live provider.
 
 ## Evidence and supported limits
 

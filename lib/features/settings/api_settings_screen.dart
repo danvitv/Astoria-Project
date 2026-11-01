@@ -369,12 +369,20 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
   }
 
   void _persistActiveId(String? id) async {
-    final prefs = ref.read(sharedPreferencesProvider).value;
-    if (prefs == null) return;
-    if (id != null) {
-      await prefs.setString('activeApiConfigId', id);
-    } else {
-      await prefs.remove('activeApiConfigId');
+    final intent = SavedPreferencesOwner.process.begin(['activeApiConfigId']);
+    try {
+      ref.read(activeApiPresetIdProvider.notifier).state = id;
+      final prefs = ref.read(sharedPreferencesProvider).value;
+      if (prefs == null) return;
+      if (id != null) {
+        await TrackedSharedPreferences.wrap(
+          prefs,
+        ).setString('activeApiConfigId', id);
+      } else {
+        await TrackedSharedPreferences.wrap(prefs).remove('activeApiConfigId');
+      }
+    } finally {
+      intent.settle();
     }
   }
 
@@ -384,12 +392,24 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
       : ref.read(apiListProvider.notifier);
 
   void _persistActiveEmbeddingId(String? id) async {
-    final prefs = ref.read(sharedPreferencesProvider).value;
-    if (prefs == null) return;
-    if (id != null) {
-      await prefs.setString(kActiveEmbeddingConfigIdKey, id);
-    } else {
-      await prefs.remove(kActiveEmbeddingConfigIdKey);
+    final intent = SavedPreferencesOwner.process.begin([
+      kActiveEmbeddingConfigIdKey,
+    ]);
+    try {
+      ref.read(activeEmbeddingPresetIdProvider.notifier).state = id;
+      final prefs = ref.read(sharedPreferencesProvider).value;
+      if (prefs == null) return;
+      if (id != null) {
+        await TrackedSharedPreferences.wrap(
+          prefs,
+        ).setString(kActiveEmbeddingConfigIdKey, id);
+      } else {
+        await TrackedSharedPreferences.wrap(
+          prefs,
+        ).remove(kActiveEmbeddingConfigIdKey);
+      }
+    } finally {
+      intent.settle();
     }
   }
 
@@ -1985,13 +2005,11 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
         if (forEmbedding) {
           // Only the embedding side moves: the chat connection stays where it
           // is, and so does everything the LLM tab holds.
-          ref.read(activeEmbeddingPresetIdProvider.notifier).state = config.id;
           _persistActiveEmbeddingId(config.id);
           _loadedEmbeddingPresetId = null;
           _loadEmbeddingFromConfig(config);
           return;
         }
-        ref.read(activeApiPresetIdProvider.notifier).state = config.id;
         _persistActiveId(config.id);
         _loadedPresetId = null;
         _loadFromConfig(config);
@@ -2006,14 +2024,12 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
   void _reloadAfterDelete(String? activeId, Set<String> removedIds) {
     var moved = false;
     if (activeId != null && removedIds.contains(activeId)) {
-      ref.read(activeApiPresetIdProvider.notifier).state = null;
       _persistActiveId(null);
       _loadedPresetId = null;
       moved = true;
     }
     final embeddingId = ref.read(activeEmbeddingPresetIdProvider);
     if (embeddingId != null && removedIds.contains(embeddingId)) {
-      ref.read(activeEmbeddingPresetIdProvider.notifier).state = null;
       _persistActiveEmbeddingId(null);
       _loadedEmbeddingPresetId = null;
       moved = true;
@@ -2163,13 +2179,10 @@ class _ApiSettingsScreenState extends ConsumerState<ApiSettingsScreen> {
             mode: forEmbedding ? kEmbeddingPresetMode : 'chat',
           );
           if (forEmbedding) {
-            ref.read(activeEmbeddingPresetIdProvider.notifier).state =
-                newConfig.id;
             _persistActiveEmbeddingId(newConfig.id);
             _loadedEmbeddingPresetId = null;
             _loadEmbeddingFromConfig(newConfig);
           } else {
-            ref.read(activeApiPresetIdProvider.notifier).state = newConfig.id;
             _persistActiveId(newConfig.id);
             _loadedPresetId = null;
             _loadFromConfig(newConfig);

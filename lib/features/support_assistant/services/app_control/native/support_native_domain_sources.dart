@@ -99,8 +99,14 @@ final class SupportNativeDomainObservation {
         if (!owner.admit(custody)) throw StateError('Native owner retired');
       }
       for (final id in checkpoints.keys) {
-        finishes.add(sources.mutations.beginMutation(sessionId: id));
-        events[id] = sources.mutations.sessionCheckpoint(id)!;
+        final admission = sources.mutations.beginObservedMutation(
+          sessionId: id,
+        );
+        finishes.add(admission.settle);
+        final checkpoint = admission.checkpoint;
+        if (checkpoint == null) throw StateError('Native source retired');
+        events[id] =
+            checkpoint; // NEVER adopt a reentrant observer's later intent.
         final owner = owners[id];
         if (owner != null) publications[id] = owner.queue.beginPublication();
         final maintenance = maintenanceOwners[id];

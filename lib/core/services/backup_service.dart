@@ -4,7 +4,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../preferences/saved_preferences_owner.dart';
+import '../preferences/tracked_shared_preferences.dart';
 
 import '../db/app_db.dart';
 import 'backup/backup_cancel.dart';
@@ -74,7 +75,7 @@ class BackupService {
     String filePath, {
     void Function(String stage)? onProgress,
     void Function(BackupFormat format)? onDetected,
-  }) async {
+  }) => SavedPreferencesWrites.run(SavedPreferencesKeys.all, () async {
     final settle = _onImportStarted?.call();
     try {
       _cancelFlag.reset();
@@ -110,7 +111,7 @@ class BackupService {
     } finally {
       settle?.call();
     }
-  }
+  });
 
   Future<BackupFormat> _detectFormat(String filePath) async {
     final raf = await File(filePath).open();
@@ -204,46 +205,56 @@ class BackupService {
     await _applyPreferences(data);
   }
 
-  Future<void> _applyPreferences(Map<String, dynamic> data) async {
-    final prefs = await SharedPreferences.getInstance();
-    final prefsData = data['preferences'] as Map<String, dynamic>?;
-    if (prefsData != null) {
-      final themeKeys = prefs.getKeys().where(
-        (k) => k.startsWith('gz_theme_') || k.startsWith('glaze_theme_'),
+  Future<void> _applyPreferences(Map<String, dynamic> data) =>
+      SavedPreferencesWrites.run(
+        [
+          if (data['preferences'] is Map)
+            ...(data['preferences'] as Map).keys.whereType<String>(),
+          if (data['localStorage'] is Map &&
+              (data['localStorage'] as Map)['gz_persona_connections'] != null)
+            'personaConnections',
+        ],
+        () async {
+          final prefs = await TrackedSharedPreferences.getInstance();
+          final prefsData = data['preferences'] as Map<String, dynamic>?;
+          if (prefsData != null) {
+            final themeKeys = prefs.getKeys().where(
+              (k) => k.startsWith('gz_theme_') || k.startsWith('glaze_theme_'),
+            );
+            for (final k in themeKeys) {
+              await prefs.remove(k);
+            }
+            for (final entry in prefsData.entries) {
+              final v = entry.value;
+              if (v is bool) {
+                await prefs.setBool(entry.key, v);
+              } else if (v is int) {
+                await prefs.setInt(entry.key, v);
+              } else if (v is double) {
+                await prefs.setDouble(entry.key, v);
+              } else if (v is String) {
+                await prefs.setString(entry.key, v);
+              }
+            }
+          }
+          final lsData = data['localStorage'] as Map<String, dynamic>?;
+          if (lsData != null) {
+            final personaConnsRaw = lsData['gz_persona_connections'];
+            if (personaConnsRaw != null) {
+              try {
+                final parsed = personaConnsRaw is String
+                    ? jsonDecode(personaConnsRaw) as Map<String, dynamic>
+                    : personaConnsRaw as Map<String, dynamic>;
+                final conns = <String, dynamic>{
+                  'character': parsed['character'] ?? <String, dynamic>{},
+                  'chat': parsed['chat'] ?? <String, dynamic>{},
+                };
+                await prefs.setString('personaConnections', jsonEncode(conns));
+              } catch (_) {}
+            }
+          }
+        },
       );
-      for (final k in themeKeys) {
-        await prefs.remove(k);
-      }
-      for (final entry in prefsData.entries) {
-        final v = entry.value;
-        if (v is bool) {
-          await prefs.setBool(entry.key, v);
-        } else if (v is int) {
-          await prefs.setInt(entry.key, v);
-        } else if (v is double) {
-          await prefs.setDouble(entry.key, v);
-        } else if (v is String) {
-          await prefs.setString(entry.key, v);
-        }
-      }
-    }
-    final lsData = data['localStorage'] as Map<String, dynamic>?;
-    if (lsData != null) {
-      final personaConnsRaw = lsData['gz_persona_connections'];
-      if (personaConnsRaw != null) {
-        try {
-          final parsed = personaConnsRaw is String
-              ? jsonDecode(personaConnsRaw) as Map<String, dynamic>
-              : personaConnsRaw as Map<String, dynamic>;
-          final conns = <String, dynamic>{
-            'character': parsed['character'] ?? <String, dynamic>{},
-            'chat': parsed['chat'] ?? <String, dynamic>{},
-          };
-          await prefs.setString('personaConnections', jsonEncode(conns));
-        } catch (_) {}
-      }
-    }
-  }
 
   bool _isTavoArchive(Archive archive) {
     for (final f in archive.files) {

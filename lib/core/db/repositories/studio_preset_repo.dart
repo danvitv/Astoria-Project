@@ -134,6 +134,8 @@ class StudioPresetRepo implements SyncStudioPresetStore {
               jsonEncode({
                 ...StudioPresetCodec.encodeRuntime(safeNormalized.runtime),
                 'agentBlockRestoreState': safeNormalized.agentBlockRestoreState,
+                'agentEnabledBeforeDependencyOff':
+                    safeNormalized.agentEnabledBeforeDependencyOff,
                 'controllerAlternativeBlockIds':
                     safeNormalized.controllerAlternativeBlockIds,
               }),
@@ -173,6 +175,8 @@ class StudioPresetRepo implements SyncStudioPresetStore {
       'maxFinalHistoryMessages': row.maxFinalHistoryMessages,
       'agentEnabled': _decodeJson(row.agentEnabledJson),
       'agentBlockRestoreState': runtimeMap['agentBlockRestoreState'],
+      'agentEnabledBeforeDependencyOff':
+          runtimeMap['agentEnabledBeforeDependencyOff'],
       'controllerAlternativeBlockIds':
           runtimeMap['controllerAlternativeBlockIds'],
       'runtime': runtimeMap,

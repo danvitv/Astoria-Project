@@ -10,6 +10,9 @@ import '../../credentials/secret_redactor.dart';
 import '../../models/support_text_context.dart';
 import '../../support/support_payload_cipher.dart';
 import '../../support/source_navigation.dart' as nav;
+import '../../preferences/saved_preferences_owner.dart';
+import '../../preferences/saved_preferences_read_port.dart';
+import '../../preferences/saved_preferences_codec.dart';
 import '../app_db.dart';
 import 'support_source_text/support_source_json.dart';
 import 'support_text_context_repo.dart';
@@ -32,6 +35,7 @@ part 'support_source_text/application_dataset_registry.dart';
 part 'support_source_text/application_json_projection.dart';
 part 'support_source_text/navigation_application.dart';
 part 'support_source_text/navigation_astoria.dart';
+part 'support_source_text/navigation_preferences.dart';
 
 /// MODEL tools may request metadata; only the original exact native lease may
 /// implement this port after confirmation of extent AND the same destination.

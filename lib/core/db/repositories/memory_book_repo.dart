@@ -14,8 +14,12 @@ import '../../utils/time_helpers.dart';
 import '../../application/sync_repo_interfaces.dart';
 import 'chat_repo.dart';
 import 'memory_catalog_repo.dart';
+import 'support_repo.dart';
+import '../../models/support_models.dart';
 
 part 'memory_book_repo.g.dart';
+part 'memory_book_setup_store.dart';
+part 'memory_book_setup_fence.dart';
 
 /// Native-only exact row observation. Never serialize this into tool metadata.
 final class MemoryBookControlObservation {
@@ -78,7 +82,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required String sessionId,
     required bool enabled,
     required bool Function() isCurrent,
-  }) => transaction(() async {
+  }) => _trackSetupBookWrite(() => transaction(() async {
     if (!isCurrent()) return false;
     final session = await ChatRepo(attachedDatabase).getById(sessionId);
     if (session == null || !isCurrent()) return false;
@@ -98,7 +102,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
       mode: InsertMode.insertOrIgnore,
     );
     return inserted != null;
-  });
+  }));
 
   /// Scalar settings patch only. Raw unknown settings and all body/history blobs
   /// are preserved; an exact SQL row predicate is the final compare-and-swap.
@@ -106,7 +110,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required MemoryBookControlObservation expected,
     required Map<String, Object?> fields,
     required bool Function() isCurrent,
-  }) => transaction(() async {
+  }) => _trackSetupBookWrite(() => transaction(() async {
     const allowed = {
       'enabled',
       'maxInjectedEntries',
@@ -136,7 +140,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
           ),
         ) ==
         1;
-  });
+  }));
 
   /// Local draft flag only; content, source manifest and error are unchanged.
   Future<bool> setDraftVectorForControl({
@@ -144,7 +148,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required String draftId,
     required bool vectorSearch,
     required bool Function() isCurrent,
-  }) => transaction(() async {
+  }) => _trackSetupBookWrite(() => transaction(() async {
     if (!isCurrent()) return false;
     final drafts = (jsonDecode(expected._row.pendingDraftsJson) as List)
         .map((d) => Map<String, dynamic>.from(d as Map))
@@ -169,7 +173,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
           ),
         ) ==
         1;
-  });
+  }));
 
   /// Rebuilds only the disposable local catalog from the exact durable book.
   /// No embeddings, graph purge, generation or paid network work is dispatched.
@@ -226,7 +230,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
       table.lastProcessedMessageCount.equals(row.lastProcessedMessageCount) &
       table.updatedAt.equals(row.updatedAt);
 
-  Future<MemoryBook> ensureForSession(String sessionId) async {
+  Future<MemoryBook> ensureForSession(String sessionId) => _trackSetupBookWrite(() async {
     final existing = await getBySessionId(sessionId);
     if (existing != null) return existing;
     final global = _ref.read(memoryGlobalSettingsProvider);
@@ -271,7 +275,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     );
     await put(book);
     return book;
-  }
+  });
 
   @override
   Future<List<MemoryBook>> getAll() async {
@@ -280,7 +284,8 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
   }
 
   @override
-  Future<void> put(MemoryBook book) => transaction(() => _put(book));
+  Future<void> put(MemoryBook book) =>
+      _trackSetupBookWrite(() => transaction(() => _put(book)));
 
   Future<void> _put(MemoryBook book) async {
     final existing = await getBySessionId(book.sessionId);
@@ -347,14 +352,14 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
   }
 
   Future<void> updateSettings(String sessionId, MemoryBookSettings settings) {
-    return (update(
+    return _trackSetupBookWrite(() => (update(
       memoryBookRows,
     )..where((t) => t.sessionId.equals(sessionId))).write(
       MemoryBookRowsCompanion(
         settingsJson: Value(jsonEncode(settings.toJson())),
         updatedAt: Value(currentTimestampSeconds()),
       ),
-    );
+    ));
   }
 
   /// Checks that the exact entries selected for a prepared request are still
@@ -379,7 +384,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     String sessionId,
     String draftId,
     MemoryDraft expected,
-  ) => transaction(() async {
+  ) => _trackSetupBookWrite(() => transaction(() async {
     final book = await getBySessionId(sessionId);
     if (book == null) return null;
     final draft = book.pendingDrafts.where((d) => d.id == draftId).firstOrNull;
@@ -414,14 +419,14 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     );
     await put(updated);
     return getBySessionId(sessionId);
-  });
+  }));
 
   /// Repairs prompt selections after the complete set of available presets
   /// changes. Only the settings JSON of affected existing books is updated.
   /// Entries, drafts, cursors, and all unrelated settings remain untouched.
   Future<int> repairPromptPresetSelections(
     Iterable<String> customPresetKeys,
-  ) async {
+  ) => _trackSetupBookWrite(() async {
     final safeKeys = {
       ...MemoryPromptPresets.builtIn.map((preset) => preset.key),
       ...customPresetKeys,
@@ -455,7 +460,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
       }
     });
     return repaired;
-  }
+  });
 
   /// Atomically appends [drafts] to the pending drafts of the memory book
   /// for [sessionId]. Wraps the read-modify-write in a transaction so
@@ -463,7 +468,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
   ///
   /// Used by user-directed MemoryBook draft workflows without racing with
   /// other MemoryBook writes.
-  Future<void> appendDrafts(String sessionId, List<MemoryDraft> drafts) async {
+  Future<void> appendDrafts(String sessionId, List<MemoryDraft> drafts) => _trackSetupBookWrite(() async {
     if (drafts.isEmpty) return;
     await transaction(() async {
       final existing = await getBySessionId(sessionId);
@@ -474,7 +479,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
         book.copyWith(pendingDrafts: [...book.pendingDrafts, ...drafts]),
       );
     });
-  }
+  });
 
   /// Applies a narrow mutation to one draft using the latest durable book.
   /// Returns false when the book or draft was removed while work was in flight.
@@ -482,7 +487,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required String sessionId,
     required String draftId,
     required MemoryDraft Function(MemoryDraft current) mutate,
-  }) async {
+  }) => _trackSetupBookWrite(() async {
     var updated = false;
     await transaction(() async {
       final existing = await getBySessionId(sessionId);
@@ -495,7 +500,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
       updated = true;
     });
     return updated;
-  }
+  });
 
   /// Atomically appends [entries] to the approved entries of the memory book
   /// for [sessionId]. Wraps the read-modify-write in a transaction so
@@ -505,7 +510,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
   Future<void> appendApprovedEntries(
     String sessionId,
     List<MemoryEntry> entries,
-  ) async {
+  ) => _trackSetupBookWrite(() async {
     if (entries.isEmpty) return;
     await transaction(() async {
       final existing = await getBySessionId(sessionId);
@@ -514,7 +519,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
           MemoryBook(id: 'memorybook_$sessionId', sessionId: sessionId);
       await put(book.copyWith(entries: [...book.entries, ...entries]));
     });
-  }
+  });
 
   /// Atomically replaces the entry with [entryId] in the memory book for
   /// [sessionId] with [updated]. Wraps the read-modify-write in a transaction
@@ -526,7 +531,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required String sessionId,
     required String entryId,
     required MemoryEntry updated,
-  }) async {
+  }) => _trackSetupBookWrite(() async {
     var didUpdate = false;
     await transaction(() async {
       final existing = await getBySessionId(sessionId);
@@ -539,7 +544,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
       await put(existing.copyWith(entries: updatedEntries));
     });
     return didUpdate;
-  }
+  });
 
   /// Applies an editor result only if [expected] is still the durable entry.
   /// Text changes append a revision; the previous active snapshot is never
@@ -549,7 +554,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required MemoryEntry expected,
     required MemoryEntry proposed,
     String reason = 'manual_edit',
-  }) => transaction(() async {
+  }) => _trackSetupBookWrite(() => transaction(() async {
     final book = await getBySessionId(sessionId);
     final current = book?.entries
         .where((entry) => entry.id == expected.id)
@@ -582,7 +587,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
       ),
     );
     return revised;
-  });
+  }));
 
   /// Restores the text from [revisionId] by appending a new active revision.
   /// The historical revision remains untouched and the active pointer never
@@ -591,7 +596,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required String sessionId,
     required MemoryEntry expected,
     required String revisionId,
-  }) async {
+  }) => _trackSetupBookWrite(() async {
     final current = await getBySessionId(sessionId).then(
       (book) =>
           book?.entries.where((entry) => entry.id == expected.id).firstOrNull,
@@ -604,7 +609,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
       proposed: restored,
       reason: 'restore_revision',
     );
-  }
+  });
 
   /// Atomically removes the entry with [entryId] from the memory book for
   /// [sessionId]. Wraps the read-modify-write in a transaction (database.md
@@ -614,7 +619,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
   Future<bool> deleteEntry({
     required String sessionId,
     required String entryId,
-  }) async {
+  }) => _trackSetupBookWrite(() async {
     var didDelete = false;
     await transaction(() async {
       final existing = await getBySessionId(sessionId);
@@ -625,7 +630,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
       await put(existing.copyWith(entries: kept));
     });
     return didDelete;
-  }
+  });
 
   /// Retains manifested history as invalid evidence when its source is deleted.
   /// Legacy records retain their existing deletion behavior.
@@ -637,7 +642,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
   Future<void> deleteForMessages(
     String sessionId,
     Set<String> messageIds,
-  ) async {
+  ) => _trackSetupBookWrite(() async {
     if (messageIds.isEmpty) return;
     await transaction(() async {
       final existing = await getBySessionId(sessionId);
@@ -685,7 +690,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
         existing.copyWith(entries: keptEntries, pendingDrafts: keptDrafts),
       );
     });
-  }
+  });
 
   Future<void> deleteSwipeAndShift({
     required String sessionId,
@@ -714,7 +719,7 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required String messageId,
     required int removedSwipeId,
     int? removedAgentSwipeId,
-  }) => transaction(() async {
+  }) => _trackSetupBookWrite(() => transaction(() async {
     final existing = await getBySessionId(sessionId);
     if (existing == null) return;
 
@@ -788,13 +793,13 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
         )
         .toList();
     await put(existing.copyWith(entries: entries, pendingDrafts: drafts));
-  });
+  }));
 
   Future<void> copyForSessionBranch({
     required String fromSessionId,
     required String toSessionId,
     required Set<String> messageIds,
-  }) async {
+  }) => _trackSetupBookWrite(() async {
     final source = await getBySessionId(fromSessionId);
     if (source == null) return;
     bool isRetained(List<String> sourceIds) =>
@@ -816,13 +821,13 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
         lastProcessedMessageCount: 0,
       ),
     );
-  }
+  });
 
   @override
   Future<void> deleteBySessionId(String sessionId) {
-    return (delete(
+    return _trackSetupBookWrite(() => (delete(
       memoryBookRows,
-    )..where((t) => t.sessionId.equals(sessionId))).go();
+    )..where((t) => t.sessionId.equals(sessionId))).go());
   }
 
   @override

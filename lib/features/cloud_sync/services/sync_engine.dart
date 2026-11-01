@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/preferences/saved_preferences_owner.dart';
+import '../../../core/preferences/tracked_shared_preferences.dart';
 
 import '../cloud_adapter.dart';
 import '../sync_models.dart';
@@ -838,136 +840,151 @@ class SyncEngine {
     SyncManifest cloudManifest,
     void Function(SyncProgress) onProgress, {
     List<SyncManifestEntry> acceptedCloudEntries = const [],
-  }) async {
-    final appliedEntries = <SyncManifestEntry>[];
-    var processed = 0;
-    final primaryEntries = pullEntries
-        .where(
-          (entry) =>
-              entry.type != 'session_lorebook_overlays' &&
-              entry.type != 'reconciliation_state' &&
-              entry.type != 'rewrite_job_history' &&
-              !localManifest.trackerSnapshotRestoreHashes.containsKey(
-                entry.key,
-              ),
-        )
-        .toList(growable: false);
-    final snapshotRestoreEntries = pullEntries
-        .where(
-          (entry) =>
-              localManifest.trackerSnapshotRestoreHashes.containsKey(entry.key),
-        )
-        .toList(growable: false);
-    final overlayEntries = pullEntries
-        .where((entry) => entry.type == 'session_lorebook_overlays')
-        .toList(growable: false);
-    final reconciliationEntries = pullEntries
-        .where((entry) => entry.type == 'reconciliation_state')
-        .toList(growable: false);
-    final rewriteEntries = pullEntries
-        .where((entry) => entry.type == 'rewrite_job_history')
-        .toList(growable: false);
-
-    Future<List<Object>> applyEntries(List<SyncManifestEntry> entries) async {
-      final tasks = <Future<void> Function()>[];
-      for (final entry in entries) {
-        tasks.add(() async {
-          processed++;
-          onProgress(
-            SyncProgress(
-              current: processed,
-              total: pullEntries.length,
-              message: 'Pulling ${entry.type}:${entry.id}',
+  }) => SavedPreferencesWrites.run(
+    [
+      if (pullEntries.any((e) => e.type == 'local_storage')) ...[
+        SyncSerialization.pipelineSettingsKey,
+        SyncSerialization.activeStudioPresetKey,
+        SyncSerialization.globalRegexScriptsKey,
+        SyncSerialization.studioRegexScriptsKey,
+      ],
+    ],
+    () async {
+      final appliedEntries = <SyncManifestEntry>[];
+      var processed = 0;
+      final primaryEntries = pullEntries
+          .where(
+            (entry) =>
+                entry.type != 'session_lorebook_overlays' &&
+                entry.type != 'reconciliation_state' &&
+                entry.type != 'rewrite_job_history' &&
+                !localManifest.trackerSnapshotRestoreHashes.containsKey(
+                  entry.key,
+                ),
+          )
+          .toList(growable: false);
+      final snapshotRestoreEntries = pullEntries
+          .where(
+            (entry) => localManifest.trackerSnapshotRestoreHashes.containsKey(
+              entry.key,
             ),
-          );
-          if (localManifest.trackerSnapshotRestoreHashes.containsKey(
-            entry.key,
-          )) {
-            await _restoreTrackerSnapshots(entry, localManifest, cloudManifest);
-            appliedEntries.add(entry);
-          } else if (entry.type == 'rewrite_job_history' && !entry.deleted) {
-            final cloudData = await SyncSerialization.readRequiredCloudEntity(
-              _adapter,
-              entry,
+          )
+          .toList(growable: false);
+      final overlayEntries = pullEntries
+          .where((entry) => entry.type == 'session_lorebook_overlays')
+          .toList(growable: false);
+      final reconciliationEntries = pullEntries
+          .where((entry) => entry.type == 'reconciliation_state')
+          .toList(growable: false);
+      final rewriteEntries = pullEntries
+          .where((entry) => entry.type == 'rewrite_job_history')
+          .toList(growable: false);
+
+      Future<List<Object>> applyEntries(List<SyncManifestEntry> entries) async {
+        final tasks = <Future<void> Function()>[];
+        for (final entry in entries) {
+          tasks.add(() async {
+            processed++;
+            onProgress(
+              SyncProgress(
+                current: processed,
+                total: pullEntries.length,
+                message: 'Pulling ${entry.type}:${entry.id}',
+              ),
             );
-            _verifyRewriteHistoryHash(entry, cloudData);
-            final merged = await _rewriteJobHistoryStore!.mergeBySessionId(
-              entry.id,
-              cloudData,
-            );
-            // Only accept the cloud hash when it covers the entire local
-            // union; otherwise the next push must publish local-only jobs.
-            if (SyncSerialization.computeSyncHash(merged) == entry.hash) {
+            if (localManifest.trackerSnapshotRestoreHashes.containsKey(
+              entry.key,
+            )) {
+              await _restoreTrackerSnapshots(
+                entry,
+                localManifest,
+                cloudManifest,
+              );
+              appliedEntries.add(entry);
+            } else if (entry.type == 'rewrite_job_history' && !entry.deleted) {
+              final cloudData = await SyncSerialization.readRequiredCloudEntity(
+                _adapter,
+                entry,
+              );
+              _verifyRewriteHistoryHash(entry, cloudData);
+              final merged = await _rewriteJobHistoryStore!.mergeBySessionId(
+                entry.id,
+                cloudData,
+              );
+              // Only accept the cloud hash when it covers the entire local
+              // union; otherwise the next push must publish local-only jobs.
+              if (SyncSerialization.computeSyncHash(merged) == entry.hash) {
+                appliedEntries.add(entry);
+              }
+            } else if (entry.type == 'rewrite_job_history') {
+              // Only deleting the owning chat removes immutable job history.
+              // A standalone cloud tombstone must not erase local records.
+            } else {
+              await _pullEntry(entry);
               appliedEntries.add(entry);
             }
-          } else if (entry.type == 'rewrite_job_history') {
-            // Only deleting the owning chat removes immutable job history.
-            // A standalone cloud tombstone must not erase local records.
-          } else {
-            await _pullEntry(entry);
-            appliedEntries.add(entry);
-          }
-        });
+          });
+        }
+        if (tasks.isEmpty) return const [];
+        final result = await _queue.enqueueAll(
+          tasks,
+          concurrency: 3,
+          delayMs: _operationDelayMs,
+        );
+        return result.errors;
       }
-      if (tasks.isEmpty) return const [];
-      final result = await _queue.enqueueAll(
-        tasks,
-        concurrency: 3,
-        delayMs: _operationDelayMs,
+
+      onProgress(
+        SyncProgress(
+          current: 0,
+          total: pullEntries.length,
+          message: 'Pulling ${pullEntries.length} items...',
+        ),
       );
-      return result.errors;
-    }
 
-    onProgress(
-      SyncProgress(
-        current: 0,
-        total: pullEntries.length,
-        message: 'Pulling ${pullEntries.length} items...',
-      ),
-    );
+      // Both dependent aggregates validate against chats/base lorebooks. Apply
+      // primary entities first, current lore projections second, and immutable
+      // reconciliation provenance last.
+      final primaryErrors = await applyEntries(primaryEntries);
+      if (primaryErrors.isNotEmpty) {
+        throw SyncQueueAggregateError(primaryErrors);
+      }
+      // Restore only after any owning chat import has completed, but before the
+      // session consistency pass and the dependent history imports.
+      final snapshotErrors = await applyEntries(snapshotRestoreEntries);
+      if (snapshotErrors.isNotEmpty) {
+        throw SyncQueueAggregateError(snapshotErrors);
+      }
+      final touchedSessionIds = [...primaryEntries, ...snapshotRestoreEntries]
+          .where(
+            (entry) =>
+                entry.type == 'chat' ||
+                entry.type == 'tracker_snapshot' ||
+                entry.type == 'tracker_value',
+          )
+          .map((entry) => entry.id)
+          .toSet();
+      if (touchedSessionIds.isNotEmpty) {
+        await _reconcilePulledSessions?.call(touchedSessionIds);
+      }
 
-    // Both dependent aggregates validate against chats/base lorebooks. Apply
-    // primary entities first, current lore projections second, and immutable
-    // reconciliation provenance last.
-    final primaryErrors = await applyEntries(primaryEntries);
-    if (primaryErrors.isNotEmpty) {
-      throw SyncQueueAggregateError(primaryErrors);
-    }
-    // Restore only after any owning chat import has completed, but before the
-    // session consistency pass and the dependent history imports.
-    final snapshotErrors = await applyEntries(snapshotRestoreEntries);
-    if (snapshotErrors.isNotEmpty) {
-      throw SyncQueueAggregateError(snapshotErrors);
-    }
-    final touchedSessionIds = [...primaryEntries, ...snapshotRestoreEntries]
-        .where(
-          (entry) =>
-              entry.type == 'chat' ||
-              entry.type == 'tracker_snapshot' ||
-              entry.type == 'tracker_value',
-        )
-        .map((entry) => entry.id)
-        .toSet();
-    if (touchedSessionIds.isNotEmpty) {
-      await _reconcilePulledSessions?.call(touchedSessionIds);
-    }
+      final taskErrors = <Object>[
+        ...await applyEntries(overlayEntries),
+        ...await applyEntries(reconciliationEntries),
+        ...await applyEntries(rewriteEntries),
+      ];
 
-    final taskErrors = <Object>[
-      ...await applyEntries(overlayEntries),
-      ...await applyEntries(reconciliationEntries),
-      ...await applyEntries(rewriteEntries),
-    ];
+      await _finalizePull(
+        localManifest,
+        cloudManifest,
+        acceptedCloudEntries: [...acceptedCloudEntries, ...appliedEntries],
+      );
 
-    await _finalizePull(
-      localManifest,
-      cloudManifest,
-      acceptedCloudEntries: [...acceptedCloudEntries, ...appliedEntries],
-    );
-
-    if (taskErrors.isNotEmpty) {
-      throw SyncQueueAggregateError(taskErrors);
-    }
-  }
+      if (taskErrors.isNotEmpty) {
+        throw SyncQueueAggregateError(taskErrors);
+      }
+    },
+  );
 
   Future<void> _finalizePull(
     SyncManifest localManifest,
@@ -2485,74 +2502,84 @@ class SyncEngine {
     );
   }
 
-  Future<void> _applyLocalStorage(Map<String, dynamic> data) async {
-    final prefs = await SharedPreferences.getInstance();
-    final pipelineSettings = data[SyncSerialization.pipelineSettingsKey];
-    if (pipelineSettings is String) {
-      if (pipelineSettings.isEmpty) {
-        await prefs.remove(SyncSerialization.pipelineSettingsKey);
-      } else {
-        await prefs.setString(
-          SyncSerialization.pipelineSettingsKey,
-          pipelineSettings,
+  Future<void> _applyLocalStorage(Map<String, dynamic> data) =>
+      SavedPreferencesWrites.run(data.keys, () async {
+        final prefs = await TrackedSharedPreferences.getInstance();
+        final pipelineSettings = data[SyncSerialization.pipelineSettingsKey];
+        if (pipelineSettings is String) {
+          if (pipelineSettings.isEmpty) {
+            await prefs.remove(SyncSerialization.pipelineSettingsKey);
+          } else {
+            await prefs.setString(
+              SyncSerialization.pipelineSettingsKey,
+              pipelineSettings,
+            );
+          }
+        }
+        final activeStudioPresetId =
+            data[SyncSerialization.activeStudioPresetKey];
+        if (activeStudioPresetId is String) {
+          if (activeStudioPresetId.isEmpty) {
+            await prefs.remove(SyncSerialization.activeStudioPresetKey);
+          } else {
+            await prefs.setString(
+              SyncSerialization.activeStudioPresetKey,
+              activeStudioPresetId,
+            );
+          }
+        }
+        await _applyLocalStorageString(
+          prefs,
+          data,
+          SyncSerialization.globalRegexScriptsKey,
         );
-      }
-    }
-    final activeStudioPresetId = data[SyncSerialization.activeStudioPresetKey];
-    if (activeStudioPresetId is String) {
-      if (activeStudioPresetId.isEmpty) {
-        await prefs.remove(SyncSerialization.activeStudioPresetKey);
-      } else {
-        await prefs.setString(
-          SyncSerialization.activeStudioPresetKey,
-          activeStudioPresetId,
+        await _applyLocalStorageString(
+          prefs,
+          data,
+          SyncSerialization.studioRegexScriptsKey,
         );
-      }
-    }
-    await _applyLocalStorageString(
-      prefs,
-      data,
-      SyncSerialization.globalRegexScriptsKey,
-    );
-    await _applyLocalStorageString(
-      prefs,
-      data,
-      SyncSerialization.studioRegexScriptsKey,
-    );
-    final rawAppSettings = data[SyncSerialization.appSettingsKey];
-    if (rawAppSettings is Map) {
-      await AppSettingsPreferences.applyPartial(
-        prefs,
-        Map<String, dynamic>.from(rawAppSettings),
-      );
-    }
-    final layout = data[SyncSerialization.chatLayoutKey];
-    if (layout is Map<String, dynamic>) {
-      await SyncSerialization.applyChatLayout(prefs, layout);
-    }
-  }
+        final rawAppSettings = data[SyncSerialization.appSettingsKey];
+        if (rawAppSettings is Map) {
+          await AppSettingsPreferences.applyPartial(
+            prefs,
+            Map<String, dynamic>.from(rawAppSettings),
+          );
+        }
+        final layout = data[SyncSerialization.chatLayoutKey];
+        if (layout is Map<String, dynamic>) {
+          await SyncSerialization.applyChatLayout(prefs, layout);
+        }
+      });
 
   Future<void> _applyLocalStorageString(
     SharedPreferences prefs,
     Map<String, dynamic> data,
     String key,
-  ) async {
+  ) => SavedPreferencesWrites.run([key], () async {
     final value = data[key];
     if (value is! String) return;
     if (value.isEmpty) {
-      await prefs.remove(key);
+      await TrackedSharedPreferences.wrap(prefs).remove(key);
     } else {
-      await prefs.setString(key, value);
+      await TrackedSharedPreferences.wrap(prefs).setString(key, value);
     }
-  }
+  });
 
-  Future<void> _deleteLocalStorage() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(SyncSerialization.pipelineSettingsKey);
-    await prefs.remove(SyncSerialization.activeStudioPresetKey);
-    await prefs.remove(SyncSerialization.globalRegexScriptsKey);
-    await prefs.remove(SyncSerialization.studioRegexScriptsKey);
-    await AppSettingsPreferences.removeAll(prefs);
-    await SyncSerialization.applyChatLayout(prefs, const {});
-  }
+  Future<void> _deleteLocalStorage() => SavedPreferencesWrites.run(
+    [
+      SyncSerialization.pipelineSettingsKey,
+      SyncSerialization.activeStudioPresetKey,
+      SyncSerialization.globalRegexScriptsKey,
+      SyncSerialization.studioRegexScriptsKey,
+    ],
+    () async {
+      final prefs = await TrackedSharedPreferences.getInstance();
+      await prefs.remove(SyncSerialization.pipelineSettingsKey);
+      await prefs.remove(SyncSerialization.activeStudioPresetKey);
+      await prefs.remove(SyncSerialization.globalRegexScriptsKey);
+      await prefs.remove(SyncSerialization.studioRegexScriptsKey);
+      await AppSettingsPreferences.removeAll(prefs);
+      await SyncSerialization.applyChatLayout(prefs, const {});
+    },
+  );
 }

@@ -4,7 +4,8 @@ import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:archive/archive.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../../preferences/saved_preferences_owner.dart';
+import '../../preferences/tracked_shared_preferences.dart';
 
 import '../../db/app_db.dart';
 import '../../db/repositories/api_config_repo.dart';
@@ -79,7 +80,7 @@ class TavoBackupImporter {
   Future<TavoImportResult> _import(
     Archive zip, {
     void Function(String stage)? onProgress,
-  }) async {
+  }) => SavedPreferencesWrites.run(['gz_global_regex_scripts'], () async {
     final result = TavoImportResult();
 
     onProgress?.call('backup_progress_clearing'.tr());
@@ -127,7 +128,7 @@ class TavoBackupImporter {
 
     onProgress?.call('backup_progress_finalizing'.tr());
     return result;
-  }
+  });
 
   Future<void> _clearAllTables() async {
     await _db.customStatement('PRAGMA foreign_keys = OFF');
@@ -316,11 +317,14 @@ class TavoBackupImporter {
     }
   }
 
-  Future<void> _importRegexes(TavoData data, TavoImportResult result) async {
+  Future<void> _importRegexes(
+    TavoData data,
+    TavoImportResult result,
+  ) => SavedPreferencesWrites.run(['gz_global_regex_scripts'], () async {
     final regexes = data.categories['regex'];
     if (regexes == null || regexes.isEmpty) return;
 
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await TrackedSharedPreferences.getInstance();
     // Mirror JS behaviour: Tavo import wipes existing regex scripts before
     // appending the imported set.
     await prefs.remove('gz_global_regex_scripts');
@@ -415,7 +419,7 @@ class TavoBackupImporter {
     if (imported.isNotEmpty) {
       await prefs.setString('gz_global_regex_scripts', jsonEncode(imported));
     }
-  }
+  });
 
   Future<void> _importLorebooks(TavoData data, TavoImportResult result) async {
     final lorebooks = data.categories['lorebook'];

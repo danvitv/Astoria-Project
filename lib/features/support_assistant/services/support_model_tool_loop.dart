@@ -171,6 +171,7 @@ extension _ModelTools on _ModelRun {
       activeStudioPresetId: service._activeStudioPresetId,
       activeOrdinaryPresetId: service._activeOrdinaryPresetId,
       ownSupportSessionId: binding.sessionId,
+      preferences: service._preferences,
     );
     return _ModelSourceToolRun(
       this,
@@ -333,6 +334,11 @@ extension _ModelTools on _ModelRun {
         sourceToolAccess: originalSourceTools?.hasSourceAuthority == true
             ? originalSourceTools
             : null,
+        // Native local catalog input, NOT a model body/disclosure grant. The
+        // lease is issuable only after this exact terminal effect is consumed.
+        sourceAccess: !isReattempt && domainRoot.hasCatalogSourceAccess
+            ? domainRoot
+            : null,
         terminalRoot: isReattempt
             ? null
             : _ModelConfigurationTerminalRoot(this),
@@ -465,13 +471,44 @@ extension _ModelTools on _ModelRun {
 
 /// The same read operation admits a finite domain capsule, not an effect future.
 final class _ModelDomainTerminalRoot
-    implements SupportBackupAppPrivateDatabaseRoot {
+    implements SupportBackupAppPrivateDatabaseRoot, SupportAppSourceAccessPort {
   _ModelDomainTerminalRoot(this._run)
-    : _backupSource = _run.service._db.nativeDataSourceIdentity;
+    : _backupSource = _run.service._db.nativeDataSourceIdentity {
+    if (!_run.isReattempt &&
+        _backupSource != null &&
+        _run.history.retainsNativeDataSource(_backupSource) &&
+        _run.binding.policy.isGlobal &&
+        _run.binding.policy.allows(SupportPermission.readApplicationData) &&
+        !_run.service._runtime.permissions.applicationDataReadDenied) {
+      _catalogAccess = _ModelMemoryCatalogSourceAccess(_run, this);
+    }
+  }
   final _ModelRun _run;
   final NativeDataSourceIdentity? _backupSource;
+  _ModelMemoryCatalogSourceAccess? _catalogAccess;
   SupportAppActionContext? _originalContext;
   bool _backupRetired = false;
+  bool get hasCatalogSourceAccess => _catalogAccess != null;
+
+  @override
+  Future<SupportAppSourceLease?> acquire({
+    required String domain,
+    required String sourceId,
+    required Object observation,
+    required SupportAppActionContext context,
+  }) async {
+    if (!identical(context, _originalContext) ||
+        !identical(context.domainRoot, this) ||
+        !identical(context.sourceAccess, this)) {
+      return null;
+    }
+    return _catalogAccess?.acquire(
+      domain: domain,
+      sourceId: sourceId,
+      observation: observation,
+      context: context,
+    );
+  }
 
   @override
   String? proposeAppPrivateSnapshotDestination(

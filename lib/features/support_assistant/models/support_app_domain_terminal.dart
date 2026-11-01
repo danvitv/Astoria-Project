@@ -161,6 +161,11 @@ extension SupportAppDomainContext on SupportAppActionContext {
 
   bool get domainEffectCurrent =>
       _domainCustody?.isCurrent == true && _domainSource?.isCurrent == true;
+
+  /// Read-only proof of the already-consumed native effect. This cannot admit a
+  /// dispatch, renew the requester or replace its bound native source fence.
+  SupportAppDomainCustody? get nativeDomainCustody =>
+      domainEffectCurrent ? _domainCustody : null;
   bool domainEffectForSession(String id) =>
       domainEffectCurrent && _domainSource!.coversSession(id);
   bool domainEffectForOperation(SupportAppDomainOperation operation) =>

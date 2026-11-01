@@ -66,6 +66,9 @@ final class ChatNativeOwnerRegistry {
   }
 
   Future<void>? beforeSessionSelection() {
+    // Native intent, before the first switch/branch await. A warm owner going
+    // A -> B -> A must not renew a previously painted source/Undo observation.
+    _revision++;
     final pending = fenceMaintenance();
     return pending.isEmpty
         ? null

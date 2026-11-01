@@ -10,6 +10,7 @@ import 'package:glaze_flutter/core/models/ledger_prompt_injection_mode.dart';
 import 'package:glaze_flutter/core/models/ledger_prompt_injection_policy.dart';
 import 'package:glaze_flutter/core/models/pipeline_settings.dart';
 import 'package:glaze_flutter/core/models/studio_config.dart';
+import 'package:glaze_flutter/features/studio/studio_agent_toggle.dart';
 
 void main() {
   late AppDatabase db;
@@ -26,6 +27,7 @@ void main() {
       id: 'studio_direct_loom_v1',
       name: 'Direct Loom v1',
       agentEnabled: {'continuity': false, 'final': true},
+      agentEnabledBeforeDependencyOff: {'continuity': true, 'world': false},
       agents: [
         StudioAgent(id: 'continuity', controllerId: 'continuity'),
         StudioAgent(id: 'final', controllerId: 'final'),
@@ -43,6 +45,10 @@ void main() {
     final restored = await repo.getById(preset.id);
 
     expect(restored?.agentEnabled, preset.agentEnabled);
+    expect(
+      restored?.agentEnabledBeforeDependencyOff,
+      preset.agentEnabledBeforeDependencyOff,
+    );
     expect(restored?.agents, preset.agents);
     expect(restored?.expensiveApiConfigId, 'expensive');
     expect(restored?.cheapApiConfigId, 'cheap');
@@ -53,37 +59,108 @@ void main() {
     expect(restored?.name, preset.name);
   });
 
-  test('refuses to overwrite a Main Writer with a partial agent list', () async {
-    const original = StudioPreset(
-      id: 'think-preset',
-      agents: [
-        StudioAgent(id: 'final', controllerId: 'final'),
-        StudioAgent(id: 'think', controllerId: 'think'),
-      ],
+  for (final originallyEnabled in [true, false]) {
+    test(
+      'native dependency OFF survives ordinary editor save and restores $originallyEnabled',
+      () async {
+        final preset = StudioPreset(
+          id: 'dependency-$originallyEnabled',
+          name: 'Dependency restoration',
+          agentEnabled: {
+            'continuity': originallyEnabled,
+            'ledger': true,
+            'final': true,
+          },
+          agents: const [
+            StudioAgent(id: 'continuity', controllerId: 'continuity'),
+            StudioAgent(id: 'ledger', controllerId: 'ledger'),
+            StudioAgent(id: 'final', controllerId: 'final'),
+          ],
+          blocks: const [
+            StudioPresetBlock(id: 'final_main_prompt', section: 'final'),
+          ],
+        );
+        await repo.upsert(preset);
+        final before = (await repo.controlObserve(preset.id))!;
+        final disabled = applyStudioAgentToggle(before, 'ledger', false);
+        expect(
+          await repo.controlAgentToggle(
+            expected: before,
+            toggled: disabled,
+            timestamp: 2,
+            current: () => true,
+          ),
+          true,
+        );
+        final editor = (await repo.getById(preset.id))!;
+        expect(editor.agentEnabled['continuity'], false);
+        expect(editor.agentEnabledBeforeDependencyOff, {
+          'continuity': originallyEnabled,
+        });
+        await repo.upsert(
+          editor.copyWith(
+            name: 'Ordinary editor rename',
+            runtime: editor.runtime.copyWith(
+              broadcastBlocks: ['Unrelated setting'],
+            ),
+          ),
+        );
+        final reopened = (await StudioPresetRepo(db).getById(preset.id))!;
+        expect(reopened.agentEnabledBeforeDependencyOff, {
+          'continuity': originallyEnabled,
+        });
+        expect(reopened.agents, editor.agents);
+        expect(reopened.blocks, editor.blocks);
+        expect(reopened.runtime.broadcastBlocks, ['Unrelated setting']);
+        expect(await repo.controlObserve(preset.id), reopened);
+        await repo.upsert(applyStudioAgentToggle(reopened, 'ledger', true));
+        final enabled = (await repo.getById(preset.id))!;
+        expect(enabled.agentEnabled['continuity'], originallyEnabled);
+        expect(enabled.agentEnabledBeforeDependencyOff, isEmpty);
+        expect(enabled.agentEnabled['final'], true);
+        expect(enabled.runtime.broadcastBlocks, ['Unrelated setting']);
+      },
     );
-    await repo.upsert(original);
+  }
 
-    await expectLater(
-      repo.upsert(original.copyWith(agents: [original.agents.last])),
-      throwsStateError,
-    );
-    expect((await repo.getById(original.id))?.agents, original.agents);
-    await expectLater(
-      repo.upsert(const StudioPreset(
-        id: 'new-think-preset',
-        agents: [StudioAgent(id: 'think', controllerId: 'think')],
-      )),
-      throwsStateError,
-    );
+  test(
+    'refuses to overwrite a Main Writer with a partial agent list',
+    () async {
+      const original = StudioPreset(
+        id: 'think-preset',
+        agents: [
+          StudioAgent(id: 'final', controllerId: 'final'),
+          StudioAgent(id: 'think', controllerId: 'think'),
+        ],
+      );
+      await repo.upsert(original);
 
-    await repo.upsert(const StudioPreset(
-      id: 'think-preset',
-      name: 'Renamed without editing controllers',
-    ));
-    final renamed = await repo.getById(original.id);
-    expect(renamed?.name, 'Renamed without editing controllers');
-    expect(renamed?.agents, original.agents);
-  });
+      await expectLater(
+        repo.upsert(original.copyWith(agents: [original.agents.last])),
+        throwsStateError,
+      );
+      expect((await repo.getById(original.id))?.agents, original.agents);
+      await expectLater(
+        repo.upsert(
+          const StudioPreset(
+            id: 'new-think-preset',
+            agents: [StudioAgent(id: 'think', controllerId: 'think')],
+          ),
+        ),
+        throwsStateError,
+      );
+
+      await repo.upsert(
+        const StudioPreset(
+          id: 'think-preset',
+          name: 'Renamed without editing controllers',
+        ),
+      );
+      final renamed = await repo.getById(original.id);
+      expect(renamed?.name, 'Renamed without editing controllers');
+      expect(renamed?.agents, original.agents);
+    },
+  );
 
   test('round-trips blocks in final, cleaner, and ledger sections', () async {
     const preset = StudioPreset(

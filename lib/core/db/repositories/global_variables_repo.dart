@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../preferences/saved_preferences_owner.dart';
+import '../../preferences/tracked_shared_preferences.dart';
 
 /// Process-wide singleton repository for global JS extension variables.
 ///
@@ -22,7 +24,7 @@ class GlobalVariablesRepo {
 
   /// Build a repo backed by the system [SharedPreferences].
   static Future<GlobalVariablesRepo> create() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await TrackedSharedPreferences.getInstance();
     return GlobalVariablesRepo._(prefsLoader: Future.value(prefs));
   }
 
@@ -30,7 +32,9 @@ class GlobalVariablesRepo {
   /// (e.g. `SharedPreferences.setMockInitialValues({})`).
   factory GlobalVariablesRepo.withPrefsLoader(
     Future<SharedPreferences> Function() loader,
-  ) => GlobalVariablesRepo._(prefsLoader: loader());
+  ) => GlobalVariablesRepo._(
+    prefsLoader: loader().then(TrackedSharedPreferences.wrap),
+  );
 
   final Future<SharedPreferences> _prefsLoader;
   final String _storageKey = _defaultStorageKey;
@@ -61,7 +65,7 @@ class GlobalVariablesRepo {
   /// [maxJsonBytes].
   Future<Map<String, dynamic>> update(
     Map<String, dynamic> Function(Map<String, dynamic> root) update,
-  ) async {
+  ) => SavedPreferencesWrites.run([_storageKey], () async {
     final next = await _runSerialized(() async {
       final prefs = await _prefs;
       final root = await read();
@@ -72,7 +76,7 @@ class GlobalVariablesRepo {
       return Map<String, dynamic>.from(mutated);
     });
     return next;
-  }
+  });
 
   /// Replaces the entire root payload. Used by tests and by the
   /// permission-protected bridge layer when the JS calls a top-level

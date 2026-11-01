@@ -1,5 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'shared_prefs_provider.dart';
 
 import '../models/studio_config.dart';
 import 'db_provider.dart';
@@ -23,15 +23,16 @@ class ActiveStudioPresetNotifier extends AsyncNotifier<String> {
     // per-session preset into SharedPreferences before dropping that column.
     final db = ref.read(appDbProvider);
     await db.customSelect('SELECT 1').getSingle();
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await TrackedSharedPreferences.getInstance();
     return prefs.getString(activeStudioPresetKey) ?? 'default';
   }
 
-  Future<void> set(String presetId) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(activeStudioPresetKey, presetId);
-    state = AsyncData(presetId);
-  }
+  Future<void> set(String presetId) =>
+      SavedPreferencesWrites.run([activeStudioPresetKey], () async {
+        final prefs = await TrackedSharedPreferences.getInstance();
+        await prefs.setString(activeStudioPresetKey, presetId);
+        state = AsyncData(presetId);
+      });
 }
 
 /// The Studio preset a turn actually runs: the one [activeStudioPresetProvider]

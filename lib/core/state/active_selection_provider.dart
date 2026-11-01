@@ -67,25 +67,27 @@ Future<void> loadActiveSelections(WidgetRef ref) async {
   await ref.read(pipelineSettingsProvider.notifier).load();
 }
 
-Future<void> setActivePreset(WidgetRef ref, String? id) async {
-  ref.read(activePresetIdProvider.notifier).state = id;
-  final prefs = await ref.read(sharedPreferencesProvider.future);
-  if (id != null) {
-    await prefs.setString('activePresetId', id);
-  } else {
-    await prefs.remove('activePresetId');
-  }
-}
+Future<void> setActivePreset(WidgetRef ref, String? id) =>
+    SavedPreferencesWrites.run(['activePresetId'], () async {
+      ref.read(activePresetIdProvider.notifier).state = id;
+      final prefs = await ref.read(sharedPreferencesProvider.future);
+      if (id != null) {
+        await prefs.setString('activePresetId', id);
+      } else {
+        await prefs.remove('activePresetId');
+      }
+    });
 
-Future<void> setActivePersona(WidgetRef ref, String? id) async {
-  ref.read(activePersonaIdProvider.notifier).state = id;
-  final prefs = await ref.read(sharedPreferencesProvider.future);
-  if (id != null) {
-    await prefs.setString('activePersonaId', id);
-  } else {
-    await prefs.remove('activePersonaId');
-  }
-}
+Future<void> setActivePersona(WidgetRef ref, String? id) =>
+    SavedPreferencesWrites.run(['activePersonaId'], () async {
+      ref.read(activePersonaIdProvider.notifier).state = id;
+      final prefs = await ref.read(sharedPreferencesProvider.future);
+      if (id != null) {
+        await prefs.setString('activePersonaId', id);
+      } else {
+        await prefs.remove('activePersonaId');
+      }
+    });
 
 PersonaConnections _buildUpdatedConnections(
   PersonaConnections current,
@@ -117,20 +119,20 @@ Future<void> setPersonaConnection(
   String type,
   String targetId,
   String? personaId,
-) async {
+) => SavedPreferencesWrites.run(['personaConnections'], () async {
   final current = ref.read(personaConnectionsProvider);
   final updated = _buildUpdatedConnections(current, type, targetId, personaId);
   ref.read(personaConnectionsProvider.notifier).state = updated;
   final prefs = await ref.read(sharedPreferencesProvider.future);
   await prefs.setString('personaConnections', jsonEncode(updated.toJson()));
-}
+});
 
 void setPersonaConnectionRef(
   Ref ref,
   String type,
   String targetId,
   String? personaId,
-) {
+) => SavedPreferencesWrites.runSync(['personaConnections'], () {
   final current = ref.read(personaConnectionsProvider);
   final updated = _buildUpdatedConnections(current, type, targetId, personaId);
   ref.read(personaConnectionsProvider.notifier).state = updated;
@@ -138,15 +140,16 @@ void setPersonaConnectionRef(
   if (prefs != null) {
     prefs.setString('personaConnections', jsonEncode(updated.toJson()));
   }
-}
+});
 
-void updateGlobalVarsRef(Ref ref, Map<String, String> vars) {
-  ref.read(globalVarsProvider.notifier).state = vars;
-  final prefs = ref.read(sharedPreferencesProvider).value;
-  if (prefs != null) {
-    prefs.setString('globalVars', jsonEncode(vars));
-  }
-}
+void updateGlobalVarsRef(Ref ref, Map<String, String> vars) =>
+    SavedPreferencesWrites.runSync(['globalVars'], () {
+      ref.read(globalVarsProvider.notifier).state = vars;
+      final prefs = ref.read(sharedPreferencesProvider).value;
+      if (prefs != null) {
+        prefs.setString('globalVars', jsonEncode(vars));
+      }
+    });
 
 // ─── Preset connections ───────────────────────────────────────────────────────
 
@@ -180,7 +183,7 @@ Future<void> setPresetConnection(
   String type,
   String targetId,
   String? presetId,
-) async {
+) => SavedPreferencesWrites.run(['presetConnections'], () async {
   final current = ref.read(presetConnectionsProvider);
   final updated = _buildUpdatedPresetConnections(
     current,
@@ -191,14 +194,14 @@ Future<void> setPresetConnection(
   ref.read(presetConnectionsProvider.notifier).state = updated;
   final prefs = await ref.read(sharedPreferencesProvider.future);
   await prefs.setString('presetConnections', jsonEncode(updated.toJson()));
-}
+});
 
 void setPresetConnectionRef(
   Ref ref,
   String type,
   String targetId,
   String? presetId,
-) {
+) => SavedPreferencesWrites.runSync(['presetConnections'], () {
   final current = ref.read(presetConnectionsProvider);
   final updated = _buildUpdatedPresetConnections(
     current,
@@ -211,4 +214,4 @@ void setPresetConnectionRef(
   if (prefs != null) {
     prefs.setString('presetConnections', jsonEncode(updated.toJson()));
   }
-}
+});

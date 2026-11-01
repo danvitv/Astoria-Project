@@ -509,6 +509,9 @@ extension _AppDatabaseUpgradeV51ToV100 on AppDatabase {
       await purgeRetiredAgenticMicroMemory();
     }
     if (from < 67) {
+      final preferencesIntent = SavedPreferencesOwner.process.begin([
+        'activeStudioPresetId',
+      ]);
       // Studio preset is now a global singleton stored in SharedPreferences
       // (activeStudioPresetProvider). Preserve the most recently updated
       // per-session choice once, then drop the old column. A database that
@@ -523,7 +526,7 @@ extension _AppDatabaseUpgradeV51ToV100 on AppDatabase {
           (column) => column.read<String>('name') == 'studio_preset_id',
         );
         if (hasLegacyPresetId) {
-          final prefs = await SharedPreferences.getInstance();
+          final prefs = await TrackedSharedPreferences.getInstance();
           if (!prefs.containsKey('activeStudioPresetId')) {
             final rows = await customSelect(
               'SELECT studio_preset_id FROM studio_config_rows '
@@ -544,6 +547,8 @@ extension _AppDatabaseUpgradeV51ToV100 on AppDatabase {
       } catch (e) {
         debugPrint('Migration 67 (preserve active Studio preset) failed: $e');
         rethrow;
+      } finally {
+        preferencesIntent.settle();
       }
     }
     if (from < 68) {

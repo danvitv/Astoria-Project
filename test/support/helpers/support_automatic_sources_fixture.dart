@@ -7,6 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/db/repositories/support_source_text_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/support_text_context_repo.dart';
+import 'package:glaze_flutter/core/preferences/saved_preferences_read_port.dart';
 import 'package:glaze_flutter/core/llm/transport/native_tool_transport.dart';
 import 'package:glaze_flutter/core/llm/transport/native_provider_transport.dart';
 import 'package:glaze_flutter/features/support_assistant/models/support_permission_preferences.dart';
@@ -35,7 +36,11 @@ final class AutomaticSourcesFixture {
   int serial = 0;
   bool ready = false;
 
-  Future<void> initialize({bool grant = true}) async {
+  Future<void> initialize({
+    bool grant = true,
+    Future<List<SupportAppActionAdapter>> Function()? nativeAdapters,
+    Future<SavedPreferencesReadPort> Function()? preferencesFactory,
+  }) async {
     _observerZone = Zone.current;
     SharedPreferences.setMockInitialValues({});
     await native.initialize(io);
@@ -59,6 +64,9 @@ final class AutomaticSourcesFixture {
     );
     await native.runtime.refresh(resolve: true);
     native.runtime.recipientConfirmed = false;
+    final adapters =
+        await nativeAdapters?.call() ?? const <SupportAppActionAdapter>[];
+    final preferences = await preferencesFactory?.call();
     service = SupportModelService(
       db: native.db,
       writeCipher: native.cipher,
@@ -70,6 +78,7 @@ final class AutomaticSourcesFixture {
       admissionContract:
           SupportTextAdmissionContract.auditedRootSingleConnectionNoBusyHandler,
       writes: SupportModelWriteQueue(),
+      preferences: preferences,
       adapterFactory: () => _Wire(this),
       nativeSources: native.native.sources,
       nativeMetadata: native.native.credentialReader,
@@ -89,7 +98,7 @@ final class AutomaticSourcesFixture {
         adapterFactory: () => _Wire(this),
       ),
       appActionsFactory: () => SupportAppActionRegistry(
-        adapters: const [],
+        adapters: adapters,
         metadata: _Metadata(),
         isOriginalOwnerCurrent: () => native.rootCurrent,
       ),
@@ -108,7 +117,9 @@ final class AutomaticSourcesFixture {
     ready = true;
   }
 
-  Future<SupportModelSubmission> start() async {
+  Future<SupportModelSubmission> start({
+    SupportModelToolUiPorts? toolUi,
+  }) async {
     final visible = await native.repo.getMessagesForSession(native.session);
     final emitted = await service.emitInput(
       controller: Object(),
@@ -130,6 +141,7 @@ final class AutomaticSourcesFixture {
       // Match production support_model_ui_submission, not the legacy preview
       // admission lane which independently requires a reviewed recipient.
       directConversation: true,
+      toolUi: toolUi,
     );
     expect(emitted.intent, isNotNull, reason: emitted.reason.name);
     retainedInput = emitted.intent;

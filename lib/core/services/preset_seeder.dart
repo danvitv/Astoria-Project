@@ -55,8 +55,12 @@ String? defaultPresetChoice({
 ///
 /// Runs exactly once per install: after the flag is written the active preset
 /// is the user's own and is never touched here again.
-Future<void> applyFirstRunPresetChoice({SharedPreferences? preferences}) async {
-  final prefs = preferences ?? await SharedPreferences.getInstance();
+Future<void> applyFirstRunPresetChoice({
+  SharedPreferences? preferences,
+}) => SavedPreferencesWrites.run(['activePresetId'], () async {
+  final prefs = TrackedSharedPreferences.wrap(
+    preferences ?? await TrackedSharedPreferences.getInstance(),
+  );
   final choice = defaultPresetChoice(
     alreadySeeded: prefs.getBool(_seededKey) == true,
     activePresetId: prefs.getString('activePresetId'),
@@ -66,7 +70,7 @@ Future<void> applyFirstRunPresetChoice({SharedPreferences? preferences}) async {
   await prefs.setBool(_seededKey, true);
   if (choice == null) return;
   await prefs.setString('activePresetId', choice);
-}
+});
 
 /// Seeds new bundled presets and refreshes unchanged older copies. The v1
 /// marker stays authoritative for old deletions; adding a preset does not reset

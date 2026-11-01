@@ -55,6 +55,12 @@ extension _NavApplication on SupportSourceNavigationRepo {
       final key = nav.SourceKey(nav.SourceDomain.applicationData, dataset.name);
       var source = _sources[key];
       if (source == null) {
+        if (SavedPreferencesKeys.families.containsKey(dataset.name)) {
+          source = await _newPreferencesSource(key, dataset.title);
+          _guard();
+          result.add(source.observation);
+          continue;
+        }
         // Indexed max(rowid) is a fixed upper membership bound, not a row count.
         // Own provenance writes never expand any of these frozen datasets.
         final maxima = <String, Object?>{};
@@ -137,6 +143,11 @@ extension _NavApplication on SupportSourceNavigationRepo {
     Object? cursor,
     nav.WorkBound bound,
   ) async {
+    if (SavedPreferencesKeys.families.containsKey(
+      source.observation.key.nativeId,
+    )) {
+      return _preferencesContents(source, scope, section, cursor, bound);
+    }
     if (source.observation.key.domain == nav.SourceDomain.astoriaConversation) {
       final page = await _astoriaPage(
         source,
@@ -213,6 +224,19 @@ extension _NavApplication on SupportSourceNavigationRepo {
     Object? cursor,
     nav.WorkBound bound,
   ) async {
+    if (SavedPreferencesKeys.families.containsKey(
+      source.observation.key.nativeId,
+    )) {
+      return _preferencesPage(
+        source,
+        scope,
+        operation,
+        section,
+        literal,
+        cursor,
+        bound,
+      );
+    }
     if (source.observation.key.domain == nav.SourceDomain.astoriaConversation) {
       return _astoriaPage(
         source,

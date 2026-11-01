@@ -24,6 +24,8 @@ import 'package:glaze_flutter/features/extensions/models/extensions_settings.dar
 import 'package:glaze_flutter/features/extensions/models/info_block.dart';
 import 'package:glaze_flutter/shared/theme/theme_preset.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:glaze_flutter/core/preferences/saved_preferences_read_port.dart';
+import 'package:glaze_flutter/core/preferences/tracked_shared_preferences.dart';
 
 class _FakeApiConfigStore implements SyncApiConfigStore {
   final Map<String, ApiConfig> data = {};
@@ -357,6 +359,69 @@ void main() {
     );
     await engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
   }
+
+  test(
+    'saved preferences native owner: actual local-storage sync intent precedes queue admission and preserves unrelated keys',
+    () async {
+      final prefs = await TrackedSharedPreferences.getInstance();
+      await prefs.setString('pipelineSettings', 'old saved pipeline');
+      final port = SavedPreferencesReadPort(
+        original: Future.value(prefs),
+        loaded: prefs,
+        producerCurrent: () => true,
+      );
+      final old = port.capture('savedPipelinePreferences');
+      final unrelated = port.capture('savedGlobalVariables');
+      final payload = {
+        '__localStorage': true,
+        'pipelineSettings': '{}',
+        'activeStudioPresetId': 'synthetic-synced-studio',
+        'gz_global_regex_scripts': '[]',
+        'gz_studio_regex_scripts': '[]',
+      };
+      final path = cloudPath('local_storage', 'local_storage');
+      cloud.files[path] = jsonEncode(payload);
+      cloud.files[cloudPath('manifest', 'manifest')] = jsonEncode(
+        SyncManifest(
+          deviceId: 'synthetic-cloud',
+          createdAt: 2000,
+          entries: {
+            'local_storage:local_storage': SyncManifestEntry(
+              type: 'local_storage',
+              id: 'local_storage',
+              path: path,
+              updatedAt: 2000,
+              hash: SyncSerialization.computeSyncHash(payload),
+            ),
+          },
+        ).toJson(),
+      );
+      var beforeQueue = false;
+      await engine.pullEntities(
+        onConflict: (_) => fail('Unexpected conflict'),
+        onProgress: (p) {
+          if (p.current == 0 && p.total == 1) {
+            beforeQueue = true;
+            expect(prefs.getString('pipelineSettings'), 'old saved pipeline');
+            expect(port.isCurrent(old), false);
+            expect(port.capture('savedPipelinePreferences').current, false);
+            expect(port.isCurrent(unrelated), true);
+          }
+        },
+      );
+      expect(beforeQueue, true);
+      expect(prefs.getString('pipelineSettings'), '{}');
+      expect(
+        prefs.getString('activeStudioPresetId'),
+        'synthetic-synced-studio',
+      );
+      expect(prefs.getString('gz_global_regex_scripts'), '[]');
+      expect(prefs.getString('gz_studio_regex_scripts'), '[]');
+      expect(port.isCurrent(old), false);
+      expect(port.capture('savedPipelinePreferences').current, true);
+      expect(port.isCurrent(unrelated), true);
+    },
+  );
 
   test(
     'preserves local apiKey, embeddingApiKey, query secrets, and extraRequestParameters secrets when route matches',

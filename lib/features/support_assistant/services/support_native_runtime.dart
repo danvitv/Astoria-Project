@@ -8,6 +8,22 @@ import 'support_permission_store.dart';
 
 part 'support_native_local_context.dart';
 
+/// Original native retirement history, not a permission or a renewed model
+/// binding. Only this runtime can issue it; catalog custody may exempt its own
+/// exact game-source fence, never a permission or unrelated source retirement.
+final class SupportNativeDataRetirement {
+  SupportNativeDataRetirement._(
+    this.owner,
+    this.lifetime,
+    this.general,
+    this.sources,
+    Map<String, int> bySession,
+  ) : _bySession = Map.unmodifiable(bySession);
+  final SupportNativeRuntime owner;
+  final int lifetime, general, sources;
+  final Map<String, int> _bySession;
+}
+
 /// Native custody and lease epoch. No Ref, persisted private results or executor.
 final class SupportNativeRuntime {
   SupportNativeRuntime({
@@ -64,6 +80,28 @@ final class SupportNativeRuntime {
   SupportConnectionInspection? _inspection;
   final _listeners = <void Function()>{};
   final _gameSourceIntents = <void Function()>{};
+  int _generalRetirements = 0, _sourceRetirements = 0;
+  final _sourceRetirementsBySession = <String, int>{};
+
+  SupportNativeDataRetirement captureDataRetirement() =>
+      SupportNativeDataRetirement._(
+        this,
+        lifetime,
+        _generalRetirements,
+        _sourceRetirements,
+        _sourceRetirementsBySession,
+      );
+
+  bool ownsDataRetirementExceptOwnSource(
+    SupportNativeDataRetirement original,
+    String ownSession,
+  ) =>
+      alive &&
+      identical(original.owner, this) &&
+      lifetime == original.lifetime &&
+      _generalRetirements == original.general &&
+      _sourceRetirements - (_sourceRetirementsBySession[ownSession] ?? 0) ==
+          original.sources - (original._bySession[ownSession] ?? 0);
 
   /// Source retirement invalidates UI issuers, not recipient/write ownership or
   /// unrelated queued grant merges. Only the original native controller listens.
@@ -156,7 +194,28 @@ final class SupportNativeRuntime {
     notify();
   }
 
+  /// Called by the original game-source observer for the source it actually
+  /// retired. Native catalog custody still checks its own exact mutation fence.
+  void invalidateGameSourceLease(String sessionId) {
+    if (_sourceRetirementsBySession.length >= 64 &&
+        !_sourceRetirementsBySession.containsKey(sessionId)) {
+      // Bounded bookkeeping exhaustion is denial, not an untracked exception.
+      invalidateLease();
+      return;
+    }
+    _sourceRetirements++;
+    _sourceRetirementsBySession.update(
+      sessionId,
+      (value) => value + 1,
+      ifAbsent: () => 1,
+    );
+    epoch++;
+    _inspection = null;
+    notify();
+  }
+
   void _clearLease() {
+    _generalRetirements++;
     epoch++;
     _inspection = null;
   }
@@ -188,6 +247,8 @@ final class SupportNativeRuntime {
     _retireLocalOwner();
     invalidateBindings();
     lifetime++;
+    _sourceRetirements = 0;
+    _sourceRetirementsBySession.clear();
     sessionId = id;
     snapshot = const SupportPermissionSnapshot(
       SupportPermissionAvailability.unavailable,

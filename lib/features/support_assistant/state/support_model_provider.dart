@@ -9,6 +9,8 @@ import '../../../core/state/credential_vault_provider.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../core/state/active_studio_preset_provider.dart';
 import '../../../core/state/active_selection_provider.dart';
+import '../../../core/state/shared_prefs_provider.dart';
+import '../../../core/preferences/saved_preferences_read_port.dart';
 import '../../presets/preset_list_provider.dart';
 import '../../../core/db/repositories/support_source_text_repo.dart';
 import '../../../core/db/repositories/support_text_context_repo.dart';
@@ -44,6 +46,10 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
   final workspace = ref.watch(supportModelWorkspaceBindingProvider);
   final custody = ref.watch(supportModelDatabaseCustodyProvider);
   final adapterFactory = ref.watch(supportModelPrivateAdapterFactoryProvider);
+  // Capture the ACTUAL original preferences producer before asynchronous work.
+  // Watching both retires this graph on future/store/provider replacement.
+  final savedPreferences = ref.watch(sharedPreferencesProvider);
+  final savedPreferencesFuture = ref.watch(sharedPreferencesProvider.future);
   // Native slots never fall back to a row key. Explicit legacy saved sources
   // use their own absence-checked route; fixtures without a native owner do not
   // construct an additional application capability graph.
@@ -64,6 +70,11 @@ final supportModelUiBridgeProvider = Provider<SupportModelUiBridge>((ref) {
     adapterFactory: adapterFactory,
     isOwnerCurrent: current,
     writes: custody,
+    preferences: SavedPreferencesReadPort(
+      original: savedPreferencesFuture,
+      loaded: savedPreferences.asData?.value,
+      producerCurrent: () => current() && ref.mounted,
+    ),
     // The same original DB owner backs both source consent and model ROOT.
     // Native confirmation is still required for every body read; this is not
     // a permission grant or a fallback for non-native injected owners.

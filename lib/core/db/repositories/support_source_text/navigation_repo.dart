@@ -13,16 +13,28 @@ final class SupportSourceNavigationRepo
     Future<String> Function()? activeStudioPresetId,
     Future<String?> Function()? activeOrdinaryPresetId,
     String? ownSupportSessionId,
+    SavedPreferencesReadPort? preferences,
   }) : _current = isCurrent,
        _activeStudio = activeStudioPresetId,
        _activeOrdinary = activeOrdinaryPresetId,
-       _ownSupportSessionId = ownSupportSessionId;
+       _ownSupportSessionId = ownSupportSessionId,
+       _preferences = preferences,
+       _preferenceLeases = {
+         if (preferences != null)
+           for (final family in SavedPreferencesKeys.families.keys)
+             family: preferences.capture(family),
+       };
 
   final SupportSourceTextRepo _boundary;
   final bool Function() _current;
   final Future<String> Function()? _activeStudio;
   final Future<String?> Function()? _activeOrdinary;
   final String? _ownSupportSessionId;
+  final SavedPreferencesReadPort? _preferences;
+  final Map<String, SavedPreferencesLease> _preferenceLeases;
+  final Map<String, Map<String, Object?>> _preferenceValues = {};
+  final Map<String, int> _preferenceReferences = {};
+  final Set<String> _observedPreferenceFamilies = {};
   late final SupportPayloadCipher _readCipher = SupportPayloadCipher.readOnly(
     delegate: _boundary._cipher,
     gate: (decrypt) async {
@@ -95,7 +107,12 @@ final class SupportSourceNavigationRepo
             _rootValidation = null;
           }
         },
-        dispatch: dispatch,
+        // SQLite excludes SQLite writers only. This separate final SYNCHRONOUS
+        // gate retains the original preferences producer/store/revisions.
+        dispatch: () {
+          _guard();
+          dispatch();
+        },
       );
     } finally {
       _rootAdmissionPending = false;
@@ -126,6 +143,13 @@ final class SupportSourceNavigationRepo
       if (observation.key.domain == nav.SourceDomain.applicationData) ...{
         'coverage': 'bounded_safe_logical_projections_not_full_rows',
         'privateFieldsOmitted': true,
+        if (SavedPreferencesKeys.families.containsKey(
+          observation.key.nativeId,
+        )) ...{
+          'savedPreferences': source.header['savedPreferences'],
+          'writerCoverage': 'finite_in_process_routed_writers_only',
+          'externalProcessesIsolatesRawPlugins': 'untrusted_not_fenced',
+        },
         if (observation.key.nativeId == 'sessionSavedData')
           'storedVariationsCoverage':
               'ready_authenticated_indexed_units_only; missing_index_is_not_no_history',
@@ -315,6 +339,12 @@ final class SupportSourceNavigationRepo
           (_native != null && !identical(native, _native))) {
         _fail();
       }
+      for (final family in _observedPreferenceFamilies) {
+        final lease = _preferenceLeases[family];
+        if (lease == null || _preferences?.isCurrent(lease) != true) {
+          _fail(SupportSourceReadFailure.changed);
+        }
+      }
       _native ??= native;
       final policy = _boundary._currentRedactor();
       if (_projectionPolicy != null && !identical(_projectionPolicy, policy)) {
@@ -416,8 +446,15 @@ final class SupportSourceNavigationRepo
       );
     } on FormatException {
       _fail(SupportSourceReadFailure.unsupportedFormat);
-    } catch (_) {
-      _fail();
+    } catch (_, stack) {
+      // Preserve the internal call site, never the original exception/message.
+      // Public behavior remains the same finite, permanently retired refusal.
+      _failure ??= SupportSourceReadFailure.unavailable;
+      _retired = true;
+      Error.throwWithStackTrace(
+        SupportSourceReadException(failure: _failure!),
+        stack,
+      );
     } finally {
       _busy = false;
     }

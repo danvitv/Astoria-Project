@@ -81,7 +81,12 @@ final class SupportGameSourceObserver {
     if (!_active || !runtime.alive) return;
     runtime.retireGameSourceIntents();
     if (!_active || !runtime.alive) return;
-    runtime.invalidateLease(); // Data epoch only; keep recipient/write custody.
+    final session = _scope?.gameSessionId;
+    if (!_registryRetired && session != null) {
+      runtime.invalidateGameSourceLease(session);
+    } else {
+      runtime.invalidateLease(); // Disposal/unknown source is never exempted.
+    }
   }
 
   /// Also called before native admission and before runtime notifications. This

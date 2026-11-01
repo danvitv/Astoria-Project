@@ -349,26 +349,40 @@ class _PersonaEditorScreenState extends ConsumerState<_PersonaEditorScreen> {
   }
 
   void _save(Map<String, dynamic> values) {
-    final name = (values['name'] as String?)?.trim() ?? '';
-    final displayName = (values['display_name'] as String?)?.trim() ?? '';
-    final promptStr = (values['prompt'] as String?)?.trim() ?? '';
-
-    final persona = Persona(
-      id: _personaId,
-      name: name.isEmpty ? 'unnamed_entry'.tr().split(' ')[0] : name,
-      displayName: displayName.isEmpty ? null : displayName,
-      prompt: promptStr.isEmpty ? null : promptStr,
-      avatarPath: values['avatarPath'] as String?,
-      createdAt: _createdAt,
+    final intent = SavedPreferencesOwner.process.begin(
+      widget.existing == null ? ['activePersonaId'] : const [],
     );
+    var scheduled = false;
+    try {
+      final name = (values['name'] as String?)?.trim() ?? '';
+      final displayName = (values['display_name'] as String?)?.trim() ?? '';
+      final promptStr = (values['prompt'] as String?)?.trim() ?? '';
 
-    _container.read(personaListProvider.notifier).updatePersona(persona);
+      final persona = Persona(
+        id: _personaId,
+        name: name.isEmpty ? 'unnamed_entry'.tr().split(' ')[0] : name,
+        displayName: displayName.isEmpty ? null : displayName,
+        prompt: promptStr.isEmpty ? null : promptStr,
+        avatarPath: values['avatarPath'] as String?,
+        createdAt: _createdAt,
+      );
 
-    if (widget.existing == null) {
-      _container.read(activePersonaIdProvider.notifier).state = _personaId;
-      _container.read(sharedPreferencesProvider.future).then((prefs) {
-        prefs.setString('activePersonaId', _personaId);
-      });
+      _container.read(personaListProvider.notifier).updatePersona(persona);
+
+      if (widget.existing == null) {
+        _container.read(activePersonaIdProvider.notifier).state = _personaId;
+        _container
+            .read(sharedPreferencesProvider.future)
+            .then(
+              (prefs) => TrackedSharedPreferences.wrap(
+                prefs,
+              ).setString('activePersonaId', _personaId),
+            )
+            .whenComplete(intent.settle);
+        scheduled = true;
+      }
+    } finally {
+      if (!scheduled) intent.settle();
     }
   }
 

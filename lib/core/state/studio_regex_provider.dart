@@ -26,46 +26,51 @@ class StudioRegexNotifier extends AsyncNotifier<List<StudioRegex>> {
     }
   }
 
-  Future<void> _persist(List<StudioRegex> entries) async {
-    final prefs = await ref.read(sharedPreferencesProvider.future);
-    await prefs.setString(
-      studioRegexStorageKey,
-      jsonEncode(entries.map((entry) => entry.toJson()).toList()),
-    );
-  }
+  Future<void> _persist(List<StudioRegex> entries) =>
+      SavedPreferencesWrites.run([studioRegexStorageKey], () async {
+        final prefs = await ref.read(sharedPreferencesProvider.future);
+        await prefs.setString(
+          studioRegexStorageKey,
+          jsonEncode(entries.map((entry) => entry.toJson()).toList()),
+        );
+      });
 
-  Future<void> addRegex(StudioRegex entry) async {
-    final updated = [...?state.value, entry];
-    state = AsyncData(updated);
-    await _persist(updated);
-  }
+  Future<void> addRegex(StudioRegex entry) =>
+      SavedPreferencesWrites.run([studioRegexStorageKey], () async {
+        final updated = [...?state.value, entry];
+        state = AsyncData(updated);
+        await _persist(updated);
+      });
 
   /// Appends several entries in one write. An import can carry dozens of
   /// scripts, and persisting each one separately rewrites the whole JSON blob
   /// once per script.
-  Future<void> addRegexes(Iterable<StudioRegex> entries) async {
-    if (entries.isEmpty) return;
-    final updated = [...?state.value, ...entries];
-    state = AsyncData(updated);
-    await _persist(updated);
-  }
+  Future<void> addRegexes(Iterable<StudioRegex> entries) =>
+      SavedPreferencesWrites.run([studioRegexStorageKey], () async {
+        if (entries.isEmpty) return;
+        final updated = [...?state.value, ...entries];
+        state = AsyncData(updated);
+        await _persist(updated);
+      });
 
-  Future<void> updateRegex(StudioRegex entry) async {
-    final updated = [
-      for (final current in state.value ?? const <StudioRegex>[])
-        if (current.script.id == entry.script.id) entry else current,
-    ];
-    state = AsyncData(updated);
-    await _persist(updated);
-  }
+  Future<void> updateRegex(StudioRegex entry) =>
+      SavedPreferencesWrites.run([studioRegexStorageKey], () async {
+        final updated = [
+          for (final current in state.value ?? const <StudioRegex>[])
+            if (current.script.id == entry.script.id) entry else current,
+        ];
+        state = AsyncData(updated);
+        await _persist(updated);
+      });
 
-  Future<void> removeRegex(String id) async {
-    final updated = (state.value ?? const <StudioRegex>[])
-        .where((entry) => entry.script.id != id)
-        .toList();
-    state = AsyncData(updated);
-    await _persist(updated);
-  }
+  Future<void> removeRegex(String id) =>
+      SavedPreferencesWrites.run([studioRegexStorageKey], () async {
+        final updated = (state.value ?? const <StudioRegex>[])
+            .where((entry) => entry.script.id != id)
+            .toList();
+        state = AsyncData(updated);
+        await _persist(updated);
+      });
 }
 
 final studioRegexProvider =

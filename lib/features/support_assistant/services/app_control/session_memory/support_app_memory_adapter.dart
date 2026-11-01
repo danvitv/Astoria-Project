@@ -36,6 +36,10 @@ final class SupportAppMemoryAdapter implements SupportAppActionAdapter {
   ) async {
     final definition = definitions.where((d) => d.name == action).firstOrNull;
     if (definition == null || !definition.accepts(arguments)) return null;
+    if (action == 'astoria_memory_catalog_rebuild' &&
+        context.sourceAccess == null) {
+      return null; // Before any private chat/book preparation read.
+    }
     final id = arguments['sessionId']! as String;
     final sourceCurrent = guard.observe(id, context);
     if (sourceCurrent == null) return null;
@@ -113,10 +117,6 @@ final class SupportAppMemoryAdapter implements SupportAppActionAdapter {
         (isDraftBusy(id) ||
             observed.book.pendingDrafts.where((d) => d.id == draftId).length !=
                 1)) {
-      return null;
-    }
-    if (action == 'astoria_memory_catalog_rebuild' &&
-        context.sourceAccess == null) {
       return null;
     }
     final patch = <String, Object?>{...arguments}..remove('sessionId');

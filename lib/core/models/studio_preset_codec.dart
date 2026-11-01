@@ -99,6 +99,9 @@ abstract final class StudioPresetCodec {
       }
     }
     final restoreState = _stringListMap(json['agentBlockRestoreState']);
+    final dependencyRestore = _booleanMap(
+      json['agentEnabledBeforeDependencyOff'],
+    );
     final alternativeBlockIds = _stringListMap(
       json['controllerAlternativeBlockIds'],
     );
@@ -184,6 +187,7 @@ abstract final class StudioPresetCodec {
         ),
         agentEnabled: enabled,
         agentBlockRestoreState: restoreState,
+        agentEnabledBeforeDependencyOff: dependencyRestore,
         controllerAlternativeBlockIds: alternativeBlockIds,
         runtime: runtime,
         updatedAt: _integer(json['updatedAt']),
@@ -332,6 +336,7 @@ abstract final class StudioPresetCodec {
       'maxFinalHistoryMessages': preset.maxFinalHistoryMessages,
       'agentEnabled': preset.agentEnabled,
       'agentBlockRestoreState': preset.agentBlockRestoreState,
+      'agentEnabledBeforeDependencyOff': preset.agentEnabledBeforeDependencyOff,
       'controllerAlternativeBlockIds': preset.controllerAlternativeBlockIds,
       'runtime': encodeRuntime(preset.runtime),
       'updatedAt': preset.updatedAt,
@@ -367,6 +372,15 @@ abstract final class StudioPresetCodec {
           entry.key.toString(): [
             for (final item in entry.value as List) item.toString(),
           ],
+    };
+  }
+
+  static Map<String, bool> _booleanMap(Object? value) {
+    if (value is! Map) return const {};
+    return {
+      for (final entry in value.entries)
+        if (entry.key is String && entry.value is bool)
+          entry.key as String: entry.value as bool,
     };
   }
 

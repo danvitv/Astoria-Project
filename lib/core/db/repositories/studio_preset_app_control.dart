@@ -22,8 +22,8 @@ extension StudioPresetAppControl on StudioPresetRepo {
     return (ids: ids.skip(offset).take(32).toList(), count: ids.length);
   }
 
-  /// Native control observation retains dependency restoration state that the
-  /// legacy general codec does not currently expose. It stays private.
+  /// Native control validates the persisted runtime object before observation.
+  /// Dependency restoration also round-trips through the general preset codec.
   Future<StudioPreset?> controlObserve(String id) async {
     final row = await (db.select(
       db.studioPresetRows,

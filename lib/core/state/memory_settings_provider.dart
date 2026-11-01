@@ -94,9 +94,21 @@ class MemoryGlobalSettingsNotifier extends StateNotifier<MemoryGlobalSettings> {
     }
   }
 
-  Future<void> save(MemoryGlobalSettings settings) async {
-    state = settings;
-    final prefs = await _ref.read(sharedPreferencesProvider.future);
-    await prefs.setString('memorySettings', jsonEncode(settings.toJson()));
+  Future<void> save(MemoryGlobalSettings settings) =>
+      SavedPreferencesWrites.run(['memorySettings'], () async {
+        state = settings;
+        final prefs = await _ref.read(sharedPreferencesProvider.future);
+        await prefs.setString('memorySettings', jsonEncode(settings.toJson()));
+      });
+
+  /// Publish only an acknowledged original-store native write, never optimistic.
+  bool publishNativeSaved(String raw, SavedPreferencesLease receipt) {
+    if (!_ref.mounted || !receipt.current) return false;
+    final parsed = MemoryGlobalSettings.fromJson(
+      jsonDecode(raw) as Map<String, dynamic>,
+    );
+    if (!receipt.current) return false;
+    state = parsed;
+    return receipt.current;
   }
 }

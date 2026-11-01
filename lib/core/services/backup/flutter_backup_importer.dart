@@ -6,6 +6,8 @@ import 'package:archive/archive.dart';
 import 'package:drift/drift.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../preferences/saved_preferences_owner.dart';
+import '../../preferences/tracked_shared_preferences.dart';
 
 import '../../db/app_db.dart';
 import '../../db/repositories/session_lorebook_embedding_job_repo.dart';
@@ -57,7 +59,7 @@ class FlutterBackupImporter extends BackupHelpers {
   Future<void> importFromZipFile(
     String filePath, {
     void Function(String stage)? onProgress,
-  }) async {
+  }) => SavedPreferencesWrites.run(SavedPreferencesKeys.all, () async {
     _legacyStudioRuntimeRows.clear();
     final input = InputFileStream(filePath);
     Archive? archive;
@@ -76,7 +78,7 @@ class FlutterBackupImporter extends BackupHelpers {
         await input.close();
       }
     }
-  }
+  });
 
   /// Imports a legacy v1 Glaze JSON-monolith. Kept for completeness but
   /// the service layer rejects v1 with a "please re-export" message.
@@ -422,78 +424,96 @@ class FlutterBackupImporter extends BackupHelpers {
   Future<void> _restorePreferences(
     Archive archive, {
     Map<String, dynamic>? localSecrets,
-  }) async {
-    // Missing/malformed preferences must not leave old global auth overrides
-    // attached to API/Studio routes replaced by a partial keyless archive.
-    if (localSecrets != null && localSecrets['pipelineSettings'] is String) {
-      final prefs = await SharedPreferences.getInstance();
-      _cancel.check();
-      await prefs.setString(
+  }) => SavedPreferencesWrites.run(
+    [
+      if (localSecrets != null && localSecrets['pipelineSettings'] is String)
         'pipelineSettings',
-        BackupSecretContainers.discardGlobalOverrides(
-              localSecrets['pipelineSettings'],
-              BackupSecrets.isSecretField,
-            )
-            as String,
-      );
-    }
-    final matches = archive.files
-        .where((f) => f.isFile && f.name == 'preferences.json')
-        .toList();
-    if (matches.isEmpty) return;
-
-    final preferencesEntry = matches.first;
-    final bytes = preferencesEntry.readBytes();
-    preferencesEntry.clear();
-    if (bytes == null || bytes.isEmpty) return;
-
-    Map<String, dynamic> map;
-    try {
-      map = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-    } catch (_) {
-      return;
-    }
-
-    final prefs = await SharedPreferences.getInstance();
-    if (localSecrets != null) {
-      for (final entry in BackupSecretContainers.pairUpdates(
-        map,
-        localSecrets,
-        BackupSecrets.isSecretField,
-      ).entries) {
+    ],
+    () async {
+      // Missing/malformed preferences must not leave old global auth overrides
+      // attached to API/Studio routes replaced by a partial keyless archive.
+      if (localSecrets != null && localSecrets['pipelineSettings'] is String) {
+        final prefs = await TrackedSharedPreferences.getInstance();
         _cancel.check();
-        await prefs.setString(entry.key, entry.value as String);
+        await prefs.setString(
+          'pipelineSettings',
+          BackupSecretContainers.discardGlobalOverrides(
+                localSecrets['pipelineSettings'],
+                BackupSecrets.isSecretField,
+              )
+              as String,
+        );
       }
-    }
-    for (final entry in map.entries) {
-      _cancel.check();
-      final key = entry.key;
-      // Credential-only preferences are deliberately absent from keyless
-      // exports. Ignore them even in an incorrectly labelled archive.
-      if (localSecrets != null && BackupSecrets.isSecretPref(key)) continue;
-      final value = localSecrets == null
-          ? entry.value
-          : BackupSecrets.refillPref(entry.value, localSecrets[key], key: key);
+      final matches = archive.files
+          .where((f) => f.isFile && f.name == 'preferences.json')
+          .toList();
+      if (matches.isEmpty) return;
+
+      final preferencesEntry = matches.first;
+      final bytes = preferencesEntry.readBytes();
+      preferencesEntry.clear();
+      if (bytes == null || bytes.isEmpty) return;
+
+      Map<String, dynamic> map;
       try {
-        if (value is bool) {
-          await prefs.setBool(key, value);
-        } else if (value is int) {
-          await prefs.setInt(key, value);
-        } else if (value is double) {
-          await prefs.setDouble(key, value);
-        } else if (value is String) {
-          await prefs.setString(key, value);
-        } else if (value is List) {
-          await prefs.setStringList(
-            key,
-            value.map((e) => e.toString()).toList(),
-          );
-        }
+        map = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
       } catch (_) {
-        // Skip individual keys that fail (e.g. type mismatch from older schema).
+        return;
       }
-    }
-  }
+
+      final intent = SavedPreferencesOwner.process.begin([
+        ...map.keys,
+        ...?localSecrets?.keys,
+      ]);
+      try {
+        final prefs = await TrackedSharedPreferences.getInstance();
+        if (localSecrets != null) {
+          for (final entry in BackupSecretContainers.pairUpdates(
+            map,
+            localSecrets,
+            BackupSecrets.isSecretField,
+          ).entries) {
+            _cancel.check();
+            await prefs.setString(entry.key, entry.value as String);
+          }
+        }
+        for (final entry in map.entries) {
+          _cancel.check();
+          final key = entry.key;
+          // Credential-only preferences are deliberately absent from keyless
+          // exports. Ignore them even in an incorrectly labelled archive.
+          if (localSecrets != null && BackupSecrets.isSecretPref(key)) continue;
+          final value = localSecrets == null
+              ? entry.value
+              : BackupSecrets.refillPref(
+                  entry.value,
+                  localSecrets[key],
+                  key: key,
+                );
+          try {
+            if (value is bool) {
+              await prefs.setBool(key, value);
+            } else if (value is int) {
+              await prefs.setInt(key, value);
+            } else if (value is double) {
+              await prefs.setDouble(key, value);
+            } else if (value is String) {
+              await prefs.setString(key, value);
+            } else if (value is List) {
+              await prefs.setStringList(
+                key,
+                value.map((e) => e.toString()).toList(),
+              );
+            }
+          } catch (_) {
+            // Skip individual keys that fail (e.g. type mismatch from older schema).
+          }
+        }
+      } finally {
+        intent.settle();
+      }
+    },
+  );
 
   /// Imports one `tables/<name>.jsonl` entry, row by row.
   ///

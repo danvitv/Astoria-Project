@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../core/preferences/tracked_shared_preferences.dart';
 
 import '../application/sync_theme_store.dart';
 import 'theme_preset.dart';
@@ -30,10 +31,11 @@ class ThemePresetStorage
   static const _activeKey = 'theme_active_preset';
 
   final SharedPreferences _prefs;
-  ThemePresetStorage(this._prefs);
+  ThemePresetStorage(SharedPreferences prefs)
+    : _prefs = TrackedSharedPreferences.wrap(prefs);
 
   static Future<ThemePresetStorage> create() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await TrackedSharedPreferences.getInstance();
     return ThemePresetStorage(prefs);
   }
 

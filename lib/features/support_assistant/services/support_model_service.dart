@@ -2,6 +2,7 @@
 // ignore_for_file: prefer_initializing_formals
 
 import 'dart:async';
+import '../../../core/preferences/saved_preferences_read_port.dart';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -12,6 +13,7 @@ import '../../../core/credentials/secret_redaction_coordinator.dart';
 import '../../../core/credentials/secret_redactor.dart';
 import '../../../core/db/app_db.dart';
 import '../../../core/db/repositories/api_config_repo.dart';
+import '../../../core/db/repositories/memory_book_repo.dart';
 import '../../../core/db/repositories/support_repo.dart';
 import '../../../core/db/repositories/support_text_context_repo.dart';
 import '../../../core/db/repositories/support_source_text_repo.dart';
@@ -42,6 +44,7 @@ import 'support_model_native_provenance_validator.dart';
 import 'support_model_provenance_codec.dart';
 import 'support_native_runtime.dart';
 import 'support_permission_codec.dart';
+import 'support_permission_store.dart';
 import 'support_recipient_projection.dart';
 import 'support_workspace_settings_codec.dart';
 import 'support_context_policy.dart';
@@ -64,6 +67,7 @@ part 'support_model_run_service.dart';
 part 'support_model_compaction_service.dart';
 part 'support_model_compacted_recipe.dart';
 part 'support_model_tool_loop.dart';
+part 'support_model_memory_catalog_source.dart';
 part 'support_model_reply_regeneration.dart';
 part 'support_model_unanswered_retry.dart';
 part 'support_model_source_tool_run.dart';
@@ -110,6 +114,7 @@ final class SupportModelService {
     NativeToolTransport? toolTransport,
     SupportAppActionRegistry? appActions,
     SupportSourceTextRepo? sourceRepo,
+    SavedPreferencesReadPort? preferences,
     Future<String> Function()? activeStudioPresetId,
     Future<String?> Function()? activeOrdinaryPresetId,
     SupportAppActionRegistry Function()? appActionsFactory,
@@ -140,6 +145,7 @@ final class SupportModelService {
        _toolTransport = toolTransport,
        _appActions = appActions,
        _sourceRepo = sourceRepo,
+       _preferences = preferences,
        _activeStudioPresetId = activeStudioPresetId,
        _activeOrdinaryPresetId = activeOrdinaryPresetId,
        _appActionsFactory = appActionsFactory,
@@ -180,6 +186,7 @@ final class SupportModelService {
   final NativeToolTransport? _toolTransport;
   final SupportAppActionRegistry? _appActions;
   final SupportSourceTextRepo? _sourceRepo;
+  final SavedPreferencesReadPort? _preferences;
   final Future<String> Function()? _activeStudioPresetId;
   final Future<String?> Function()? _activeOrdinaryPresetId;
   final SupportAppActionRegistry Function()? _appActionsFactory;

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'db_provider.dart';
+import 'shared_prefs_provider.dart';
 
 /// Global mode flag for **Studio**, set by preset selection rather than by a
 /// settings switch: `true` while an agentic preset is the active one, `false`
@@ -48,11 +49,11 @@ class StudioFeatureEnabledNotifier extends StateNotifier<bool> {
 
   /// Reads the stored flag, completing [ready] whichever way it goes — a throw
   /// on the way out must not leave every awaiting reader hanging.
-  Future<void> _load() async {
+  Future<void> _load() => SavedPreferencesWrites.run([_storageKey], () async {
     try {
       final SharedPreferences prefs;
       try {
-        prefs = await SharedPreferences.getInstance();
+        prefs = await TrackedSharedPreferences.getInstance();
       } catch (_) {
         // Keep the feature default-deny when preferences are unavailable.
         return;
@@ -83,18 +84,21 @@ class StudioFeatureEnabledNotifier extends StateNotifier<bool> {
     } finally {
       if (!_loaded.isCompleted) _loaded.complete();
     }
-  }
+  });
 
-  Future<void> setEnabled(bool enabled) async {
-    state = enabled;
-    // [studioFeatureSettledProvider] deliberately does not watch this value —
-    // see the note there — so a toggle has to announce itself. It cannot
-    // invalidate that provider directly either: the provider depends on this
-    // notifier, which makes invalidating it from here a dependency cycle.
-    _ref.read(studioFeatureRevisionProvider.notifier).state++;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_storageKey, enabled);
-  }
+  Future<void> setEnabled(bool enabled) => SavedPreferencesWrites.run(
+    [_storageKey],
+    () async {
+      state = enabled;
+      // [studioFeatureSettledProvider] deliberately does not watch this value —
+      // see the note there — so a toggle has to announce itself. It cannot
+      // invalidate that provider directly either: the provider depends on this
+      // notifier, which makes invalidating it from here a dependency cycle.
+      _ref.read(studioFeatureRevisionProvider.notifier).state++;
+      final prefs = await TrackedSharedPreferences.getInstance();
+      await prefs.setBool(_storageKey, enabled);
+    },
+  );
 
   Future<void> enable() async => setEnabled(true);
 }

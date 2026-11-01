@@ -31,26 +31,40 @@ class PipelineSettingsNotifier extends StateNotifier<PipelineSettings> {
   final Ref _ref;
   PipelineSettingsNotifier(this._ref) : super(const PipelineSettings());
 
-  Future<void> load() async {
-    final prefs = await _ref.read(sharedPreferencesProvider.future);
-    final raw = prefs.getString('pipelineSettings');
-    if (raw != null) {
-      try {
-        final json = jsonDecode(raw) as Map<String, dynamic>;
-        state = _parseSettingsJson(json);
-        // Persist back if migration occurred (flat → nested).
-        final encoded = jsonEncode(state.toJson());
-        if (encoded != raw) {
-          await prefs.setString('pipelineSettings', encoded);
+  Future<void> load() =>
+      SavedPreferencesWrites.run(['pipelineSettings'], () async {
+        final prefs = await _ref.read(sharedPreferencesProvider.future);
+        final raw = prefs.getString('pipelineSettings');
+        if (raw != null) {
+          try {
+            final json = jsonDecode(raw) as Map<String, dynamic>;
+            state = _parseSettingsJson(json);
+            // Persist back if migration occurred (flat → nested).
+            final encoded = jsonEncode(state.toJson());
+            if (encoded != raw) {
+              await prefs.setString('pipelineSettings', encoded);
+            }
+          } catch (_) {}
         }
-      } catch (_) {}
-    }
-  }
+      });
 
-  Future<void> save(PipelineSettings settings) async {
-    state = settings;
-    final prefs = await _ref.read(sharedPreferencesProvider.future);
-    await prefs.setString('pipelineSettings', jsonEncode(settings.toJson()));
+  Future<void> save(PipelineSettings settings) => SavedPreferencesWrites.run(
+    ['pipelineSettings'],
+    () async {
+      state = settings;
+      final prefs = await _ref.read(sharedPreferencesProvider.future);
+      await prefs.setString('pipelineSettings', jsonEncode(settings.toJson()));
+    },
+  );
+
+  /// The caller retains the original raw document privately and writes changed
+  /// slot fields only. This publishes its acknowledged parse, not a writeback.
+  bool publishNativeSaved(String raw, SavedPreferencesLease receipt) {
+    if (!_ref.mounted || !receipt.current) return false;
+    final parsed = _parseSettingsJson(jsonDecode(raw) as Map<String, dynamic>);
+    if (!receipt.current) return false;
+    state = parsed;
+    return receipt.current;
   }
 
   /// Parses the SharedPreferences JSON into [PipelineSettings], handling both

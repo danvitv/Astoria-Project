@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:shared_preferences/shared_preferences.dart';
+import '../preferences/saved_preferences_owner.dart';
+import '../preferences/tracked_shared_preferences.dart';
 
 import '../utils/cast_helpers.dart';
 import '../utils/id_generator.dart';
@@ -53,30 +55,36 @@ class MigrationService {
     required this._imageStorage,
   });
 
-  Future<MigrationResult> importGlzBackup(String filePath) async {
-    final bytes = await File(filePath).readAsBytes();
-    final raw = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+  Future<MigrationResult> importGlzBackup(String filePath) =>
+      SavedPreferencesWrites.run(
+        ['active_preset_id', 'activePersonaId', 'personaConnections'],
+        () async {
+          final bytes = await File(filePath).readAsBytes();
+          final raw = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
 
-    if (raw['_isGlazeBackup'] != true && raw['characters'] == null) {
-      throw FormatException('Not a valid Glaze backup file');
-    }
+          if (raw['_isGlazeBackup'] != true && raw['characters'] == null) {
+            throw FormatException('Not a valid Glaze backup file');
+          }
 
-    final result = MigrationResult();
-    final kv = Map<String, dynamic>.from(raw['keyvalue'] as Map? ?? {});
-    final ls = Map<String, dynamic>.from(raw['localStorage'] as Map? ?? {});
+          final result = MigrationResult();
+          final kv = Map<String, dynamic>.from(raw['keyvalue'] as Map? ?? {});
+          final ls = Map<String, dynamic>.from(
+            raw['localStorage'] as Map? ?? {},
+          );
 
-    await _importCharacters(raw['characters'], result);
-    await _importPersonas(raw['personas'], result);
-    await _importChats(kv, result);
-    await _importApiConfigs(kv, result);
-    await _importPresets(ls, result);
-    await _importActiveSelections(kv, ls);
+          await _importCharacters(raw['characters'], result);
+          await _importPersonas(raw['personas'], result);
+          await _importChats(kv, result);
+          await _importApiConfigs(kv, result);
+          await _importPresets(ls, result);
+          await _importActiveSelections(kv, ls);
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('gz_migration_done', true);
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setBool('gz_migration_done', true);
 
-    return result;
-  }
+          return result;
+        },
+      );
 
   Future<void> _importCharacters(dynamic data, MigrationResult result) async {
     if (data is! List) return;
@@ -263,46 +271,55 @@ class MigrationService {
   Future<void> _importActiveSelections(
     Map<String, dynamic> kv,
     Map<String, dynamic> ls,
-  ) async {
-    final prefs = await SharedPreferences.getInstance();
+  ) => SavedPreferencesWrites.run(
+    ['active_preset_id', 'activePersonaId', 'personaConnections'],
+    () async {
+      final prefs = await TrackedSharedPreferences.getInstance();
 
-    final activePresetId = ls['silly_cradle_current_preset_id'] as String?;
-    if (activePresetId != null) {
-      await prefs.setString('active_preset_id', activePresetId);
-    }
+      final activePresetId = ls['silly_cradle_current_preset_id'] as String?;
+      if (activePresetId != null) {
+        await prefs.setString('active_preset_id', activePresetId);
+      }
 
-    final activePersonaRaw = ls['gz_active_persona'];
-    if (activePersonaRaw is String) {
-      try {
-        final persona = jsonDecode(activePersonaRaw) as Map<String, dynamic>;
-        final id = persona['id'] as String?;
+      final activePersonaRaw = ls['gz_active_persona'];
+      if (activePersonaRaw is String) {
+        try {
+          final persona = jsonDecode(activePersonaRaw) as Map<String, dynamic>;
+          final id = persona['id'] as String?;
+          if (id != null) await prefs.setString('activePersonaId', id);
+        } catch (_) {}
+      } else if (activePersonaRaw is Map) {
+        final id = activePersonaRaw['id'] as String?;
         if (id != null) await prefs.setString('activePersonaId', id);
-      } catch (_) {}
-    } else if (activePersonaRaw is Map) {
-      final id = activePersonaRaw['id'] as String?;
-      if (id != null) await prefs.setString('activePersonaId', id);
-    }
+      }
 
-    final personaConnsRaw = ls['gz_persona_connections'];
-    if (personaConnsRaw is String) {
-      try {
-        final parsed = jsonDecode(personaConnsRaw) as Map<String, dynamic>;
-        final conns = PersonaConnections.fromJson({
-          'character': parsed['character'] ?? <String, dynamic>{},
-          'chat': parsed['chat'] ?? <String, dynamic>{},
-        });
-        await prefs.setString('personaConnections', jsonEncode(conns.toJson()));
-      } catch (_) {}
-    } else if (personaConnsRaw is Map) {
-      try {
-        final conns = PersonaConnections.fromJson({
-          'character': personaConnsRaw['character'] ?? <String, dynamic>{},
-          'chat': personaConnsRaw['chat'] ?? <String, dynamic>{},
-        });
-        await prefs.setString('personaConnections', jsonEncode(conns.toJson()));
-      } catch (_) {}
-    }
-  }
+      final personaConnsRaw = ls['gz_persona_connections'];
+      if (personaConnsRaw is String) {
+        try {
+          final parsed = jsonDecode(personaConnsRaw) as Map<String, dynamic>;
+          final conns = PersonaConnections.fromJson({
+            'character': parsed['character'] ?? <String, dynamic>{},
+            'chat': parsed['chat'] ?? <String, dynamic>{},
+          });
+          await prefs.setString(
+            'personaConnections',
+            jsonEncode(conns.toJson()),
+          );
+        } catch (_) {}
+      } else if (personaConnsRaw is Map) {
+        try {
+          final conns = PersonaConnections.fromJson({
+            'character': personaConnsRaw['character'] ?? <String, dynamic>{},
+            'chat': personaConnsRaw['chat'] ?? <String, dynamic>{},
+          });
+          await prefs.setString(
+            'personaConnections',
+            jsonEncode(conns.toJson()),
+          );
+        } catch (_) {}
+      }
+    },
+  );
 
   ChatMessage _mapMessage(Map<String, dynamic> json) {
     var role = json['role'] as String? ?? 'user';

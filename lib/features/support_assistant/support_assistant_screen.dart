@@ -28,6 +28,7 @@ import 'widgets/support_settings_panel.dart';
 import 'widgets/support_model_screen_controller.dart';
 import 'services/app_control/backup/support_backup_native_ui.dart';
 import 'widgets/support_theme_entry.dart';
+import 'widgets/support_memory_setup_entry.dart';
 import 'widgets/support_provider_entry.dart';
 import 'widgets/support_guidance_sheet.dart';
 import 'widgets/support_card_view.dart';
@@ -75,6 +76,7 @@ class _SupportAssistantScreenState
   final SupportModelScreenController _modelUi = SupportModelScreenController();
   final _providerEntry = GlobalKey<SupportProviderEntryState>();
   final _themeEntry = GlobalKey<SupportThemeEntryState>();
+  final _memoryEntry = GlobalKey<SupportMemorySetupEntryState>();
   final _composer = GlobalKey<SupportComposerBarState>();
   List<SupportGuidanceTarget> _guidance = const [];
   SupportComposerDraft? _guidanceDraft;
@@ -269,10 +271,7 @@ class _SupportAssistantScreenState
       case 'theme_setup':
         _themeEntry.currentState?.open();
       case 'memory_books_setup':
-        GlazeToast.show(
-          context,
-          'Memory Books настраиваются в нужной ролевой сессии. Переход к ним из ассистента пока недоступен; настройки не изменены.',
-        );
+        _memoryEntry.currentState?.open();
       case 'connection_diagnostics':
       case 'diagnostics':
         GlazeToast.show(
@@ -446,6 +445,7 @@ class _SupportAssistantScreenState
       actions: [
         if (isDesktop) ...[
           SupportThemeEntry(key: _themeEntry),
+          SupportMemorySetupEntry(key: _memoryEntry),
           SupportProviderEntry(
             key: _providerEntry,
             onOpenPermissions: _openSettingsSheet,
@@ -577,6 +577,7 @@ class _SupportAssistantScreenState
                                 key: _themeEntry,
                                 compact: true,
                               ),
+                              SupportMemorySetupEntry(key: _memoryEntry, compact: true),
                               SupportProviderEntry(
                                 key: _providerEntry,
                                 compact: true,

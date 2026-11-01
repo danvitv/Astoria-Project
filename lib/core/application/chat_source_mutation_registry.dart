@@ -1,6 +1,14 @@
 /// An admission event, not a durable change log. No message bodies are retained.
 enum ChatSourceMutationPhase { began, settled }
 
+/// Exact admission checkpoint captured before any synchronous observer can
+/// start another mutation. Settlement never restores the checkpoint's currency.
+final class ChatSourceMutationAdmission {
+  ChatSourceMutationAdmission._(this.checkpoint, this.settle);
+  final Object? checkpoint;
+  final void Function() settle;
+}
+
 final class ChatSourceMutationChange {
   ChatSourceMutationChange({
     required this.sessionId,
@@ -74,10 +82,20 @@ final class ChatSourceMutationRegistry {
   void Function() beginMutation({
     required String sessionId,
     Set<String>? messageIds,
+  }) => beginObservedMutation(
+    sessionId: sessionId,
+    messageIds: messageIds,
+  ).settle;
+
+  ChatSourceMutationAdmission beginObservedMutation({
+    required String sessionId,
+    Set<String>? messageIds,
   }) {
-    if (_disposed || sessionId.isEmpty) return () {};
+    if (_disposed || sessionId.isEmpty)
+      return ChatSourceMutationAdmission._(null, () {});
     final ids = messageIds?.where((id) => id.isNotEmpty).toSet();
-    if (ids != null && ids.isEmpty) return () {};
+    if (ids != null && ids.isEmpty)
+      return ChatSourceMutationAdmission._(null, () {});
     final key = Object();
     final change = ChatSourceMutationChange(
       sessionId: sessionId,
@@ -85,10 +103,11 @@ final class ChatSourceMutationRegistry {
       phase: ChatSourceMutationPhase.began,
     );
     _pending[key] = change;
-    _sessionEvents[sessionId] = Object();
+    final checkpoint = Object();
+    _sessionEvents[sessionId] = checkpoint;
     _notify(change);
     var settled = false;
-    return () {
+    return ChatSourceMutationAdmission._(checkpoint, () {
       if (settled) return;
       settled = true;
       if (_disposed) return;
@@ -100,7 +119,7 @@ final class ChatSourceMutationRegistry {
           phase: ChatSourceMutationPhase.settled,
         ),
       );
-    };
+    });
   }
 
   /// Permanently retires this lifetime. Old writes/settlements/subscriptions

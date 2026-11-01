@@ -6,6 +6,45 @@ import 'package:glaze_flutter/core/models/studio_config.dart';
 import 'package:glaze_flutter/core/models/studio_preset_codec.dart';
 
 void main() {
+  test(
+    'dependency restoration round-trips without coercing malformed values',
+    () {
+      final canonical = StudioPresetCodec.canonicalizePresetJson({
+        'id': 'dependencies',
+        'blocks': const <Map<String, dynamic>>[],
+        'agentEnabledBeforeDependencyOff': {
+          'continuity': true,
+          'world': false,
+          'dialogue': 'true',
+          'agency': 1,
+          7: true,
+        },
+      });
+      expect(canonical['agentEnabledBeforeDependencyOff'], {
+        'continuity': true,
+        'world': false,
+      });
+      expect(
+        StudioPresetCodec.decodePreset(
+          canonical,
+        ).preset.agentEnabledBeforeDependencyOff,
+        {'continuity': true, 'world': false},
+      );
+      for (final value in [
+        null,
+        'invalid',
+        ['continuity'],
+      ]) {
+        expect(
+          StudioPresetCodec.decodePreset({
+            'id': 'legacy',
+            'agentEnabledBeforeDependencyOff': value,
+          }).preset.agentEnabledBeforeDependencyOff,
+          isEmpty,
+        );
+      }
+    },
+  );
   test('canonicalizes persisted block arrays and rejects malformed shapes', () {
     final encoded = StudioPresetCodec.canonicalizeBlocksJson(
       jsonEncode([
@@ -155,9 +194,9 @@ void main() {
 
     expect(structured.prefillStyle, 'structured');
     expect(
-      StudioPresetCodec.canonicalizeBlockJson(structured.toJson())[
-        'prefillStyle'
-      ],
+      StudioPresetCodec.canonicalizeBlockJson(
+        structured.toJson(),
+      )['prefillStyle'],
       'structured',
     );
     expect(legacy.prefillStyle, 'tool');

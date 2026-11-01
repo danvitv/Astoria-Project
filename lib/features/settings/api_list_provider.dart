@@ -124,21 +124,22 @@ class ApiListNotifier extends AsyncNotifier<List<ApiConfig>>
 class EmbeddingPresetListNotifier extends AsyncNotifier<List<ApiConfig>>
     implements ApiPresetWriter {
   @override
-  Future<List<ApiConfig>> build() async {
-    final repo = ref.watch(apiConfigRepoProvider);
-    final configs = await repo.getAll();
-    var presets = [
-      for (final config in configs)
-        if (config.mode == kEmbeddingPresetMode) config,
-    ];
-    final prefs = await ref.read(sharedPreferencesProvider.future);
+  Future<List<ApiConfig>> build() =>
+      SavedPreferencesWrites.run([kActiveEmbeddingConfigIdKey], () async {
+        final repo = ref.watch(apiConfigRepoProvider);
+        final configs = await repo.getAll();
+        var presets = [
+          for (final config in configs)
+            if (config.mode == kEmbeddingPresetMode) config,
+        ];
+        final prefs = await ref.read(sharedPreferencesProvider.future);
 
-    final seeded = await _seedFromChatPresets(prefs, configs, presets);
-    if (seeded != null) presets = [...presets, seeded];
+        final seeded = await _seedFromChatPresets(prefs, configs, presets);
+        if (seeded != null) presets = [...presets, seeded];
 
-    _restoreSelection(prefs, presets, seeded?.id);
-    return presets;
-  }
+        _restoreSelection(prefs, presets, seeded?.id);
+        return presets;
+      });
 
   /// Carries the embedding settings that used to live on a chat preset over
   /// into an embedding preset of its own — once, on the first run after the
@@ -153,7 +154,7 @@ class EmbeddingPresetListNotifier extends AsyncNotifier<List<ApiConfig>>
     SharedPreferences prefs,
     List<ApiConfig> configs,
     List<ApiConfig> presets,
-  ) async {
+  ) => SavedPreferencesWrites.run([kActiveEmbeddingConfigIdKey], () async {
     if (prefs.getBool(kEmbeddingPresetsSeededKey) == true) return null;
     if (presets.isNotEmpty) {
       await prefs.setBool(kEmbeddingPresetsSeededKey, true);
@@ -193,10 +194,12 @@ class EmbeddingPresetListNotifier extends AsyncNotifier<List<ApiConfig>>
       embeddingLlmPresetId: source.id,
     );
     await ref.read(apiConfigRepoProvider).put(preset);
-    await prefs.setString(kActiveEmbeddingConfigIdKey, preset.id);
+    await TrackedSharedPreferences.wrap(
+      prefs,
+    ).setString(kActiveEmbeddingConfigIdKey, preset.id);
     await prefs.setBool(kEmbeddingPresetsSeededKey, true);
     return preset;
-  }
+  });
 
   void _restoreSelection(
     SharedPreferences prefs,
