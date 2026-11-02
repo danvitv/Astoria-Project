@@ -1,12 +1,12 @@
 import '../db/repositories/embedding_repo.dart';
 import '../models/chat_message.dart';
 import '../utils/cast_helpers.dart';
+import 'chat_message_embedding_chunks.dart';
 import 'embedding_service.dart';
 
 /// Indexes raw chat-message content into the `embeddings` table under
-/// `sourceType: 'chat_message'`. Each chunk is [chunkSize] consecutive
-/// messages (default 5, mirroring Marinara's `CHUNK_SIZE = 5` in
-/// `memory-recall.ts`), formatted as:
+/// `sourceType: 'chat_message'`. Each storage group is [chunkSize] consecutive
+/// messages (default 5), formatted as:
 ///
 /// ```
 /// Name: content
@@ -15,7 +15,9 @@ import 'embedding_service.dart';
 /// ...
 /// ```
 ///
-/// Per chunk: one embedding row keyed by `entryId = '${sessionId}_${i}'`
+/// Each message is split independently using the lorebook embedder's boundaries.
+/// A retrieval fragment never mixes speakers. Per group: one embedding row keyed
+/// by `entryId = '${sessionId}_${i}'`
 /// where `i` is the chunk index, `sourceId = sessionId`. This lets
 /// [MessageRecallService] cosine-search against the current user message
 /// and return top-K raw message chunks as a lossless backstop for the
@@ -81,6 +83,7 @@ class ChatMessageEmbeddingService {
         _MessageChunk(
           index: i ~/ chunkSize,
           text: text,
+          messages: slice,
           messageIds: slice.map((m) => m.id).toList(),
         ),
       );
@@ -113,26 +116,46 @@ class ChatMessageEmbeddingService {
       if (aborted()) return;
       final entryId = '${sessionId}_${chunk.index}';
       final textHash = computeHash(chunk.text);
+      final existing = existingByEntryId[entryId];
+      var hasValidPriorIndex = false;
 
       try {
-        final existing = existingByEntryId[entryId];
-        if (existing != null &&
+        hasValidPriorIndex =
+            existing != null &&
             existing.textHash == textHash &&
-            _repo.hasUsableVectors(existing) &&
+            _validVectors(_repo.decodeVectors(existing)) &&
             existing.errorJson == null &&
             embeddingSignatureMatches(
               _repo.decodeMetadata(existing)?['embeddingSignature'],
               embeddingModelSignature(config),
-            )) {
+            );
+        if (hasValidPriorIndex &&
+            _repo.decodeMetadata(existing)?['chunkingVersion'] ==
+                ChatMessageEmbeddingChunks.version &&
+            _repo.decodeMetadata(existing)?['maxChunkTokens'] ==
+                config.maxChunkTokens) {
           continue;
         }
 
-        final embedded = await _embeddingService.getEmbeddingsWithChunks([
-          chunk.text,
-        ], config);
+        final planned = ChatMessageEmbeddingChunks.split(
+          chunk.messages,
+          config.maxChunkTokens,
+        );
+        final embedded = await _embeddingService.getEmbeddingsWithChunks(
+          planned.map((part) => part.text).toList(),
+          config,
+        );
         if (aborted()) return;
+        if (embedded.length != planned.length ||
+            embedded.indexed.any(
+              (part) => part.$2.text != planned[part.$1].text,
+            )) {
+          throw StateError('Embedding response does not match source chunks');
+        }
         final vectors = embedded.map((c) => c.vector).toList();
-        if (vectors.isEmpty) continue;
+        if (!_validVectors(vectors)) {
+          throw StateError('Embedding response contains unusable vectors');
+        }
 
         await _repo.transaction(() async {
           if (aborted()) return;
@@ -150,7 +173,12 @@ class ChatMessageEmbeddingService {
               // via the standard _decodeChunkTexts path.
               chunks: [
                 for (int i = 0; i < embedded.length; i++)
-                  {'index': i, 'text': embedded[i].text},
+                  {
+                    'index': i,
+                    'text': embedded[i].text,
+                    'groupStart': planned[i].groupStart,
+                    'groupEnd': planned[i].groupEnd,
+                  },
               ],
               // Provenance for debugging and orphan-cleanup tools.
               extra: {
@@ -158,12 +186,16 @@ class ChatMessageEmbeddingService {
                 'chunkIndex': chunk.index,
                 'chunkCount': chunks.length,
                 'chunkSize': chunkSize,
+                'chunkingVersion': ChatMessageEmbeddingChunks.version,
+                'maxChunkTokens': config.maxChunkTokens,
               },
             ),
           );
         });
       } on RateLimitException {
         if (aborted()) return;
+        // A failed chunk-layout upgrade must not destroy still-valid history.
+        if (hasValidPriorIndex) return;
         await _repo.transaction(() async {
           if (aborted()) return;
           await _repo.putEmbeddingError(
@@ -190,6 +222,7 @@ class ChatMessageEmbeddingService {
         return;
       } catch (e) {
         if (aborted()) return;
+        if (hasValidPriorIndex) continue;
         await _repo.transaction(() async {
           if (aborted()) return;
           await _repo.putEmbeddingError(
@@ -238,15 +271,30 @@ class ChatMessageEmbeddingService {
     }
     return parts.join('\n\n');
   }
+
+  static bool _validVectors(List<List<double>>? vectors) {
+    if (vectors == null || vectors.isEmpty || vectors.first.isEmpty) {
+      return false;
+    }
+    final dimension = vectors.first.length;
+    return vectors.every(
+      (vector) =>
+          vector.length == dimension &&
+          vector.every((value) => value.isFinite) &&
+          vector.any((value) => value != 0),
+    );
+  }
 }
 
 class _MessageChunk {
   final int index;
   final String text;
+  final List<ChatMessage> messages;
   final List<String> messageIds;
   const _MessageChunk({
     required this.index,
     required this.text,
+    required this.messages,
     required this.messageIds,
   });
 }

@@ -85,10 +85,14 @@ abstract final class MessageRecallSelection {
   static List<MessageRecallSourceSpan> recoverSources(
     String groupedText,
     String excerpt,
-    List<ChatMessage> messages,
-  ) {
-    final start = groupedText.indexOf(excerpt);
-    if (start < 0 || groupedText.indexOf(excerpt, start + 1) >= 0) {
+    List<ChatMessage> messages, {
+    int? groupStart,
+  }) {
+    final start = groupStart ?? groupedText.indexOf(excerpt);
+    if (start < 0 ||
+        start + excerpt.length > groupedText.length ||
+        groupedText.substring(start, start + excerpt.length) != excerpt ||
+        (groupStart == null && groupedText.indexOf(excerpt, start + 1) >= 0)) {
       return const [];
     }
     final end = start + excerpt.length;

@@ -420,7 +420,12 @@ class EmbeddingService {
     throw firstError!;
   }
 
-  List<String> _chunkText(String text, int maxTokens) {
+  List<String> _chunkText(String text, int maxTokens) =>
+      splitTextIntoChunks(text, maxTokens);
+
+  /// Shared, local-only text boundaries used by lorebook embeddings and Recall.
+  /// This is the embedder's character-based sizing estimate, not prompt budgeting.
+  static List<String> splitTextIntoChunks(String text, int maxTokens) {
     if (maxTokens <= 0 || text.isEmpty) return [text];
 
     final estChars = maxTokens * 4;
@@ -435,15 +440,18 @@ class EmbeddingService {
         break;
       }
 
-      int cutPos = remaining.lastIndexOf('\n', estChars);
+      int cutPos = remaining.lastIndexOf('\n', estChars - 1);
       if (cutPos <= 0) {
-        cutPos = remaining.lastIndexOf('. ', estChars);
+        cutPos = remaining.lastIndexOf('. ', estChars - 1);
       }
       if (cutPos <= 0) {
-        cutPos = remaining.lastIndexOf(' ', estChars);
+        cutPos = remaining.lastIndexOf(' ', estChars - 1);
       }
       if (cutPos <= 0) {
-        cutPos = estChars;
+        cutPos = estChars - 1;
+        // Keep a UTF-16 surrogate pair together when a word has no boundary.
+        final last = remaining.codeUnitAt(cutPos);
+        if (last >= 0xD800 && last <= 0xDBFF) cutPos--;
       }
 
       chunks.add(remaining.substring(0, cutPos + 1).trim());

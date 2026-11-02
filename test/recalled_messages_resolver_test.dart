@@ -97,7 +97,7 @@ void main() {
     expect(content, isNot(contains('legacy')));
   });
 
-  test('5000-token budget counts the complete block, not character length', () {
+  test('includes an oversized relevant fragment whole and stops', () {
     expect(RecalledMessagesResolver.defaultMaxTokens, 5000);
     final longButCheap = RecalledMessageChunk(
       entryId: 'cheap',
@@ -121,13 +121,59 @@ void main() {
         return 200 + (block.contains('expensive') ? 5000 : 4800);
       },
     );
-    expect(result.diagnostics['estimatedTokens'], 5000);
-    expect(result.diagnostics['budgetRejected'], 1);
-    expect(result.content, contains(original.trim()));
-    expect(result.content!.length, greaterThan(6000));
-    expect(result.content, isNot(contains('expensive')));
+    expect(result.diagnostics['estimatedTokens'], 5200);
+    expect(result.diagnostics['budgetExceeded'], isTrue);
+    expect(
+      result.diagnostics['budgetPolicy'],
+      'include_crossing_fragment_then_stop',
+    );
+    expect(result.content, contains('expensive'));
+    expect(result.content, isNot(contains(original.trim())));
     expect(longButCheap.text, original);
   });
+
+  test(
+    'crosses the remaining budget without substituting a smaller fragment',
+    () {
+      final result = resolver.resolveWithDiagnostics(
+        chunks: const [
+          RecalledMessageChunk(entryId: 'a', text: 'first', score: 1),
+          RecalledMessageChunk(entryId: 'b', text: 'crossing', score: .9),
+          RecalledMessageChunk(entryId: 'c', text: 'cheaper', score: .8),
+        ],
+        visibleMessageIds: const {},
+        tokenCounter: (block) => 3500 + (block.contains('crossing') ? 1800 : 0),
+      );
+      expect(result.diagnostics['estimatedTokens'], 5300);
+      expect(result.diagnostics['selected'], hasLength(2));
+      expect(result.content, contains('crossing'));
+      expect(result.content, isNot(contains('cheaper')));
+    },
+  );
+
+  test(
+    'stops at exactly 5000 tokens and still allows long cheap source text',
+    () {
+      final source = 'cheap ' * 2000;
+      final result = resolver.resolveWithDiagnostics(
+        chunks: [
+          RecalledMessageChunk(entryId: 'a', text: source, score: 1),
+          const RecalledMessageChunk(entryId: 'b', text: 'later', score: .9),
+        ],
+        visibleMessageIds: const {},
+        tokenCounter: (block) {
+          expect(block, startsWith('<recalled_messages>'));
+          expect(block, endsWith('</recalled_messages>'));
+          return 5000;
+        },
+      );
+      expect(result.diagnostics['estimatedTokens'], 5000);
+      expect(result.diagnostics['budgetExceeded'], isFalse);
+      expect(result.content!.length, greaterThan(6000));
+      expect(result.content, contains(source.trim()));
+      expect(result.content, isNot(contains('later')));
+    },
+  );
 
   test('excludes visible sources before top-K, budget and group diversity', () {
     final result = resolver.resolveWithDiagnostics(
@@ -197,25 +243,28 @@ void main() {
     );
   });
 
-  test('legacy fallback and invalid budgets cannot bypass the token cap', () {
-    expect(
-      resolver.resolve(
-        chunks: const [],
-        visibleMessageIds: const {},
-        fallbackContent: 'old evidence',
-        maxTokens: 1,
-      ),
-      isNull,
-    );
-    expect(
-      resolver.resolve(
-        chunks: const [RecalledMessageChunk(text: 'old evidence')],
-        visibleMessageIds: const {},
-        maxTokens: 0,
-      ),
-      isNull,
-    );
-  });
+  test(
+    'legacy fallback is indivisible; an invalid budget still disables recall',
+    () {
+      expect(
+        resolver.resolve(
+          chunks: const [],
+          visibleMessageIds: const {},
+          fallbackContent: 'old evidence',
+          maxTokens: 1,
+        ),
+        contains('old evidence'),
+      );
+      expect(
+        resolver.resolve(
+          chunks: const [RecalledMessageChunk(text: 'old evidence')],
+          visibleMessageIds: const {},
+          maxTokens: 0,
+        ),
+        isNull,
+      );
+    },
+  );
 
   test('rank and raw-text metadata survive worker serialization', () {
     const source = RecalledMessageChunk(

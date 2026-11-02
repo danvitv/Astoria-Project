@@ -47,7 +47,6 @@ final class RecalledMessagesResolver {
         : 'approx_chars_per_4';
     var visibleRejected = 0;
     var duplicates = 0;
-    var budgetRejected = 0;
     var tokens = 0;
     final selected = <RecalledMessageChunk>[];
     RecalledMessagesResolution finish(String? content, String reason) =>
@@ -58,12 +57,13 @@ final class RecalledMessagesResolver {
             'budgetBasis': 'source_before_prompt_transforms',
             'tokenCounter': counterKind,
             'budgetTokens': maxTokens,
+            'budgetPolicy': 'include_crossing_fragment_then_stop',
             'estimatedTokens': tokens,
+            'budgetExceeded': tokens > maxTokens,
             'reason': reason,
             'candidates': chunks.length,
             'visibleRejected': visibleRejected,
             'duplicates': duplicates,
-            'budgetRejected': budgetRejected,
             'selected': [
               for (final chunk in selected)
                 {
@@ -85,10 +85,6 @@ final class RecalledMessagesResolver {
           '${historicalMemoryHeader(gameTime)}\n'
           '${memoryOccurrence(null)}\n$fallbackContent';
       final cost = countTokens(content);
-      if (cost > maxTokens) {
-        budgetRejected++;
-        return finish(null, 'budgetExhausted');
-      }
       tokens = cost;
       return finish(content, 'legacyContent');
     }
@@ -117,11 +113,9 @@ final class RecalledMessagesResolver {
       for (final item in eligible) {
         if (processed.contains(item.ordinal)) continue;
         final chunk = item.chunk;
-        final group =
-            chunk.entryId ??
-            (chunk.messageIds.isEmpty
-                ? 'legacy:${item.ordinal}'
-                : chunk.messageIds.join('\u001f'));
+        final group = chunk.messageIds.isNotEmpty
+            ? chunk.messageIds.join('\u001f')
+            : chunk.entryId ?? 'legacy:${item.ordinal}';
         if ((groupCounts[group] ?? 0) >= pass) continue;
         processed.add(item.ordinal);
         final fingerprint = (chunk.rawText ?? chunk.text)
@@ -135,26 +129,20 @@ final class RecalledMessagesResolver {
         // headers and wrapper. No truncated evidence and no transformed spaces.
         final proposed = _render([...selected, chunk], gameTime);
         final cost = countTokens(proposed);
-        if (cost > maxTokens) {
-          budgetRejected++;
-          continue; // A smaller, lower-ranked fragment can still fit.
-        }
         selected.add(chunk);
         seenTexts.add(fingerprint);
         groupCounts[group] = (groupCounts[group] ?? 0) + 1;
         tokens = cost;
-        if (selected.length >= topK) {
+        // The last relevant fragment is indivisible evidence. Include it even
+        // when it crosses the soft limit; never substitute a cheaper candidate.
+        if (tokens >= maxTokens || selected.length >= topK) {
           return finish(proposed, 'success');
         }
       }
     }
     return finish(
       selected.isEmpty ? null : _render(selected, gameTime),
-      selected.isNotEmpty
-          ? 'success'
-          : budgetRejected > 0
-          ? 'budgetExhausted'
-          : 'empty',
+      selected.isNotEmpty ? 'success' : 'empty',
     );
   }
 

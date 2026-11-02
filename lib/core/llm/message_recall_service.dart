@@ -100,10 +100,6 @@ class MessageRecallService {
           counters['sourceRejected'] = counters['sourceRejected']! + 1;
           continue;
         }
-        if (sourceIds.any(visibleMessageIds.contains)) {
-          counters['visibleRejected'] = counters['visibleRejected']! + 1;
-          continue;
-        }
         String? groupedText;
         var sources = const <ChatMessage>[];
         if (sourceMessages != null) {
@@ -146,6 +142,7 @@ class MessageRecallService {
         }
         final chunks = metadata?['chunks'];
         final texts = <int, String>{};
+        final ranges = <int, ({Object? start, Object? end})>{};
         final duplicateIndices = <int>{};
         if (chunks is List) {
           for (final chunk in chunks) {
@@ -155,6 +152,13 @@ class MessageRecallService {
             if (index is! int || text is! String) continue;
             if (texts.containsKey(index)) duplicateIndices.add(index);
             texts[index] = text;
+            if (chunk.containsKey('groupStart') ||
+                chunk.containsKey('groupEnd')) {
+              ranges[index] = (
+                start: chunk['groupStart'],
+                end: chunk['groupEnd'],
+              );
+            }
           }
         }
         for (var index = 0; index < vectors.length; index++) {
@@ -166,20 +170,61 @@ class MessageRecallService {
             counters['invalidText'] = counters['invalidText']! + 1;
             continue;
           }
+          final range = ranges[index];
+          var candidateIds = sourceIds;
+          var spans = const <MessageRecallSourceSpan>[];
+          if (range != null && groupedText != null) {
+            final start = range.start;
+            final end = range.end;
+            if (start is! int ||
+                end is! int ||
+                start < 0 ||
+                end > groupedText.length ||
+                end != start + text.length ||
+                groupedText.substring(start, end) != text) {
+              counters['invalidText'] = counters['invalidText']! + 1;
+              continue;
+            }
+            spans = MessageRecallSelection.recoverSources(
+              groupedText,
+              text,
+              sources,
+              groupStart: start,
+            );
+            // Only exact, hash-verified single-message ranges may narrow a
+            // storage group's provenance or its visible-history exclusion.
+            if (spans.length != 1) {
+              counters['invalidText'] = counters['invalidText']! + 1;
+              continue;
+            }
+            final span = spans.single;
+            final source = sources.singleWhere((m) => m.id == span.messageId);
+            final contentStart = start + span.excerptStart - span.sourceStart;
+            if (start < contentStart - source.role.length - 2 ||
+                end > contentStart + source.content.length) {
+              counters['invalidText'] = counters['invalidText']! + 1;
+              continue;
+            }
+            candidateIds = [span.messageId];
+          } else if (groupedText != null) {
+            spans = MessageRecallSelection.recoverSources(
+              groupedText,
+              text,
+              sources,
+            );
+          }
+          if (candidateIds.any(visibleMessageIds.contains)) {
+            counters['visibleRejected'] = counters['visibleRejected']! + 1;
+            continue;
+          }
           candidates.add(
             MessageRecallCandidate(
               entryId: row.entryId,
               chunkIndex: index,
               text: text,
               vector: vectors[index],
-              messageIds: sourceIds,
-              sourceSpans: groupedText == null
-                  ? const []
-                  : MessageRecallSelection.recoverSources(
-                      groupedText,
-                      text,
-                      sources,
-                    ),
+              messageIds: candidateIds,
+              sourceSpans: spans,
             ),
           );
         }
