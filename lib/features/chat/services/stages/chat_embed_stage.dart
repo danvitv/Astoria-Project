@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import '../../../../core/llm/memory_injection_service.dart'
     show chatMessageEmbeddingServiceProvider;
 import '../../../../core/models/chat_message.dart';
+import '../../../../core/state/chat_source_mutation_provider.dart';
+import '../../../../core/state/db_provider.dart';
 import '../../../../core/state/lorebook_embedding_provider.dart'
     show embeddingConfigProvider;
 import 'stage_context.dart';
@@ -41,15 +43,29 @@ class ChatEmbedStage {
     required int genId,
   }) async {
     try {
-      if (!ctx.abortHandler.isCurrentGen(genId)) return;
+      if (!ctx.ref.mounted || !ctx.abortHandler.isCurrentGen(genId)) return;
+      final mutations = ctx.ref.read(chatSourceMutationRegistryProvider);
+      final checkpoint = mutations.sessionCheckpoint(sessionId);
+      bool shouldAbort() =>
+          !ctx.ref.mounted ||
+          !ctx.abortHandler.isCurrentGen(genId) ||
+          mutations.isSessionPending(sessionId) ||
+          mutations.sessionCheckpoint(sessionId) != checkpoint;
+      if (shouldAbort()) return;
       final config = ctx.ref.read(embeddingConfigProvider);
       if (config.endpoint.isEmpty) return;
+      // The coordinator's message snapshot can predate a completed deletion
+      // while this task waits for background admission. Load a fresh durable
+      // source under the checkpoint instead of reviving that old snapshot.
+      final durable = await ctx.ref.read(chatRepoProvider).getById(sessionId);
+      if (shouldAbort() || durable == null) return;
       await ctx.ref
           .read(chatMessageEmbeddingServiceProvider)
           .indexSessionMessages(
             sessionId: sessionId,
-            messages: messages,
+            messages: durable.messages,
             config: config,
+            shouldAbort: shouldAbort,
           );
     } catch (e) {
       debugPrint('[ChatEmbedStage] failed session=$sessionId error=$e');

@@ -27,6 +27,7 @@ import 'memory_injection_service.dart';
 import 'memory_retrieval_mode.dart';
 import 'game_time.dart';
 import 'message_recall_service.dart';
+import 'message_recall_query.dart';
 import 'memory_selector.dart';
 import 'generation_context_inputs.dart';
 import 'prompt_builder.dart';
@@ -358,6 +359,7 @@ class PromptPayloadBuilder {
                   sessionId: session.id,
                   currentText: currentText,
                   config: embeddingConfig,
+                  recentHistory: session.messages,
                   cancelToken: cancelToken,
                   shouldAbort: shouldAbort,
                   allowedSourceMessageIds: historicalWindow?.byId.keys.toSet(),
@@ -367,9 +369,23 @@ class PromptPayloadBuilder {
                 )
                 .timeout(
                   const Duration(seconds: 30),
-                  onTimeout: () => const MessageRecallResult(),
+                  onTimeout: () => MessageRecallResult(
+                    reason: MessageRecallReason.timeout,
+                    query: MessageRecallQuery.build(
+                      currentText: currentText,
+                      history: session!.messages,
+                    ),
+                  ),
                 )
-          : Future.value(const MessageRecallResult());
+          : Future.value(
+              MessageRecallResult(
+                reason: MessageRecallReason.remoteDisabled,
+                query: MessageRecallQuery.build(
+                  currentText: currentText,
+                  history: session.messages,
+                ),
+              ),
+            );
 
       throwIfAborted();
       onPhase?.call(GenerationPhase.retrieving);
@@ -417,6 +433,7 @@ class PromptPayloadBuilder {
         'excerptChunksPerEntry': memorySettings.memoryExcerptChunksPerEntry,
         'chunkFirstTopEntries': memorySettings.chunkFirstTopEntries,
         'chunkFirstTopChunks': memorySettings.chunkFirstTopChunks,
+        'rawRecall': recallResult.toJson(),
         if (memoryResult.diagnostics != null)
           'diagnostics': memoryResult.diagnostics!.toJson(),
       };

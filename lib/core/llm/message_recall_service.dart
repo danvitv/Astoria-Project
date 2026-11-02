@@ -1,65 +1,37 @@
-import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
+import 'dart:async';
 
-import '../db/app_db.dart' show EmbeddingRow;
+import 'package:dio/dio.dart';
+
 import '../db/repositories/embedding_repo.dart';
 import '../models/chat_message.dart';
-import 'chat_message_embedding_service.dart';
 import '../utils/cast_helpers.dart';
+import 'chat_message_embedding_service.dart';
 import 'embedding_service.dart';
+import 'message_recall_query.dart';
+import 'message_recall_result.dart';
+import 'message_recall_selection.dart';
 import 'transport/llm_capture_context.dart';
-import 'vector_math.dart';
 
-/// Cosine-similarity recall over raw chat-message chunks embedded by
-/// [ChatMessageEmbeddingService]. Returns the top-K raw message chunks
-/// semantically closest to the current user message — a lossless backstop
-/// for the lossy MemoryBook compression (Marinara `memory-recall.ts`
-/// analog).
-///
-/// Injection into the prompt is the caller's responsibility — this service
-/// only returns the matched chunk texts. The caller wraps them in
-/// `<recalled_messages>...</recalled_messages>` and adds the block to
-/// `PromptPayload`.
-///
-/// ADR: if mobile latency or binary size becomes prohibitive, this service can
-/// be feature-flagged off per-chat (`enableMessageRecall`, default off on
-/// mobile), the embedder binary can be lazy-loaded only on first request, or
-/// Recall can be dropped entirely — MemoryBook + chat history within the
-/// context window already covers ~80% of cases. Marinara itself keeps Recall
-/// parallel to Lorebook + Summary as insurance against lossy compression;
-/// without it, agent-filtered "unimportant" details are unrecoverable when
-/// they later matter.
+export 'message_recall_result.dart';
+
+/// Best-effort recall of exact indexed chat excerpts. The query is a bounded
+/// recent-context projection; source evidence remains unchanged. Prompt assembly
+/// performs the final exclusion against its frozen visible history window.
 class MessageRecallService {
   final EmbeddingRepo _repo;
   final EmbeddingService _embeddingService;
 
-  /// Cosine similarity threshold below which a match is considered noise.
-  /// Marinara uses 0.25; we match.
   static const double defaultSimilarityThreshold = 0.25;
-
-  /// Maximum number of chunks to return per query. Marinara default 8.
   static const int defaultTopK = 8;
-
-  /// Soft cap on total recalled characters injected into the prompt.
-  /// Marinara caps at 15% of context (~384-1536 tokens); we use a simpler
-  /// character cap (~6000 chars ≈ 1500 tokens) which the caller can trim
-  /// further to fit the model's context budget.
   static const int defaultMaxChars = 6000;
 
   MessageRecallService(this._repo, this._embeddingService);
 
-  /// Cosine-search [currentText] against every `chat_message` embedding
-  /// row for [sessionId]. Returns the matched chunk texts sorted by
-  /// descending similarity, filtered by [threshold] and capped to [topK]
-  /// chunks and [maxChars] total characters.
-  ///
-  /// Never throws — on any error (embedding API failure, timeout, decode
-  /// error) returns an empty [MessageRecallResult]. The caller should
-  /// treat recall as best-effort insurance, not a hard dependency.
   Future<MessageRecallResult> recall({
     required String sessionId,
     required String currentText,
     required EmbeddingConfig config,
+    List<ChatMessage> recentHistory = const [],
     double threshold = defaultSimilarityThreshold,
     int topK = defaultTopK,
     int maxChars = defaultMaxChars,
@@ -69,73 +41,165 @@ class MessageRecallService {
     CancelToken? cancelToken,
     bool Function()? shouldAbort,
   }) async {
+    final query = MessageRecallQuery.build(
+      currentText: currentText,
+      history: recentHistory,
+    );
+    final counters = <String, int>{
+      'rows': 0,
+      'sourceRejected': 0,
+      'visibleRejected': 0,
+      'hashRejected': 0,
+      'unusableVectors': 0,
+      'indexErrors': 0,
+      'invalidText': 0,
+      'candidates': 0,
+      'dimensionMismatch': 0,
+      'aboveThreshold': 0,
+      'duplicate': 0,
+      'oversized': 0,
+      'selectedChars': 0,
+    };
+    MessageRecallResult finish(
+      MessageRecallReason reason, [
+      List<MessageRecallMatch> matches = const [],
+    ]) => MessageRecallResult(
+      matches: List.unmodifiable(matches),
+      reason: reason,
+      query: query,
+      counters: Map.unmodifiable({...counters, 'selected': matches.length}),
+    );
+    bool aborted() =>
+        cancelToken?.isCancelled == true || shouldAbort?.call() == true;
+
     try {
-      if (config.endpoint.isEmpty) return const MessageRecallResult();
-      if (currentText.trim().isEmpty) return const MessageRecallResult();
-      if (shouldAbort?.call() == true) return const MessageRecallResult();
-
+      if (aborted()) return finish(MessageRecallReason.cancelled);
+      if (config.endpoint.isEmpty) {
+        return finish(MessageRecallReason.endpointNotConfigured);
+      }
+      if (query.isEmpty) return finish(MessageRecallReason.emptyQuery);
+      if (topK <= 0 || maxChars <= 0 || !threshold.isFinite) {
+        return finish(MessageRecallReason.invalidLimits);
+      }
       final rows = await _repo.getBySource('chat_message', sessionId);
-      if (shouldAbort?.call() == true) return const MessageRecallResult();
-      if (rows.isEmpty) return const MessageRecallResult();
+      if (aborted()) return finish(MessageRecallReason.cancelled);
+      counters['rows'] = rows.length;
+      if (rows.isEmpty) return finish(MessageRecallReason.emptyIndex);
 
-      final candidates = <VectorCandidate>[];
+      final candidates = <MessageRecallCandidate>[];
       for (final row in rows) {
-        final sourceIds = _decodeMessageIds(row);
-        if (allowedSourceMessageIds != null &&
-            (sourceIds.isEmpty ||
-                !sourceIds.every(allowedSourceMessageIds.contains))) {
+        if (row.errorJson != null) {
+          counters['indexErrors'] = counters['indexErrors']! + 1;
+        }
+        final metadata = _repo.decodeMetadata(row);
+        final rawIds = metadata?['messageIds'];
+        final sourceIds = rawIds is List
+            ? rawIds.whereType<String>().toList(growable: false)
+            : const <String>[];
+        // Do not silently drop a malformed ID and then prove only the rest.
+        if ((rawIds is List &&
+                (sourceIds.length != rawIds.length ||
+                    sourceIds.any((id) => id.isEmpty) ||
+                    sourceIds.toSet().length != sourceIds.length)) ||
+            (allowedSourceMessageIds != null &&
+                (sourceIds.isEmpty ||
+                    !sourceIds.every(allowedSourceMessageIds.contains)))) {
+          counters['sourceRejected'] = counters['sourceRejected']! + 1;
           continue;
         }
+        if (sourceIds.any(visibleMessageIds.contains)) {
+          counters['visibleRejected'] = counters['visibleRejected']! + 1;
+          continue;
+        }
+        String? groupedText;
+        var sources = const <ChatMessage>[];
         if (sourceMessages != null) {
-          final sources = sourceIds.map((id) => sourceMessages[id]).toList();
-          if (sources.isEmpty ||
-              sources.any(
+          final found = sourceIds.map((id) => sourceMessages[id]).toList();
+          if (found.isEmpty ||
+              found.any(
                 (message) =>
                     message == null ||
                     message.isHidden ||
                     message.isTyping ||
-                    message.isError,
+                    message.isError ||
+                    (message.role != 'user' && message.role != 'assistant'),
               )) {
+            counters['sourceRejected'] = counters['sourceRejected']! + 1;
             continue;
           }
-          final text = ChatMessageEmbeddingService.formatChunk(
-            sources.cast<ChatMessage>(),
-          );
-          if (computeHash(text) != row.textHash) continue;
+          if (found.asMap().entries.any(
+            (entry) => entry.value!.id != sourceIds[entry.key],
+          )) {
+            counters['sourceRejected'] = counters['sourceRejected']! + 1;
+            continue;
+          }
+          sources = found.cast<ChatMessage>();
+          groupedText = ChatMessageEmbeddingService.formatChunk(sources);
+          if (computeHash(groupedText) != row.textHash) {
+            counters['hashRejected'] = counters['hashRejected']! + 1;
+            continue;
+          }
         }
-        if (!_repo.hasUsableVectors(row)) continue;
         final vectors = _repo.decodeVectors(row);
-        if (vectors == null || vectors.isEmpty) continue;
-        final chunkTexts = _decodeChunkTexts(row, vectors.length);
-        candidates.add(
-          VectorCandidate(
-            id: row.entryId,
-            vectors: vectors
-                .asMap()
-                .entries
-                .map(
-                  (v) => VectorChunk(
-                    text: v.key < chunkTexts.length ? chunkTexts[v.key] : '',
-                    vector: v.value,
-                  ),
-                )
-                .toList(),
-            metadata: {
-              'chunkTexts': chunkTexts,
-              'messageIds': _decodeMessageIds(row),
-            },
-          ),
-        );
+        if (!_repo.hasUsableVectors(row) ||
+            vectors == null ||
+            vectors.isEmpty ||
+            vectors.any(
+              (vector) =>
+                  vector.isEmpty || vector.any((value) => !value.isFinite),
+            )) {
+          counters['unusableVectors'] = counters['unusableVectors']! + 1;
+          continue;
+        }
+        final chunks = metadata?['chunks'];
+        final texts = <int, String>{};
+        final duplicateIndices = <int>{};
+        if (chunks is List) {
+          for (final chunk in chunks) {
+            if (chunk is! Map) continue;
+            final index = chunk['index'];
+            final text = chunk['text'];
+            if (index is! int || text is! String) continue;
+            if (texts.containsKey(index)) duplicateIndices.add(index);
+            texts[index] = text;
+          }
+        }
+        for (var index = 0; index < vectors.length; index++) {
+          final text = texts[index];
+          if (duplicateIndices.contains(index) ||
+              text == null ||
+              text.trim().isEmpty ||
+              (groupedText != null && !groupedText.contains(text))) {
+            counters['invalidText'] = counters['invalidText']! + 1;
+            continue;
+          }
+          candidates.add(
+            MessageRecallCandidate(
+              entryId: row.entryId,
+              chunkIndex: index,
+              text: text,
+              vector: vectors[index],
+              messageIds: sourceIds,
+              sourceSpans: groupedText == null
+                  ? const []
+                  : MessageRecallSelection.recoverSources(
+                      groupedText,
+                      text,
+                      sources,
+                    ),
+            ),
+          );
+        }
       }
-      if (candidates.isEmpty) return const MessageRecallResult();
-
-      if (shouldAbort?.call() == true) {
-        return const MessageRecallResult();
+      counters['candidates'] = candidates.length;
+      if (candidates.isEmpty) {
+        return finish(MessageRecallReason.noUsableCandidates);
       }
+      if (aborted()) return finish(MessageRecallReason.cancelled);
 
       final queryChunks = await _embeddingService
           .getEmbeddingsWithChunks(
-            [currentText],
+            [query],
             config,
             cancelToken: cancelToken,
             captureContext: LlmCaptureContext(
@@ -143,149 +207,56 @@ class MessageRecallService {
               sessionId: sessionId,
             ),
           )
-          .timeout(const Duration(seconds: 30), onTimeout: () => []);
-      if (cancelToken?.isCancelled == true) {
-        return const MessageRecallResult();
+          .timeout(const Duration(seconds: 30));
+      if (aborted()) return finish(MessageRecallReason.cancelled);
+      if (queryChunks.isEmpty ||
+          queryChunks.any(
+            (chunk) =>
+                chunk.vector.isEmpty ||
+                chunk.vector.any((value) => !value.isFinite),
+          )) {
+        return finish(MessageRecallReason.embeddingEmpty);
       }
-      if (queryChunks.isEmpty) return const MessageRecallResult();
-
-      final queryVecChunks = queryChunks
-          .map((c) => VectorChunk(text: c.text, vector: c.vector))
-          .toList();
-
-      // §6: dimension-mismatch detection. If the user switched embedding
-      // models after chunks were stored, the candidate vectors will have a
-      // different dimension from the query. cosineSimilarity silently
-      // returns 0 in that case (which the threshold filters out), but
-      // without a warning the user would see empty recall with no clue why.
-      // Filter out stale candidates and log a warning once per recall.
-      final queryDim = queryVecChunks.isEmpty
-          ? 0
-          : queryVecChunks.first.vector.length;
-      var mismatchLogged = false;
-      final dimFilteredCandidates = <VectorCandidate>[];
-      for (final candidate in candidates) {
-        final chunks = candidate.vectors ?? const <VectorChunk>[];
-        final allMatch = chunks.every((c) => c.vector.length == queryDim);
-        if (allMatch) {
-          dimFilteredCandidates.add(candidate);
-        } else if (!mismatchLogged && kDebugMode) {
-          debugPrint(
-            '[msg-recall] dimension mismatch: query=$queryDim '
-            'candidate has ${chunks.isNotEmpty ? chunks.first.vector.length : 0} '
-            '(entryId=${candidate.id}). Embedding model may have changed — '
-            're-index chat message embeddings to restore recall.',
-          );
-          mismatchLogged = true;
-        }
+      final queryDim = queryChunks.first.vector.length;
+      if (queryChunks.any((chunk) => chunk.vector.length != queryDim)) {
+        return finish(MessageRecallReason.dimensionMismatch);
       }
-      if (dimFilteredCandidates.isEmpty && mismatchLogged) {
-        return const MessageRecallResult();
-      }
-
-      final results = findTopKMulti(
-        queryVecChunks,
-        dimFilteredCandidates,
-        dimFilteredCandidates.length,
-        0,
+      final matches = MessageRecallSelection.select(
+        candidates: candidates,
+        queryVectors: queryChunks.map((chunk) => chunk.vector).toList(),
+        threshold: threshold,
+        topK: topK,
+        maxChars: maxChars,
+        counters: counters,
       );
-
-      final matched = <MessageRecallMatch>[];
-      var totalChars = 0;
-      for (final result in results.where((r) => r.score >= threshold)) {
-        final chunkTexts = result.metadata['chunkTexts'];
-        if (chunkTexts is! List) continue;
-        if (result.bestCandidateChunk == null) continue;
-        final bestIndex = result.bestCandidateChunk!;
-        if (bestIndex < 0 || bestIndex >= chunkTexts.length) continue;
-        final text = chunkTexts[bestIndex];
-        if (text is! String || text.trim().isEmpty) continue;
-        final rawIds = result.metadata['messageIds'];
-        final messageIds = rawIds is List
-            ? rawIds.whereType<String>().toList(growable: false)
-            : const <String>[];
-        if (visibleMessageIds.isNotEmpty &&
-            messageIds.any(visibleMessageIds.contains)) {
-          continue;
-        }
-
-        if (totalChars + text.length > maxChars) {
-          // Soft cap: stop adding once we exceed the budget. Caller can
-          // further trim if needed.
-          break;
-        }
-        matched.add(
-          MessageRecallMatch(
-            entryId: result.id,
-            text: text,
-            score: result.score,
-            messageIds: messageIds,
-          ),
-        );
-        totalChars += text.length;
-        if (matched.length >= topK) break;
+      if (aborted()) return finish(MessageRecallReason.cancelled);
+      if (matches.isNotEmpty) {
+        return finish(MessageRecallReason.success, matches);
       }
-      return MessageRecallResult(matches: matched);
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[msg-recall] error: $e');
+      if (counters['dimensionMismatch'] == candidates.length) {
+        return finish(MessageRecallReason.dimensionMismatch);
       }
-      return const MessageRecallResult();
+      return finish(
+        counters['aboveThreshold'] == 0
+            ? MessageRecallReason.belowThreshold
+            : MessageRecallReason.budgetExhausted,
+      );
+    } on TimeoutException {
+      return finish(
+        aborted() ? MessageRecallReason.cancelled : MessageRecallReason.timeout,
+      );
+    } on DioException catch (error) {
+      return finish(
+        aborted() || error.type == DioExceptionType.cancel
+            ? MessageRecallReason.cancelled
+            : MessageRecallReason.error,
+      );
+    } catch (_) {
+      // Exception strings can contain endpoint URLs or credentials. Only the
+      // finite classification is retained in local chat diagnostics.
+      return finish(
+        aborted() ? MessageRecallReason.cancelled : MessageRecallReason.error,
+      );
     }
   }
-
-  List<String> _decodeChunkTexts(EmbeddingRow row, int vectorCount) {
-    // ChatMessageEmbeddingService stores chunk text directly in
-    // retrievalMetadata['chunks'][i]['text'] — same shape as
-    // MemoryEmbeddingService. But for chat messages we only ever embed
-    // one chunk text per row (the chunk-of-5-messages text), so the
-    // list has exactly one element. We still return a list for
-    // consistency with VectorCandidate's contract.
-    final metadata = _repo.decodeMetadata(row);
-    final chunks = metadata?['chunks'];
-    if (chunks is! List) {
-      // Fallback: no chunk metadata. Return empty strings so the
-      // candidate's vector is still searchable but yields no text.
-      return List<String>.filled(vectorCount, '');
-    }
-    final texts = List<String>.filled(vectorCount, '');
-    for (final chunk in chunks) {
-      if (chunk is! Map) continue;
-      final index = chunk['index'];
-      final text = chunk['text'];
-      if (index is! int || text is! String) continue;
-      if (index < 0 || index >= texts.length) continue;
-      texts[index] = text;
-    }
-    return texts;
-  }
-
-  List<String> _decodeMessageIds(EmbeddingRow row) {
-    final metadata = _repo.decodeMetadata(row);
-    final ids = metadata?['messageIds'];
-    if (ids is! List) return const [];
-    return ids.whereType<String>().toList(growable: false);
-  }
-}
-
-/// One matched raw-message chunk.
-class MessageRecallMatch {
-  final String entryId;
-  final String text;
-  final double score;
-  final List<String> messageIds;
-  const MessageRecallMatch({
-    required this.entryId,
-    required this.text,
-    required this.score,
-    this.messageIds = const [],
-  });
-}
-
-/// Result of a recall query. Empty on any error or when no chunks clear
-/// the [MessageRecallService.defaultSimilarityThreshold].
-class MessageRecallResult {
-  final List<MessageRecallMatch> matches;
-  const MessageRecallResult({this.matches = const []});
-  bool get isEmpty => matches.isEmpty;
 }

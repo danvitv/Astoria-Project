@@ -56,8 +56,10 @@ class ChatMessageEmbeddingService {
     required List<ChatMessage> messages,
     required EmbeddingConfig config,
     int chunkSize = defaultChunkSize,
+    bool Function()? shouldAbort,
   }) async {
-    if (config.endpoint.isEmpty) return;
+    bool aborted() => shouldAbort?.call() ?? false;
+    if (config.endpoint.isEmpty || aborted()) return;
     if (chunkSize < 1) chunkSize = 1;
 
     final eligible = messages
@@ -84,6 +86,7 @@ class ChatMessageEmbeddingService {
       );
     }
     final existingRows = await _repo.getBySource('chat_message', sessionId);
+    if (aborted()) return;
     final existingByEntryId = {
       for (final row in existingRows) row.entryId: row,
     };
@@ -94,15 +97,20 @@ class ChatMessageEmbeddingService {
         .where((entryId) => !currentEntryIds.contains(entryId))
         .toList();
     if (staleEntryIds.isNotEmpty) {
-      await _repo.deleteBySourceAndEntryIds(
-        'chat_message',
-        sessionId,
-        staleEntryIds,
-      );
+      await _repo.transaction(() async {
+        if (aborted()) return;
+        await _repo.deleteBySourceAndEntryIds(
+          'chat_message',
+          sessionId,
+          staleEntryIds,
+        );
+      });
+      if (aborted()) return;
     }
     if (chunks.isEmpty) return;
 
     for (final chunk in chunks) {
+      if (aborted()) return;
       final entryId = '${sessionId}_${chunk.index}';
       final textHash = computeHash(chunk.text);
 
@@ -111,77 +119,99 @@ class ChatMessageEmbeddingService {
         if (existing != null &&
             existing.textHash == textHash &&
             _repo.hasUsableVectors(existing) &&
-            existing.errorJson == null) {
+            existing.errorJson == null &&
+            embeddingSignatureMatches(
+              _repo.decodeMetadata(existing)?['embeddingSignature'],
+              embeddingModelSignature(config),
+            )) {
           continue;
         }
 
         final embedded = await _embeddingService.getEmbeddingsWithChunks([
           chunk.text,
         ], config);
+        if (aborted()) return;
         final vectors = embedded.map((c) => c.vector).toList();
         if (vectors.isEmpty) continue;
 
-        await _repo.putEmbeddingVector(
-          entryId: entryId,
-          sourceType: 'chat_message',
-          sourceId: sessionId,
-          vectors: vectors,
-          textHash: textHash,
-          retrievalMetadata: embeddingMetadataForConfig(
-            config,
-            vectors,
-            // Same shape as MemoryEmbeddingService — list of {index, text}
-            // so MessageRecallService can extract the matched chunk text
-            // via the standard _decodeChunkTexts path.
-            chunks: [
-              for (int i = 0; i < embedded.length; i++)
-                {'index': i, 'text': embedded[i].text},
-            ],
-            // Provenance for debugging and orphan-cleanup tools.
-            extra: {
-              'messageIds': chunk.messageIds,
-              'chunkIndex': chunk.index,
-              'chunkCount': chunks.length,
-              'chunkSize': chunkSize,
-            },
-          ),
-        );
+        await _repo.transaction(() async {
+          if (aborted()) return;
+          await _repo.putEmbeddingVector(
+            entryId: entryId,
+            sourceType: 'chat_message',
+            sourceId: sessionId,
+            vectors: vectors,
+            textHash: textHash,
+            retrievalMetadata: embeddingMetadataForConfig(
+              config,
+              vectors,
+              // Same shape as MemoryEmbeddingService — list of {index, text}
+              // so MessageRecallService can extract the matched chunk text
+              // via the standard _decodeChunkTexts path.
+              chunks: [
+                for (int i = 0; i < embedded.length; i++)
+                  {'index': i, 'text': embedded[i].text},
+              ],
+              // Provenance for debugging and orphan-cleanup tools.
+              extra: {
+                'messageIds': chunk.messageIds,
+                'chunkIndex': chunk.index,
+                'chunkCount': chunks.length,
+                'chunkSize': chunkSize,
+              },
+            ),
+          );
+        });
       } on RateLimitException {
-        await _repo.putEmbeddingError(
-          entryId: entryId,
-          sourceType: 'chat_message',
-          sourceId: sessionId,
-          textHash: textHash,
-          error: const {
-            'type': 'rate_limit',
-            'message': 'Rate limited, deferred',
-            'retryable': true,
-          },
-          retrievalMetadata: embeddingMetadataForConfig(
-            config,
-            const [],
-            extra: {'messageIds': chunk.messageIds, 'chunkIndex': chunk.index},
-          ),
-        );
+        if (aborted()) return;
+        await _repo.transaction(() async {
+          if (aborted()) return;
+          await _repo.putEmbeddingError(
+            entryId: entryId,
+            sourceType: 'chat_message',
+            sourceId: sessionId,
+            textHash: textHash,
+            error: const {
+              'type': 'rate_limit',
+              'message': 'Rate limited, deferred',
+              'retryable': true,
+            },
+            retrievalMetadata: embeddingMetadataForConfig(
+              config,
+              const [],
+              extra: {
+                'messageIds': chunk.messageIds,
+                'chunkIndex': chunk.index,
+              },
+            ),
+          );
+        });
         // Stop the loop — rate limits apply to the whole endpoint.
         return;
       } catch (e) {
-        await _repo.putEmbeddingError(
-          entryId: entryId,
-          sourceType: 'chat_message',
-          sourceId: sessionId,
-          textHash: textHash,
-          error: {
-            'type': 'api_error',
-            'message': e.toString(),
-            'retryable': true,
-          },
-          retrievalMetadata: embeddingMetadataForConfig(
-            config,
-            const [],
-            extra: {'messageIds': chunk.messageIds, 'chunkIndex': chunk.index},
-          ),
-        );
+        if (aborted()) return;
+        await _repo.transaction(() async {
+          if (aborted()) return;
+          await _repo.putEmbeddingError(
+            entryId: entryId,
+            sourceType: 'chat_message',
+            sourceId: sessionId,
+            textHash: textHash,
+            error: {
+              'type': 'api_error',
+              'message': e.toString(),
+              'retryable': true,
+            },
+            retrievalMetadata: embeddingMetadataForConfig(
+              config,
+              const [],
+              extra: {
+                'messageIds': chunk.messageIds,
+                'chunkIndex': chunk.index,
+              },
+            ),
+          );
+        });
       }
     }
   }

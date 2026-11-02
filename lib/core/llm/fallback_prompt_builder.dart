@@ -98,5 +98,8 @@ PromptResult buildFallbackPrompt(PromptPayload payload) {
     breakdown: breakdown,
     sessionVars: payload.sessionVars,
     globalVars: payload.globalVars,
+    // Retrieval diagnostics are selection evidence, not an injection claim.
+    // The fallback still omits memory/recall blocks, but must retain the result.
+    memoryCoverage: payload.memoryCoverage,
   );
 }

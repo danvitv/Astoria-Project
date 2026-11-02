@@ -124,6 +124,31 @@ class EmbeddingRepo extends DatabaseAccessor<AppDatabase>
         .go();
   }
 
+  /// Invalidate only groups containing changed/deleted source messages. Chunk
+  /// ordinals are not source identities: unaffected groups remain searchable
+  /// before the next post-generation indexing pass. Legacy rows without exact
+  /// source IDs cannot be proved unaffected and are retired conservatively.
+  Future<void> invalidateChatMessageGroupsForMessages(
+    String sessionId,
+    Set<String> messageIds,
+  ) => transaction(() async {
+    if (messageIds.isEmpty) return;
+    final rows = await getBySource('chat_message', sessionId);
+    final invalidated = <String>[];
+    for (final row in rows) {
+      final ids = decodeMetadata(row)?['messageIds'];
+      final hasExactSources =
+          ids is List &&
+          ids.isNotEmpty &&
+          ids.every((id) => id is String && id.isNotEmpty) &&
+          ids.toSet().length == ids.length;
+      if (!hasExactSources || ids.any(messageIds.contains)) {
+        invalidated.add(row.entryId);
+      }
+    }
+    await deleteBySourceAndEntryIds('chat_message', sessionId, invalidated);
+  });
+
   Future<void> putEmbeddingVector({
     required String entryId,
     required String sourceType,

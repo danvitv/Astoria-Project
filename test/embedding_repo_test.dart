@@ -21,8 +21,12 @@ void main() {
   tearDown(() => db.close());
 
   test('reads vectors restored as JSON byte arrays in a TEXT column', () async {
-    final encoded = vectorListToBytes(const [[0.5, -0.25]]);
-    expect(bytesToVectorList(encoded), [const [0.5, -0.25]]);
+    final encoded = vectorListToBytes(const [
+      [0.5, -0.25],
+    ]);
+    expect(bytesToVectorList(encoded), [
+      const [0.5, -0.25],
+    ]);
     await db.customStatement(
       'INSERT INTO embeddings (entry_id, source_type, source_id, vectors_blob) '
       'VALUES (?, ?, ?, ?)',
@@ -33,7 +37,9 @@ void main() {
     expect(row, isNotNull);
     expect(row!.vectorsBlob?.take(4).toList(), [91, 49, 44, 48]);
     expect(vectorBytesFromJson(utf8.decode(row.vectorsBlob!)), encoded);
-    expect(repo.decodeVectors(row), [const [0.5, -0.25]]);
+    expect(repo.decodeVectors(row), [
+      const [0.5, -0.25],
+    ]);
   });
 
   test('rejects invalid vector headers before allocating vectors', () {
@@ -147,4 +153,37 @@ void main() {
       contains('idx_embeddings_source_type_id'),
     );
   });
+
+  test(
+    'message invalidation preserves unrelated sources and retires legacy groups',
+    () async {
+      for (final source in [
+        ('keep', 'chat_message', 's1', ['old-1', 'old-2']),
+        ('changed', 'chat_message', 's1', ['old-2', 'removed']),
+        ('legacy', 'chat_message', 's1', <String>[]),
+        ('other-session', 'chat_message', 's2', ['removed']),
+        ('memory', 'memory_entry', 's1', ['removed']),
+      ]) {
+        await repo.putEmbeddingVector(
+          entryId: source.$1,
+          sourceType: source.$2,
+          sourceId: source.$3,
+          vectors: const [
+            [1, 0],
+          ],
+          textHash: source.$1,
+          retrievalMetadata: {'messageIds': source.$4},
+        );
+      }
+      final before = await repo.getAll();
+      await repo.invalidateChatMessageGroupsForMessages('s1', const {});
+      expect(await repo.getAll(), before);
+      await repo.invalidateChatMessageGroupsForMessages('s1', {'removed'});
+      expect((await repo.getAll()).map((row) => row.entryId).toSet(), {
+        'keep',
+        'other-session',
+        'memory',
+      });
+    },
+  );
 }

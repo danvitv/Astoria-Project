@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/llm/tokenizer.dart';
@@ -328,6 +327,12 @@ class ChatMessageService {
         }
         await trackerRepo.replaceLedgerState(session.id, committedBase);
         final survivors = await _writeDeletion(session, plan);
+        await _ref
+            .read(embeddingRepoProvider)
+            .invalidateChatMessageGroupsForMessages(
+              session.id,
+              invalidatedMessageIds,
+            );
         final canonRollback = await _ref
             .read(sessionCanonRollbackRepoProvider)
             .reconcileInTransaction(
@@ -339,16 +344,6 @@ class ChatMessageService {
 
       if (wakeLoreEmbeddingWorker) {
         unawaited(_ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
-      }
-
-      // Current chunk indices no longer map to the same message ranges. Drop the
-      // session index now; post-generation indexing will rebuild current chunks.
-      try {
-        await _ref
-            .read(embeddingRepoProvider)
-            .deleteBySource('chat_message', session.id);
-      } catch (e) {
-        debugPrint('[ChatMessageService] failed to clear message index: $e');
       }
 
       // ExtBlock panels are keyed by message id. The transaction deleted the
@@ -820,7 +815,7 @@ class ChatMessageService {
             .deleteForMessages(session.id, {messageId});
         await _ref
             .read(embeddingRepoProvider)
-            .deleteBySource('chat_message', session.id);
+            .invalidateChatMessageGroupsForMessages(session.id, {messageId});
         await chatRepo.put(updatedSession);
         final canonRollback = await _ref
             .read(sessionCanonRollbackRepoProvider)
