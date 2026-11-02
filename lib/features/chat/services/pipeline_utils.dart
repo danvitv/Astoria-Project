@@ -1,6 +1,7 @@
 import '../../../core/models/agent_operation_record.dart';
 import '../../../core/models/chat_message.dart';
 import '../../../core/llm/prompt_builder.dart' show PromptPayload;
+import '../../../core/llm/canon_evidence_text.dart';
 
 /// Extracts recent conversation as plain text for auxiliary prompt analysis.
 /// Format: "Role: content" per line, last [maxMessages] messages.
@@ -38,7 +39,8 @@ String extractRecentHistoryText(
   final lines = <String>[];
   for (final msg in eligible.sublist(start)) {
     final role = msg.role == 'assistant' ? 'Assistant' : 'User';
-    final content = msg.content.trim();
+    final content = CanonEvidenceText.forMessage(msg.role, msg.content).trim();
+    if (content.isEmpty) continue;
     lines.add('$role: $content');
   }
   return lines.join('\n\n');

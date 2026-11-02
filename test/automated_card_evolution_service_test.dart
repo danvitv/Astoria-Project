@@ -131,6 +131,56 @@ void main() {
     await fixture.expectCanonRowsUnchanged();
   });
 
+  test(
+    'automatic writer receives IC evidence without assistant route forecasts',
+    () async {
+      final session = await fixture.db
+          .select(fixture.db.chatSessions)
+          .getSingle();
+      final messages = jsonDecode(session.messagesJson) as List;
+      for (final message in messages.whereType<Map<String, dynamic>>()) {
+        if (message['role'] == 'assistant') {
+          message['content'] =
+              '<lumiaooc>OOC_FORECAST_SENTINEL_ALL_NPCS_IN_LOVE</lumiaooc>'
+              '${message['content']}';
+        }
+      }
+      await fixture.db.customStatement(
+        'UPDATE chat_sessions SET messages_json = ? WHERE session_id = ?',
+        [jsonEncode(messages), 'session'],
+      );
+      var calls = 0;
+      final result = await fixture
+          .service((_, prompt) async {
+            calls++;
+            expect(
+              prompt,
+              isNot(contains('OOC_FORECAST_SENTINEL_ALL_NPCS_IN_LOVE')),
+            );
+            expect(prompt, contains('NOT narrated IC facts'));
+            return _ok(fixture.cardBatchOutput);
+          })
+          .runOneBatch('session');
+      expect(result.kind, 'persisted');
+      expect(calls, 1);
+      final claim = await fixture.db
+          .select(fixture.db.cardEvolutionClaims)
+          .getSingle();
+      // Fence/evidence source retains original text; prompt projection is not a
+      // transcript mutation or an attempt to forge a different source hash.
+      expect(
+        claim.selectedInputJson,
+        contains('OOC_FORECAST_SENTINEL_ALL_NPCS_IN_LOVE'),
+      );
+      expect(
+        (await fixture.db.select(fixture.db.chatSessions).getSingle())
+            .messagesJson,
+        contains('OOC_FORECAST_SENTINEL_ALL_NPCS_IN_LOVE'),
+      );
+      await fixture.expectCanonRowsUnchanged();
+    },
+  );
+
   test('model failure retains failed claim and call for resume', () async {
     var fail = true;
     var calls = 0;

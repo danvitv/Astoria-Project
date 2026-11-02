@@ -1,6 +1,8 @@
 import '../models/character.dart';
 import '../models/memory_book.dart';
 import '../models/tracker.dart';
+import 'canon_evidence_rules.dart';
+import 'canon_evidence_text.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // StudioLedgerPrompt
@@ -58,6 +60,9 @@ class StudioLedgerPrompt {
     String focalUserName = '',
     List<String> gameClockHistory = const [],
   }) {
+    finalAssistantText = CanonEvidenceText.assistantNarrative(
+      finalAssistantText,
+    );
     final trackerBlock = buildCurrentStateBlock(
       currentTrackers,
       '$recentHistoryText\n$finalAssistantText',
@@ -154,6 +159,9 @@ knowledgeFacts rules:
     String focalUserName = '',
     List<String> gameClockHistory = const [],
   }) {
+    finalAssistantText = CanonEvidenceText.assistantNarrative(
+      finalAssistantText,
+    );
     final trackerBlock = buildCurrentStateBlock(
       currentTrackers,
       '$recentHistoryText\n$finalAssistantText',
@@ -408,7 +416,7 @@ You maintain session-canon facts for future generations.
 Use the final assistant response, latest user message, previous ledger, recent chat, current state, and existing memory.
 
 Rules:
-- Preserve prior state unless contradicted by the final response.
+- Preserve prior state unless valid attributed evidence or an explicit user correction contradicts it; source and ownership correctness takes precedence.
 - Treat accepted assistant prose as evidence of what was narrated, not proof of
   hidden motives, unseen research, ownership, causation, or off-screen events.
   Persist only explicit observations, actions, dialogue, user corrections, and
@@ -419,8 +427,8 @@ Rules:
 - Temporary posture/outfit/props stay in the visible ledger unless they became important.
 - Do not create quests unless an explicit task/goal exists.
 - Do not create persona stats unless already tracked.
-- Do not infer romance/trust jumps without evidence in the final response.
-- Session state overrides character-card baseline.
+- Do not infer romance/trust jumps without correctly attributed evidence; distinguish these independent relationship dimensions.
+- Correctly attributed established session state overrides character-card baseline; fallible Ledger claims are not unconditional authority.
 - Source priority is: explicit user correction and established session canon;
   then episodic MemoryBook/raw recall; then character card and supplied lore;
   then model knowledge of the source material.
@@ -465,18 +473,20 @@ Rules:
 - Never write npc:*.knowledge or relationship:*.knowledge. Use knowledgeFacts.
 - Arc keys: arc:id.status, arc:id.summary, arc:id.do_not_reopen, arc:id.card_override
 - World/scene keys: world:location, world:time, world:date, world:day, world:active_threats, scene.present_entities, scene.absent_backstory_entities
-$gameClockRules''';
+$gameClockRules
+
+${CanonEvidenceRules.sourceAndRelationships}''';
 
   static const String _legacyTurnOnlySystemPrompt =
       '''You are Studio Ledger, an internal continuity and state extractor.
 You do not write story prose. You maintain session-canon facts for future generations.
 
 Rules:
-- Preserve prior state unless contradicted by the final response.
+- Preserve prior state unless valid attributed evidence or an explicit user correction contradicts it; source and ownership correctness takes precedence.
 - Temporary posture/outfit/props stay in the visible ledger unless important.
 - Do not create quests or persona stats unless explicitly established.
-- Do not infer romance or trust jumps without evidence.
-- Session state overrides character-card baseline.
+- Do not infer romance or trust jumps without correctly attributed evidence.
+- Correctly attributed established session state overrides character-card baseline; fallible Ledger claims are not unconditional authority.
 - Never write future events as facts or pending choices as completed events.
 - Distinguish planned, suggested, threatened, attempted, completed, failed, cancelled, and unknown event states.
 - Do not mark an entity present merely because it is mentioned.
@@ -487,5 +497,7 @@ Rules:
 - Relationship keys include trust, status, relationship, attitude, boundaries, and card_override.
 - Never write npc:*.knowledge or relationship:*.knowledge. Use knowledgeFacts.
 - Arc keys: arc:id.status, arc:id.summary, arc:id.do_not_reopen, arc:id.card_override.
-- World/scene keys: world:location, world:time, world:date, world:day, world:active_threats, scene.present_entities, scene.absent_backstory_entities.''';
+- World/scene keys: world:location, world:time, world:date, world:day, world:active_threats, scene.present_entities, scene.absent_backstory_entities.
+
+${CanonEvidenceRules.sourceAndRelationships}''';
 }

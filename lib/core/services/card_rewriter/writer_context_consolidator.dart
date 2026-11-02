@@ -4,6 +4,8 @@ import 'package:dio/dio.dart';
 
 import '../../db/app_db.dart';
 import '../../db/repositories/card_evolution_repo.dart';
+import '../../llm/canon_evidence_text.dart';
+import '../../llm/canon_evidence_rules.dart';
 import 'durable_writer_call_runner.dart';
 
 typedef DiscardOrRetainWriter =
@@ -56,6 +58,7 @@ final class WriterContextConsolidator {
     required String? manualCallId,
     required String? manualResponse,
   }) async {
+    selectedInputJson = CanonEvidenceText.projectContextJson(selectedInputJson);
     if (selectedInputJson.length <= contextCharacterLimit) {
       return PreparedWriterContext.context(
         selectedInputJson,
@@ -214,6 +217,8 @@ final class WriterContextConsolidator {
     required List<Object?> history,
   }) =>
       '$_historyConsolidationInstruction\n\n'
+      '${CanonEvidenceRules.sourceAndRelationships}\n\n'
+      '${CanonEvidenceRules.durablePromotion}\n\n'
       '# Prior cumulative handoff\n${priorHandoff ?? '(none)'}\n\n'
       '# Shared card, canon, and lorebook context\n${jsonEncode(common)}\n\n'
       '# Next immutable chat-history segment\n${jsonEncode(history)}';

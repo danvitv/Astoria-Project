@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:glaze_flutter/core/llm/canon_evidence_rules.dart';
 import 'package:glaze_flutter/core/models/character.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/card_rewriter_contracts.dart';
 
@@ -58,7 +59,9 @@ abstract final class CardRewriterPromptBuilder {
         'ONLY when the chat and Ledger contain no supported durable change for '
         'any writable field. A Ledger fact is accepted evidence, not a reason '
         'to omit a card patch. Use one or more exact anchors per changed field, '
-        'never a full-field rewrite.',
+        'never a full-field rewrite. The obligation to patch is subordinate '
+        'to source and ownership correctness; an unresolved disputed claim '
+        'does not require a patch.',
       )
       ..writeln(
         'Prefer replacing or refining an existing outdated card fragment over '
@@ -96,6 +99,10 @@ abstract final class CardRewriterPromptBuilder {
         'or ending, marriage, divorce, or an enduring alliance or enmity changes '
         'the baseline premise and belongs in the card when supported.',
       )
+      ..writeln()
+      ..writeln(CanonEvidenceRules.sourceAndRelationships)
+      ..writeln()
+      ..writeln(CanonEvidenceRules.durablePromotion)
       ..writeln(
         'For example, accepting a drink is a Ledger event; a repeatedly '
         'demonstrated shift from guarded distrust to cautious trust may justify '
@@ -167,7 +174,8 @@ abstract final class CardRewriterPromptBuilder {
           'Evaluate these candidates independently. Status "active" means the '
           'candidate alone is not yet confirmed and remains discretionary. '
           'Status "promoted" is stronger confirmed evidence. Use repeatCount, '
-          'confidence, evidence clusters, chat, card, and Ledger together. When '
+          'confidence, evidence clusters, chat, card, and Ledger together. '
+          'Source and ownership correctness must be satisfied first. When '
           'the supplied immutable chat or Ledger confirms a durable candidate '
           'that directly contradicts supplied card text, emit the smallest valid '
           'patch that resolves the contradiction regardless of whether the '
@@ -175,7 +183,10 @@ abstract final class CardRewriterPromptBuilder {
           'or valid character-boundary-preserving anchor can do so. An empty '
           'operations list is not valid for such a confirmed, resolvable '
           'contradiction. Return no patch only when evidence is insufficient or '
-          'the durable fact is already canonical.',
+          'the durable fact is already canonical. These mandatory-patch '
+          'instructions remain subordinate to the shared source and ownership '
+          'rules: an unresolved out-of-window source or a misattributed Ledger '
+          'claim is not a confirmed, resolvable contradiction.',
         )
         ..write(jsonEncode(accumulatedObservations));
     }
@@ -232,6 +243,10 @@ abstract final class CardRewriterPromptBuilder {
         '- Confidence 0.0-1.0 reflects how strongly the chat history supports '
         'this change.',
       )
+      ..writeln()
+      ..writeln(CanonEvidenceRules.sourceAndRelationships)
+      ..writeln()
+      ..writeln(CanonEvidenceRules.durablePromotion)
       ..writeln()
       ..writeln('# Active observations from previous passes')
       ..writeln(jsonEncode(activeObservations))
@@ -303,6 +318,11 @@ NPC-owned facts may patch only an existing supplied injected lorebook entry. Mai
 Respond with exactly one JSON object and nothing else:
 {"operations":[{"lorebookId":"...","entryId":"...","baseContent":"...","expectedContentHash":"...","patches":[{"anchor":"...","value":"..."}]}]}
 Each target may occur at most once. Return an empty "operations" list ONLY when no supported durable update belongs in any supplied target. A Ledger fact is accepted evidence, not a reason to omit an eligible lorebook patch. baseContent and expectedContentHash must exactly echo the supplied target; when a target has no baseContent field, echo its content as baseContent. Each anchor must occur exactly once in its supplied current content. Use smallest exact fragment replacements, never rewrite an entire entry. Preserve every {{...}} macro token byte-for-byte.
+The obligation to patch is subordinate to source and ownership correctness; an unresolved disputed claim does not require a patch. Once a durable contradiction is confirmed with correct attribution, patch every directly conflicting fragment of the eligible owning entry rather than leaving an obsolete status as current.
+
+${CanonEvidenceRules.sourceAndRelationships}
+
+${CanonEvidenceRules.durablePromotion}
 
 # Instruction
 $instruction''';
@@ -386,6 +406,10 @@ $instruction''';
         'transitions are accepted.',
       )
       ..writeln('- Emit no keys beyond those shown in the shape above.')
+      ..writeln()
+      ..writeln(CanonEvidenceRules.sourceAndRelationships)
+      ..writeln()
+      ..writeln(CanonEvidenceRules.manualRewrite)
       ..writeln()
       ..writeln('# Macro preservation')
       ..writeln(

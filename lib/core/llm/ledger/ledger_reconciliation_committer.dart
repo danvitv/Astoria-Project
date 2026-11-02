@@ -16,6 +16,8 @@ import '../../models/tracker.dart';
 import '../../utils/cast_helpers.dart';
 import '../../utils/time_helpers.dart';
 import '../studio_ledger_reconciliation.dart';
+import '../canon_evidence_text.dart';
+import 'ledger_attribution_guard.dart';
 import 'ledger_canon_authority.dart';
 import 'ledger_op_applier.dart';
 import 'ledger_replacement_basis_resolver.dart';
@@ -131,6 +133,16 @@ final class LedgerReconciliationCommitter {
   Future<LedgerReconciliationCommitResult> commit(
     LedgerReconciliationCommitRequest request,
   ) async {
+    LedgerAttributionGuard.validate(
+      ops: request.export.ops,
+      priorTrackers: request.promptTrackers,
+      sourceText: request.plan.messages
+          .map(
+            (message) =>
+                CanonEvidenceText.forMessage(message.role, message.content),
+          )
+          .join('\n\n'),
+    );
     var opsApplied = 0;
     var replayed = false;
     final plan = request.plan;

@@ -16,6 +16,7 @@ import 'package:glaze_flutter/core/db/repositories/character_revision_repo.dart'
 import 'package:glaze_flutter/core/db/repositories/character_session_baseline_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/ledger_raw_tracker_state_reader.dart';
 import 'package:glaze_flutter/core/db/repositories/ledger_reconciliation_run_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/tracker_snapshot_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/llm_request_capture_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/manual_rewrite_job_repo.dart';
 import 'package:glaze_flutter/core/llm/aux_llm_client.dart';
@@ -27,6 +28,8 @@ import 'package:glaze_flutter/core/llm/transport/llm_request_capture.dart';
 import 'package:glaze_flutter/core/models/agent_operation_record.dart';
 import 'package:glaze_flutter/core/models/card_evolution_observation.dart';
 import 'package:glaze_flutter/core/models/character.dart';
+import 'package:glaze_flutter/core/models/tracker.dart';
+import 'package:glaze_flutter/core/models/tracker_snapshot.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/automated_card_evolution_service.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/card_rewriter_contracts.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/effective_canon_read_repository.dart';
@@ -1171,45 +1174,56 @@ void main() {
     expect(RegExp('Ж{2001}').hasMatch(prompt), isFalse);
   });
 
-  test('exact retry reuses captured prompt and completes failed row', () async {
-    final first = await fixture.seedReconciliationRun(ordinal: 1);
-    final middle = await fixture.seedReconciliationRun(ordinal: 2);
-    final boundary = await fixture.seedReconciliationRun(ordinal: 3);
-    final failed = await fixture.seedFailedCollector(
-      first: first,
-      middle: middle,
-      boundary: boundary,
-      prompt: 'captured collector prompt',
-    );
-    String? receivedPrompt;
-    final result = await fixture
-        .service((_, prompt) async {
-          receivedPrompt = prompt;
-          return AuxCallOutcome(
-            status: AgentOperationStatus.ok,
-            text: fixture.observationNewOutput,
-            captureContext: LlmCaptureContext(
-              stage: 'card.collector',
-              sessionId: 'session',
-              pipelineRunId: failed.id,
-              callId: 'retry-call',
-              attempt: 1,
-            ),
-          );
-        })
-        .retryFailedCollector(failed.id);
+  test(
+    'exact retry refuses obsolete captured evidence before claim or model call',
+    () async {
+      final first = await fixture.seedReconciliationRun(ordinal: 1);
+      final middle = await fixture.seedReconciliationRun(ordinal: 2);
+      final boundary = await fixture.seedReconciliationRun(ordinal: 3);
+      final failed = await fixture.seedFailedCollector(
+        first: first,
+        middle: middle,
+        boundary: boundary,
+        prompt:
+            '<lumiaooc>OOC_FORECAST_ALL_NPCS_IN_LOVE</lumiaooc> old collector rules',
+      );
+      String? receivedPrompt;
+      final result = await fixture
+          .service((_, prompt) async {
+            receivedPrompt = prompt;
+            return AuxCallOutcome(
+              status: AgentOperationStatus.ok,
+              text: fixture.observationNewOutput,
+              captureContext: LlmCaptureContext(
+                stage: 'card.collector',
+                sessionId: 'session',
+                pipelineRunId: failed.id,
+                callId: 'retry-call',
+                attempt: 1,
+              ),
+            );
+          })
+          .retryFailedCollector(failed.id);
 
-    expect(result.kind, 'collectorCompleted');
-    expect(receivedPrompt, 'captured collector prompt');
-    final completed = await fixture.collectorRepo.getById(failed.id);
-    expect(completed?.status, 'completed');
-    expect(completed?.collectorOrdinal, failed.collectorOrdinal);
-    expect(completed?.lastCallId, 'retry-call');
-    expect(
-      await fixture.observationRepo.getActiveObservations('session'),
-      hasLength(1),
-    );
-  });
+      expect(result.kind, 'collectorPromptChanged');
+      expect(receivedPrompt, isNull);
+      final retained = await fixture.collectorRepo.getById(failed.id);
+      expect(retained, failed);
+      expect(
+        (await fixture.captureRepo.exactPromptForCall(
+          callId: 'failed-call',
+          sessionId: 'session',
+          pipelineRunId: failed.id,
+          stage: 'card.collector',
+        ))?.prompt,
+        contains('OOC_FORECAST_ALL_NPCS_IN_LOVE'),
+      );
+      expect(
+        await fixture.observationRepo.getActiveObservations('session'),
+        isEmpty,
+      );
+    },
+  );
 
   test('retry rebuilds prompt when exact capture is unavailable', () async {
     final first = await fixture.seedReconciliationRun(ordinal: 1);
@@ -1289,50 +1303,53 @@ void main() {
     },
   );
 
-  test('invalid manual correction keeps exact retry available', () async {
-    final first = await fixture.seedReconciliationRun(ordinal: 1);
-    final middle = await fixture.seedReconciliationRun(ordinal: 2);
-    final boundary = await fixture.seedReconciliationRun(ordinal: 3);
-    final failed = await fixture.seedFailedCollector(
-      first: first,
-      middle: middle,
-      boundary: boundary,
-      prompt: 'captured collector prompt',
-    );
+  test(
+    'invalid manual correction preserves the immutable capture for review',
+    () async {
+      final first = await fixture.seedReconciliationRun(ordinal: 1);
+      final middle = await fixture.seedReconciliationRun(ordinal: 2);
+      final boundary = await fixture.seedReconciliationRun(ordinal: 3);
+      final failed = await fixture.seedFailedCollector(
+        first: first,
+        middle: middle,
+        boundary: boundary,
+        prompt: 'captured collector prompt',
+      );
 
-    LlmCallEventCapture.sink = fixture.captureRepo;
-    addTearDown(() {
-      if (identical(LlmCallEventCapture.sink, fixture.captureRepo)) {
-        LlmCallEventCapture.sink = null;
-      }
-    });
-    final result = await fixture
-        .service((_, _) async => _ok('{}'))
-        .correctFailedCollector(failed.id, response: 'not json');
+      LlmCallEventCapture.sink = fixture.captureRepo;
+      addTearDown(() {
+        if (identical(LlmCallEventCapture.sink, fixture.captureRepo)) {
+          LlmCallEventCapture.sink = null;
+        }
+      });
+      final result = await fixture
+          .service((_, _) async => _ok('{}'))
+          .correctFailedCollector(failed.id, response: 'not json');
 
-    expect(result.kind, 'parserRejected');
-    final retained = await fixture.collectorRepo.getById(failed.id);
-    expect(retained?.status, 'failed');
-    expect(retained?.lastCallId, 'failed-call');
-    expect(
-      (await fixture.captureRepo.exactPromptForCall(
-        callId: 'failed-call',
-        sessionId: 'session',
-        pipelineRunId: failed.id,
-        stage: 'card.collector',
-      ))?.prompt,
-      'captured collector prompt',
-    );
-    final events = await fixture.captureRepo.callEventsForArtifact(
-      'session',
-      failed.id,
-    );
-    expect(events.single.kind, 'parser_rejected');
-    expect(events.single.responseText, 'not json');
-    expect(jsonDecode(events.single.payloadJson), {
-      'source': 'manual_correction',
-    });
-  });
+      expect(result.kind, 'parserRejected');
+      final retained = await fixture.collectorRepo.getById(failed.id);
+      expect(retained?.status, 'failed');
+      expect(retained?.lastCallId, 'failed-call');
+      expect(
+        (await fixture.captureRepo.exactPromptForCall(
+          callId: 'failed-call',
+          sessionId: 'session',
+          pipelineRunId: failed.id,
+          stage: 'card.collector',
+        ))?.prompt,
+        'captured collector prompt',
+      );
+      final events = await fixture.captureRepo.callEventsForArtifact(
+        'session',
+        failed.id,
+      );
+      expect(events.single.kind, 'parser_rejected');
+      expect(events.single.responseText, 'not json');
+      expect(jsonDecode(events.single.payloadJson), {
+        'source': 'manual_correction',
+      });
+    },
+  );
 }
 
 AuxCallOutcome _ok(String text) =>
@@ -1379,8 +1396,28 @@ final class _Fixture {
       ['session', 'character', jsonEncode(_messages)],
     );
     await db.customStatement(
-      'INSERT INTO tracker_rows (session_id, name, value) VALUES (?, ?, ?)',
+      "INSERT INTO tracker_rows (session_id, name, value, scope) VALUES (?, ?, ?, 'ledger')",
       ['session', 'npc:Алиса.доверие', 'растёт'],
+    );
+    // Current selection is snapshot/effect-first. A live row by itself is not
+    // historical canon evidence; seed the actual committed fixture boundary.
+    await TrackerSnapshotRepo(db).upsert(
+      const TrackerSnapshot(
+        sessionId: 'session',
+        messageId: 'a1',
+        swipeId: 0,
+        agentSwipeId: 0,
+        committed: true,
+        createdAt: 1,
+        trackers: [
+          Tracker(
+            sessionId: 'session',
+            name: 'npc:Алиса.доверие',
+            value: 'растёт',
+            scope: 'ledger',
+          ),
+        ],
+      ),
     );
     final reader = EffectiveCanonReadRepository(
       db: db,
@@ -1516,9 +1553,18 @@ final class _Fixture {
       opsApplied: const [],
       createdAt: ordinal * 10,
     );
+    final reconciliationRepo = LedgerReconciliationRunRepo(db);
+    final state = await reconciliationRepo.captureState('session');
     expect(
-      await LedgerReconciliationRunRepo(db).append(run),
+      await reconciliationRepo.append(run),
       isA<ReconciliationRunAppended>(),
+    );
+    await reconciliationRepo.recordEffect(
+      runId: run.id,
+      sessionId: 'session',
+      before: state,
+      after: state,
+      createdAt: run.createdAt,
     );
     return (db.select(
       db.ledgerReconciliationSuccessfulRuns,

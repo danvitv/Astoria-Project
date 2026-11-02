@@ -184,6 +184,97 @@ void main() {
     return db.close();
   });
 
+  for (final reconciled in [false, true]) {
+    test(
+      'cross-NPC copied relationship aborts ${reconciled ? 'reconciliation' : 'turn'} before any canon write',
+      () async {
+        const akane = Tracker(
+          sessionId: 'session',
+          name: 'npc:Акане Курокава.attitude_to_user',
+          value:
+              'Считает, что поехала с ним не ради машины, а чтобы побыть '
+              'наедине; ценит внимание без зрителей.',
+          scope: 'ledger',
+        );
+        const kana = Tracker(
+          sessionId: 'session',
+          name: 'npc:Кана Арима.attitude_to_user',
+          value: 'У машины смеялась и скрепила договор мизинцем.',
+          scope: 'ledger',
+        );
+        for (final tracker in [akane, kana]) {
+          await trackers.upsertValue(
+            'session',
+            tracker.name,
+            tracker.value,
+            scope: 'ledger',
+          );
+        }
+        // Model-owned live rows are intentionally not a committed prompt base.
+        // Seed a prior anchor for turns, and the reviewed anchor for reconciliation.
+        await snapshots.upsert(
+          TrackerSnapshot(
+            sessionId: 'session',
+            messageId: reconciled ? 'a1' : 'prior',
+            swipeId: 0,
+            agentSwipeId: 0,
+            trackers: const [akane, kana],
+            committed: true,
+          ),
+        );
+        final before = await trackers.getBySessionId('session');
+        final endpoint = await _serve('''
+<glaze_memory_export>
+${jsonEncode({
+          'ops': [
+            {'op': 'set', 'key': 'world:location', 'value': 'must-not-commit'},
+            {'op': 'set', 'key': kana.name, 'value': '${akane.value} ${kana.value}', 'evidence': 'Kana accepted support'},
+          ],
+          'knowledgeFacts': <Object?>[],
+        })}
+</glaze_memory_export>
+<glaze_knowledge_cleanup>{"ops":[]}</glaze_knowledge_cleanup>
+<studio_ledger>updated</studio_ledger>
+''');
+        addTearDown(endpoint.close);
+        final result = reconciled
+            ? await service.reconcile(
+                sessionId: 'session',
+                settings: const PipelineSettings(),
+                config: _config(endpoint.url),
+                plan: LedgerReconciliationPlan(
+                  messages: const [
+                    ChatMessage(id: 'u1', role: 'user', content: 'Start'),
+                    assistant,
+                  ],
+                  endMessage: assistant,
+                  rangeHash: computeLedgerReconciliationRangeHash(const [
+                    ChatMessage(id: 'u1', role: 'user', content: 'Start'),
+                    assistant,
+                  ]),
+                ),
+              )
+            : await run(endpoint.url);
+        expect(result.status, 'error');
+        expect(result.error, contains('attribution conflict'));
+        expect(await trackers.getBySessionId('session'), before);
+        expect(await trackers.get('session', 'world:location'), isNull);
+        expect(await reconciliationRuns.readSession('session'), isEmpty);
+        expect(await facts.getReviewableForSession('session'), isEmpty);
+        final afterSnapshot = await snapshots.getByAnchor(
+          sessionId: 'session',
+          messageId: 'a1',
+          swipeId: 0,
+          agentSwipeId: 0,
+        );
+        expect(
+          afterSnapshot?.trackers,
+          reconciled ? const [akane, kana] : null,
+        );
+      },
+    );
+  }
+
   test(
     'canon changes after LLM completion abort normal commit without writes',
     () async {

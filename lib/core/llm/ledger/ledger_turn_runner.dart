@@ -536,6 +536,7 @@ class LedgerTurnRunner {
           swipeId: request.swipeId,
           agentSwipeId: request.agentSwipeId,
           finalAssistantText: request.finalAssistantText,
+          currentUserText: currentUserText,
           canon: canon,
           promptTrackers: promptTrackers,
           export: export,

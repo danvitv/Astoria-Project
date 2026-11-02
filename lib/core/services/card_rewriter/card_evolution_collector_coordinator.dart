@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../../llm/canon_evidence_text.dart';
+
 import 'package:dio/dio.dart';
 
 import '../../db/app_db.dart';
@@ -278,6 +280,7 @@ class CardEvolutionCollectorCoordinator {
 
     String? prompt;
     if (manualResponse == null) {
+      final currentPrompt = _buildObservationPrompt(snapshot);
       final failedCallId = failed.lastCallId;
       if (failedCallId != null) {
         final capture = await requestCaptureRepo.exactPromptForCall(
@@ -288,7 +291,18 @@ class CardEvolutionCollectorCoordinator {
         );
         prompt = capture?.prompt;
       }
-      prompt ??= _buildObservationPrompt(snapshot);
+      if (prompt != null && prompt != currentPrompt) {
+        // A pre-upgrade capture can contain assistant forecasts and obsolete
+        // attribution rules. Preserve it, but do not replay it as new evidence
+        // or spend a model call under a different prompt contract.
+        return const CardEvolutionFinalizeOutcome(
+          'collectorPromptChanged',
+          null,
+          'Captured collector prompt differs from current evidence rules; '
+              'exact retry refused. Review the immutable capture explicitly.',
+        );
+      }
+      prompt ??= currentPrompt;
     }
 
     final ownerId = 'collector-recovery-${generateId()}';
@@ -651,6 +665,13 @@ class CardEvolutionCollectorCoordinator {
       final result = <String>{};
       for (final message in decoded['chatHistory'] as List) {
         if (message is! Map || message['messageId'] is! String) return null;
+        if (message['role'] == 'assistant' &&
+            message['content'] is String &&
+            CanonEvidenceText.assistantNarrative(
+              message['content'] as String,
+            ).trim().isEmpty) {
+          continue;
+        }
         result.add(message['messageId'] as String);
       }
       return result;
@@ -685,7 +706,8 @@ class CardEvolutionCollectorCoordinator {
   static String _collectorContext(String selectedInputJson) {
     try {
       final decoded = Map<String, Object?>.from(
-        jsonDecode(selectedInputJson) as Map,
+        jsonDecode(CanonEvidenceText.projectContextJson(selectedInputJson))
+            as Map,
       )..remove('card');
       return jsonEncode(decoded);
     } catch (_) {

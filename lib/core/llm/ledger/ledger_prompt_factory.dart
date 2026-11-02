@@ -2,6 +2,8 @@ import '../../models/character.dart';
 import '../../models/memory_book.dart';
 import '../../models/studio_config.dart';
 import '../../models/tracker.dart';
+import '../canon_evidence_rules.dart';
+import '../canon_evidence_text.dart';
 import '../macro_engine.dart';
 import '../studio/studio_aux_prompt_assembler.dart';
 import '../studio_ledger_prompt.dart';
@@ -26,6 +28,9 @@ class LedgerPromptFactory {
     StudioLedgerEngine engine = StudioLedgerEngine.currentReconciled,
     List<String> gameClockHistory = const [],
   }) {
+    finalAssistantText = CanonEvidenceText.assistantNarrative(
+      finalAssistantText,
+    );
     if (engine == StudioLedgerEngine.legacyTurnOnly) {
       return _promptBuilder.buildLegacyTurnOnly(
         finalAssistantText: finalAssistantText,
@@ -129,11 +134,13 @@ Allowed namespaces: npc:, relationship:, arc:, world:, scene.
 Allowed ops: set, delete. Every set REPLACES the complete current value.
 Never append history to a state value. Keep each value under 1200 characters.
 Never write npc:*.knowledge or relationship:*.knowledge; durable propositions belong in knowledgeFacts.
-Relationship trust/status/attitude and card overrides are current state and must be updated with set whenever they change.
+Relationship trust/status/attitude and card overrides are current state and must be updated with set whenever correctly attributed evidence establishes a change; source and ownership correctness takes precedence.
 Reuse an exact key from <current_state> or <existing_keys> for the same fact; update it with set instead of creating a synonym key.
 Allowed eventState: planned, suggested, threatened, attempted, completed, failed, cancelled, unknown (or omit).
 
-${StudioLedgerPrompt.gameClockRules}''';
+${StudioLedgerPrompt.gameClockRules}
+
+${CanonEvidenceRules.sourceAndRelationships}''';
 
     return const StudioAuxPromptAssembler().assemble(
       blocks: ledgerBlocks,

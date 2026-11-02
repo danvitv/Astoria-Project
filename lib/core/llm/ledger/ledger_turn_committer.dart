@@ -9,7 +9,9 @@ import '../../models/character_knowledge_fact.dart';
 import '../../models/knowledge_cleanup.dart';
 import '../../models/studio_ledger_export.dart';
 import '../../models/tracker.dart';
+import '../canon_evidence_text.dart';
 import 'ledger_canon_authority.dart';
+import 'ledger_attribution_guard.dart';
 import 'ledger_op_applier.dart';
 
 class LedgerTurnCommitRequest {
@@ -27,6 +29,7 @@ class LedgerTurnCommitRequest {
     required this.token,
     required this.isStillCurrent,
     required this.commitSnapshot,
+    this.currentUserText = '',
   });
 
   final String sessionId;
@@ -34,6 +37,7 @@ class LedgerTurnCommitRequest {
   final int swipeId;
   final int agentSwipeId;
   final String finalAssistantText;
+  final String currentUserText;
   final LedgerCanonContext canon;
   final List<Tracker> promptTrackers;
   final StudioLedgerExport export;
@@ -74,6 +78,13 @@ class LedgerTurnCommitter {
   final LedgerOpApplier _opApplier;
 
   Future<int> commit(LedgerTurnCommitRequest request) async {
+    LedgerAttributionGuard.validate(
+      ops: request.export.ops,
+      priorTrackers: request.promptTrackers,
+      sourceText:
+          '${request.currentUserText}\n'
+          '${CanonEvidenceText.assistantNarrative(request.finalAssistantText)}',
+    );
     var opsApplied = 0;
     final target = LedgerTarget(
       messageId: request.messageId,

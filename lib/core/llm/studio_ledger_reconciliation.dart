@@ -9,6 +9,8 @@ import '../models/chat_message.dart';
 import '../models/knowledge_cleanup.dart';
 import '../models/tracker.dart';
 import 'studio_ledger_prompt.dart';
+import 'canon_evidence_text.dart';
+import 'canon_evidence_rules.dart';
 
 const ledgerReconciliationPromptBlockId = 'ledger_reconciliation_prompt';
 
@@ -208,7 +210,7 @@ class StudioLedgerReconciliationPrompt {
         .map(
           (message) =>
               '${message.role == 'assistant' ? 'Assistant' : 'User'} '
-              '[${message.id}]: ${message.content}',
+              '[${message.id}]: ${CanonEvidenceText.forMessage(message.role, message.content)}',
         )
         .join('\n\n');
     final candidates = candidateTrackers(
@@ -227,6 +229,8 @@ class StudioLedgerReconciliationPrompt {
     final cardSection = StudioLedgerPrompt.buildCharacterCardSection(character);
 
     return '''$systemPrompt
+
+${CanonEvidenceRules.sourceAndRelationships}
 
 $cardSection<review_range start="${plan.startMessageId}" end="${plan.endMessage.id}">
 $chat

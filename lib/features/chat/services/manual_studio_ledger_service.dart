@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import '../../../core/llm/canon_evidence_text.dart';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -660,7 +662,8 @@ String _recentHistoryText(
       : 0;
   final lines = <String>[];
   for (final msg in eligible.sublist(start)) {
-    final content = msg.content.trim();
+    final content = CanonEvidenceText.forMessage(msg.role, msg.content).trim();
+    if (content.isEmpty) continue;
     final role = msg.role == 'assistant' ? 'Assistant' : 'User';
     lines.add('$role: $content');
   }
