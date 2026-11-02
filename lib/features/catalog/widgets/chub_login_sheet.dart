@@ -7,13 +7,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/utils/error_format.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/widgets/glaze_bottom_sheet.dart';
 import '../../../shared/widgets/glaze_spinner.dart';
 import '../../../shared/widgets/glaze_toast.dart';
 import '../../chat/bridge/chat_webview_environment.dart';
 import '../chub_account_provider.dart';
-import '../services/chub_provider.dart';
 import '../services/chub_session.dart';
 
 /// Menu entry point for the "Chub Account" item. When a key is already stored
@@ -32,9 +32,16 @@ Future<void> openChubAccountSheet(BuildContext context, WidgetRef ref) async {
         icon: Icons.logout_rounded,
         isDestructive: true,
         onTap: () async {
+          final account = ref.read(chubAccountProvider.notifier);
           Navigator.of(context, rootNavigator: true).pop();
-          await ref.read(chubAccountProvider.notifier).logout();
-          resetChubTagCache();
+          try {
+            await account.logout();
+          } catch (error) {
+            if (context.mounted) {
+              GlazeToast.show(context, formatError(error), isError: true);
+            }
+            return;
+          }
         },
       ),
       BottomSheetItem(
@@ -78,6 +85,7 @@ class _ChubLoginSheetState extends ConsumerState<ChubLoginSheet> {
   InAppWebViewController? _controller;
   Timer? _poll;
   bool _manual = false;
+  int _captureEpoch = 0;
 
   /// Guard against re-entrant capture: once a key lands we close exactly once.
   bool _closing = false;
@@ -87,42 +95,57 @@ class _ChubLoginSheetState extends ConsumerState<ChubLoginSheet> {
     super.initState();
     // chub.ai is a SPA: a successful login can store the token without a full
     // navigation, so poll alongside the navigation callbacks.
-    _poll = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => _capture(),
-    );
+    _poll = Timer.periodic(const Duration(seconds: 1), (_) => _capture());
   }
 
   @override
   void dispose() {
+    _captureEpoch++;
+    _controller = null;
     _poll?.cancel();
     super.dispose();
   }
 
   Future<void> _capture() async {
-    if (_closing || _manual) return;
+    if (!mounted || _closing || _manual) return;
     final controller = _controller;
     if (controller == null) return;
-    final Object? raw;
+    final epoch = _captureEpoch;
+    final account = ref.read(chubAccountProvider.notifier);
+    final accountCurrent = account.captureProbeGuard();
+    bool modeCurrent() =>
+        mounted &&
+        !_manual &&
+        epoch == _captureEpoch &&
+        identical(_controller, controller);
+    final session = await captureChubSessionProbe(
+      evaluate: () => controller.evaluateJavascript(source: chubSessionProbeJs),
+      isCurrent: () => modeCurrent() && !_closing && accountCurrent(),
+    );
+    if (!modeCurrent() || _closing || !accountCurrent()) return;
+    if (session == null) return;
+    _closing = true;
     try {
-      raw = await controller.evaluateJavascript(source: chubSessionProbeJs);
-    } catch (_) {
+      await account.setApiKey(session.token, userName: session.userName);
+    } on ChubAccountMetadataException catch (error) {
+      if (modeCurrent() && context.mounted) {
+        GlazeToast.show(context, formatError(error), isError: true);
+      }
+    } catch (error) {
+      if (modeCurrent() && context.mounted) {
+        _closing = false;
+        GlazeToast.show(context, formatError(error), isError: true);
+      }
       return;
     }
-    final session = parseChubSessionProbe(raw);
-    if (session == null || _closing || !mounted) return;
-    _closing = true;
-    await ref
-        .read(chubAccountProvider.notifier)
-        .setApiKey(session.token, userName: session.userName);
-    resetChubTagCache();
-    if (!mounted) return;
+    if (!modeCurrent() || !context.mounted) return;
     Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
     final height = MediaQuery.of(context).size.height * 0.92;
+    final viewEpoch = _captureEpoch;
     return Container(
       height: height,
       decoration: BoxDecoration(
@@ -135,8 +158,18 @@ class _ChubLoginSheetState extends ConsumerState<ChubLoginSheet> {
           _Header(
             manual: _manual,
             onClose: () => Navigator.of(context).pop(),
-            onManual: () => setState(() => _manual = true),
-            onBack: () => setState(() => _manual = false),
+            onManual: () => setState(() {
+              _captureEpoch++;
+              _controller = null;
+              _closing = false;
+              _manual = true;
+            }),
+            onBack: () => setState(() {
+              _captureEpoch++;
+              _controller = null;
+              _closing = false;
+              _manual = false;
+            }),
           ),
           Expanded(
             child: _manual
@@ -162,8 +195,8 @@ class _ChubLoginSheetState extends ConsumerState<ChubLoginSheet> {
                     ),
                     webViewEnvironment:
                         defaultTargetPlatform == TargetPlatform.windows
-                            ? chatWebViewEnvironment
-                            : null,
+                        ? chatWebViewEnvironment
+                        : null,
                     // Claim drags so the WebView scrolls instead of the sheet.
                     gestureRecognizers: {
                       Factory<VerticalDragGestureRecognizer>(
@@ -173,7 +206,13 @@ class _ChubLoginSheetState extends ConsumerState<ChubLoginSheet> {
                         () => HorizontalDragGestureRecognizer(),
                       ),
                     },
-                    onWebViewCreated: (c) => _controller = c,
+                    onWebViewCreated: (c) {
+                      if (!mounted || _manual || viewEpoch != _captureEpoch) {
+                        return;
+                      }
+                      _captureEpoch++;
+                      _controller = c;
+                    },
                     onLoadStop: (_, _) => _capture(),
                     onUpdateVisitedHistory: (_, _, _) => _capture(),
                   ),
@@ -259,12 +298,30 @@ class _ChubKeyFormState extends ConsumerState<_ChubKeyForm> {
       _busy = true;
       _error = null;
     });
-    await ref.read(chubAccountProvider.notifier).setApiKey(key);
-    // A different key means a different tag universe and result set.
-    resetChubTagCache();
+    final account = ref.read(chubAccountProvider.notifier);
+    ChubAccountMetadataException? metadataIssue;
+    try {
+      await account.setApiKey(key);
+    } on ChubAccountMetadataException catch (error) {
+      metadataIssue = error;
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = formatError(error);
+        });
+      }
+      return;
+    }
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true).pop();
-    GlazeToast.show(context, 'chub_key_saved'.tr());
+    GlazeToast.show(
+      context,
+      metadataIssue == null
+          ? 'chub_key_saved'.tr()
+          : formatError(metadataIssue),
+      isError: metadataIssue != null,
+    );
   }
 
   @override
@@ -335,8 +392,10 @@ class _ChubKeyFormState extends ConsumerState<_ChubKeyForm> {
         hintStyle: TextStyle(color: cs.onSurfaceVariant, fontSize: 14),
         filled: true,
         fillColor: cs.surfaceContainerHighest,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 12,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide.none,

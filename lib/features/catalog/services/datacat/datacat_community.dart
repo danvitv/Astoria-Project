@@ -1,6 +1,6 @@
+import '../../../../core/credentials/credential_vault.dart';
 import '../../catalog_models.dart';
 import 'datacat_account.dart';
-import 'datacat_client.dart';
 import 'datacat_errors.dart';
 import 'datacat_models.dart';
 
@@ -21,20 +21,19 @@ const datacatCommentPageLimit = 100;
 /// Reads the community panel for [characterId].
 Future<DatacatCommunity> datacatFetchCommunity(
   String characterId, {
+  required DatacatAccountService account,
   int offset = 0,
   int limit = 40,
 }) async {
-  final token = await datacatUserToken();
-  final data = await datacatGet(
-    '/characters/$characterId/community',
+  final current = account.captureAuthGuard();
+  final data = await account.communityRequest(
+    'GET', '/characters/${Uri.encodeComponent(characterId)}/community',
     query: {
       'offset': offset,
       'limit': limit.clamp(1, datacatCommentPageLimit),
     },
-    // Optional, but sending it is what makes `canInteract` answer for this
-    // viewer rather than for nobody.
-    auth: DatacatAuth(userToken: token),
   );
+  if (!current()) throw const CredentialVaultAdmissionDenied();
   return DatacatCommunity.fromJson(data);
 }
 
@@ -66,19 +65,23 @@ CatalogComment datacatComment(Map<String, dynamic> json) {
 /// the server's, not one the client incremented hopefully.
 Future<DatacatCommunity> datacatSendKudos(
   String characterId, {
+  required DatacatAccountService account,
   required String giftKey,
 }) async {
-  final data = await datacatPost(
-    '/characters/$characterId/community/kudos',
+  final current = account.captureAuthGuard();
+  final data = await account.communityRequest(
+    'POST', '/characters/${Uri.encodeComponent(characterId)}/community/kudos',
     body: {'giftKey': giftKey},
-    auth: await _writeAuth(),
+    requiredAccount: true,
   );
+  if (!current()) throw const CredentialVaultAdmissionDenied();
   return DatacatCommunity.fromJson(data);
 }
 
 /// Posts a plain comment as the linked account.
 Future<DatacatCommunity> datacatPostComment(
   String characterId, {
+  required DatacatAccountService account,
   required String body,
 }) async {
   final text = body.trim();
@@ -88,22 +91,12 @@ Future<DatacatCommunity> datacatPostComment(
       message: 'A comment must be between 1 and 4000 characters',
     );
   }
-  final data = await datacatPost(
-    '/characters/$characterId/community/comments',
+  final current = account.captureAuthGuard();
+  final data = await account.communityRequest(
+    'POST', '/characters/${Uri.encodeComponent(characterId)}/community/comments',
     body: {'body': text},
-    auth: await _writeAuth(),
+    requiredAccount: true,
   );
+  if (!current()) throw const CredentialVaultAdmissionDenied();
   return DatacatCommunity.fromJson(data);
-}
-
-Future<DatacatAuth> _writeAuth() async {
-  final token = await datacatUserToken();
-  if (token == null) {
-    throw const DatacatApiException(
-      status: 401,
-      code: 'account_not_linked',
-      message: 'Link a DataCat account to post',
-    );
-  }
-  return DatacatAuth(userToken: token, withInstallationId: true);
 }

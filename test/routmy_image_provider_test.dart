@@ -296,8 +296,8 @@ void main() {
             predicate((error) {
               final message = error.toString();
               return message.contains('asynchronous image task') &&
-                  message.contains('status=pending') &&
-                  message.contains('id=task-top-level-123') &&
+                  !message.contains('status=pending') &&
+                  !message.contains('id=task-top-level-123') &&
                   !message.contains('secret prompt');
             }),
           ),
@@ -332,8 +332,8 @@ void main() {
         throwsA(
           predicate((error) {
             final message = error.toString();
-            return message.contains('status=submitted') &&
-                message.contains('id=task-data-item-456') &&
+            return !message.contains('status=submitted') &&
+                !message.contains('id=task-data-item-456') &&
                 message.contains('no polling endpoint is documented') &&
                 !message.contains('must-not-leak');
           }),

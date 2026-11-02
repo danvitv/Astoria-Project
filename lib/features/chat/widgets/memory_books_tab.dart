@@ -139,6 +139,16 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   void initState() {
     super.initState();
     _ctrl = MemoryBookController(ref, widget.sessionId, widget.charId);
+    final originalSession = widget.sessionId, originalCharacter = widget.charId;
+    _ctrl.bindNativeLifetime(
+      changed: () {
+        if (mounted) setState(() {});
+      },
+      isCurrent: () =>
+          mounted &&
+          widget.sessionId == originalSession &&
+          widget.charId == originalCharacter,
+    );
     _searchCtrl = TextEditingController();
     _searchFocus = FocusNode();
     _reportedFailureSeq =
@@ -179,9 +189,20 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
 
   @override
   void dispose() {
+    _ctrl.dispose();
     _searchCtrl.dispose();
     _searchFocus.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant MemoryBooksTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sessionId != widget.sessionId ||
+        oldWidget.charId != widget.charId) {
+      // This State owns a final controller. A -> B -> A cannot resurrect it.
+      _ctrl.dispose();
+    }
   }
 
   /// Switching sub-tabs also persists the choice, so reopening the sheet comes

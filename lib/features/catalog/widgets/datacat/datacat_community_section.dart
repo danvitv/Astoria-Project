@@ -81,12 +81,16 @@ class _DatacatCommunitySectionState
       _loading = true;
       _error = null;
     });
+    final service = ref.read(datacatAccountServiceProvider);
+    final authCurrent = service.captureAuthGuard();
+    final characterId = widget.args.characterId;
     try {
       final community = await datacatFetchCommunity(
         widget.args.characterId,
+        account: service,
         offset: _nextOffset,
       );
-      if (!mounted) return;
+      if (!mounted || widget.args.characterId != characterId || !authCurrent()) return;
       setState(() {
         _community = community;
         _comments.addAll(community.comments.map(datacatComment));
@@ -95,11 +99,15 @@ class _DatacatCommunitySectionState
         _loading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || widget.args.characterId != characterId || !authCurrent()) return;
       setState(() {
         _error = e;
         _loading = false;
       });
+    } finally {
+      // No newer page can start while _loading is true; retirement must release
+      // this local busy flag without publishing the retired account's response.
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -130,18 +138,22 @@ class _DatacatCommunitySectionState
 
   Future<void> _sendKudos(DatacatKudosOption option) async {
     if (!await _ensureLinked() || !mounted) return;
+    final service = ref.read(datacatAccountServiceProvider);
+    final authCurrent = service.captureAuthGuard();
+    final characterId = widget.args.characterId;
     try {
       final community = await datacatSendKudos(
         widget.args.characterId,
+        account: service,
         giftKey: option.giftKey,
       );
-      if (!mounted) return;
+      if (!mounted || widget.args.characterId != characterId || !authCurrent()) return;
       GlazeToast.show(context, 'datacat_kudos_sent'.tr());
       // The write answers with the refreshed thread, so the new count is the
       // server's rather than one guessed locally — and no second read is made.
       setState(() => _community = community);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || widget.args.characterId != characterId || !authCurrent()) return;
       GlazeToast.show(context, formatError(e));
     }
   }
@@ -154,20 +166,25 @@ class _DatacatCommunitySectionState
       return;
     }
     if (!await _ensureLinked() || !mounted) return;
+    if (_posting) return;
 
     setState(() => _posting = true);
+    final service = ref.read(datacatAccountServiceProvider);
+    final authCurrent = service.captureAuthGuard();
+    final characterId = widget.args.characterId;
     try {
       final community = await datacatPostComment(
         widget.args.characterId,
+        account: service,
         body: text,
       );
-      if (!mounted) return;
+      if (!mounted || widget.args.characterId != characterId || !authCurrent()) return;
       _composer.clear();
       // A posted comment belongs at the top of a list read from the start, so
       // the thread is re-read rather than appended to.
       _applyFirstPage(community);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || widget.args.characterId != characterId || !authCurrent()) return;
       GlazeToast.show(context, formatError(e));
     } finally {
       if (mounted) setState(() => _posting = false);

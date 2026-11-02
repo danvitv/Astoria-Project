@@ -1,4 +1,5 @@
 import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/llm/memory_injection_service.dart';
@@ -9,10 +10,11 @@ import '../../../core/models/pipeline_settings.dart';
 import '../../../core/state/lorebook_embedding_provider.dart';
 import '../../../core/state/memory_book_ops_provider.dart';
 import '../../../core/state/memory_settings_provider.dart';
-import '../../../core/state/pipeline_settings_provider.dart';
+import '../../../core/state/db_provider.dart';
 import '../../chat/chat_provider.dart';
 import '../../settings/api_list_provider.dart';
 import '../state/memory_draft_jobs_provider.dart';
+import '../state/memory_native_entry_owner.dart';
 import 'memory_book_write_queue.dart';
 import 'memory_settings_mapper.dart';
 
@@ -25,19 +27,27 @@ import 'memory_settings_mapper.dart';
 /// built for, so a generation is not lost when the sheet closes.
 class MemoryBookController {
   final WidgetRef _ref;
+  final ProviderContainer _originContainer;
   final String _sessionId;
   final String _charId;
 
   MemoryBook? _book;
   bool _loading = true;
   bool _isReindexing = false;
+  bool _disposed = false;
+  int _nativeEpoch = 0;
+  void Function()? _unregisterNativeEntry;
+  VoidCallback? _nativeChanged;
+  bool Function()? _nativeBindingCurrent;
   final MemorySettingsMapper _settingsMapper = const MemorySettingsMapper();
   late final MemoryBookWriteQueue _bookWrites = MemoryBookWriteQueue(
     readLatest: () => _book,
     persist: (book) => _ref.read(memoryBookOpsProvider).saveMemoryBook(book),
   );
 
-  MemoryBookController(this._ref, this._sessionId, this._charId);
+  MemoryBookController(WidgetRef ref, this._sessionId, this._charId)
+    : _ref = ref,
+      _originContainer = ProviderScope.containerOf(ref.context, listen: false);
 
   MemoryBook? get book => _book;
   bool get loading => _loading;
@@ -59,8 +69,72 @@ class MemoryBookController {
   PipelineSettings globalPipelineAsPipeline() => pipelineSettings;
 
   Future<void> load() async {
-    _book = await _ref.read(memoryBookOpsProvider).ensureForSession(_sessionId);
+    final repo = _ref.read(memoryBookRepoProvider);
+    final loaded = await _ref
+        .read(memoryBookOpsProvider)
+        .ensureForSession(_sessionId);
+    if (_disposed || !_ref.context.mounted) return;
+    _book = loaded;
     _loading = false;
+    _unregisterNativeEntry?.call();
+    _unregisterNativeEntry = _ref
+        .read(memoryNativeEntryOwnerRegistryProvider)
+        .register(
+          MemoryNativeEntryOwner(
+            originContainer: _originContainer,
+            sessionId: _sessionId,
+            characterId: _charId,
+            repo: repo,
+            queue: _bookWrites,
+            readBook: () => _book,
+            isNativeCurrent: () =>
+                !_disposed &&
+                _ref.context.mounted &&
+                identical(
+                  ProviderScope.containerOf(_ref.context, listen: false),
+                  _originContainer,
+                ) &&
+                _nativeBindingCurrent?.call() == true &&
+                !_loading &&
+                !_isReindexing &&
+                !isGenerating &&
+                !globalSettings.vectorSearchEnabled &&
+                identical(_ref.read(memoryBookRepoProvider), repo),
+            captureNativeGuard: () {
+              final settings = globalSettings,
+                  jobs = _jobs,
+                  epoch = _nativeEpoch;
+              return () =>
+                  !_disposed &&
+                  _ref.context.mounted &&
+                  epoch == _nativeEpoch &&
+                  identical(globalSettings, settings) &&
+                  identical(_jobs, jobs);
+            },
+            publish: (entry) {
+              _publishRevision(entry);
+              _nativeChanged?.call();
+            },
+          ),
+        );
+  }
+
+  /// The native port never retains a WidgetRef past its original tab lifetime.
+  void bindNativeLifetime({
+    required VoidCallback changed,
+    required bool Function() isCurrent,
+  }) {
+    _nativeChanged = changed;
+    _nativeBindingCurrent = isCurrent;
+  }
+
+  void dispose() {
+    _disposed = true;
+    _nativeEpoch++;
+    _unregisterNativeEntry?.call();
+    _unregisterNativeEntry = null;
+    _nativeChanged = null;
+    _nativeBindingCurrent = null;
   }
 
   Future<void> save() async {
@@ -324,6 +398,7 @@ class MemoryBookController {
     final config = _ref.read(embeddingConfigProvider);
     if (config.endpoint.isEmpty) return const ReindexNeedsEmbeddingApi();
 
+    _nativeEpoch++;
     _isReindexing = true;
     try {
       final service = _ref.read(memoryEmbeddingServiceProvider);
@@ -343,6 +418,7 @@ class MemoryBookController {
       return ReindexFailed(e);
     } finally {
       _isReindexing = false;
+      _nativeEpoch++;
     }
   }
 

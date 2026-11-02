@@ -277,18 +277,33 @@ SupportSourceNavigationRepo _reader(AutomaticSourcesFixture f) =>
 Future<List<nav.SourceObservation>> _catalog(
   SupportSourceNavigationRepo reader,
 ) async {
-  final page = await reader.discover(
-    nav.SourceDomain.applicationData,
-    null,
-    null,
-    const nav.WorkBound(),
+  // The five global preferences families brought the catalog above the native
+  // 16-item page. Follow its original opaque cursor, not a larger work budget.
+  final items = <nav.SourceObservation>[];
+  Object? cursor;
+  for (var pageNumber = 0; pageNumber < 4; pageNumber++) {
+    final page = await reader.discover(
+      nav.SourceDomain.applicationData,
+      null,
+      cursor,
+      const nav.WorkBound(),
+    );
+    items.addAll(page.items);
+    if (page.complete) {
+      expect(page.next, isNull);
+      expect(
+        items.map((o) => o.key.nativeId),
+        SupportApplicationDataRegistry.datasets,
+      );
+      return items;
+    }
+    expect(page.items, isNotEmpty);
+    expect(page.next, isNotNull);
+    cursor = page.next;
+  }
+  throw TestFailure(
+    'Native application catalog did not finish within four pages',
   );
-  expect(page.complete, true);
-  expect(
-    page.items.map((o) => o.key.nativeId),
-    SupportApplicationDataRegistry.datasets,
-  );
-  return page.items;
 }
 
 Future<void> _encrypted(AutomaticSourcesFixture f, int count) async {

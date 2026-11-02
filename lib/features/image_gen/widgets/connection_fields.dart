@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../shared/widgets/menu_group.dart';
 import '../image_gen_models.dart';
 import 'rows.dart' as rows;
+import 'image_routmy_key_field.dart';
 
 /// Connection-field rows for the Naistera image-gen API.
 ///
@@ -59,15 +60,10 @@ List<Widget> buildRoutmyConnectionFields(
   ImageGenSettings s,
   BuildContext context,
   ValueChanged<ImageGenSettings> onUpdate,
+  VoidCallback onAuthAdmission,
 ) {
   return [
-    rows.ImageGenTextFieldItem(
-      label: 'rout.my API Key',
-      value: s.routmyApiKey,
-      obscure: true,
-      hint: 'sk-...',
-      onChanged: (v) => onUpdate(s.copyWith(routmyApiKey: v)),
-    ),
+    ImageRoutmyKeyField(onAdmission: onAuthAdmission),
     MenuSelectorItem(
       label: 'imggen_mirror'.tr(),
       currentValue: s.routmyMirror.label,

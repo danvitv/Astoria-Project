@@ -33,26 +33,54 @@ final class TrackedSharedPreferences implements SharedPreferences {
     );
   }
 
-  Future<bool> _write(String key, Future<bool> Function() write) =>
-      SavedPreferencesWrites.run([key], () async {
-        var acknowledged = false;
-        try {
-          return acknowledged = await write();
-        } finally {
-          store.owner.acknowledge(store, key, acknowledged);
-        }
-      });
+  Future<bool> _write(String key, Future<bool> Function() write) {
+    Future<bool> perform() async {
+      var acknowledged = false;
+      try {
+        return acknowledged = await write();
+      } finally {
+        store.owner.acknowledge(store, key, acknowledged);
+      }
+    }
 
-  /// Exact native single-key JSON write. Compare before plugin cache publication;
+    return SavedPreferencesWrites.run(
+      [key],
+      () => key == PrivatePreferenceKeys.chubApiKey
+          ? SavedPreferencesWrites.serializeChub(perform)
+          : key == PrivatePreferenceKeys.saucepanToken
+          ? SavedPreferencesWrites.serializeSaucepan(perform)
+          : PrivatePreferenceKeys.datacatAccountKeys.contains(key)
+          ? SavedPreferencesWrites.serializeDatacat(perform)
+          : key == PrivatePreferenceKeys.datacatAnonymousToken
+          ? SavedPreferencesWrites.serializeDatacatAnonymous(perform)
+          : PrivatePreferenceKeys.imageRoutmyKeys.contains(key)
+          ? SavedPreferencesWrites.serializeImageRoutmy(perform)
+          : key == PrivatePreferenceKeys.cloudOAuthDocument
+          ? SavedPreferencesWrites.serializeCloudOAuth(perform)
+          : perform(),
+    );
+  }
+
+  /// Exact native single-key string write/removal. Compare before cache publication;
   /// never route a saved read projection through this API. False/throw can persist.
   Future<({bool started, bool accepted, SavedPreferencesLease? receipt})>
   compareAndSetString({
     required String key,
     required String? expectedRaw,
-    required String value,
+    required String? value,
     required SavedPreferencesLease expected,
     required bool Function() isCurrent,
   }) async {
+    // Private credential keys have their own physical FIFOs; do not widen this
+    // saved-JSON writer into a private credential mutation surface.
+    if (key == PrivatePreferenceKeys.chubApiKey ||
+        key == PrivatePreferenceKeys.saucepanToken ||
+        key == PrivatePreferenceKeys.datacatAnonymousToken ||
+        key == PrivatePreferenceKeys.cloudOAuthDocument ||
+        PrivatePreferenceKeys.imageRoutmyKeys.contains(key) ||
+        PrivatePreferenceKeys.datacatAccountKeys.contains(key)) {
+      return (started: false, accepted: false, receipt: null);
+    }
     if (!isCurrent() || !expected.current || getString(key) != expectedRaw) {
       return (started: false, accepted: false, receipt: null);
     }
@@ -65,7 +93,9 @@ final class TrackedSharedPreferences implements SharedPreferences {
     try {
       if (isCurrent() && admission.current && getString(key) == expectedRaw) {
         started = true;
-        accepted = await delegate.setString(key, value);
+        accepted = value == null
+            ? await delegate.remove(key)
+            : await delegate.setString(key, value);
       }
     } catch (_) {
       // Keep the original producer's ambiguous outcome; never expose exception.
@@ -75,6 +105,38 @@ final class TrackedSharedPreferences implements SharedPreferences {
     if (!started) return (started: false, accepted: false, receipt: null);
     return (started: true, accepted: accepted, receipt: receipt);
   }
+
+  /// Native, exact retirement of ONLY the Chub legacy key. Caller must retain
+  /// the original store/value/revision and separately verify the vault copy.
+  /// Shared key ordering prevents a later backup setter from being erased by a
+  /// delayed remove. No clear(), reload(), replacement store or generic delete.
+  Future<bool> retireChubApiKey({
+    required String expectedRaw,
+    required SavedPreferencesLease expected,
+    required bool Function() isCurrent,
+  }) => SavedPreferencesWrites.serializeChub(() async {
+    const key = PrivatePreferenceKeys.chubApiKey;
+    if (!isCurrent() || !expected.current || getString(key) != expectedRaw) {
+      return false;
+    }
+    final admission = store.owner.beginConditional(expected, store, key);
+    if (admission == null) return false;
+    var accepted = false;
+    SavedPreferencesLease? receipt;
+    try {
+      if (isCurrent() && admission.current && getString(key) == expectedRaw) {
+        accepted = await delegate.remove(key);
+      }
+    } catch (_) {
+      // An ambiguous native failure quarantines the original store; no retry.
+    } finally {
+      receipt = admission.finish(accepted);
+    }
+    return accepted &&
+        isCurrent() &&
+        receipt?.current == true &&
+        !containsKey(key);
+  });
 
   @override
   Object? get(String key) => delegate.get(key);
@@ -110,41 +172,50 @@ final class TrackedSharedPreferences implements SharedPreferences {
   @override
   Future<bool> remove(String key) => _write(key, () => delegate.remove(key));
   @override
-  Future<bool> clear() =>
-      SavedPreferencesWrites.run(SavedPreferencesKeys.all, () async {
-        var acknowledged = false;
-        try {
-          return acknowledged = await delegate.clear();
-        } finally {
-          for (final key in SavedPreferencesKeys.all) {
-            store.owner.acknowledge(store, key, acknowledged);
-          }
+  Future<bool> clear() => SavedPreferencesWrites.run(
+    PrivatePreferenceKeys.tracked,
+    () => SavedPreferencesWrites.serializePrivateSources(() async {
+      var acknowledged = false;
+      try {
+        return acknowledged = await delegate.clear();
+      } finally {
+        for (final key in PrivatePreferenceKeys.tracked) {
+          store.owner.acknowledge(store, key, acknowledged);
         }
-      });
+      }
+    }),
+  );
   @override
   Future<void> reload() {
     final preexisting = store.owner.pendingKeys;
-    return SavedPreferencesWrites.run(SavedPreferencesKeys.all, () async {
-      // Legacy reload replaces its whole cache AFTER getAll completes. An
-      // overlapping accepted setter may already have persisted a newer value;
-      // reloading an older captured map must not certify that cache as saved.
-      final before = store.owner.capture(SavedPreferencesKeys.all).revisions;
-      var completed = false;
-      try {
-        await delegate.reload();
-        completed = true;
-      } finally {
-        final after = store.owner.capture(SavedPreferencesKeys.all).revisions;
-        for (final key in SavedPreferencesKeys.all) {
-          if (!completed ||
-              !store.current ||
-              preexisting.contains(key) ||
-              before[key] != after[key]) {
-            store.owner.acknowledge(store, key, false);
+    return SavedPreferencesWrites.run(
+      PrivatePreferenceKeys.tracked,
+      () => SavedPreferencesWrites.serializePrivateSources(() async {
+        // Legacy reload replaces its whole cache AFTER getAll completes. An
+        // overlapping accepted setter may already have persisted a newer value;
+        // reloading an older captured map must not certify that cache as saved.
+        final before = store.owner
+            .capture(PrivatePreferenceKeys.tracked)
+            .revisions;
+        var completed = false;
+        try {
+          await delegate.reload();
+          completed = true;
+        } finally {
+          final after = store.owner
+              .capture(PrivatePreferenceKeys.tracked)
+              .revisions;
+          for (final key in PrivatePreferenceKeys.tracked) {
+            if (!completed ||
+                !store.current ||
+                preexisting.contains(key) ||
+                before[key] != after[key]) {
+              store.owner.acknowledge(store, key, false);
+            }
           }
         }
-      }
-    });
+      }),
+    );
   }
 
   @override

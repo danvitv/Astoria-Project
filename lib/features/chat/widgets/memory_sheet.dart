@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../shared/widgets/glaze_spinner.dart';
 import '../../../shared/widgets/glaze_tab_bar.dart';
 import '../../../shared/widgets/sheet_view.dart';
+import '../../../core/constants/support_assistant_availability.dart';
+import '../../support_assistant/support_assistant_screen.dart';
 import '../chat_provider.dart';
 import 'memory/memory_books_controls.dart';
 import 'memory/memory_books_toolbar.dart';
@@ -63,6 +65,27 @@ class _MemorySheetState extends ConsumerState<MemorySheet> {
   /// controller, so the sheet's header actions and FAB are driven from what
   /// the tab hands out rather than from the sheet reaching into it.
   MemoryBooksActions? _booksActions;
+  bool _assistantOpen = false;
+
+  /// Keep this ORIGINAL modal/tab/controller mounted beneath Astoria. Replacing
+  /// the router location would discard it and make its finite native port stale.
+  /// Navigation grants no read consent, edit authority or automatic book load.
+  Future<void> _openAssistant() async {
+    if (!mounted || _assistantOpen || widget.isOwnerCurrent?.call() == false) {
+      return;
+    }
+    _assistantOpen = true;
+    try {
+      await Navigator.of(context, rootNavigator: true).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              const SupportAssistantScreen(returnToPreviousRoute: true),
+        ),
+      );
+    } finally {
+      if (mounted) _assistantOpen = false;
+    }
+  }
 
   @override
   void initState() {
@@ -127,6 +150,19 @@ class _MemorySheetState extends ConsumerState<MemorySheet> {
         onChanged: (index) => _select(MemoryTab.values[index]),
       ),
       actions: [
+        if (supportAssistantWorkspaceEnabled &&
+            tab == MemoryTab.books &&
+            _booksActions != null)
+          SheetViewAction(
+            icon: MemoryCircleButton(
+              key: const ValueKey('memory_open_astoria'),
+              icon: Icons.support_agent_rounded,
+              label: 'Astoria',
+              onTap: () => unawaited(_openAssistant()),
+            ),
+            tooltip: 'Astoria',
+            onPressed: () => unawaited(_openAssistant()),
+          ),
         if (tab == MemoryTab.summary && session != null)
           _summarySettingsAction(session.id),
         if (tab == MemoryTab.books && _booksActions != null)

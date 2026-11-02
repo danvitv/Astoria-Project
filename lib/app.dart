@@ -24,6 +24,7 @@ import 'core/services/preset_seeder.dart';
 import 'features/chat_history/chat_history_provider.dart';
 import 'features/settings/api_list_provider.dart';
 import 'features/settings/app_settings_provider.dart';
+import 'features/catalog/services/datacat_provider.dart';
 import 'shared/widgets/desktop_popup.dart';
 import 'shared/theme/theme_font_provider.dart';
 import 'core/services/onboarding_service.dart';
@@ -138,6 +139,11 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
   /// synchronous `activeApiConfigProvider` read sees a still-loading list and
   /// falsely reports "no API selected" on every fresh launch.
   void _warmInitialListProviders() {
+    // Retain the native extraction graph; constructing it neither identifies nor
+    // makes a catalog request. Public callbacks never manufacture a new owner.
+    _warmSubs.add(
+      ref.listenManual(datacatAnonymousExtractorProvider, (_, _) {}),
+    );
     _warmSubs.add(ref.listenManual(chatHistoryProvider, (_, _) {}));
     _warmSubs.add(
       ref.listenManual(

@@ -20,6 +20,7 @@ import '../image_gen_capabilities.dart';
 import '../image_gen_models.dart';
 import '../image_gen_provider.dart';
 import '../services/image_gen_connection_service.dart';
+import '../services/image_gen_service.dart' show ImageGenErrorSanitizer;
 import '../services/naistera_image_provider.dart';
 import 'a1111_fields.dart';
 import 'comfyui_fields.dart';
@@ -45,8 +46,9 @@ class ImageGenSheet extends ConsumerStatefulWidget {
 class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
   late ImageGenSettings _settings;
   bool _isFetchingModels = false;
-  final ImageGenConnectionService _connectionService =
-      ImageGenConnectionService();
+  late final ImageGenConnectionService _connectionService;
+  late final bool Function(String) _publicRoutmyText;
+  late final ImageGenErrorSanitizer _errors;
   final ScrollController _scrollController = ScrollController();
   int _connectionEpoch = 0;
   ApiConnectionStatus _connectionStatus = ApiConnectionStatus.idle;
@@ -56,14 +58,36 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
   @override
   void initState() {
     super.initState();
+    _publicRoutmyText = ref
+        .read(imageRoutmyCredentialOwnerProvider)
+        .capturePublicTextGuard();
+    _errors = ImageGenErrorSanitizer(
+      routmyCredentials: ref.read(imageRoutmyCredentialOwnerProvider),
+    );
+    _connectionService = ImageGenConnectionService(
+      routmyCredentials: ref.read(imageRoutmyCredentialOwnerProvider),
+    );
     _settings =
         ref.read(imageGenSettingsProvider).value ?? const ImageGenSettings();
   }
 
   void _update(ImageGenSettings s) {
+    if (!_publicRoutmyText(s.routmyModel) ||
+        !s.routmyModels.every(
+          (model) =>
+              _publicRoutmyText(model.id) && _publicRoutmyText(model.name),
+        )) {
+      if (mounted)
+        setState(() => _connectionError = 'Image model selection unavailable');
+      return;
+    }
     final connectionChanged = _hasConnectionChanged(_settings, s);
     _settings = s;
-    ref.read(imageGenSettingsProvider.notifier).save(s);
+    ref.read(imageGenSettingsProvider.notifier).save(s).catchError((Object _) {
+      if (mounted) {
+        setState(() => _connectionError = 'Image settings could not be saved');
+      }
+    });
     // Nothing is probed automatically — but a verdict about the old endpoint
     // must not linger once the connection settings change under it.
     if (!s.enabled || connectionChanged) {
@@ -89,7 +113,6 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       before.naisteraApiKey != after.naisteraApiKey ||
       before.xai.apiKey != after.xai.apiKey ||
       before.xai.endpoint != after.xai.endpoint ||
-      before.routmyApiKey != after.routmyApiKey ||
       before.routmyMirror != after.routmyMirror ||
       before.openrouter.apiKey != after.openrouter.apiKey ||
       before.openrouter.endpoint != after.openrouter.endpoint ||
@@ -102,11 +125,22 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       before.comfyui.endpoint != after.comfyui.endpoint ||
       before.comfyui.apiKey != after.comfyui.apiKey;
 
+  void _invalidateRoutmyAuth() {
+    _connectionEpoch++;
+    _connectionStatus = ApiConnectionStatus.idle;
+    _connectionError = '';
+    _modelFetchError = '';
+    if (mounted) setState(() {});
+  }
+
   /// Probes the provider. Only ever runs from a tap on the status badge — the
   /// sheet never reaches out on its own.
   Future<void> _checkConnection() async {
     final settings = _settings;
     if (!settings.enabled) return;
+    final ownsAuth = settings.apiType == ImageGenApiType.routmy
+        ? ref.read(imageRoutmyCredentialOwnerProvider).captureGuard()
+        : () => true;
     final epoch = ++_connectionEpoch;
     setState(() {
       _connectionStatus = ApiConnectionStatus.connecting;
@@ -119,13 +153,15 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
         llmEndpoint: apiConfig?.endpoint ?? '',
         llmApiKey: apiConfig?.apiKey ?? '',
       );
-      if (!mounted || epoch != _connectionEpoch) return;
+      if (!mounted || !ownsAuth() || epoch != _connectionEpoch) return;
       setState(() => _connectionStatus = ApiConnectionStatus.connected);
     } catch (error) {
-      if (!mounted || epoch != _connectionEpoch) return;
+      if (!mounted || !ownsAuth() || epoch != _connectionEpoch) return;
       setState(() {
         _connectionStatus = ApiConnectionStatus.failed;
-        _connectionError = error.toString().replaceFirst('Bad state: ', '');
+        _connectionError = _errors
+            .sanitize(error.toString())
+            .replaceFirst('Bad state: ', '');
       });
     }
   }
@@ -159,6 +195,12 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(imageRoutmyAuthProvider, (previous, next) {
+      if (previous?.value?.revision != next.value?.revision ||
+          previous?.value?.unavailable != next.value?.unavailable) {
+        _invalidateRoutmyAuth();
+      }
+    });
     final s = _settings;
 
     return SheetView(
@@ -387,7 +429,12 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       case ImageGenApiType.naistera:
         return buildNaisteraConnectionFields(s, _update);
       case ImageGenApiType.routmy:
-        return buildRoutmyConnectionFields(s, context, _update);
+        return buildRoutmyConnectionFields(
+          s,
+          context,
+          _update,
+          _invalidateRoutmyAuth,
+        );
       case ImageGenApiType.xai:
         return buildXaiConnectionFields(s, _update);
       case ImageGenApiType.openrouter:
@@ -424,8 +471,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       backgroundColor: Colors.transparent,
       builder: (_) => ComfyUiWorkflowSheet(
         settings: _settings.comfyui,
-        onUpdate: (comfyui) =>
-            _update(_settings.copyWith(comfyui: comfyui)),
+        onUpdate: (comfyui) => _update(_settings.copyWith(comfyui: comfyui)),
       ),
     );
   }
@@ -452,6 +498,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       case ImageGenApiType.routmy:
         return buildRoutmyModelFields(
           s,
+          isPublicText: _publicRoutmyText,
           isFetching: _isFetchingModels,
           onFetchModels: _onFetchModels,
           onUpdate: _update,
@@ -577,10 +624,21 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
   /// Loads the rout.my catalog and stores it with the `/images/edits`
   /// capability each entry advertises, so the reference gate follows the API.
   Future<List<String>> _fetchRoutmyModels() async {
-    final catalog = await _connectionService.fetchRoutmyModels(_settings);
-    if (catalog.isEmpty) return const [];
-    _update(_settings.copyWith(routmyModels: catalog));
-    return catalog.map((model) => model.id).toList();
+    final settings = _settings;
+    final epoch = _connectionEpoch;
+    final current = ref.read(imageRoutmyCredentialOwnerProvider).captureGuard();
+    final catalog = await _connectionService.fetchRoutmyModels(settings);
+    if (!mounted || !current() || epoch != _connectionEpoch || catalog.isEmpty)
+      return const [];
+    final publicCatalog = catalog
+        .where(
+          (model) =>
+              _publicRoutmyText(model.id) && _publicRoutmyText(model.name),
+        )
+        .toList();
+    if (publicCatalog.isEmpty) return const [];
+    _update(_settings.copyWith(routmyModels: publicCatalog));
+    return publicCatalog.map((model) => model.id).toList();
   }
 
   bool _isSelectedModel(String model) => switch (_settings.apiType) {
@@ -625,9 +683,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
         _update(_settings.copyWith(routmyModel: model));
       case ImageGenApiType.novelai:
         _update(
-          _settings.copyWith(
-            novelai: _settings.novelai.copyWith(model: model),
-          ),
+          _settings.copyWith(novelai: _settings.novelai.copyWith(model: model)),
         );
       default:
         _update(_settings.copyWith(customModel: model));
@@ -635,11 +691,18 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
   }
 
   Future<void> _onFetchModels() async {
+    final routmy = _settings.apiType == ImageGenApiType.routmy;
+    final epoch = _connectionEpoch;
+    final ownsRoutmy = routmy
+        ? ref.read(imageRoutmyCredentialOwnerProvider).captureGuard()
+        : () => true;
+    bool current() =>
+        mounted && ownsRoutmy() && (!routmy || epoch == _connectionEpoch);
     setState(() => _isFetchingModels = true);
     final apiConfig = ref.read(activeApiConfigProvider);
     try {
       final models = await _fetchModelsForProvider(apiConfig);
-      if (!mounted) return;
+      if (!current()) return;
       if (models.isEmpty) {
         setState(() => _modelFetchError = 'imggen_no_models'.tr());
         return;
@@ -648,15 +711,20 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       _showOptions<String>(
         title: 'Image models',
         items: models,
-        labelBuilder: (model) => model,
+        labelBuilder: (model) =>
+            _settings.apiType != ImageGenApiType.routmy ||
+                _publicRoutmyText(model)
+            ? model
+            : 'Model unavailable',
         isSelected: _isSelectedModel,
         onSelected: _applyModel,
       );
     } catch (error) {
-      if (!mounted) return;
+      if (!current()) return;
       setState(
-        () =>
-            _modelFetchError = error.toString().replaceFirst('Bad state: ', ''),
+        () => _modelFetchError = _errors
+            .sanitize(error.toString())
+            .replaceFirst('Bad state: ', ''),
       );
     } finally {
       if (mounted) setState(() => _isFetchingModels = false);

@@ -1,8 +1,15 @@
 import 'dart:convert';
+import 'dart:async';
 
 // ignore_for_file: prefer_initializing_formals
 
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../../core/credentials/cloud_oauth_mobile_metadata.dart';
+import '../../../core/credentials/cloud_oauth_credential_owner.dart';
+import '../../../core/credentials/credential_vault.dart';
+import '../../../core/credentials/secret_redaction_coordinator.dart';
+import '../../../core/preferences/tracked_shared_preferences.dart';
 
 import '../../../core/services/generation_notification_service.dart';
 import '../../../core/models/lorebook.dart';
@@ -70,8 +77,114 @@ class SyncService {
   bool _operationInProgress = false;
   bool _isDiagnosingConflicts = false;
 
-  final DropboxAuth _dropboxAuth = DropboxAuth();
-  final GDriveAuth _gdriveAuth = GDriveAuth();
+  final DropboxAuth _dropboxAuth;
+  final GDriveAuth _gdriveAuth;
+  final Future<SharedPreferences>? _originalPreferences;
+  final SecretRedactionCoordinator _redaction;
+  bool _disposed = false;
+  int _workflowEpoch = 0;
+  final Object _workflowKey = Object();
+  bool Function()? _publicationGuard;
+  List<bool Function()>? _publicationClauses;
+  final Map<SyncProvider, String> _storageWarnings = {};
+  String? _metadataWarning;
+  String? _disconnectWarning;
+  int _acknowledgedPreferenceWrites = 0;
+
+  Future<void> _writePreference(Future<bool> Function() original) async {
+    _checkWorkflow();
+    if (!await original())
+      throw StateError('Cloud preference write not acknowledged');
+    _acknowledgedPreferenceWrites++;
+    try {
+      _checkWorkflow();
+    } catch (_) {
+      throw SyncWorkflowRetired(_acknowledgedPreferenceWrites);
+    }
+  }
+
+  String? get warning =>
+      _disconnectWarning ??
+      (_provider == SyncProvider.gdrive ? _metadataWarning : null) ??
+      _storageWarnings[_provider];
+  Map<SyncProvider, String> get storageWarnings =>
+      Map.unmodifiable(_storageWarnings);
+
+  bool Function() capturePublicationGuard() {
+    final epoch = _workflowEpoch;
+    final issued = _publicationClauses;
+    // Retain this workflow's actual admission object. Later genuine clauses
+    // may be added to it; a later workflow never replaces this captured object.
+    return () =>
+        !_disposed &&
+        epoch == _workflowEpoch &&
+        (issued?.every((guard) => guard()) ?? true);
+  }
+
+  void _checkWorkflow() {
+    final guard = Zone.current[_workflowKey] as bool Function()?;
+    if (_disposed ||
+        guard?.call() == false ||
+        _publicationGuard?.call() == false) {
+      throw const CredentialVaultAdmissionDenied();
+    }
+  }
+
+  Future<T> _workflow<T>(Future<T> Function() action, {bool oauth = false}) {
+    final inherited = Zone.current[_workflowKey] as bool Function()?;
+    final protected = _provider == SyncProvider.dropbox
+        ? _dropboxAuth.hasWorkflowOwner
+        : _gdriveAuth.hasWorkflowOwner;
+    if (inherited != null) {
+      _checkWorkflow();
+      if (!oauth || !protected) return action();
+      Future<T> child() {
+        final credential = _provider == SyncProvider.dropbox
+            ? _dropboxAuth.requests.guard
+            : _gdriveAuth.requests.guard;
+        bool owned() => inherited() && credential();
+        _publicationGuard = owned;
+        _publicationClauses!.add(owned);
+        return runZoned(() async {
+          _checkWorkflow();
+          final result = await action();
+          _checkWorkflow();
+          return result;
+        }, zoneValues: {_workflowKey: owned});
+      }
+
+      return _provider == SyncProvider.dropbox
+          ? _dropboxAuth.requests.run(child)
+          : _gdriveAuth.requests.run(child);
+    }
+    final epoch = ++_workflowEpoch;
+    _acknowledgedPreferenceWrites = 0;
+    final provider = _provider;
+    bool current() =>
+        !_disposed &&
+        epoch == _workflowEpoch &&
+        (!oauth || provider == _provider);
+    Future<T> run() => runZoned(() async {
+      final credential = oauth && protected
+          ? (provider == SyncProvider.dropbox
+                ? _dropboxAuth.requests.guard
+                : _gdriveAuth.requests.guard)
+          : (() => true);
+      bool owned() => current() && credential();
+      _publicationGuard = owned;
+      _publicationClauses = [owned];
+      return runZoned(() async {
+        _checkWorkflow();
+        final value = await action();
+        _checkWorkflow();
+        return value;
+      }, zoneValues: {_workflowKey: owned});
+    });
+    if (!oauth || !protected) return run();
+    return provider == SyncProvider.dropbox
+        ? _dropboxAuth.requests.run(run)
+        : _gdriveAuth.requests.run(run);
+  }
 
   SyncProvider get provider => _provider;
   SyncStatus get status => _status;
@@ -103,7 +216,11 @@ class SyncService {
     if (_provider != SyncProvider.gdrive) return null;
     final adapter = _adapter;
     if (adapter is GDriveAdapter) {
-      return await adapter.getGlazeFolderId();
+      final folder = await _workflow(adapter.getGlazeFolderId, oauth: true);
+      _checkWorkflow();
+      if (_gdriveAuth.usesNativeCustody) await _saveTokens();
+      _checkWorkflow();
+      return folder;
     }
     return null;
   }
@@ -139,12 +256,20 @@ class SyncService {
     Future<void> Function(Set<String>)? reconcilePulledSessions,
     Future<String> Function(String)? diagnosticDownload,
     CloudAdapter Function(SyncProvider)? selectAdapter,
+    DropboxAuth? dropboxAuth,
+    GDriveAuth? gdriveAuth,
+    Future<SharedPreferences>? originalPreferences,
+    SecretRedactionCoordinator? redaction,
   }) : _sessionDeletionStore = sessionDeletionStore,
        _characterDeletionStore = characterDeletionStore,
        _saveLorebookActivations = saveLorebookActivations,
        _reconcilePulledSessions = reconcilePulledSessions,
        _diagnosticDownload = diagnosticDownload,
-       _selectAdapter = selectAdapter;
+       _selectAdapter = selectAdapter,
+       _dropboxAuth = dropboxAuth ?? DropboxAuth(),
+       _gdriveAuth = gdriveAuth ?? GDriveAuth(),
+       _originalPreferences = originalPreferences,
+       _redaction = redaction ?? SecretRedactionCoordinator();
 
   CloudAdapter get _adapter {
     final selector = _selectAdapter;
@@ -158,6 +283,7 @@ class SyncService {
   }
 
   SyncManifestBuilder get _manifestBuilder => SyncManifestBuilder(
+    checkCurrent: _checkWorkflow,
     characterRepo: _characterRepo,
     chatRepo: _chatRepo,
     personaRepo: _personaRepo,
@@ -216,6 +342,7 @@ class SyncService {
     300,
     const Duration(seconds: 2),
     _rewriteJobHistoryStore,
+    _checkWorkflow,
   );
 
   Future<void> init() async {
@@ -223,23 +350,61 @@ class SyncService {
   }
 
   Future<void> _init() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs =
+        await (_originalPreferences ?? TrackedSharedPreferences.getInstance());
+    _checkWorkflow();
     final providerStr = prefs.getString('gz_sync_provider');
     if (providerStr == 'gdrive') _provider = SyncProvider.gdrive;
     _autoSyncEnabled = prefs.getBool('gz_sync_auto') ?? false;
     _autoSyncMessageCount = prefs.getInt('gz_sync_auto_count') ?? 5;
     _lastSyncTime = prefs.getInt('gz_sync_last');
 
-    final tokensRaw = prefs.getString('gz_sync_tokens');
-    if (tokensRaw != null) {
-      final tokens = jsonDecode(tokensRaw) as Map<String, dynamic>;
-      _dropboxAuth.loadTokens(tokens);
-      _gdriveAuth.loadTokens(tokens);
+    if (_gdriveAuth.usesNativeCustody) {
+      try {
+        final tokensRaw = prefs.getString('gz_sync_tokens');
+        if (tokensRaw != null) {
+          final tokens = jsonDecode(tokensRaw) as Map<String, dynamic>;
+          _gdriveAuth.loadTokens(tokens);
+        }
+      } catch (_) {
+        _metadataWarning =
+            'Google Drive metadata unavailable; reconnect explicitly';
+      }
+    }
+
+    if (_dropboxAuth.hasWorkflowOwner || _gdriveAuth.hasWorkflowOwner) {
+      for (final provider in SyncProvider.values) {
+        try {
+          if (provider == SyncProvider.dropbox) {
+            await _dropboxAuth.restoreTokens();
+          } else {
+            await _gdriveAuth.restoreTokens();
+          }
+          _checkWorkflow();
+          _storageWarnings.remove(provider);
+        } catch (_) {
+          _checkWorkflow();
+          _storageWarnings[provider] = provider == SyncProvider.dropbox
+              ? 'Dropbox protected credentials unavailable; reconnect explicitly'
+              : 'Google Drive protected credentials unavailable; reconnect explicitly';
+        }
+      }
     }
 
     await _gdriveAuth.restoreNativeSession();
+    _checkWorkflow();
 
-    _accountInfo = await _adapter.getAccountInfo();
+    if (!_storageWarnings.containsKey(_provider)) {
+      try {
+        await _workflow(() async {
+          final info = await _adapter.getAccountInfo();
+          _checkWorkflow();
+          _accountInfo = info;
+        }, oauth: true);
+      } catch (_) {
+        _checkWorkflow();
+      }
+    }
   }
 
   Future<void> setProvider(SyncProvider p) async {
@@ -249,8 +414,14 @@ class SyncService {
   Future<void> _setProvider(SyncProvider p) async {
     _provider = p;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('gz_sync_provider', p.name);
-    _accountInfo = await _adapter.getAccountInfo();
+    _checkWorkflow();
+    await _writePreference(() => prefs.setString('gz_sync_provider', p.name));
+    _checkWorkflow();
+    await _workflow(() async {
+      final info = await _adapter.getAccountInfo();
+      _checkWorkflow();
+      _accountInfo = info;
+    }, oauth: true);
   }
 
   Future<void> fullPush({
@@ -272,11 +443,18 @@ class SyncService {
             onProgress: onProgress ?? (_) {},
             includeApiKeys: includeApiKeys,
           );
+          _checkWorkflow();
           _lastSyncTime = DateTime.now().millisecondsSinceEpoch;
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setInt('gz_sync_last', _lastSyncTime!);
+          _checkWorkflow();
+          await _writePreference(
+            () => prefs.setInt('gz_sync_last', _lastSyncTime!),
+          );
+          _checkWorkflow();
           _status = SyncStatus.idle;
         } catch (e) {
+          if (e is CloudOAuthRetiredCommit) rethrow;
+          _checkWorkflow();
           _lastError = e.toString();
           _status = SyncStatus.error;
           rethrow;
@@ -305,20 +483,28 @@ class SyncService {
           await engine.pullEntities(
             onProgress: onProgress ?? (_) {},
             onConflict: (c) {
+              _checkWorkflow();
               if (_conflicts.every((existing) => existing.key != c.key)) {
                 _conflicts.add(c);
               }
             },
           );
+          _checkWorkflow();
           if (_conflicts.isNotEmpty) {
             _status = SyncStatus.conflict;
           } else {
             _lastSyncTime = DateTime.now().millisecondsSinceEpoch;
             final prefs = await SharedPreferences.getInstance();
-            await prefs.setInt('gz_sync_last', _lastSyncTime!);
+            _checkWorkflow();
+            await _writePreference(
+              () => prefs.setInt('gz_sync_last', _lastSyncTime!),
+            );
+            _checkWorkflow();
             _status = SyncStatus.idle;
           }
         } catch (e) {
+          if (e is CloudOAuthRetiredCommit) rethrow;
+          _checkWorkflow();
           _lastError = e.toString();
           _status = SyncStatus.error;
           rethrow;
@@ -333,10 +519,13 @@ class SyncService {
     void Function(SyncProgress)? onProgress,
     bool? includeApiKeys,
   }) async {
-    await fullPush(onProgress: onProgress, includeApiKeys: includeApiKeys);
-    if (_status != SyncStatus.error) {
-      await fullPull(onProgress: onProgress);
-    }
+    if (_operationInProgress)
+      throw StateError('Sync operation already in progress');
+    await _workflow(() async {
+      await fullPush(onProgress: onProgress, includeApiKeys: includeApiKeys);
+      _checkWorkflow();
+      if (_status != SyncStatus.error) await fullPull(onProgress: onProgress);
+    }, oauth: true);
   }
 
   Future<void> wipeCloudData({void Function(SyncProgress)? onProgress}) async {
@@ -352,11 +541,15 @@ class SyncService {
       try {
         final engine = _engine;
         await engine.wipeCloudData(onProgress: onProgress ?? (_) {});
+        _checkWorkflow();
         await _manifestBuilder.clearLocalManifest();
+        _checkWorkflow();
         _conflicts.clear();
         _resolvedAsCloud.clear();
         _status = SyncStatus.idle;
       } catch (e) {
+        if (e is CloudOAuthRetiredCommit) rethrow;
+        _checkWorkflow();
         _lastError = e.toString();
         _status = SyncStatus.error;
         rethrow;
@@ -418,13 +611,20 @@ class SyncService {
                 : null,
             pushLocalChanges: _resolvedAsLocal,
           );
+          _checkWorkflow();
           _resolvedAsCloud.clear();
           _resolvedAsLocal = false;
           _lastSyncTime = DateTime.now().millisecondsSinceEpoch;
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setInt('gz_sync_last', _lastSyncTime!);
+          _checkWorkflow();
+          await _writePreference(
+            () => prefs.setInt('gz_sync_last', _lastSyncTime!),
+          );
+          _checkWorkflow();
           _status = SyncStatus.idle;
         } catch (e) {
+          if (e is CloudOAuthRetiredCommit) rethrow;
+          _checkWorkflow();
           _lastError = e.toString();
           _status = SyncStatus.error;
           rethrow;
@@ -443,8 +643,15 @@ class SyncService {
       throw StateError('Sync operation already in progress');
     }
     _operationInProgress = true;
+    bool Function()? issued;
     try {
-      await _engine.resolveConflict(conflict, choice);
+      final pending = _workflow(
+        () => _engine.resolveConflict(conflict, choice),
+        oauth: true,
+      );
+      issued = capturePublicationGuard();
+      await pending;
+      if (!issued()) throw const CredentialVaultAdmissionDenied();
       if (choice == 'cloud') {
         _resolvedAsCloud.add(conflict.key);
       } else {
@@ -452,6 +659,8 @@ class SyncService {
       }
       _conflicts.removeWhere((c) => c.key == conflict.key);
     } catch (e) {
+      if (e is CloudOAuthRetiredCommit) rethrow;
+      if (_disposed || issued?.call() == false) rethrow;
       _lastError = e.toString();
       _status = SyncStatus.error;
       rethrow;
@@ -480,13 +689,20 @@ class SyncService {
                 : null,
             pushLocalChanges: _resolvedAsLocal,
           );
+          _checkWorkflow();
           _resolvedAsCloud.clear();
           _resolvedAsLocal = false;
           _lastSyncTime = DateTime.now().millisecondsSinceEpoch;
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setInt('gz_sync_last', _lastSyncTime!);
+          _checkWorkflow();
+          await _writePreference(
+            () => prefs.setInt('gz_sync_last', _lastSyncTime!),
+          );
+          _checkWorkflow();
           _status = SyncStatus.idle;
         } catch (e) {
+          if (e is CloudOAuthRetiredCommit) rethrow;
+          _checkWorkflow();
           _lastError = e.toString();
           _status = SyncStatus.error;
           rethrow;
@@ -498,12 +714,16 @@ class SyncService {
   }
 
   Future<void> _withSyncForeground(Future<void> Function() action) async {
-    await GenerationNotificationService.instance.onSyncStarted();
-    try {
-      await action();
-    } finally {
-      await GenerationNotificationService.instance.onSyncFinished();
-    }
+    await _workflow(() async {
+      await GenerationNotificationService.instance.onSyncStarted();
+      try {
+        _checkWorkflow();
+        await action();
+        _checkWorkflow();
+      } finally {
+        await GenerationNotificationService.instance.onSyncFinished();
+      }
+    }, oauth: true);
   }
 
   Future<void> connectDropbox() async {
@@ -511,9 +731,19 @@ class SyncService {
   }
 
   Future<void> _connectDropbox() async {
-    await _dropboxAuth.connect();
-    await _saveTokens();
-    _accountInfo = await _adapter.getAccountInfo();
+    final pending = _dropboxAuth.connect();
+    final credential = _dropboxAuth.captureConnectionGuard();
+    final lifecycle = _publicationGuard!;
+    _publicationGuard = () => lifecycle() && credential();
+    _publicationClauses!.add(credential);
+    await pending;
+    _checkWorkflow();
+    if (!credential()) throw const CredentialVaultAdmissionDenied();
+    _storageWarnings.remove(SyncProvider.dropbox);
+    _disconnectWarning = null;
+    final info = await _adapter.getAccountInfo();
+    _checkWorkflow();
+    _accountInfo = info;
   }
 
   Future<void> connectGDrive() async {
@@ -521,9 +751,21 @@ class SyncService {
   }
 
   Future<void> _connectGDrive() async {
-    await _gdriveAuth.connect();
+    final pending = _gdriveAuth.connect();
+    final credential = _gdriveAuth.captureConnectionGuard();
+    final lifecycle = _publicationGuard!;
+    _publicationGuard = () => lifecycle() && credential();
+    _publicationClauses!.add(credential);
+    await pending;
+    _checkWorkflow();
+    if (!credential()) throw const CredentialVaultAdmissionDenied();
+    _storageWarnings.remove(SyncProvider.gdrive);
+    _disconnectWarning = null;
     await _saveTokens();
-    _accountInfo = await _adapter.getAccountInfo();
+    _checkWorkflow();
+    final info = await _adapter.getAccountInfo();
+    _checkWorkflow();
+    _accountInfo = info;
   }
 
   Future<void> disconnect() async {
@@ -531,21 +773,32 @@ class SyncService {
   }
 
   Future<void> _disconnect() async {
+    late Future<CloudOAuthDisconnectOutcome> pending;
     switch (_provider) {
       case SyncProvider.dropbox:
-        await _dropboxAuth.disconnect();
+        pending = _dropboxAuth.disconnect();
         break;
       case SyncProvider.gdrive:
-        await _gdriveAuth.disconnect();
+        pending = _gdriveAuth.disconnect();
         break;
     }
+    final credential = _provider == SyncProvider.dropbox
+        ? _dropboxAuth.requests.captureGuard()
+        : _gdriveAuth.requests.captureGuard();
+    final lifecycle = _publicationGuard!;
+    _publicationGuard = () => lifecycle() && credential();
+    _publicationClauses!.add(credential);
+    final result = await pending;
+    _checkWorkflow();
+    _disconnectWarning = result.warning;
     _accountInfo = null;
     _conflicts.clear();
     _resolvedAsCloud.clear();
     _lastSyncTime = null;
     _status = SyncStatus.idle;
     await _manifestBuilder.clearLocalManifest();
-    await _saveTokens();
+    _checkWorkflow();
+    if (_provider == SyncProvider.gdrive) await _saveTokens();
   }
 
   Future<void> setAutoSync(bool enabled, {int messageCount = 5}) async {
@@ -556,8 +809,13 @@ class SyncService {
     _autoSyncEnabled = enabled;
     _autoSyncMessageCount = messageCount;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('gz_sync_auto', enabled);
-    await prefs.setInt('gz_sync_auto_count', messageCount);
+    _checkWorkflow();
+    await _writePreference(() => prefs.setBool('gz_sync_auto', enabled));
+    _checkWorkflow();
+    await _writePreference(
+      () => prefs.setInt('gz_sync_auto_count', messageCount),
+    );
+    _checkWorkflow();
   }
 
   Future<void> incrementMessageCounter() async {
@@ -586,12 +844,13 @@ class SyncService {
   }
 
   Future<T> _withAdapterOperation<T>(Future<T> Function() action) async {
+    if (_disposed) throw StateError('Cloud sync owner retired');
     if (_operationInProgress) {
       throw StateError('Sync operation already in progress');
     }
     _operationInProgress = true;
     try {
-      return await action();
+      return await _workflow(action);
     } finally {
       _operationInProgress = false;
     }
@@ -614,18 +873,20 @@ class SyncService {
     _operationInProgress = true;
     _isDiagnosingConflicts = true;
     try {
-      final downloader = SyncConflictDiagnosticDownload(_adapter);
-      if (!downloader.supported) {
-        return await SyncConflictDiagnostics(
-          readLocal: (_, _) => throw const SyncDiagnosticAdapterUnsupported(),
-          download: downloader.download,
-          adapterSupported: false,
-        ).diagnose(conflicts);
-      }
-      return await _engine.diagnoseConflicts(
-        conflicts,
-        diagnosticDownload: _diagnosticDownload ?? downloader.download,
-      );
+      return await _workflow(() async {
+        final downloader = SyncConflictDiagnosticDownload(_adapter);
+        if (!downloader.supported) {
+          return await SyncConflictDiagnostics(
+            readLocal: (_, _) => throw const SyncDiagnosticAdapterUnsupported(),
+            download: downloader.download,
+            adapterSupported: false,
+          ).diagnose(conflicts);
+        }
+        return await _engine.diagnoseConflicts(
+          conflicts,
+          diagnosticDownload: _diagnosticDownload ?? downloader.download,
+        );
+      }, oauth: true);
     } catch (_) {
       return SyncConflictDiagnosticReport(
         status: SyncDiagnosticStatus.unavailable,
@@ -637,12 +898,35 @@ class SyncService {
   }
 
   Future<void> _saveTokens() async {
-    final prefs = await SharedPreferences.getInstance();
-    final dbTokens = _dropboxAuth.saveTokens();
-    final gdTokens = _gdriveAuth.saveTokens();
-    final merged = <String, dynamic>{};
-    if (dbTokens != null) merged.addAll(dbTokens);
-    if (gdTokens != null) merged.addAll(gdTokens);
-    await prefs.setString('gz_sync_tokens', jsonEncode(merged));
+    // Each persisted OAuth owner already verified its atomic secure record.
+    // Mobile Google retains the SDK and its original metadata-only semantics.
+    if (!_gdriveAuth.usesNativeCustody) return;
+    _checkWorkflow();
+    final original = capturePublicationGuard();
+    try {
+      final result = await saveCloudOAuthMobileMetadata(
+        originalPreferences:
+            _originalPreferences ?? TrackedSharedPreferences.getInstance(),
+        connected: _gdriveAuth.isConnected,
+        folderId: _gdriveAuth.folderId,
+        redaction: _redaction,
+        isCurrent: original,
+      );
+      result.requireCurrent(original);
+      _checkWorkflow();
+      _metadataWarning = null;
+    } catch (error) {
+      if (error is CloudOAuthRetiredCommit) rethrow;
+      _checkWorkflow();
+      // SDK success is independent of a refused legacy-document metadata save.
+      _metadataWarning =
+          'Google Drive connected state retained; metadata could not be saved';
+    }
+  }
+
+  void dispose() {
+    _disposed = true;
+    _dropboxAuth.dispose();
+    _gdriveAuth.dispose();
   }
 }

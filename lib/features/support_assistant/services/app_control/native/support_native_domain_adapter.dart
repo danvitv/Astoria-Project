@@ -1,6 +1,10 @@
 import '../../../../../core/db/repositories/chat_repo.dart';
 import '../../../models/support_app_action.dart';
 import 'support_native_domain_sources.dart';
+import 'support_native_session_title_adapter.dart';
+import 'support_native_memory_entry_adapter.dart';
+import 'support_native_active_selection_adapter.dart';
+import 'support_native_global_regex_adapter.dart';
 
 /// Finite native composition. Repositories still own every domain patch/CAS;
 /// this adds only exact ROOT admission and original source/queue lifetime.
@@ -32,15 +36,30 @@ final class SupportNativeDomainAdapter implements SupportAppActionAdapter {
     final operation = SupportAppDomainOperation.forAction(action);
     if (operation == null || context.domainRoot == null) return prepared;
     final isMemory = action.startsWith('astoria_memory_');
+    final isTitle =
+        operation == SupportAppDomainOperation.sessionRename ||
+        operation == SupportAppDomainOperation.sessionTitleUndo;
     final isRepair =
         operation == SupportAppDomainOperation.sessionRepair ||
         operation == SupportAppDomainOperation.sessionUndo;
-    final queued = isMemory
+    final queued = isTitle && adapter is SupportNativeSessionTitleAdapter
+        ? (adapter as SupportNativeSessionTitleAdapter).targetSession(
+            action,
+            arguments,
+            context,
+          )
+        : adapter is SupportNativeMemoryEntryAdapter
+        ? (adapter as SupportNativeMemoryEntryAdapter).targetSession(
+            action,
+            arguments,
+            context,
+          )
+        : isMemory
         ? arguments['sessionId'] as String?
         : isRepair
         ? repairSession?.call(action, arguments, context)
         : null;
-    if ((isMemory || isRepair) && queued == null) return null;
+    if ((isMemory || isRepair || isTitle) && queued == null) return null;
     final fresh =
         arguments['operation'] == 'create' &&
         const {
@@ -49,7 +68,24 @@ final class SupportNativeDomainAdapter implements SupportAppActionAdapter {
           SupportAppDomainOperation.lorebook,
           SupportAppDomainOperation.preset,
         }.contains(operation);
-    final ids = queued != null
+    // Selection/regex already captured ONE original inventory before target reads.
+    // The same observation owns confirmation, admission, final CAS and Undo.
+    final selectionCollateral = adapter is SupportNativeActiveSelectionAdapter
+        ? (adapter as SupportNativeActiveSelectionAdapter).collateralFor(
+            prepared.observation,
+          )
+        : adapter is SupportNativeGlobalRegexAdapter
+        ? (adapter as SupportNativeGlobalRegexAdapter).collateralFor(
+            prepared.observation,
+          )
+        : null;
+    if ((adapter is SupportNativeActiveSelectionAdapter ||
+            adapter is SupportNativeGlobalRegexAdapter) &&
+        selectionCollateral == null)
+      return null;
+    final ids = selectionCollateral != null
+        ? selectionCollateral.checkpoints.keys.toList()
+        : queued != null
         ? <String>[queued]
         : fresh
         ? <String>[]
@@ -59,11 +95,9 @@ final class SupportNativeDomainAdapter implements SupportAppActionAdapter {
     if (!context.current) return null;
     // Content/global configuration can be used by any session. Conservative
     // all-session admission is explicit collateral, never guessed bindings.
-    final observed = sources.observe(
-      ids,
-      queuedSession: queued,
-      allowMaintenance: isRepair,
-    );
+    final observed =
+        selectionCollateral ??
+        sources.observe(ids, queuedSession: queued, allowMaintenance: isRepair);
     if (observed == null) return null;
     return SupportAppPreparedAction(
       target: prepared.target,
@@ -107,7 +141,7 @@ final class SupportNativeDomainAdapter implements SupportAppActionAdapter {
             if (!scope.isCurrent) {
               return SupportAppActionOutcome(SupportAppActionCode.stale);
             }
-            if (queued == null && !fresh) {
+            if (queued == null && !fresh && selectionCollateral == null) {
               // Resolve the latest related session inventory in the native owner
               // before effect. New/removed sessions change confirmed collateral;
               // do not silently extend the already-admitted fence or plan.

@@ -11,6 +11,8 @@ import 'studio_stage_brief.dart';
 import 'controller_batcher.dart';
 import 'studio_turn_config_snapshot.dart';
 import 'studio/studio_context.dart';
+import 'diagnostics/studio_runtime_diagnostics.dart';
+import 'transport/llm_capture_context.dart';
 
 /// Runs the per-agent LLM calls of the Studio chat-time pipeline: the
 /// pre-gen tracker, the post-processing tracker, the individual (non-batch)
@@ -85,6 +87,7 @@ class StudioAgentExecutor {
     StudioAgent? finalAgent,
     StudioContext? finalContext,
     void Function(String text)? onIntermediateUpdate,
+    LlmCaptureContext? diagnosticContext,
   }) async {
     if (_briefParser.isMetaPolicyAgent(agent)) {
       return StudioStageBrief(
@@ -134,6 +137,7 @@ class StudioAgentExecutor {
         charName: context.macroContext.charName,
         userName: context.macroContext.userName,
         onIntermediateUpdate: onIntermediateUpdate,
+        diagnosticContext: diagnosticContext,
       );
       return StudioStageBrief(
         agentId: agent.id,
@@ -185,6 +189,10 @@ class StudioAgentExecutor {
     StudioTurnConfigSnapshot? turnConfig,
   }) async {
     String? lastError;
+    final call = StudioRuntimeDiagnostics.forRun(
+      cancelToken,
+      sessionId,
+    )?.newCall('studio.post_processing', agentId: agent.id);
     for (var attempt = 1; attempt <= 3; attempt++) {
       if (cancelToken.isCancelled) {
         return StudioStageBrief(
@@ -221,6 +229,7 @@ class StudioAgentExecutor {
           turnConfig: turnConfig,
           charName: context.macroContext.charName,
           userName: context.macroContext.userName,
+          diagnosticContext: call?.withAttempt(attempt),
         );
         final text = result.text.trim();
         return StudioStageBrief(
@@ -263,6 +272,9 @@ class StudioAgentExecutor {
     // A Think pass is a full-context, paid generation. Never silently resend
     // the same large request if it fails or yields an empty response.
     final maxAttempts = agent.reasoningMode == 'think-replacement' ? 1 : 3;
+    final diagnostics = StudioRuntimeDiagnostics.forRun(cancelToken, sessionId);
+    final call = diagnostics?.newCall('studio.controller', agentId: agent.id);
+    LlmCaptureContext? lastCall;
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       if (cancelToken.isCancelled) {
         return ControllerBatchResult.failed(
@@ -271,6 +283,7 @@ class StudioAgentExecutor {
           reason: 'cancelled',
         );
       }
+      lastCall = call?.withAttempt(attempt);
       try {
         final brief = await runTracker(
           agent: agent,
@@ -286,8 +299,16 @@ class StudioAgentExecutor {
           finalAgent: finalAgent,
           finalContext: finalContext,
           onIntermediateUpdate: onIntermediateUpdate,
+          diagnosticContext: lastCall,
         );
         if (brief.status == 'ok' && brief.brief.trim().isNotEmpty) {
+          if (!cancelToken.isCancelled) {
+            diagnostics?.record(
+              lastCall,
+              StudioRuntimeOutcome.executed,
+              StudioRuntimeReason.controllerAccepted,
+            );
+          }
           return ControllerBatchResult(
             agentId: agent.id,
             agentName: agent.name,
@@ -301,6 +322,13 @@ class StudioAgentExecutor {
       } catch (error) {
         lastError = formatError(error);
       }
+    }
+    if (!cancelToken.isCancelled) {
+      diagnostics?.record(
+        lastCall,
+        StudioRuntimeOutcome.blockingFailure,
+        StudioRuntimeReason.requiredTrackerFailed,
+      );
     }
     return ControllerBatchResult.failed(
       agentId: agent.id,

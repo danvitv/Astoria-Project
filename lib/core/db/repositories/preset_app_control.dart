@@ -51,7 +51,8 @@ extension PresetAppControl on PresetRepo {
         if (!current() || await getById(value.id) != null || !current()) {
           return false;
         }
-        await _db.into(_db.presets).insert(_toCompanion(value));
+        await _selectionTargetWrite(value.id,
+            () => _db.into(_db.presets).insert(_toCompanion(value)));
         return true;
       });
 
@@ -112,7 +113,7 @@ extension PresetAppControl on PresetRepo {
     }
     if (!current()) return false;
     final changed =
-        await (_db.update(_db.presets)..where(
+        await _selectionTargetWrite(row.presetId, () => (_db.update(_db.presets)..where(
               (t) =>
                   t.presetId.equals(row.presetId) &
                   t.dataJson.equals(row.dataJson),
@@ -124,7 +125,7 @@ extension PresetAppControl on PresetRepo {
                     ? Value(value!)
                     : const Value.absent(),
               ),
-            );
+            ));
     return changed == 1;
   });
 }

@@ -14,6 +14,7 @@ import 'package:glaze_flutter/features/chat/state/chat_native_owner_registry.dar
 import 'package:glaze_flutter/features/extensions/providers/extension_presets_provider.dart';
 import 'package:glaze_flutter/features/memory/state/memory_active_drafts_provider.dart';
 import 'package:glaze_flutter/features/memory/state/memory_book_revision_provider.dart';
+import 'package:glaze_flutter/features/memory/state/memory_native_entry_owner.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_app_control_content_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_app_control_session_memory_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_app_control_secondary_provider.dart';
@@ -50,6 +51,8 @@ void domainLoopTest(
       }
       screen.core.native.sql.afterSelect = null;
       screen.core.native.sql.afterWrite = null;
+      screen.core.native.sql.beforeOuterSend = null;
+      screen.core.native.sql.afterOuterSend = null;
       screen.core.native.primitive.afterEncrypt = null;
       screen.core.native.storage.beforeRead = null;
       screen.core.native.storage.beforeWrite = null;
@@ -109,6 +112,7 @@ final class DomainLoopFixture {
     memoryCatalogRepoProvider,
     memoryActiveDraftsProvider,
     memoryBookRevisionProvider,
+    memoryNativeEntryOwnerRegistryProvider,
     llmRequestCaptureRepoProvider,
     characterRevisionRepoProvider,
     characterSessionBaselineRepoProvider,

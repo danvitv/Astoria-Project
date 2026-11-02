@@ -3,12 +3,58 @@ import 'package:drift/drift.dart';
 import '../app_db.dart';
 import 'lorebook_use_manifest_repo.dart';
 
+// Process-local ORIGINAL repository inventory intent, not a durable revision or
+// an external-SQL/other-connection guarantee. Keep no private session content.
+final class _SessionInventoryLifetime {
+  Object event = Object();
+  int pending = 0;
+}
+
 /// The DB-only session cascade. The caller must provide the surrounding
 /// transaction so this can compose into larger atomic deletion operations.
 class SessionDeletionQueries {
   final AppDatabase _db;
 
   SessionDeletionQueries(this._db);
+
+  static final _inventories = Expando<_SessionInventoryLifetime>();
+  static _SessionInventoryLifetime _inventory(AppDatabase db) =>
+      _inventories[db] ??= _SessionInventoryLifetime();
+
+  static bool Function()? captureInventoryLifetime(AppDatabase db) {
+    final owner = _inventory(db);
+    if (owner.pending != 0) return null;
+    final event = owner.event;
+    var retired = false;
+    return () {
+      if (owner.pending != 0 || !identical(event, owner.event)) retired = true;
+      return !retired;
+    };
+  }
+
+  /// Begin before a native insert/delete/full replacement's first await. Failed
+  /// and same-identity intents retire old collateral too; settlement never renews.
+  static void Function() beginInventoryMutation(AppDatabase db) {
+    final owner = _inventory(db);
+    owner.event = Object();
+    owner.pending++;
+    var settled = false;
+    return () {
+      if (settled) return;
+      settled = true;
+      owner.pending--;
+    };
+  }
+
+  static Future<T> trackInventoryMutation<T>(
+      AppDatabase db, Future<T> Function() write) async {
+    final settle = beginInventoryMutation(db);
+    try {
+      return await write();
+    } finally {
+      settle();
+    }
+  }
 
   Future<void> deleteMessageDerivedRows({
     required String sessionId,
@@ -121,6 +167,15 @@ class SessionDeletionQueries {
   }
 
   Future<void> deleteSessionRows(String sessionId) async {
+    final settle = beginInventoryMutation(_db);
+    try {
+      await _deleteSessionRows(sessionId);
+    } finally {
+      settle();
+    }
+  }
+
+  Future<void> _deleteSessionRows(String sessionId) async {
     final session = await (_db.select(
       _db.chatSessions,
     )..where((row) => row.sessionId.equals(sessionId))).getSingleOrNull();

@@ -93,6 +93,30 @@ final class CredentialVault {
     return _writeVerified(key, secret);
   });
 
+  /// Migration admission belongs inside the slot FIFO and is checked again
+  /// after the absence read, immediately before invoking storage. An invoked
+  /// write still settles its original verification; retirement is not rollback.
+  Future<CredentialMetadata> importIfAbsentGuarded(
+    CredentialSlot slot,
+    String secret, {
+    required bool Function() isCurrent,
+  }) => _serialize(slot, (key) async {
+    _requireAdmission(isCurrent);
+    final current = await _read(key);
+    _requireAdmission(isCurrent);
+    if (current != null) return CredentialMetadata.fromSecret(current);
+    return _writeVerified(key, secret);
+  });
+
+  void _requireAdmission(bool Function() isCurrent) {
+    try {
+      if (isCurrent()) return;
+    } catch (_) {
+      // Admission callbacks cannot publish arbitrary underlying exceptions.
+    }
+    throw const CredentialVaultAdmissionDenied();
+  }
+
   Future<void> delete(CredentialSlot slot) => _serialize(slot, (key) async {
     try {
       await _storage.delete(key);

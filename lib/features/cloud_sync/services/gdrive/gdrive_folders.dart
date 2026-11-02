@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
+import '../../../../core/credentials/cloud_oauth_transport.dart';
 import '../../sync_models.dart';
 
 class GDriveFolders {
@@ -9,18 +10,25 @@ class GDriveFolders {
   // user's Drive root instead of writing into one shared tree.
   static const _folderName = cloudRootFolderName;
 
-  final Dio _dio = Dio(
-    BaseOptions(
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(seconds: 60),
-    ),
-  );
+  final Dio _dio;
 
   final Map<String, String> _folderIdCache = {};
   String? _glazeFolderId;
-  final Future<String> Function() _getAccessToken;
+  final Future<CloudOAuthRequestToken> Function() _getRequestToken;
+  final void Function() _check;
 
-  GDriveFolders(this._getAccessToken);
+  GDriveFolders(this._getRequestToken, {Dio? dio, void Function()? check})
+    : _check = check ?? _noCheck,
+      _dio =
+          dio ??
+          Dio(
+            BaseOptions(
+              connectTimeout: const Duration(seconds: 30),
+              receiveTimeout: const Duration(seconds: 60),
+            ),
+          );
+
+  static void _noCheck() {}
 
   String? get glazeFolderId => _glazeFolderId;
 
@@ -33,9 +41,8 @@ class GDriveFolders {
 
   Future<String> getGlazeFolderId() async {
     if (_glazeFolderId != null) return _glazeFolderId!;
-    final token = await _getAccessToken();
-
-    final found = await _findFolderByName(_folderName, 'root', token);
+    final found = await _findFolderByName(_folderName, 'root');
+    _check();
     if (found != null) {
       _glazeFolderId = found;
       _folderIdCache['/$_folderName'] = found;
@@ -46,10 +53,10 @@ class GDriveFolders {
   }
 
   Future<String> ensureFolder(String path) async {
+    _check();
     final cached = _folderIdCache[path];
     if (cached != null) return cached;
 
-    final token = await _getAccessToken();
     final parts = path.split('/').where((s) => s.isNotEmpty).toList();
 
     var parentId = 'root';
@@ -63,8 +70,10 @@ class GDriveFolders {
         continue;
       }
 
-      var folderId = await _findFolderByName(part, parentId, token);
+      var folderId = await _findFolderByName(part, parentId);
+      _check();
       folderId ??= await createFolder(part, parentId);
+      _check();
       _folderIdCache[currentPath] = folderId;
       parentId = folderId;
     }
@@ -83,7 +92,8 @@ class GDriveFolders {
   }
 
   Future<String> createFolder(String name, String parentId) async {
-    final token = await _getAccessToken();
+    final token = await _getRequestToken();
+    _check();
     final response = await _dio.post<Map<String, dynamic>>(
       'https://www.googleapis.com/drive/v3/files',
       data: jsonEncode({
@@ -93,50 +103,60 @@ class GDriveFolders {
       }),
       options: Options(
         headers: {
-          'Authorization': 'Bearer $token',
+          'Authorization': 'Bearer ${token.value}',
           'Content-Type': 'application/json',
         },
+        extra: CloudOAuthRequestScope.tokenAdmission(token),
       ),
     );
+    _check();
     final id = response.data?['id'] as String;
     return id;
   }
 
   Future<void> deleteFolder(String path) async {
-    final token = await _getAccessToken();
     var folderId = _folderIdCache[path];
     if (folderId == null && path == '/$_folderName') {
-      folderId = await _findFolderByName(_folderName, 'root', token);
+      folderId = await _findFolderByName(_folderName, 'root');
+      _check();
     }
     if (folderId == null) {
       return;
     }
+    final token = await _getRequestToken();
+    _check();
     await _dio.delete<void>(
       'https://www.googleapis.com/drive/v3/files/$folderId',
-      options: Options(headers: {'Authorization': 'Bearer $token'}),
+      options: Options(
+        headers: {'Authorization': 'Bearer ${token.value}'},
+        extra: CloudOAuthRequestScope.tokenAdmission(token),
+      ),
     );
+    _check();
     _folderIdCache.remove(path);
     if (path == '/$_folderName') _glazeFolderId = null;
   }
 
-  Future<String?> _findFolderByName(
-    String name,
-    String parentId,
-    String token,
-  ) async {
+  Future<String?> _findFolderByName(String name, String parentId) async {
     try {
       final query =
           "name='$name' and '$parentId' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false";
+      final token = await _getRequestToken();
+      _check();
       final response = await _dio.get<Map<String, dynamic>>(
         'https://www.googleapis.com/drive/v3/files',
         queryParameters: {'q': query, 'fields': 'files(id,name)'},
-        options: Options(headers: {'Authorization': 'Bearer $token'}),
+        options: Options(
+          headers: {'Authorization': 'Bearer ${token.value}'},
+          extra: CloudOAuthRequestScope.tokenAdmission(token),
+        ),
       );
+      _check();
       final files = response.data?['files'] as List? ?? [];
       if (files.isEmpty) return null;
       return files[0]['id'] as String;
     } catch (_) {
-      return null;
+      rethrow;
     }
   }
 }

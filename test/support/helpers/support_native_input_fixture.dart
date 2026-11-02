@@ -239,12 +239,30 @@ typedef NativeInputObservation = ({
 });
 
 /// Hooks after actual SQL and BEFORE its awaited result returns. These are
-/// provisional SQL/read faults, deliberately NOT physical COMMIT-fault probes.
+/// provisional SQL/read faults. Optional outer-send hooks also exercise memory
+/// SQLite commit send/delivery, not filesystem or power-loss durability.
 final class NativeInputSql extends QueryInterceptor {
   final observations = <NativeInputObservation>[];
   final writes = <String>[];
   Future<void> Function(String statement, List<Object?> args)? afterSelect;
   Future<void> Function(String statement)? afterWrite;
+  Future<void> Function()? beforeOuterSend, afterOuterSend;
+  final _outer = <TransactionExecutor, bool>{};
+  @override
+  TransactionExecutor beginTransaction(QueryExecutor parent) {
+    final inner = super.beginTransaction(parent);
+    _outer[inner] = parent is! TransactionExecutor;
+    return inner;
+  }
+
+  @override
+  Future<void> commitTransaction(TransactionExecutor inner) async {
+    final outer = _outer.remove(inner) == true;
+    if (outer) await beforeOuterSend?.call();
+    await super.commitTransaction(inner);
+    if (outer) await afterOuterSend?.call();
+  }
+
   @override
   Future<List<Map<String, Object?>>> runSelect(
     QueryExecutor executor,

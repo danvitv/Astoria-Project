@@ -310,17 +310,17 @@ void main() {
       expect(oauthCodeFromRedirect({'code': 'abc'}), 'abc');
     });
 
-    test('a denial is reported as the provider described it', () {
+    test('a denial never reflects provider descriptions or markup', () {
       expect(
         () => oauthCodeFromRedirect({
           'error': 'access_denied',
-          'error_description': 'user said no',
+          'error_description': '<script>SYNTHETIC_PRIVATE_CALLBACK_CANARY</script>',
         }, expectedState: 'S'),
         throwsA(
           isA<Exception>().having(
             (e) => '$e',
             'message',
-            allOf(contains('access_denied'), contains('user said no')),
+            equals('Exception: OAuth authorization failed'),
           ),
         ),
       );

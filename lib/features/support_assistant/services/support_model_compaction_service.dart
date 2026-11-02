@@ -83,7 +83,7 @@ extension _ModelCompaction on _ModelRun {
                 : SupportDiagnosticSkills.instruction(
                     diagnosticSkills,
                     hasNativeTools
-                        ? originalActions!.definitions.map((d) => d.name)
+                        ? toolDefinitions.map((d) => d.name)
                         : const <String>[],
                   )),
       ),

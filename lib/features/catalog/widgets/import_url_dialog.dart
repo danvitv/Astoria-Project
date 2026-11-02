@@ -18,7 +18,6 @@ import '../../character_list/character_import_persistence_provider.dart';
 import '../../settings/app_settings_provider.dart';
 import '../catalog_models.dart';
 import '../catalog_provider.dart';
-import '../saucepan_account_provider.dart';
 import '../services/datacat_provider.dart';
 import '../services/extraction_status.dart';
 import '../services/saucepan_extractor.dart';
@@ -55,7 +54,10 @@ class _ImportUrlDialogState extends ConsumerState<ImportUrlDialog> {
             padding: const EdgeInsets.only(left: 4, bottom: 12),
             child: Text(
               'placeholder_janitor_url'.tr(),
-              style: TextStyle(color: context.cs.onSurfaceVariant, fontSize: 14),
+              style: TextStyle(
+                color: context.cs.onSurfaceVariant,
+                fontSize: 14,
+              ),
             ),
           ),
           TextField(
@@ -124,7 +126,10 @@ class _ImportUrlDialogState extends ConsumerState<ImportUrlDialog> {
                 _loading
                     ? 'catalog_importing'.tr()
                     : 'action_import_by_link'.tr(),
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
@@ -147,12 +152,25 @@ class _ImportUrlDialogState extends ConsumerState<ImportUrlDialog> {
     }
 
     // Saucepan companion links extract LOCALLY (on-device fragment reassembly)
-    // when the user has configured a Saucepan token; otherwise they fall through
-    // to the remote DataCat path below.
-    if (_isSaucepanCompanionUrl(url) &&
-        ref.read(saucepanAccountProvider).isLoggedIn) {
-      await _extractSaucepanLocal(url);
-      return;
+    // when configured. Unavailable secure custody is NOT logout/permission to
+    // probe anonymously or silently switch this request to remote extraction.
+    if (_isSaucepanCompanionUrl(url)) {
+      final extractor = ref.read(saucepanExtractorProvider);
+      final authCurrent = extractor.captureAuthGuard();
+      try {
+        await extractor.loadToken();
+        if (!mounted || !authCurrent()) return;
+        if (extractor.account.unavailable) {
+          throw const SaucepanExceptionStorage();
+        }
+        if (extractor.isLoggedIn) {
+          await _extractSaucepanLocal(url, extractor);
+          return;
+        }
+      } catch (error) {
+        if (mounted) setState(() => _error = formatError(error));
+        return;
+      }
     }
 
     // Probe the link before the remote extractor: if it directly serves a card
@@ -235,23 +253,24 @@ class _ImportUrlDialogState extends ConsumerState<ImportUrlDialog> {
   /// Extracts a Saucepan companion on-device (no browser) and imports it. Used
   /// only when a Saucepan token is configured — otherwise the remote DataCat
   /// path handles saucepan.ai links.
-  Future<void> _extractSaucepanLocal(String url) async {
+  Future<void> _extractSaucepanLocal(
+    String url,
+    SaucepanExtractor extractor,
+  ) async {
+    final importer = ref.read(catalogProvider.notifier);
+    final authCurrent = extractor.captureAuthGuard();
     setState(() {
       _loading = true;
       _error = null;
       _phase = 'extracting locally';
     });
     try {
-      final result =
-          await ref.read(saucepanExtractorProvider).extractCompanion(url);
-      if (!mounted) return;
-      await ref
-          .read(catalogProvider.notifier)
-          .importCharacter(result.character, sourceUrl: url);
-      if (mounted) {
+      final result = await extractor.extractCompanion(url);
+      if (!mounted || !authCurrent()) return;
+      await importer.importCharacter(result.character, sourceUrl: url);
+      if (mounted && authCurrent()) {
         Navigator.pop(context);
-        GlazeToast.show(
-            context, 'Imported ${result.character.charData.name}');
+        GlazeToast.show(context, 'Imported ${result.character.charData.name}');
       }
     } catch (e) {
       if (mounted) {
@@ -308,10 +327,12 @@ class _ImportUrlDialogState extends ConsumerState<ImportUrlDialog> {
 
     Uint8List bytes;
     try {
-      final dio = Dio(BaseOptions(
-        connectTimeout: const Duration(seconds: 15),
-        receiveTimeout: const Duration(seconds: 20),
-      ));
+      final dio = Dio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 20),
+        ),
+      );
       final res = await dio.get<List<int>>(
         url,
         options: Options(
@@ -401,10 +422,8 @@ class _ImportUrlDialogState extends ConsumerState<ImportUrlDialog> {
       isScrollControlled: true,
       useRootNavigator: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => CatalogDetailLauncher(
-        item: item,
-        provider: CatalogProvider.janitor,
-      ),
+      builder: (_) =>
+          CatalogDetailLauncher(item: item, provider: CatalogProvider.janitor),
     );
     if (!rootContext.mounted ||
         importedCharId == null ||

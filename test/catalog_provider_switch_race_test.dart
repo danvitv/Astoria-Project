@@ -4,11 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:glaze_flutter/core/state/credential_vault_provider.dart';
 
 import 'package:glaze_flutter/features/catalog/catalog_models.dart';
 import 'package:glaze_flutter/features/catalog/catalog_provider.dart';
 import 'package:glaze_flutter/features/catalog/chub_account_provider.dart';
 import 'package:glaze_flutter/features/catalog/third_party_providers_provider.dart';
+
+import 'credentials/fake_credential_storage.dart';
 
 /// Regression tests for the catalog provider switch race: picking a second
 /// provider while the first one is still loading used to be a no-op (the
@@ -44,7 +47,9 @@ void main() {
         StateNotifierProvider<CatalogNotifier, CatalogState>(
           (ref) => CatalogNotifier(ref, fetchOverride: makeFetcher()),
         );
-    container = ProviderContainer();
+    container = ProviderContainer(overrides: [
+      credentialStorageProvider.overrideWithValue(FakeCredentialStorage()),
+    ]);
     // Let the third-party provider loader settle so enabledCatalogProvidersProvider
     // sees the saved (all-enabled) set before the catalog notifier queries it.
     container.read(thirdPartyProvidersProvider);

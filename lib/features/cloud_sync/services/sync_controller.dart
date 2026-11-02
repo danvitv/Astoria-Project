@@ -52,6 +52,9 @@ class SyncController {
 
   SyncController(this._ref, {required this.isMounted});
 
+  bool _ownsService(SyncService service) =>
+      isMounted() && identical(_ref.read(syncServiceProvider).value, service);
+
   bool get isConnecting => _isConnecting;
   bool get isConnectingGdrive => _isConnectingGdrive;
   bool get isDisconnecting => _isDisconnecting;
@@ -84,7 +87,11 @@ class SyncController {
       if (service.gdriveFolderId != null) {
         _gdriveFolderId = service.gdriveFolderId;
       } else {
-        _gdriveFolderId = await service.resolveGDriveFolderId();
+        final pending = service.resolveGDriveFolderId();
+        final issued = service.capturePublicationGuard();
+        final folder = await pending;
+        if (_ownsService(service) && issued() && service.isConnected())
+          _gdriveFolderId = folder;
       }
     }
   }
@@ -105,15 +112,20 @@ class SyncController {
     _isConnecting = true;
     try {
       final service = await _ref.read(syncServiceProvider.future);
-      await service.connectDropbox();
-      _ref.read(syncConnectedProvider.notifier).state = true;
+      if (!_ownsService(service)) return 'Cloud sync owner retired';
+      final pending = service.connectDropbox();
+      final issued = service.capturePublicationGuard();
+      await pending;
+      if (!_ownsService(service) || !issued())
+        return 'Cloud sync owner retired';
+      _ref.read(syncConnectedProvider.notifier).state = service.isConnected();
       _ref.read(syncProviderProvider.notifier).state = SyncProvider.dropbox;
       _ref.read(syncStatusProvider.notifier).state = service.status;
-      _ref.read(syncLastErrorProvider.notifier).state = null;
+      _ref.read(syncLastErrorProvider.notifier).state = service.warning;
       await resolveFolderIdIfNeeded();
       return null;
-    } catch (e) {
-      return 'Dropbox connection failed: $e';
+    } catch (_) {
+      return 'Dropbox connection failed';
     } finally {
       _isConnecting = false;
     }
@@ -123,15 +135,20 @@ class SyncController {
     _isConnectingGdrive = true;
     try {
       final service = await _ref.read(syncServiceProvider.future);
-      await service.connectGDrive();
-      _ref.read(syncConnectedProvider.notifier).state = true;
+      if (!_ownsService(service)) return 'Cloud sync owner retired';
+      final pending = service.connectGDrive();
+      final issued = service.capturePublicationGuard();
+      await pending;
+      if (!_ownsService(service) || !issued())
+        return 'Cloud sync owner retired';
+      _ref.read(syncConnectedProvider.notifier).state = service.isConnected();
       _ref.read(syncProviderProvider.notifier).state = SyncProvider.gdrive;
       _ref.read(syncStatusProvider.notifier).state = service.status;
-      _ref.read(syncLastErrorProvider.notifier).state = null;
+      _ref.read(syncLastErrorProvider.notifier).state = service.warning;
       await resolveFolderIdIfNeeded();
       return null;
-    } catch (e) {
-      return 'Google Drive connection failed: $e';
+    } catch (_) {
+      return 'Google Drive connection failed';
     } finally {
       _isConnectingGdrive = false;
     }
@@ -142,16 +159,26 @@ class SyncController {
     if (service == null) return null;
 
     _isDisconnecting = true;
+    bool Function()? issued;
+    bool current() => _ownsService(service) && (issued?.call() ?? true);
     try {
-      await service.disconnect();
+      final pending = service.disconnect();
+      issued = service.capturePublicationGuard();
+      await pending;
+      if (!current()) return 'Cloud sync owner retired';
       _ref.read(syncConnectedProvider.notifier).state = false;
       _ref.read(syncProviderProvider.notifier).state = SyncProvider.dropbox;
       _ref.read(syncStatusProvider.notifier).state = service.status;
+      _ref.read(syncLastErrorProvider.notifier).state = service.warning;
       _syncResult = null;
       _gdriveFolderId = null;
-      return null;
-    } catch (e) {
-      return 'Disconnect failed: $e';
+      return service.warning;
+    } catch (_) {
+      // Verified local tombstone remains truth even when remote/metadata fails.
+      if (current()) {
+        _ref.read(syncConnectedProvider.notifier).state = service.isConnected();
+      }
+      return 'Disconnect failed';
     } finally {
       _isDisconnecting = false;
     }
@@ -170,19 +197,30 @@ class SyncController {
     _isWiping = true;
     _syncResult = null;
     statusNotifier.state = SyncStatus.syncing;
-
+    bool Function()? issued;
+    bool current() => _ownsService(service) && (issued?.call() ?? true);
     try {
-      await service.wipeCloudData(onProgress: onProgress);
+      final pending = service.wipeCloudData(
+        onProgress: (progress) {
+          if (current()) onProgress(progress);
+        },
+      );
+      issued = service.capturePublicationGuard();
+      await pending;
+      if (!current()) return null;
       statusNotifier.state = service.status;
       _syncResult = {'type': 'wipe', 'total': 'all'};
       return _syncResult;
     } catch (e) {
+      if (!current()) rethrow;
       statusNotifier.state = SyncStatus.error;
       rethrow;
     } finally {
       _isWiping = false;
-      progressNotifier.state = null;
-      statusNotifier.state = service.status;
+      if (current()) {
+        progressNotifier.state = null;
+        statusNotifier.state = service.status;
+      }
     }
   }
 
@@ -197,68 +235,77 @@ class SyncController {
     _syncResult = null;
 
     int itemsCount = 0;
-    late final SyncService service;
-    var serviceReady = false;
+    SyncService? service;
+    bool Function()? issued;
+    bool current() =>
+        service != null && _ownsService(service) && (issued?.call() ?? true);
+    final originalProducer = _ref.read(syncServiceProvider.future);
+    final originalService = _ref.read(syncServiceProvider).value;
     try {
-      service = await _ref.read(syncServiceProvider.future);
-      serviceReady = true;
+      service = await originalProducer;
+      if (!current() ||
+          (originalService != null && !identical(originalService, service))) {
+        return 'Cloud sync owner retired';
+      }
+      final owned = service;
+      void progress(SyncProgress p) {
+        if (!current()) return;
+        progressNotifier.state = p;
+        itemsCount = p.total;
+      }
+
+      late Future<void> pending;
       switch (mode) {
         case 'push':
-          await service.fullPush(
+          pending = owned.fullPush(
             includeApiKeys: _syncIncludeApiKeys,
-            onProgress: (p) {
-              if (isMounted()) progressNotifier.state = p;
-              itemsCount = p.total;
-            },
+            onProgress: progress,
           );
-          _syncResult = {'type': 'push', 'pushed': itemsCount};
-          statusNotifier.state = service.status;
-          conflictsNotifier.state = service.conflicts;
-          return 'Push completed ($itemsCount items)';
-
+          break;
         case 'pull':
-          await service.fullPull(
-            onProgress: (p) {
-              if (isMounted()) progressNotifier.state = p;
-              itemsCount = p.total;
-            },
-          );
-          _syncResult = {
-            'type': 'pull',
-            'pulled': itemsCount,
-            'conflictsCount': service.conflicts.length,
-          };
-          await refreshDataProvidersAfterPull();
-          statusNotifier.state = service.status;
-          conflictsNotifier.state = service.conflicts;
-          if (service.conflicts.isNotEmpty) {
-            return 'Pull completed with ${service.conflicts.length} conflicts';
-          }
-          return 'Pull completed ($itemsCount items)';
-
+          pending = owned.fullPull(onProgress: progress);
+          break;
         case 'full':
-          await service.fullSync(
+          pending = owned.fullSync(
             includeApiKeys: _syncIncludeApiKeys,
-            onProgress: (p) {
-              if (isMounted()) progressNotifier.state = p;
-              itemsCount = p.total;
-            },
+            onProgress: progress,
           );
-          _syncResult = {'type': 'full'};
-          await refreshDataProvidersAfterPull();
-          statusNotifier.state = service.status;
-          conflictsNotifier.state = service.conflicts;
-          return 'sync_full_done'.tr();
+          break;
+        default:
+          return null;
       }
+      issued = owned
+          .capturePublicationGuard(); // Exact synchronously started workflow.
+      await pending;
+      if (!current()) return 'Cloud sync owner retired';
+      if (mode != 'push')
+        await refreshDataProvidersAfterPull(isCurrent: current);
+      if (!current()) return 'Cloud sync owner retired';
+      _syncResult = mode == 'push'
+          ? {'type': 'push', 'pushed': itemsCount}
+          : mode == 'pull'
+          ? {
+              'type': 'pull',
+              'pulled': itemsCount,
+              'conflictsCount': owned.conflicts.length,
+            }
+          : {'type': 'full'};
+      statusNotifier.state = owned.status;
+      conflictsNotifier.state = List.of(owned.conflicts);
+      if (mode == 'full') return 'sync_full_done'.tr();
+      if (mode == 'pull' && owned.conflicts.isNotEmpty) {
+        return 'Pull completed with ${owned.conflicts.length} conflicts';
+      }
+      return '${mode == 'push' ? 'Push' : 'Pull'} completed ($itemsCount items)';
     } catch (e) {
+      if (!current()) return 'Cloud sync owner retired';
       lastErrorNotifier.state = e.toString();
-      statusNotifier.state = serviceReady ? service.status : SyncStatus.error;
-      conflictsNotifier.state = serviceReady ? service.conflicts : const [];
+      statusNotifier.state = service!.status;
+      conflictsNotifier.state = List.of(service.conflicts);
       return 'Sync failed: $e';
     } finally {
-      progressNotifier.state = null;
+      if (current()) progressNotifier.state = null;
     }
-    return null;
   }
 
   Future<String?> resolveConflict(SyncConflict conflict, String choice) async {
@@ -277,9 +324,13 @@ class SyncController {
         .toList();
     conflictsNotifier.state = optimistic;
     statusNotifier.state = SyncStatus.syncing;
-
+    bool Function()? issued;
+    bool current() => _ownsService(service) && (issued?.call() ?? true);
     try {
-      await service.resolveConflict(conflict, choice);
+      final pending = service.resolveConflict(conflict, choice);
+      issued = service.capturePublicationGuard();
+      await pending;
+      if (!current()) return 'Cloud sync owner retired';
       // Sync provider state with service truth (in case of partial failure).
       conflictsNotifier.state = List.from(service.conflicts);
 
@@ -294,6 +345,7 @@ class SyncController {
       statusNotifier.state = SyncStatus.conflict;
       return null;
     } catch (e) {
+      if (!current()) return 'Cloud sync owner retired';
       // Roll back optimistic removal on error.
       conflictsNotifier.state = List.from(service.conflicts);
       errorNotifier.state = e.toString();
@@ -314,23 +366,34 @@ class SyncController {
     // Optimistically clear all conflict rows immediately.
     conflictsNotifier.state = [];
     statusNotifier.state = SyncStatus.syncing;
+    bool Function()? issued;
+    bool current() => _ownsService(service) && (issued?.call() ?? true);
     try {
-      await service.resolveAllConflictsAndApply(
+      final pending = service.resolveAllConflictsAndApply(
         choice,
-        onProgress: (value) => progressNotifier.state = value,
+        onProgress: (value) {
+          if (current()) progressNotifier.state = value;
+        },
       );
+      issued = service.capturePublicationGuard();
+      await pending;
+      if (!current()) return 'Cloud sync owner retired';
       conflictsNotifier.state = List.from(service.conflicts);
-      if (isMounted()) await refreshDataProvidersAfterPull();
+      if (isMounted()) await refreshDataProvidersAfterPull(isCurrent: current);
+      if (!current()) return 'Cloud sync owner retired';
       return 'Sync complete';
     } catch (e) {
+      if (!current()) return 'Cloud sync owner retired';
       errorNotifier.state = e.toString();
       conflictsNotifier.state = List.from(service.conflicts);
       statusNotifier.state = service.status;
       return 'Could not resolve conflicts: $e';
     } finally {
       _isResolvingConflicts = false;
-      statusNotifier.state = service.status;
-      progressNotifier.state = null;
+      if (current()) {
+        statusNotifier.state = service.status;
+        progressNotifier.state = null;
+      }
     }
   }
 
@@ -342,30 +405,49 @@ class SyncController {
     required void Function(SyncProgress? value) setProgress,
     required void Function(String? value) setError,
   }) async {
+    bool Function()? issued;
+    bool current() => _ownsService(service) && (issued?.call() ?? true);
     setStatus(SyncStatus.syncing);
     try {
-      await service.applyPendingPullAfterResolve(
+      final pending = service.applyPendingPullAfterResolve(
         onProgress: (p) {
-          setProgress(p);
+          if (current()) setProgress(p);
         },
       );
-      if (isMounted()) await refreshDataProvidersAfterPull();
+      issued = service.capturePublicationGuard();
+      await pending;
+      if (!current()) return 'Cloud sync owner retired';
+      await refreshDataProvidersAfterPull(isCurrent: current);
+      if (!current()) return 'Cloud sync owner retired';
       return 'Sync complete';
     } catch (e) {
+      if (!current()) return 'Cloud sync owner retired';
       setError(e.toString());
       return 'Sync failed: $e';
     } finally {
-      setStatus(service.status);
-      setProgress(null);
+      if (current()) {
+        setStatus(service.status);
+        setProgress(null);
+      }
     }
   }
 
-  Future<void> refreshDataProvidersAfterPull() async {
-    final prefs = await _ref.read(sharedPreferencesProvider.future);
-    await prefs.reload();
+  Future<void> refreshDataProvidersAfterPull({
+    bool Function()? isCurrent,
+  }) async {
+    void check() {
+      if (!isMounted() || isCurrent?.call() == false)
+        throw StateError('Cloud sync owner retired');
+    }
+
+    check();
+    // Pull writes use the original cached preferences delegate. Reload would
+    // retire that very credential admission before the dependent publications.
     _ref.invalidate(appSettingsProvider);
     await _ref.read(appSettingsProvider.future);
+    check();
     await _ref.read(pipelineSettingsProvider.notifier).load();
+    check();
 
     // Evict all cached avatar images so that Image.file widgets re-read the
     // updated files from disk immediately (without a full app restart).
@@ -405,6 +487,7 @@ class SyncController {
     _ref.invalidate(magicDrawerLayoutCacheProvider);
     unawaited(_ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
     await _ref.read(themeProvider.notifier).reload();
+    check();
 
     // Bump the version counter so widgets that watch avatarVersionProvider
     // (chat_header, character_list) rebuild and pick up the new paths.
@@ -429,10 +512,13 @@ class SyncController {
   Future<void> setAutoSync(bool val) async {
     final service = _ref.read(syncServiceProvider).value;
     if (service != null) {
-      await service.setAutoSync(
+      final pending = service.setAutoSync(
         val,
         messageCount: service.autoSyncMessageCount,
       );
+      final issued = service.capturePublicationGuard();
+      await pending;
+      if (!_ownsService(service) || !issued()) return;
       _ref.read(syncAutoEnabledProvider.notifier).state = val;
     }
   }

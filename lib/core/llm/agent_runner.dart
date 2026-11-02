@@ -15,6 +15,7 @@ import 'studio/agent_config_resolver.dart';
 import 'studio_turn_config_snapshot.dart';
 import 'transport/transport_factory.dart';
 import 'studio_controller_ontology.dart';
+import 'transport/llm_capture_context.dart';
 
 /// Thin LLM orchestrator extracted from `MemoryStudioService` (Phase 5.1,
 /// port of Marinara `agent-executor.ts` single-agent execution path).
@@ -82,6 +83,7 @@ class AgentRunner {
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
     void Function(String text)? onIntermediateUpdate,
     Future<void> Function()? beforeSend,
+    LlmCaptureContext? diagnosticContext,
   }) async {
     final token = cancelToken ?? CancelToken();
     if (token.isCancelled) {
@@ -111,6 +113,7 @@ class AgentRunner {
         onFinalResponseUpdate: onFinalResponseUpdate,
         onIntermediateUpdate: onIntermediateUpdate,
         beforeSend: beforeSend,
+        diagnosticContext: diagnosticContext,
       );
     } catch (e) {
       if (token.isCancelled || (e is DioException && CancelToken.isCancel(e))) {
@@ -150,6 +153,7 @@ class AgentRunner {
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
     void Function(String text)? onIntermediateUpdate,
     Future<void> Function()? beforeSend,
+    LlmCaptureContext? diagnosticContext,
   }) async {
     final resolved =
         preResolvedConfig ??
@@ -212,6 +216,7 @@ class AgentRunner {
       responseJsonSchema: responseJsonSchema,
       onFinalResponseUpdate: onFinalResponseUpdate,
       onIntermediateUpdate: onIntermediateUpdate,
+      diagnosticContext: diagnosticContext,
     );
   }
 

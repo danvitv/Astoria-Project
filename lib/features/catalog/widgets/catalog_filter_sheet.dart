@@ -106,9 +106,18 @@ class _CatalogFilterSheetState extends ConsumerState<CatalogFilterSheet> {
   Future<void> _loadTags() async {
     List<CatalogTag> tags = [];
     if (widget.provider == CatalogProvider.chub) {
-      tags = await fetchChubTags(
-        apiKey: ref.read(chubAccountProvider).apiKey,
-      );
+      try {
+        final account = ref.read(chubAccountProvider.notifier);
+        tags = await account.withApiKeyGuarded(
+          (key, current) => fetchChubTags(
+            apiKey: key,
+            isCurrent: () => mounted && current(),
+          ),
+        );
+      } catch (_) {
+        // Keep the sheet usable without account-scoped tags. Never retry with
+        // plaintext or anonymous auth after a failed secure credential read.
+      }
     } else if (widget.provider == CatalogProvider.datacat) {
       tags = await fetchDatacatTags();
     } else {

@@ -150,13 +150,14 @@ class CatalogNotifier extends StateNotifier<CatalogState> {
     // changes while Chub is the active source — this also covers the stored key
     // arriving from prefs after the first anonymous search.
     _ref.listen<ChubAccount>(chubAccountProvider, (previous, next) {
-      if (previous?.apiKey == next.apiKey && previous?.nsfl == next.nsfl) {
+      if (previous?.authRevision == next.authRevision &&
+          previous?.isLoggedIn == next.isLoggedIn &&
+          previous?.nsfl == next.nsfl) {
         return;
       }
       if (!_savedStateApplied || state.activeProvider != CatalogProvider.chub) {
         return;
       }
-      resetChubTagCache();
       unawaited(search(reset: true));
     });
   }
@@ -458,13 +459,17 @@ class CatalogNotifier extends StateNotifier<CatalogState> {
           filters: state.filters,
         );
       case CatalogProvider.chub:
-        return chubSearch(
-          query: state.query,
-          page: state.page,
-          limit: _pageSize,
-          filters: state.filters,
-          apiKey: _ref.read(chubAccountProvider).apiKey,
-          accountNsfl: _ref.read(chubAccountProvider).nsfl,
+        final snapshot = state;
+        final nsfl = _ref.read(chubAccountProvider).nsfl;
+        return _ref.read(chubAccountProvider.notifier).withApiKey(
+          (key) => chubSearch(
+            query: snapshot.query,
+            page: snapshot.page,
+            limit: _pageSize,
+            filters: snapshot.filters,
+            apiKey: key,
+            accountNsfl: nsfl,
+          ),
         );
     }
   }

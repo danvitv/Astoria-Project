@@ -34,6 +34,39 @@ final class _ApplicationDataset {
   final List<_ApplicationTable> tables;
 }
 
+// The indexed call lookup is bounded to two candidates: duplicates are ambiguous,
+// not permission to pick the newest request or cross a session/run/attempt. Raw
+// IDs are compared in SQLite only and never become selected/disclosed columns.
+const _diagnosticRequestRow =
+    '''(SELECT CASE WHEN count(*)=1 THEN min(rowid) END
+  FROM (SELECT c.rowid FROM llm_request_capture_rows c
+    WHERE typeof(t.call_id)='text' AND length(t.call_id)>0
+      AND typeof(t.pipeline_run_id)='text' AND length(t.pipeline_run_id)>0
+      AND typeof(t.session_id)='text' AND length(t.session_id)>0
+      AND typeof(t.attempt)='integer' AND t.attempt>=1
+      AND c.call_id=t.call_id COLLATE BINARY
+      AND c.pipeline_run_id=t.pipeline_run_id COLLATE BINARY
+      AND c.session_id=t.session_id COLLATE BINARY
+      AND c.attempt=t.attempt LIMIT 2))''';
+
+// These fixed comparisons retain private identity in SQLite. A unique original
+// phase record can link a call to its phase; missing/duplicate phases stay unknown.
+const _diagnosticIdentityValid =
+    "(typeof(t.session_id)='text' AND length(t.session_id)>0 AND "
+    "typeof(t.pipeline_run_id)='text' AND length(t.pipeline_run_id)>0 AND "
+    "typeof(t.call_id)='text' AND length(t.call_id)>0 AND "
+    "typeof(t.attempt)='integer' AND t.attempt BETWEEN 1 AND 3)";
+const _diagnosticPhaseRow =
+    '''(SELECT CASE WHEN count(*)=1 AND min(matches)=1 THEN min(rowid) END
+  FROM (SELECT e.rowid,
+      (e.pipeline_run_id=t.pipeline_run_id COLLATE BINARY
+       AND e.session_id=t.session_id COLLATE BINARY
+       AND e.stage='studio.pre_generation.phase'
+       AND e.parser_name='studio_runtime_v1'
+       AND e.kind IN ('pipeline_completed','pipeline_failed')) AS matches
+    FROM llm_call_event_rows e
+    WHERE e.call_id=t.parent_call_id COLLATE BINARY AND e.attempt=1 LIMIT 2))''';
+
 const _applicationDatasets = [
   _ApplicationDataset('savedCharacters', 'Saved character cards', [
     _ApplicationTable(
@@ -320,6 +353,11 @@ const _applicationDatasets = [
         'created_at_ms,stage,stage_ordinal,attempt,kind,status,status_code,response_text,error,parser_name,parser_code,parser_detail,payload_json,truncated',
         session: 'session_id',
         diagnostic: true,
+        expressions: {
+          '_diagnosticRequestRow': _diagnosticRequestRow,
+          '_diagnosticIdentityValid': _diagnosticIdentityValid,
+          '_diagnosticPhaseRow': _diagnosticPhaseRow,
+        },
       ),
       _ApplicationTable(
         'ledgerDebug',

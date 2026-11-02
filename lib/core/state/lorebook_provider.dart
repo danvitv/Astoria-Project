@@ -62,8 +62,12 @@ Future<void> loadLorebookActivations(WidgetRef ref) async {
 Future<void> saveLorebookActivations(
   LorebookActivations activations, [
   SharedPreferences? prefs,
+  void Function()? checkCurrent,
+  Future<SharedPreferences>? originalPreferences,
 ]) async {
-  prefs ??= await SharedPreferences.getInstance();
+  checkCurrent?.call();
+  prefs ??= await (originalPreferences ?? SharedPreferences.getInstance());
+  checkCurrent?.call();
   await prefs.setString(
     'lorebookActivations',
     jsonEncode(activations.toJson()),

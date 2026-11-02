@@ -27,13 +27,43 @@ abstract final class SavedPreferencesKeys {
   );
 }
 
+/// Native ownership only. Never add these keys to the five saved-data families,
+/// their read ports, schemas or application datasets.
+abstract final class PrivatePreferenceKeys {
+  static const chubApiKey = 'gz_chub_api_key';
+  static const saucepanToken = 'gz_saucepan_token';
+  static const datacatAnonymousToken = 'gz_dc_token';
+  static const cloudOAuthDocument = 'gz_sync_tokens';
+  // A mixed ordinary image document remains in its existing native domain.
+  // Private tracking does not grant a generic whole-JSON credential writer.
+  static const imageRoutmyKeys = {
+    'gz_imggen_settings',
+    'gz_imggen_routmy_api_key',
+  };
+  static const datacatAccountKeys = {
+    'gz_dc_user_token',
+    'gz_dc_device',
+    'gz_dc_user_name',
+    'gz_dc_scopes',
+  };
+  static final Set<String> tracked = Set.unmodifiable({
+    ...SavedPreferencesKeys.all,
+    chubApiKey,
+    saucepanToken,
+    datacatAnonymousToken,
+    cloudOAuthDocument,
+    ...datacatAccountKeys,
+    ...imageRoutmyKeys,
+  });
+}
+
 /// Shared by every attachment/container in THIS isolate, not SQLite or an OS
 /// lock. Unknown plugins/processes/backends are explicitly outside this proof.
 final class SavedPreferencesOwner {
   SavedPreferencesOwner._();
   static final process = SavedPreferencesOwner._();
-  final _revisions = {for (final key in SavedPreferencesKeys.all) key: 0};
-  final _pending = {for (final key in SavedPreferencesKeys.all) key: 0};
+  final _revisions = {for (final key in PrivatePreferenceKeys.tracked) key: 0};
+  final _pending = {for (final key in PrivatePreferenceKeys.tracked) key: 0};
   final _stores = Expando<SavedPreferencesStore>();
   SavedPreferencesStore? _originalStore;
   int _storeRevision = 0;
@@ -71,7 +101,7 @@ final class SavedPreferencesOwner {
   }
 
   SavedPreferencesIntent begin(Iterable<String> keys) {
-    final selected = keys.where(SavedPreferencesKeys.all.contains).toSet();
+    final selected = keys.where(PrivatePreferenceKeys.tracked.contains).toSet();
     for (final key in selected) {
       _revisions[key] = _revisions[key]! + 1;
       _pending[key] = _pending[key]! + 1;
@@ -95,7 +125,7 @@ final class SavedPreferencesOwner {
   }
 
   void acknowledge(SavedPreferencesStore store, String key, bool success) {
-    if (!SavedPreferencesKeys.all.contains(key)) return;
+    if (!PrivatePreferenceKeys.tracked.contains(key)) return;
     if (!success || !store.current) {
       // The plugin cache is optimistic. A false/throw is not saved evidence.
       store._uncertain.add(key);
@@ -255,8 +285,108 @@ final class SavedPreferencesLease {
 /// Outer writer hooks MUST surround queue admission, acquisition and optimistic
 /// publication. Facade setters additionally retain actual acknowledgement work.
 abstract final class SavedPreferencesWrites {
+  static Future<void> _chubTail = Future<void>.value();
+  static Future<void> _saucepanTail = Future<void>.value();
+  static Future<void> _datacatTail = Future<void>.value();
+  static Future<void> _datacatAnonymousTail = Future<void>.value();
+  static Future<void> _imageRoutmyTail = Future<void>.value();
+  static Future<void> _cloudOAuthTail = Future<void>.value();
+
+  /// The one private legacy key needs physical writer ordering as well as ABA
+  /// revisions. An admitted remove/import cannot race a tracked backup setter.
+  /// Intents still start before enqueue, so queued same-value writes retire reads.
+  static Future<T> serializeChub<T>(Future<T> Function() operation) {
+    final result = _chubTail.then((_) => operation());
+    _chubTail = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return result;
+  }
+
+  /// Saucepan's original private producer and tracked backup writes share only
+  /// this family FIFO. Admission revisions still start before physical enqueue.
+  static Future<T> serializeSaucepan<T>(Future<T> Function() operation) {
+    final result = _saucepanTail.then((_) => operation());
+    _saucepanTail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  /// Linked DataCat credentials and their exact device binding share one FIFO.
+  static Future<T> serializeDatacat<T>(Future<T> Function() operation) {
+    final result = _datacatTail.then((_) => operation());
+    _datacatTail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  /// Anonymous extraction is separate from linked-account token/device writes.
+  static Future<T> serializeDatacatAnonymous<T>(
+    Future<T> Function() operation,
+  ) {
+    final result = _datacatAnonymousTail.then((_) => operation());
+    _datacatAnonymousTail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  /// Whole-store operations reserve ALL private tails at admission, not after
+  /// acquiring the first. A later family write cannot overtake an older clear
+  /// blocked by Chub. The callback invokes the plugin directly, never re-enters
+  /// an individual family FIFO. Failed operations do not poison the tails.
+  static Future<T> serializePrivateSources<T>(Future<T> Function() operation) {
+    final previous = Future.wait<void>([
+      _chubTail,
+      _saucepanTail,
+      _datacatTail,
+      _datacatAnonymousTail,
+      _imageRoutmyTail,
+      _cloudOAuthTail,
+    ]);
+    final result = previous.then((_) => operation());
+    final settled = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    _chubTail = settled;
+    _saucepanTail = settled;
+    _datacatTail = settled;
+    _datacatAnonymousTail = settled;
+    _imageRoutmyTail = settled;
+    _cloudOAuthTail = settled;
+    return result;
+  }
+
+  /// The native rout.my source and ordinary mixed-document writes share custody.
+  /// Existing intent admission still occurs before physical queue reservation.
+  static Future<T> serializeImageRoutmy<T>(Future<T> Function() operation) {
+    final result = _imageRoutmyTail.then((_) => operation());
+    _imageRoutmyTail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  /// Desktop token pairs and native mobile metadata share the original document.
+  /// This queue does not grant restoration, cleanup or SDK credential authority.
+  static Future<T> serializeCloudOAuth<T>(Future<T> Function() operation) {
+    final result = _cloudOAuthTail.then((_) => operation());
+    _cloudOAuthTail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
   static Future<T> run<T>(Iterable<String> keys, Future<T> Function() write) {
     final intent = SavedPreferencesOwner.process.begin(keys);
+    // Outer hooks may call facade setters. Only the physical facade operation
+    // owns the private FIFO, otherwise nested importer hooks would deadlock.
     return Future.sync(write).whenComplete(intent.settle);
   }
 

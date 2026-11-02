@@ -119,14 +119,15 @@ final class AutomaticSourcesFixture {
 
   Future<SupportModelSubmission> start({
     SupportModelToolUiPorts? toolUi,
+    String text =
+        'Read the newest named Marina session, another session and current Studio.',
   }) async {
     final visible = await native.repo.getMessagesForSession(native.session);
     final emitted = await service.emitInput(
       controller: Object(),
       uiLifetime: Object(),
       draftRevision: 1,
-      text:
-          'Read the newest named Marina session, another session and current Studio.',
+      text: text,
       isEmitterCurrent: () => true,
       isDraftCurrent: () => true,
       visibleConversation: [
@@ -256,12 +257,13 @@ final class _Wire implements HttpClientAdapter {
 Future<void> automaticSourcesTest(
   Future<void> Function(AutomaticSourcesFixture) body, {
   bool grant = true,
+  Future<List<SupportAppActionAdapter>> Function()? nativeAdapters,
 }) async {
   final f = AutomaticSourcesFixture();
   await HttpOverrides.runZoned(
     () => IOOverrides.runWithIOOverrides(() async {
       try {
-        await f.initialize(grant: grant);
+        await f.initialize(grant: grant, nativeAdapters: nativeAdapters);
         await body(f);
       } finally {
         await f.close();

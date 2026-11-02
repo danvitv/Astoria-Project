@@ -19,6 +19,7 @@ import '../generation_context_inputs.dart';
 import 'studio_context.dart';
 import '../controller_batcher.dart';
 import 'controller_result_mapper.dart';
+import '../diagnostics/studio_runtime_diagnostics.dart';
 
 /// Result of the shared pre-gen tracker phase. Both [MemoryStudioService.runTrackerCycle]
 /// and [MemoryStudioService.runTrackersOnly] call [ControllerPhaseRunner.run]
@@ -111,6 +112,13 @@ class ControllerPhaseRunner {
     StudioTurnConfigSnapshot? turnConfig,
     void Function(String text)? onThinkingUpdate,
   }) async {
+    final diagnostics = StudioRuntimeDiagnostics.forRun(token, sessionId);
+    void recordPhase(StudioRuntimeOutcome outcome, StudioRuntimeReason reason) {
+      if (diagnostics != null && !token.isCancelled) {
+        diagnostics.record(diagnostics.phaseContext, outcome, reason);
+      }
+    }
+
     if (token.isCancelled) {
       return const PreGenPhaseResult(status: 'aborted');
     }
@@ -118,6 +126,12 @@ class ControllerPhaseRunner {
         ? await resolvePreset(presetId)
         : (preset: studioPreset, error: null);
     if (resolvedPreset.error != null) {
+      if (!token.isCancelled) {
+        recordPhase(
+          StudioRuntimeOutcome.blockingFailure,
+          StudioRuntimeReason.missingPreset,
+        );
+      }
       return PreGenPhaseResult(status: 'error', error: resolvedPreset.error);
     }
     final effectivePreset = resolvedPreset.preset!;
@@ -125,17 +139,31 @@ class ControllerPhaseRunner {
       final agents =
           effectivePreset.agents.where((agent) => agent.enabled).toList()
             ..sort((a, b) => a.order.compareTo(b.order));
-      if (agents.isEmpty) return const PreGenPhaseResult(status: 'disabled');
+      if (agents.isEmpty) {
+        recordPhase(
+          StudioRuntimeOutcome.skipped,
+          StudioRuntimeReason.noEnabledAgents,
+        );
+        return const PreGenPhaseResult(status: 'disabled');
+      }
       if (token.isCancelled) return const PreGenPhaseResult(status: 'aborted');
 
       final split = StudioActivationGate.splitAgentsByPhase(agents);
       if (split.finalAgent == null) {
         if (agents.any((agent) => agent.reasoningMode == 'think-replacement')) {
+          recordPhase(
+            StudioRuntimeOutcome.blockingFailure,
+            StudioRuntimeReason.thinkWriterMissing,
+          );
           return const PreGenPhaseResult(
             status: 'error',
             error: 'Studio Think mode requires an enabled Main Writer agent.',
           );
         }
+        recordPhase(
+          StudioRuntimeOutcome.skipped,
+          StudioRuntimeReason.noFinalAgent,
+        );
         return const PreGenPhaseResult(status: 'disabled');
       }
       final sceneKey = _briefCache.sceneCacheKeyFromInputs(inputs);
@@ -193,6 +221,13 @@ class ControllerPhaseRunner {
         cacheProbeByAgent[agent.id] = probe;
         if (probe.hit && probe.brief != null) {
           cachedBriefs.add(probe.brief!);
+          if (diagnostics != null) {
+            diagnostics.record(
+              diagnostics.newCall('studio.controller', agentId: agent.id),
+              StudioRuntimeOutcome.skipped,
+              StudioRuntimeReason.cacheHit,
+            );
+          }
         } else {
           fetchTrackers.add(agent);
         }
@@ -242,6 +277,10 @@ class ControllerPhaseRunner {
       if (token.isCancelled) return const PreGenPhaseResult(status: 'aborted');
       final failure = _resultMapper.firstFailedTrackerResult(fetchedResults);
       if (failure != null) {
+        recordPhase(
+          StudioRuntimeOutcome.blockingFailure,
+          StudioRuntimeReason.requiredTrackerFailed,
+        );
         final failedBriefs = _resultMapper.trackerResultsToBriefs(
           fetchedResults,
           dueTrackers,
@@ -308,6 +347,14 @@ class ControllerPhaseRunner {
             .firstOrNull;
         if (fetched != null) briefs.add(fetched);
       }
+      recordPhase(
+        dueTrackers.isEmpty
+            ? StudioRuntimeOutcome.skipped
+            : StudioRuntimeOutcome.executed,
+        dueTrackers.isEmpty
+            ? StudioRuntimeReason.noControllers
+            : StudioRuntimeReason.phaseCompleted,
+      );
       return PreGenPhaseResult(
         status: 'ok',
         briefs: briefs,
@@ -317,6 +364,12 @@ class ControllerPhaseRunner {
         studioPreset: effectivePreset,
       );
     } on TimeoutException catch (error) {
+      if (!token.isCancelled) {
+        recordPhase(
+          StudioRuntimeOutcome.blockingFailure,
+          StudioRuntimeReason.phaseTimeout,
+        );
+      }
       return PreGenPhaseResult(
         status: 'timeout',
         error: error.message?.isNotEmpty == true
@@ -328,6 +381,10 @@ class ControllerPhaseRunner {
           (error is DioException && CancelToken.isCancel(error))) {
         return const PreGenPhaseResult(status: 'aborted');
       }
+      recordPhase(
+        StudioRuntimeOutcome.blockingFailure,
+        StudioRuntimeReason.phaseException,
+      );
       _log('tracker cycle error session=$sessionId error=$error');
       return PreGenPhaseResult(status: 'error', error: '$error');
     }

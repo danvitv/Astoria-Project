@@ -10,6 +10,11 @@ import 'package:glaze_flutter/features/cloud_sync/services/dropbox/dropbox_adapt
 import 'package:glaze_flutter/features/cloud_sync/services/dropbox/dropbox_auth.dart';
 import 'package:glaze_flutter/features/cloud_sync/sync_models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:glaze_flutter/core/credentials/cloud_oauth_credential_owner.dart';
+import 'package:glaze_flutter/core/credentials/cloud_oauth_record.dart';
+import 'package:glaze_flutter/core/credentials/credential_vault.dart';
+
+import 'credentials/cloud_oauth_fixture.dart';
 
 const _token = 'synthetic-access-secret';
 const _providerSecret = 'synthetic-provider-body-secret';
@@ -46,6 +51,7 @@ class _RecordingHttpAdapter implements HttpClientAdapter {
 
 /// Makes accidentally using ordinary refreshing auth fail even on valid tokens.
 class _DiagnosticOnlyAuth extends DropboxAuth {
+  _DiagnosticOnlyAuth(CloudOAuthCredentialOwner credentials) : super(credentials: credentials);
   int regularTokenCalls = 0;
 
   @override
@@ -55,19 +61,15 @@ class _DiagnosticOnlyAuth extends DropboxAuth {
   }
 }
 
-void _loadSyntheticTokens(
-  DropboxAuth auth, {
+Future<void> _loadSyntheticTokens(
+  CloudOAuthCredentialOwner owner, {
   String? token = _token,
   int? expiresAt,
   String? refreshToken = 'synthetic-refresh-secret',
-}) {
-  auth.loadTokens({
-    'dropbox': {
-      'access_token': token,
-      'refresh_token': refreshToken,
-      'expires_at': expiresAt,
-    },
-  });
+}) async {
+  final current = owner.beginOperation();
+  await owner.store(token == null || token.isEmpty || refreshToken == null ? null :
+    CloudOAuthPair(accessToken: token, refreshToken: refreshToken, expiresAt: expiresAt), current);
 }
 
 Matcher _safeFailure(CloudReadOnlyDownloadStatus status, String text) =>
@@ -78,6 +80,8 @@ Matcher _safeFailure(CloudReadOnlyDownloadStatus status, String text) =>
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late _DiagnosticOnlyAuth auth;
+  late CloudOAuthFixture fixture;
+  late CloudOAuthCredentialOwner owner;
   late _RecordingHttpAdapter http;
   late DropboxAdapter dropbox;
   late SharedPreferences prefs;
@@ -85,15 +89,17 @@ void main() {
   late Map<String, dynamic>? beforeTokens;
 
   setUp(() async {
-    SharedPreferences.setMockInitialValues({
+    fixture = await CloudOAuthFixture.create(values: {
       'gz_sync_tokens': '{"sentinel":"synthetic-prefs-secret"}',
       'unrelated': 42,
     });
-    prefs = await SharedPreferences.getInstance();
+    addTearDown(fixture.redaction.dispose);
+    prefs = fixture.prefs;
     beforePrefs = {for (final key in prefs.getKeys()) key: prefs.get(key)};
-    auth = _DiagnosticOnlyAuth();
-    _loadSyntheticTokens(
-      auth,
+    owner = fixture.owner(CloudOAuthProvider.dropbox);
+    auth = _DiagnosticOnlyAuth(owner);
+    await _loadSyntheticTokens(
+      owner,
       expiresAt: DateTime.now()
           .add(const Duration(hours: 1))
           .millisecondsSinceEpoch,
@@ -115,8 +121,8 @@ void main() {
     test(
       '$expiry token rejects synchronously without HTTP or writes',
       () async {
-        _loadSyntheticTokens(
-          auth,
+        await _loadSyntheticTokens(
+          owner,
           expiresAt: expiry == 'expired'
               ? DateTime.now().millisecondsSinceEpoch - 1
               : null,
@@ -142,7 +148,7 @@ void main() {
 
   for (final token in <String?>[null, '']) {
     test('absent/empty token rejects without HTTP', () async {
-      _loadSyntheticTokens(auth, token: token);
+      await _loadSyntheticTokens(owner, token: token);
       beforeTokens = auth.saveTokens();
       await expectLater(
         dropbox.downloadReadOnly(cloudPath('character', 'card-1')),
@@ -259,20 +265,20 @@ void main() {
     expect(http.requests, hasLength(1));
   });
 
-  test('valid access token needs no refresh credential', () async {
-    _loadSyntheticTokens(
-      auth,
+  test('incomplete protected pair cannot grant diagnostic custody', () async {
+    await _loadSyntheticTokens(
+      owner,
       refreshToken: null,
       expiresAt: DateTime.now()
           .add(const Duration(hours: 1))
           .millisecondsSinceEpoch,
     );
     beforeTokens = auth.saveTokens();
-    expect(
-      await dropbox.downloadReadOnly(cloudPath('character', 'id')),
-      http.body,
+    await expectLater(
+      dropbox.downloadReadOnly(cloudPath('character', 'id')),
+      throwsA(isA<CloudReadOnlyDownloadException>()),
     );
-    expect(http.requests, hasLength(1));
+    expect(http.requests, isEmpty);
   });
 
   test('invalid diagnostic paths never reach HTTP', () async {
@@ -309,8 +315,8 @@ void main() {
   });
 
   test('ordinary token accessor/download preserve existing behavior', () async {
-    final ordinaryAuth = DropboxAuth();
-    _loadSyntheticTokens(ordinaryAuth);
+    final ordinaryAuth = DropboxAuth(credentials: owner);
+    await _loadSyntheticTokens(owner);
     // Ordinary auth still accepts legacy tokens with unknown expiry.
     expect(await ordinaryAuth.getValidToken(), _token);
     final ordinary = DropboxAdapter(
@@ -328,7 +334,7 @@ void main() {
       throwsA(isA<CloudFileNotFoundException>()),
     );
     // Ordinary expired auth still attempts refresh (fails here before HTTP).
-    _loadSyntheticTokens(ordinaryAuth, expiresAt: 0, refreshToken: null);
-    await expectLater(ordinaryAuth.getValidToken(), throwsStateError);
+    await _loadSyntheticTokens(owner, expiresAt: 0, refreshToken: null);
+    await expectLater(ordinaryAuth.getValidToken(), throwsA(isA<CredentialVaultException>()));
   });
 }

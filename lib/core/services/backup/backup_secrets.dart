@@ -3,6 +3,7 @@ import 'backup_secret_runtime.dart';
 import 'backup_secret_preferences.dart';
 import 'backup_secret_routes.dart';
 import 'backup_secret_containers.dart';
+import 'backup_secret_memory_history.dart';
 
 /// Credential filtering for shareable backups, not a general content scrubber.
 abstract final class BackupSecrets {
@@ -96,6 +97,11 @@ abstract final class BackupSecrets {
       'runtime_settings_json': BackupSecretRuntime.transformStudio(
         row['runtime_settings_json'],
         (value) => BackupSecretRuntime.stripParameters(value, isSecretField),
+      ),
+    if (tableName == 'memory_book_rows' && row.containsKey('settings_json'))
+      'settings_json': BackupSecretMemoryHistory.strip(
+        row['settings_json'],
+        isSecretField,
       ),
   };
 

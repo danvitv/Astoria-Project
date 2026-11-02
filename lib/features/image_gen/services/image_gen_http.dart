@@ -8,11 +8,12 @@ import '../../../core/utils/error_format.dart';
 class ImageGenHttp {
   final Dio _dio;
 
-  ImageGenHttp()
-    : _dio = Dio(
+  ImageGenHttp({Dio? dio, bool followRedirects = true})
+    : _dio = dio ?? Dio(
         BaseOptions(
           connectTimeout: const Duration(seconds: 60),
           receiveTimeout: const Duration(seconds: 300),
+          followRedirects: followRedirects,
         ),
       );
 

@@ -12,6 +12,37 @@ class PersonaRepo implements SyncPersonaStore {
   PersonaRepo(this._db);
   Future<void>? _ensureDisplayNameColumnFuture;
 
+  // Selection custody follows ORIGINAL writers sharing this database, not row
+  // equality. Even a failed/same-value write permanently retires older reads.
+  static final _selectionTargets =
+      Expando<Map<String, ({Object event, int pending})>>();
+  Map<String, ({Object event, int pending})> get _selectionTargetEvents =>
+      _selectionTargets[_db] ??= {};
+
+  bool Function()? captureNativeSelectionTarget(String id) {
+    final events = _selectionTargetEvents;
+    final before = events.putIfAbsent(id, () => (event: Object(), pending: 0));
+    if (before.pending != 0) return null;
+    var retired = false;
+    return () {
+      final now = events[id]!;
+      if (now.pending != 0 || !identical(now.event, before.event)) retired = true;
+      return !retired;
+    };
+  }
+
+  Future<T> _selectionTargetWrite<T>(String id, Future<T> Function() write) async {
+    final events = _selectionTargetEvents;
+    final before = events[id];
+    events[id] = (event: Object(), pending: (before?.pending ?? 0) + 1);
+    try {
+      return await write();
+    } finally {
+      final latest = events[id]!;
+      events[id] = (event: latest.event, pending: latest.pending - 1);
+    }
+  }
+
   Future<void> _ensureDisplayNameColumn() {
     return _ensureDisplayNameColumnFuture ??= () async {
       final cols = await _db
@@ -55,7 +86,7 @@ class PersonaRepo implements SyncPersonaStore {
   }
 
   @override
-  Future<void> put(Persona persona) async {
+  Future<void> put(Persona persona) => _selectionTargetWrite(persona.id, () async {
     await _ensureDisplayNameColumn();
     await _db.customStatement(
       '''
@@ -77,22 +108,22 @@ class PersonaRepo implements SyncPersonaStore {
         persona.createdAt,
       ],
     );
-  }
+  });
 
   @override
-  Future<void> updateAvatarPath(String id, String path) async {
+  Future<void> updateAvatarPath(String id, String path) => _selectionTargetWrite(id, () async {
     await _ensureDisplayNameColumn();
     await (_db.update(
       _db.personas,
     )..where((t) => t.personaId.equals(id))).write(
       PersonasCompanion(avatarPath: Value(relativeGlazeFilePath(path))),
     );
-  }
+  });
 
   @override
-  Future<void> delete(String id) async {
+  Future<void> delete(String id) => _selectionTargetWrite(id, () async {
     await (_db.delete(_db.personas)..where((t) => t.personaId.equals(id))).go();
-  }
+  });
 
   Persona _toModel(QueryRow row) => Persona(
     id: row.read<String>('persona_id'),

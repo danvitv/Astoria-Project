@@ -125,7 +125,14 @@ final class LlmCallEvent {
 class LlmCallEventCapture {
   LlmCallEventCapture._();
 
-  static LlmCallEventSink? sink;
+  static LlmCallEventSink? _sink;
+  static int _sinkRevision = 0;
+  static LlmCallEventSink? get sink => _sink;
+  static int get sinkRevision => _sinkRevision;
+  static set sink(LlmCallEventSink? value) {
+    if (!identical(_sink, value)) _sinkRevision++;
+    _sink = value;
+  }
 
   static Future<void> record(LlmCallEvent event) async {
     final target = sink;

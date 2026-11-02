@@ -1,9 +1,11 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../app_db.dart';
+import '../database_transaction_guard.dart';
 import '../tables.dart';
 import '../../models/memory_book.dart';
 import '../../models/memory_entry_revisions.dart';
@@ -20,6 +22,7 @@ import '../../models/support_models.dart';
 part 'memory_book_repo.g.dart';
 part 'memory_book_setup_store.dart';
 part 'memory_book_setup_fence.dart';
+part 'memory_book_native_entry_store.dart';
 
 /// Native-only exact row observation. Never serialize this into tool metadata.
 final class MemoryBookControlObservation {
@@ -82,27 +85,29 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required String sessionId,
     required bool enabled,
     required bool Function() isCurrent,
-  }) => _trackSetupBookWrite(() => transaction(() async {
-    if (!isCurrent()) return false;
-    final session = await ChatRepo(attachedDatabase).getById(sessionId);
-    if (session == null || !isCurrent()) return false;
-    final settings = MemoryBookSettings(
-      enabled: enabled,
-      autoCreateEnabled: false,
-      autoGenerateEnabled: false,
-      vectorSearchEnabled: false,
-      consolidationEnabled: false,
-    );
-    final inserted = await into(memoryBookRows).insertReturningOrNull(
-      MemoryBookRowsCompanion.insert(
-        sessionId: sessionId,
-        settingsJson: Value(jsonEncode(settings.toJson())),
-        updatedAt: Value(currentTimestampSeconds()),
-      ),
-      mode: InsertMode.insertOrIgnore,
-    );
-    return inserted != null;
-  }));
+  }) => _trackSetupBookWrite(
+    () => transaction(() async {
+      if (!isCurrent()) return false;
+      final session = await ChatRepo(attachedDatabase).getById(sessionId);
+      if (session == null || !isCurrent()) return false;
+      final settings = MemoryBookSettings(
+        enabled: enabled,
+        autoCreateEnabled: false,
+        autoGenerateEnabled: false,
+        vectorSearchEnabled: false,
+        consolidationEnabled: false,
+      );
+      final inserted = await into(memoryBookRows).insertReturningOrNull(
+        MemoryBookRowsCompanion.insert(
+          sessionId: sessionId,
+          settingsJson: Value(jsonEncode(settings.toJson())),
+          updatedAt: Value(currentTimestampSeconds()),
+        ),
+        mode: InsertMode.insertOrIgnore,
+      );
+      return inserted != null;
+    }),
+  );
 
   /// Scalar settings patch only. Raw unknown settings and all body/history blobs
   /// are preserved; an exact SQL row predicate is the final compare-and-swap.
@@ -110,37 +115,39 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required MemoryBookControlObservation expected,
     required Map<String, Object?> fields,
     required bool Function() isCurrent,
-  }) => _trackSetupBookWrite(() => transaction(() async {
-    const allowed = {
-      'enabled',
-      'maxInjectedEntries',
-      'maxInjectedTokens',
-      'memoryExcerptingEnabled',
-      'memoryPackingMode',
-      'injectionTarget',
-      'sourceWindowExclusion',
-      'factualContinuityGuardEnabled',
-    };
-    if (fields.isEmpty ||
-        fields.keys.any((k) => !allowed.contains(k)) ||
-        !isCurrent()) {
-      return false;
-    }
-    final settings = Map<String, dynamic>.from(
-      jsonDecode(expected._row.settingsJson) as Map,
-    )..addAll(fields);
-    // Enforce model types without replacing unrelated/unknown serialized fields.
-    MemoryBookSettings.fromJson(settings);
-    return await (update(
-          memoryBookRows,
-        )..where((t) => _controlPredicate(t, expected._row))).write(
-          MemoryBookRowsCompanion(
-            settingsJson: Value(jsonEncode(settings)),
-            updatedAt: Value(currentTimestampSeconds()),
-          ),
-        ) ==
-        1;
-  }));
+  }) => _trackSetupBookWrite(
+    () => transaction(() async {
+      const allowed = {
+        'enabled',
+        'maxInjectedEntries',
+        'maxInjectedTokens',
+        'memoryExcerptingEnabled',
+        'memoryPackingMode',
+        'injectionTarget',
+        'sourceWindowExclusion',
+        'factualContinuityGuardEnabled',
+      };
+      if (fields.isEmpty ||
+          fields.keys.any((k) => !allowed.contains(k)) ||
+          !isCurrent()) {
+        return false;
+      }
+      final settings = Map<String, dynamic>.from(
+        jsonDecode(expected._row.settingsJson) as Map,
+      )..addAll(fields);
+      // Enforce model types without replacing unrelated/unknown serialized fields.
+      MemoryBookSettings.fromJson(settings);
+      return await (update(
+            memoryBookRows,
+          )..where((t) => _controlPredicate(t, expected._row))).write(
+            MemoryBookRowsCompanion(
+              settingsJson: Value(jsonEncode(settings)),
+              updatedAt: Value(currentTimestampSeconds()),
+            ),
+          ) ==
+          1;
+    }),
+  );
 
   /// Local draft flag only; content, source manifest and error are unchanged.
   Future<bool> setDraftVectorForControl({
@@ -148,32 +155,34 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required String draftId,
     required bool vectorSearch,
     required bool Function() isCurrent,
-  }) => _trackSetupBookWrite(() => transaction(() async {
-    if (!isCurrent()) return false;
-    final drafts = (jsonDecode(expected._row.pendingDraftsJson) as List)
-        .map((d) => Map<String, dynamic>.from(d as Map))
-        .toList();
-    final matches = drafts.where((d) => d['id'] == draftId).toList();
-    if (matches.length != 1 ||
-        !const {
-          'pending_generation',
-          'pending_approval',
-          'error',
-          'needs_regeneration',
-        }.contains(matches.single['status'])) {
-      return false;
-    }
-    matches.single['vectorSearch'] = vectorSearch;
-    return await (update(
-          memoryBookRows,
-        )..where((t) => _controlPredicate(t, expected._row))).write(
-          MemoryBookRowsCompanion(
-            pendingDraftsJson: Value(jsonEncode(drafts)),
-            updatedAt: Value(currentTimestampSeconds()),
-          ),
-        ) ==
-        1;
-  }));
+  }) => _trackSetupBookWrite(
+    () => transaction(() async {
+      if (!isCurrent()) return false;
+      final drafts = (jsonDecode(expected._row.pendingDraftsJson) as List)
+          .map((d) => Map<String, dynamic>.from(d as Map))
+          .toList();
+      final matches = drafts.where((d) => d['id'] == draftId).toList();
+      if (matches.length != 1 ||
+          !const {
+            'pending_generation',
+            'pending_approval',
+            'error',
+            'needs_regeneration',
+          }.contains(matches.single['status'])) {
+        return false;
+      }
+      matches.single['vectorSearch'] = vectorSearch;
+      return await (update(
+            memoryBookRows,
+          )..where((t) => _controlPredicate(t, expected._row))).write(
+            MemoryBookRowsCompanion(
+              pendingDraftsJson: Value(jsonEncode(drafts)),
+              updatedAt: Value(currentTimestampSeconds()),
+            ),
+          ) ==
+          1;
+    }),
+  );
 
   /// Rebuilds only the disposable local catalog from the exact durable book.
   /// No embeddings, graph purge, generation or paid network work is dispatched.
@@ -230,52 +239,53 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
       table.lastProcessedMessageCount.equals(row.lastProcessedMessageCount) &
       table.updatedAt.equals(row.updatedAt);
 
-  Future<MemoryBook> ensureForSession(String sessionId) => _trackSetupBookWrite(() async {
-    final existing = await getBySessionId(sessionId);
-    if (existing != null) return existing;
-    final global = _ref.read(memoryGlobalSettingsProvider);
-    final book = MemoryBook(
-      id: 'memorybook_$sessionId',
-      sessionId: sessionId,
-      settings: MemoryBookSettings(
-        enabled: global.enabled,
-        memoryMode: global.memoryMode,
-        autoCreateEnabled: global.autoCreateEnabled,
-        autoGenerateEnabled: global.autoGenerateEnabled,
-        maxInjectedEntries: global.maxInjectedEntries,
-        memoryExcerptingEnabled: global.memoryExcerptingEnabled,
-        memoryPackingMode: global.memoryPackingMode,
-        memoryExcerptTokensPerChunk: global.memoryExcerptTokensPerChunk,
-        memoryExcerptChunksPerEntry: global.memoryExcerptChunksPerEntry,
-        chunkFirstTopEntries: global.chunkFirstTopEntries,
-        chunkFirstTopChunks: global.chunkFirstTopChunks,
-        maxInjectedTokens: global.maxInjectedTokens,
-        memoryBudgetPreset: global.memoryBudgetPreset,
-        autoCreateInterval: global.autoCreateInterval,
-        autoCreateLagMessages: global.autoCreateLagMessages,
-        useDelayedAutomation: global.useDelayedAutomation,
-        injectionTarget: global.injectionTarget,
-        batchSize: global.batchSize,
-        vectorSearchEnabled: global.vectorSearchEnabled,
-        keyMatchMode: global.keyMatchMode,
-        promptPreset: global.promptPreset,
-        diversityAware: global.diversityAware,
-        diversityPenalty: global.diversityPenalty,
-        recencyBoost: global.recencyBoost,
-        recencyHalfLifeDays: global.recencyHalfLifeDays,
-        importanceBoost: global.importanceBoost,
-        importanceWeight: global.importanceWeight,
-        sourceWindowExclusion: global.sourceWindowExclusion,
-        factualContinuityGuardEnabled: global.factualContinuityGuardEnabled,
-        queryIncludeAssistant: global.queryIncludeAssistant,
-        queryRecentTurns: global.queryRecentTurns,
-        queryMaxChars: global.queryMaxChars,
-        cadenceInterval: global.cadenceInterval,
-      ),
-    );
-    await put(book);
-    return book;
-  });
+  Future<MemoryBook> ensureForSession(String sessionId) =>
+      _trackSetupBookWrite(() async {
+        final existing = await getBySessionId(sessionId);
+        if (existing != null) return existing;
+        final global = _ref.read(memoryGlobalSettingsProvider);
+        final book = MemoryBook(
+          id: 'memorybook_$sessionId',
+          sessionId: sessionId,
+          settings: MemoryBookSettings(
+            enabled: global.enabled,
+            memoryMode: global.memoryMode,
+            autoCreateEnabled: global.autoCreateEnabled,
+            autoGenerateEnabled: global.autoGenerateEnabled,
+            maxInjectedEntries: global.maxInjectedEntries,
+            memoryExcerptingEnabled: global.memoryExcerptingEnabled,
+            memoryPackingMode: global.memoryPackingMode,
+            memoryExcerptTokensPerChunk: global.memoryExcerptTokensPerChunk,
+            memoryExcerptChunksPerEntry: global.memoryExcerptChunksPerEntry,
+            chunkFirstTopEntries: global.chunkFirstTopEntries,
+            chunkFirstTopChunks: global.chunkFirstTopChunks,
+            maxInjectedTokens: global.maxInjectedTokens,
+            memoryBudgetPreset: global.memoryBudgetPreset,
+            autoCreateInterval: global.autoCreateInterval,
+            autoCreateLagMessages: global.autoCreateLagMessages,
+            useDelayedAutomation: global.useDelayedAutomation,
+            injectionTarget: global.injectionTarget,
+            batchSize: global.batchSize,
+            vectorSearchEnabled: global.vectorSearchEnabled,
+            keyMatchMode: global.keyMatchMode,
+            promptPreset: global.promptPreset,
+            diversityAware: global.diversityAware,
+            diversityPenalty: global.diversityPenalty,
+            recencyBoost: global.recencyBoost,
+            recencyHalfLifeDays: global.recencyHalfLifeDays,
+            importanceBoost: global.importanceBoost,
+            importanceWeight: global.importanceWeight,
+            sourceWindowExclusion: global.sourceWindowExclusion,
+            factualContinuityGuardEnabled: global.factualContinuityGuardEnabled,
+            queryIncludeAssistant: global.queryIncludeAssistant,
+            queryRecentTurns: global.queryRecentTurns,
+            queryMaxChars: global.queryMaxChars,
+            cadenceInterval: global.cadenceInterval,
+          ),
+        );
+        await put(book);
+        return book;
+      });
 
   @override
   Future<List<MemoryBook>> getAll() async {
@@ -352,14 +362,17 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
   }
 
   Future<void> updateSettings(String sessionId, MemoryBookSettings settings) {
-    return _trackSetupBookWrite(() => (update(
-      memoryBookRows,
-    )..where((t) => t.sessionId.equals(sessionId))).write(
-      MemoryBookRowsCompanion(
-        settingsJson: Value(jsonEncode(settings.toJson())),
-        updatedAt: Value(currentTimestampSeconds()),
-      ),
-    ));
+    return _trackSetupBookWrite(
+      () =>
+          (update(
+            memoryBookRows,
+          )..where((t) => t.sessionId.equals(sessionId))).write(
+            MemoryBookRowsCompanion(
+              settingsJson: Value(jsonEncode(settings.toJson())),
+              updatedAt: Value(currentTimestampSeconds()),
+            ),
+          ),
+    );
   }
 
   /// Checks that the exact entries selected for a prepared request are still
@@ -384,83 +397,88 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     String sessionId,
     String draftId,
     MemoryDraft expected,
-  ) => _trackSetupBookWrite(() => transaction(() async {
-    final book = await getBySessionId(sessionId);
-    if (book == null) return null;
-    final draft = book.pendingDrafts.where((d) => d.id == draftId).firstOrNull;
-    if (draft == null) return null;
-    if (jsonEncode(draft.toJson()) != jsonEncode(expected.toJson())) {
-      throw StateError('Memory draft changed. Reload it before approval.');
-    }
-    if (draft.content.trim().isEmpty) return null;
-    final entry = MemoryEntryRevisions.initialize(
-      MemoryEntry(
-        id: draft.id.replaceAll('draft_', 'mem_'),
-        title: draft.title,
-        content: draft.content,
-        keys: draft.keys,
-        keyParagraphs: draft.keyParagraphs,
-        ledgerRange: draft.ledgerRange,
-        vectorSearch: draft.vectorSearch,
-        messageIds: draft.messageIds,
-        messageRange: draft.messageRange,
-        sourceManifest: draft.sourceManifest,
-        sourceSwipeId: draft.sourceSwipeId,
-        sourceAgentSwipeId: draft.sourceAgentSwipeId,
-        source: draft.source,
-        createdAt: DateTime.now().millisecondsSinceEpoch,
-      ),
-      reason: 'approved_generation',
-      reviewer: 'user',
-    );
-    final updated = book.copyWith(
-      entries: [...book.entries, entry],
-      pendingDrafts: book.pendingDrafts.where((d) => d.id != draftId).toList(),
-    );
-    await put(updated);
-    return getBySessionId(sessionId);
-  }));
+  ) => _trackSetupBookWrite(
+    () => transaction(() async {
+      final book = await getBySessionId(sessionId);
+      if (book == null) return null;
+      final draft = book.pendingDrafts
+          .where((d) => d.id == draftId)
+          .firstOrNull;
+      if (draft == null) return null;
+      if (jsonEncode(draft.toJson()) != jsonEncode(expected.toJson())) {
+        throw StateError('Memory draft changed. Reload it before approval.');
+      }
+      if (draft.content.trim().isEmpty) return null;
+      final entry = MemoryEntryRevisions.initialize(
+        MemoryEntry(
+          id: draft.id.replaceAll('draft_', 'mem_'),
+          title: draft.title,
+          content: draft.content,
+          keys: draft.keys,
+          keyParagraphs: draft.keyParagraphs,
+          ledgerRange: draft.ledgerRange,
+          vectorSearch: draft.vectorSearch,
+          messageIds: draft.messageIds,
+          messageRange: draft.messageRange,
+          sourceManifest: draft.sourceManifest,
+          sourceSwipeId: draft.sourceSwipeId,
+          sourceAgentSwipeId: draft.sourceAgentSwipeId,
+          source: draft.source,
+          createdAt: DateTime.now().millisecondsSinceEpoch,
+        ),
+        reason: 'approved_generation',
+        reviewer: 'user',
+      );
+      final updated = book.copyWith(
+        entries: [...book.entries, entry],
+        pendingDrafts: book.pendingDrafts
+            .where((d) => d.id != draftId)
+            .toList(),
+      );
+      await put(updated);
+      return getBySessionId(sessionId);
+    }),
+  );
 
   /// Repairs prompt selections after the complete set of available presets
   /// changes. Only the settings JSON of affected existing books is updated.
   /// Entries, drafts, cursors, and all unrelated settings remain untouched.
-  Future<int> repairPromptPresetSelections(
-    Iterable<String> customPresetKeys,
-  ) => _trackSetupBookWrite(() async {
-    final safeKeys = {
-      ...MemoryPromptPresets.builtIn.map((preset) => preset.key),
-      ...customPresetKeys,
-    };
-    var repaired = 0;
-    await transaction(() async {
-      final rows = await select(memoryBookRows).get();
-      for (final row in rows) {
-        final Map<String, dynamic> rawSettings;
-        try {
-          final decoded = jsonDecode(row.settingsJson);
-          if (decoded is! Map<String, dynamic>) continue;
-          rawSettings = decoded;
-        } catch (_) {
-          continue;
-        }
-        final normalized = MemoryPromptPresets.normalizeSerializedSelection(
-          rawSettings,
-          safeKeys,
-        );
-        if (identical(normalized, rawSettings)) continue;
-        await (update(
-          memoryBookRows,
-        )..where((table) => table.sessionId.equals(row.sessionId))).write(
-          MemoryBookRowsCompanion(
-            settingsJson: Value(jsonEncode(normalized)),
-            updatedAt: Value(currentTimestampSeconds()),
-          ),
-        );
-        repaired++;
-      }
-    });
-    return repaired;
-  });
+  Future<int> repairPromptPresetSelections(Iterable<String> customPresetKeys) =>
+      _trackSetupBookWrite(() async {
+        final safeKeys = {
+          ...MemoryPromptPresets.builtIn.map((preset) => preset.key),
+          ...customPresetKeys,
+        };
+        var repaired = 0;
+        await transaction(() async {
+          final rows = await select(memoryBookRows).get();
+          for (final row in rows) {
+            final Map<String, dynamic> rawSettings;
+            try {
+              final decoded = jsonDecode(row.settingsJson);
+              if (decoded is! Map<String, dynamic>) continue;
+              rawSettings = decoded;
+            } catch (_) {
+              continue;
+            }
+            final normalized = MemoryPromptPresets.normalizeSerializedSelection(
+              rawSettings,
+              safeKeys,
+            );
+            if (identical(normalized, rawSettings)) continue;
+            await (update(
+              memoryBookRows,
+            )..where((table) => table.sessionId.equals(row.sessionId))).write(
+              MemoryBookRowsCompanion(
+                settingsJson: Value(jsonEncode(normalized)),
+                updatedAt: Value(currentTimestampSeconds()),
+              ),
+            );
+            repaired++;
+          }
+        });
+        return repaired;
+      });
 
   /// Atomically appends [drafts] to the pending drafts of the memory book
   /// for [sessionId]. Wraps the read-modify-write in a transaction so
@@ -468,18 +486,19 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
   ///
   /// Used by user-directed MemoryBook draft workflows without racing with
   /// other MemoryBook writes.
-  Future<void> appendDrafts(String sessionId, List<MemoryDraft> drafts) => _trackSetupBookWrite(() async {
-    if (drafts.isEmpty) return;
-    await transaction(() async {
-      final existing = await getBySessionId(sessionId);
-      final book =
-          existing ??
-          MemoryBook(id: 'memorybook_$sessionId', sessionId: sessionId);
-      await put(
-        book.copyWith(pendingDrafts: [...book.pendingDrafts, ...drafts]),
-      );
-    });
-  });
+  Future<void> appendDrafts(String sessionId, List<MemoryDraft> drafts) =>
+      _trackSetupBookWrite(() async {
+        if (drafts.isEmpty) return;
+        await transaction(() async {
+          final existing = await getBySessionId(sessionId);
+          final book =
+              existing ??
+              MemoryBook(id: 'memorybook_$sessionId', sessionId: sessionId);
+          await put(
+            book.copyWith(pendingDrafts: [...book.pendingDrafts, ...drafts]),
+          );
+        });
+      });
 
   /// Applies a narrow mutation to one draft using the latest durable book.
   /// Returns false when the book or draft was removed while work was in flight.
@@ -554,40 +573,43 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required MemoryEntry expected,
     required MemoryEntry proposed,
     String reason = 'manual_edit',
-  }) => _trackSetupBookWrite(() => transaction(() async {
-    final book = await getBySessionId(sessionId);
-    final current = book?.entries
-        .where((entry) => entry.id == expected.id)
-        .firstOrNull;
-    if (book == null || current == null) return null;
-    final normalizedExpected = MemoryEntryRevisions.initialize(expected);
-    final normalizedCurrent = MemoryEntryRevisions.initialize(current);
-    if (normalizedCurrent != normalizedExpected || proposed.id != current.id) {
-      throw StateError('Memory changed while editing. Reload before saving.');
-    }
-    final edited = current.copyWith(
-      title: proposed.title,
-      content: proposed.content,
-      keys: proposed.keys,
-      keyParagraphs: proposed.keyParagraphs,
-      ledgerRange: proposed.ledgerRange,
-    );
-    final revised = MemoryEntryRevisions.prepare(
-      edited,
-      current,
-      author: 'user',
-      reason: reason,
-      reviewer: 'user',
-    );
-    await put(
-      book.copyWith(
-        entries: book.entries
-            .map((entry) => entry.id == current.id ? revised : entry)
-            .toList(),
-      ),
-    );
-    return revised;
-  }));
+  }) => _trackSetupBookWrite(
+    () => transaction(() async {
+      final book = await getBySessionId(sessionId);
+      final current = book?.entries
+          .where((entry) => entry.id == expected.id)
+          .firstOrNull;
+      if (book == null || current == null) return null;
+      final normalizedExpected = MemoryEntryRevisions.initialize(expected);
+      final normalizedCurrent = MemoryEntryRevisions.initialize(current);
+      if (normalizedCurrent != normalizedExpected ||
+          proposed.id != current.id) {
+        throw StateError('Memory changed while editing. Reload before saving.');
+      }
+      final edited = current.copyWith(
+        title: proposed.title,
+        content: proposed.content,
+        keys: proposed.keys,
+        keyParagraphs: proposed.keyParagraphs,
+        ledgerRange: proposed.ledgerRange,
+      );
+      final revised = MemoryEntryRevisions.prepare(
+        edited,
+        current,
+        author: 'user',
+        reason: reason,
+        reviewer: 'user',
+      );
+      await put(
+        book.copyWith(
+          entries: book.entries
+              .map((entry) => entry.id == current.id ? revised : entry)
+              .toList(),
+        ),
+      );
+      return revised;
+    }),
+  );
 
   /// Restores the text from [revisionId] by appending a new active revision.
   /// The historical revision remains untouched and the active pointer never
@@ -719,81 +741,83 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
     required String messageId,
     required int removedSwipeId,
     int? removedAgentSwipeId,
-  }) => _trackSetupBookWrite(() => transaction(() async {
-    final existing = await getBySessionId(sessionId);
-    if (existing == null) return;
+  }) => _trackSetupBookWrite(
+    () => transaction(() async {
+      final existing = await getBySessionId(sessionId);
+      if (existing == null) return;
 
-    bool belongsToMessage(List<String> ids) => ids.contains(messageId);
-    bool removeAnchor(int swipeId, int agentSwipeId) =>
-        swipeId == removedSwipeId &&
-        (removedAgentSwipeId == null || agentSwipeId == removedAgentSwipeId);
-    int shiftedSwipe(int value) =>
-        removedAgentSwipeId == null && value > removedSwipeId
-        ? value - 1
-        : value;
-    int shiftedAgent(int swipeId, int value) =>
-        removedAgentSwipeId != null &&
-            swipeId == removedSwipeId &&
-            value > removedAgentSwipeId
-        ? value - 1
-        : value;
+      bool belongsToMessage(List<String> ids) => ids.contains(messageId);
+      bool removeAnchor(int swipeId, int agentSwipeId) =>
+          swipeId == removedSwipeId &&
+          (removedAgentSwipeId == null || agentSwipeId == removedAgentSwipeId);
+      int shiftedSwipe(int value) =>
+          removedAgentSwipeId == null && value > removedSwipeId
+          ? value - 1
+          : value;
+      int shiftedAgent(int swipeId, int value) =>
+          removedAgentSwipeId != null &&
+              swipeId == removedSwipeId &&
+              value > removedAgentSwipeId
+          ? value - 1
+          : value;
 
-    final entries = existing.entries
-        .where(
-          (entry) =>
-              entry.sourceManifest != null ||
-              !belongsToMessage(entry.messageIds) ||
-              !removeAnchor(entry.sourceSwipeId, entry.sourceAgentSwipeId),
-        )
-        .map(
-          (entry) => entry.sourceManifest != null
-              ? entry.copyWith(
-                  sourceManifest: entry.sourceManifest!.removeVariation(
-                    messageId,
-                    removedSwipeId,
-                    removedAgentSwipeId,
+      final entries = existing.entries
+          .where(
+            (entry) =>
+                entry.sourceManifest != null ||
+                !belongsToMessage(entry.messageIds) ||
+                !removeAnchor(entry.sourceSwipeId, entry.sourceAgentSwipeId),
+          )
+          .map(
+            (entry) => entry.sourceManifest != null
+                ? entry.copyWith(
+                    sourceManifest: entry.sourceManifest!.removeVariation(
+                      messageId,
+                      removedSwipeId,
+                      removedAgentSwipeId,
+                    ),
+                  )
+                : !belongsToMessage(entry.messageIds)
+                ? entry
+                : entry.copyWith(
+                    sourceSwipeId: shiftedSwipe(entry.sourceSwipeId),
+                    sourceAgentSwipeId: shiftedAgent(
+                      entry.sourceSwipeId,
+                      entry.sourceAgentSwipeId,
+                    ),
                   ),
-                )
-              : !belongsToMessage(entry.messageIds)
-              ? entry
-              : entry.copyWith(
-                  sourceSwipeId: shiftedSwipe(entry.sourceSwipeId),
-                  sourceAgentSwipeId: shiftedAgent(
-                    entry.sourceSwipeId,
-                    entry.sourceAgentSwipeId,
+          )
+          .toList();
+      final drafts = existing.pendingDrafts
+          .where(
+            (draft) =>
+                draft.sourceManifest != null ||
+                !belongsToMessage(draft.messageIds) ||
+                !removeAnchor(draft.sourceSwipeId, draft.sourceAgentSwipeId),
+          )
+          .map(
+            (draft) => draft.sourceManifest != null
+                ? draft.copyWith(
+                    sourceManifest: draft.sourceManifest!.removeVariation(
+                      messageId,
+                      removedSwipeId,
+                      removedAgentSwipeId,
+                    ),
+                  )
+                : !belongsToMessage(draft.messageIds)
+                ? draft
+                : draft.copyWith(
+                    sourceSwipeId: shiftedSwipe(draft.sourceSwipeId),
+                    sourceAgentSwipeId: shiftedAgent(
+                      draft.sourceSwipeId,
+                      draft.sourceAgentSwipeId,
+                    ),
                   ),
-                ),
-        )
-        .toList();
-    final drafts = existing.pendingDrafts
-        .where(
-          (draft) =>
-              draft.sourceManifest != null ||
-              !belongsToMessage(draft.messageIds) ||
-              !removeAnchor(draft.sourceSwipeId, draft.sourceAgentSwipeId),
-        )
-        .map(
-          (draft) => draft.sourceManifest != null
-              ? draft.copyWith(
-                  sourceManifest: draft.sourceManifest!.removeVariation(
-                    messageId,
-                    removedSwipeId,
-                    removedAgentSwipeId,
-                  ),
-                )
-              : !belongsToMessage(draft.messageIds)
-              ? draft
-              : draft.copyWith(
-                  sourceSwipeId: shiftedSwipe(draft.sourceSwipeId),
-                  sourceAgentSwipeId: shiftedAgent(
-                    draft.sourceSwipeId,
-                    draft.sourceAgentSwipeId,
-                  ),
-                ),
-        )
-        .toList();
-    await put(existing.copyWith(entries: entries, pendingDrafts: drafts));
-  }));
+          )
+          .toList();
+      await put(existing.copyWith(entries: entries, pendingDrafts: drafts));
+    }),
+  );
 
   Future<void> copyForSessionBranch({
     required String fromSessionId,
@@ -825,9 +849,11 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
 
   @override
   Future<void> deleteBySessionId(String sessionId) {
-    return _trackSetupBookWrite(() => (delete(
-      memoryBookRows,
-    )..where((t) => t.sessionId.equals(sessionId))).go());
+    return _trackSetupBookWrite(
+      () => (delete(
+        memoryBookRows,
+      )..where((t) => t.sessionId.equals(sessionId))).go(),
+    );
   }
 
   @override

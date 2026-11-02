@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../settings/app_settings_provider.dart';
 import 'sync_serialization.dart';
 import 'sync_character_hash.dart';
+import 'sync_engine.dart' show SyncWorkflowRetired;
 import '../sync_models.dart';
 import '../sync_repo_interfaces.dart';
 import '../../../core/application/sync_reconciliation_source.dart';
@@ -35,6 +36,24 @@ class SyncManifestBuilder implements SyncManifestProvider {
   final SyncReconciliationStateStore? _reconciliationStateStore;
   final SyncRewriteJobHistoryStore? _rewriteJobHistoryStore;
   final SyncImageStore? _imageStore;
+  final void Function()? _checkOriginal;
+  int _acknowledgedWrites = 0;
+  void _check() {
+    try { _checkOriginal?.call(); }
+    catch (_) { throw SyncWorkflowRetired(_acknowledgedWrites); }
+  }
+  Future<T> _read<T>(Future<T> Function() action) async {
+    _check();
+    final value = await action();
+    _check();
+    return value;
+  }
+  Future<void> _write(Future<bool> Function() action) async {
+    _check();
+    if (!await action()) throw StateError('Cloud manifest write not acknowledged');
+    _acknowledgedWrites++;
+    _check();
+  }
 
   static const _manifestKey = 'gz_sync_manifest_v2';
   static const _deviceIdKey = 'gz_sync_device_id';
@@ -64,16 +83,17 @@ class SyncManifestBuilder implements SyncManifestProvider {
     this._reconciliationStateStore,
     this._rewriteJobHistoryStore,
     this._imageStore,
-  });
+    void Function()? checkCurrent,
+  }) : _checkOriginal = checkCurrent;
 
   @override
   Future<String> getDeviceId() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _read(SharedPreferences.getInstance);
     var id = prefs.getString(_deviceIdKey);
     if (id == null) {
       id =
           '${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(999999)}';
-      await prefs.setString(_deviceIdKey, id);
+      await _write(() => prefs.setString(_deviceIdKey, id!));
     }
     return id;
   }
@@ -92,7 +112,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
     final previous = await readLocalManifest();
     final characterAcceptedHashes = <String, String>{};
 
-    final characters = await _characterRepo.getAll();
+    final characters = await _read(_characterRepo.getAll);
     for (final c in characters) {
       final json = c.toJson();
       final size = SyncCharacterHash.avatarSize(json, _imageStore);
@@ -146,7 +166,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
       );
     }
 
-    final personas = await _personaRepo.getAll();
+    final personas = await _read(_personaRepo.getAll);
     for (final p in personas) {
       final json = p.toJson();
       final hash = SyncSerialization.computeSyncHash(_normalizeForHash(json));
@@ -169,7 +189,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
       );
     }
 
-    final extensionPresets = await _extensionPresetRepo.getAll();
+    final extensionPresets = await _read(_extensionPresetRepo.getAll);
     for (final ep in extensionPresets) {
       final json = ep.toJson();
       final hash = SyncSerialization.computeSyncHash(json);
@@ -192,7 +212,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
       );
     }
 
-    final sessions = await _chatRepo.getAllSessionMetadata();
+    final sessions = await _read(_chatRepo.getAllSessionMetadata);
     for (final s in sessions) {
       final hash = SyncSerialization.computeChatMetadataHash(s);
       final key = entryKey('chat', s.sessionId);
@@ -215,7 +235,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
       );
     }
 
-    final memoryBooks = await _memoryBookRepo.getAll();
+    final memoryBooks = await _read(_memoryBookRepo.getAll);
     for (final mb in memoryBooks) {
       final json = mb.toJson();
       final hash = SyncSerialization.computeMemoryBookHash(json);
@@ -239,9 +259,9 @@ class SyncManifestBuilder implements SyncManifestProvider {
       );
     }
 
-    final infoBlockSessionIds = await _infoBlockStore.getAllSessionIds();
+    final infoBlockSessionIds = await _read(_infoBlockStore.getAllSessionIds);
     for (final sessionId in infoBlockSessionIds) {
-      final blocks = await _infoBlockStore.getBySessionId(sessionId);
+      final blocks = await _read(() => _infoBlockStore.getBySessionId(sessionId));
       if (blocks.isEmpty) continue;
       final hash = SyncSerialization.computeSyncHash(
         SyncSerialization.infoBlocksPayload(blocks),
@@ -268,10 +288,10 @@ class SyncManifestBuilder implements SyncManifestProvider {
     final chatSessionIds = sessions.map((session) => session.sessionId).toSet();
     final trackerSnapshotSessionIds = {
       ...chatSessionIds,
-      ...await _trackerSnapshotStore.getAllSessionIds(),
+      ...await _read(_trackerSnapshotStore.getAllSessionIds),
     };
     for (final sessionId in trackerSnapshotSessionIds) {
-      final snapshots = await _trackerSnapshotStore.getBySessionId(sessionId);
+      final snapshots = await _read(() => _trackerSnapshotStore.getBySessionId(sessionId));
       final payload = {'__trackerSnapshots': true, 'items': snapshots};
       final hash = SyncSerialization.computeSyncHash(payload);
       final key = entryKey('tracker_snapshot', sessionId);
@@ -295,10 +315,10 @@ class SyncManifestBuilder implements SyncManifestProvider {
 
     final trackerValueSessionIds = {
       ...chatSessionIds,
-      ...await _trackerValueStore.getAllSessionIds(),
+      ...await _read(_trackerValueStore.getAllSessionIds),
     };
     for (final sessionId in trackerValueSessionIds) {
-      final trackers = await _trackerValueStore.getBySessionId(sessionId);
+      final trackers = await _read(() => _trackerValueStore.getBySessionId(sessionId));
       final payload = {'__trackerValues': true, 'items': trackers};
       final hash = SyncSerialization.computeSyncHash(payload);
       final key = entryKey('tracker_value', sessionId);
@@ -320,7 +340,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
       );
     }
 
-    final studioConfigs = await _studioConfigStore.getAll();
+    final studioConfigs = await _read(_studioConfigStore.getAll);
     for (final config in studioConfigs) {
       final id = config.sessionId;
       final json = config.toJson();
@@ -346,7 +366,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
     }
 
     if (_studioPresetStore != null) {
-      final studioPresets = await _studioPresetStore.getAll();
+      final studioPresets = await _read(_studioPresetStore.getAll);
       for (final preset in studioPresets) {
         final json = preset.toJson();
         final hash = SyncSerialization.computeSyncHash(json);
@@ -373,9 +393,9 @@ class SyncManifestBuilder implements SyncManifestProvider {
 
     // Chat summaries — per-session, like tracker_value.
     if (_chatSummaryStore != null) {
-      final summarySessionIds = await _chatSummaryStore.getAllSessionIds();
+      final summarySessionIds = await _read(_chatSummaryStore.getAllSessionIds);
       for (final sessionId in summarySessionIds) {
-        final summary = await _chatSummaryStore.getBySessionId(sessionId);
+        final summary = await _read(() => _chatSummaryStore.getBySessionId(sessionId));
         if (summary == null) continue;
         final hash = SyncSerialization.computeSyncHash(summary);
         final key = entryKey('chat_summary', sessionId);
@@ -400,9 +420,9 @@ class SyncManifestBuilder implements SyncManifestProvider {
 
     // Memory graph — per-session, packs 5 tables into one JSON.
     if (_memoryGraphStore != null) {
-      final graphSessionIds = await _memoryGraphStore.getAllSessionIds();
+      final graphSessionIds = await _read(_memoryGraphStore.getAllSessionIds);
       for (final sessionId in graphSessionIds) {
-        final graph = await _memoryGraphStore.getBySessionId(sessionId);
+        final graph = await _read(() => _memoryGraphStore.getBySessionId(sessionId));
         if (graph == null) continue;
         final hash = SyncSerialization.computeSyncHash(graph);
         final key = entryKey('memory_graph', sessionId);
@@ -426,11 +446,11 @@ class SyncManifestBuilder implements SyncManifestProvider {
     }
 
     if (_characterKnowledgeStore != null) {
-      final sessionIds = await _characterKnowledgeStore.getAllSessionIds();
+      final sessionIds = await _read(_characterKnowledgeStore.getAllSessionIds);
       for (final sessionId in sessionIds) {
-        final knowledge = await _characterKnowledgeStore.getBySessionId(
+        final knowledge = await _read(() => _characterKnowledgeStore.getBySessionId(
           sessionId,
-        );
+        ));
         if (knowledge == null) continue;
         final hash = SyncSerialization.computeSyncHash(knowledge);
         final key = entryKey('character_knowledge', sessionId);
@@ -453,11 +473,11 @@ class SyncManifestBuilder implements SyncManifestProvider {
     }
 
     if (_sessionLorebookOverlayStore != null) {
-      final sessionIds = await _sessionLorebookOverlayStore.getAllSessionIds();
+      final sessionIds = await _read(_sessionLorebookOverlayStore.getAllSessionIds);
       for (final sessionId in sessionIds) {
-        final overlays = await _sessionLorebookOverlayStore.getBySessionId(
+        final overlays = await _read(() => _sessionLorebookOverlayStore.getBySessionId(
           sessionId,
-        );
+        ));
         if (overlays == null) continue;
         final hash = SyncSerialization.computeSyncHash(overlays);
         final key = entryKey('session_lorebook_overlays', sessionId);
@@ -500,13 +520,13 @@ class SyncManifestBuilder implements SyncManifestProvider {
 
     if (_reconciliationStateStore != null) {
       final store = _reconciliationStateStore;
-      final sessionIds = await store.getAllSessionIds();
+      final sessionIds = await _read(store.getAllSessionIds);
       for (final sessionId in sessionIds) {
         final String? hash;
         if (store is SyncPagedReconciliationStateStore) {
-          hash = (await store.fingerprintBySessionId(sessionId))?.hash;
+          hash = (await _read(() => store.fingerprintBySessionId(sessionId)))?.hash;
         } else {
-          final state = await store.getBySessionId(sessionId);
+          final state = await _read(() => store.getBySessionId(sessionId));
           hash = state == null
               ? null
               : SyncSerialization.computeSyncHash(state);
@@ -555,13 +575,13 @@ class SyncManifestBuilder implements SyncManifestProvider {
     }
 
     if (_rewriteJobHistoryStore != null) {
-      final sessionIds = await _rewriteJobHistoryStore.getAllSessionIds();
+      final sessionIds = await _read(_rewriteJobHistoryStore.getAllSessionIds);
       for (final sessionId in sessionIds) {
         if (!chatSessionIds.contains(sessionId) ||
             await isDeleted('chat', sessionId)) {
           continue;
         }
-        final history = await _rewriteJobHistoryStore.getBySessionId(sessionId);
+        final history = await _read(() => _rewriteJobHistoryStore.getBySessionId(sessionId));
         if (history == null) continue;
         final hash = SyncSerialization.computeSyncHash(history);
         final key = entryKey('rewrite_job_history', sessionId);
@@ -713,19 +733,19 @@ class SyncManifestBuilder implements SyncManifestProvider {
   ) async {
     final singletons = <String, dynamic>{};
 
-    final lorebooks = await _lorebookRepo.getAll()
+    final lorebooks = await _read(_lorebookRepo.getAll)
       ..sort((a, b) => a.id.compareTo(b.id));
     singletons['lorebooks'] = lorebooks.map((l) => l.toJson()).toList();
 
-    final apiConfigs = await _apiRepo.getAll();
+    final apiConfigs = await _read(_apiRepo.getAll);
     singletons['api_presets'] = apiConfigs
         .map((a) => a.copyWith(apiKey: '', embeddingApiKey: '').toJson())
         .toList();
 
-    final presets = await _presetRepo.getAll();
+    final presets = await _read(_presetRepo.getAll);
     singletons['theme_presets'] = presets.map((p) => p.toJson()).toList();
 
-    final uiThemes = await _themePresetRepo.getAll();
+    final uiThemes = await _read(_themePresetRepo.getAll);
     singletons['ui_themes'] = uiThemes.map((t) => t.toJson()).toList();
 
     for (final entry in singletons.entries) {
@@ -756,7 +776,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
     // extensions_settings is a Map singleton (not a list), handled separately.
     {
       const type = 'extensions_settings';
-      final settings = await _extensionsSettingsStore.get();
+      final settings = await _read(_extensionsSettingsStore.get);
       final settingsJson = settings.toJson();
       final hash = SyncSerialization.computeSyncHash(settingsJson);
       final key = entryKey(type, type);
@@ -781,7 +801,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
     // Character folders — singleton (all folders + members in one JSON).
     if (_characterFolderStore != null) {
       const type = 'character_folders';
-      final data = await _characterFolderStore.getAll();
+      final data = await _read(_characterFolderStore.getAll);
       final hash = SyncSerialization.computeSyncHash(data);
       final key = entryKey(type, type);
       final prevEntry = previous.entries[key];
@@ -802,7 +822,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
       );
     }
 
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _read(SharedPreferences.getInstance);
     final pipelineSettings = prefs.getString(
       SyncSerialization.pipelineSettingsKey,
     );
@@ -853,7 +873,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
     Map<String, SyncManifestEntry> entries,
     int now,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _read(SharedPreferences.getInstance);
     final raw = prefs.getString(_deletedKey);
     if (raw == null) return;
 
@@ -877,7 +897,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
 
   @override
   Future<SyncManifest> readLocalManifest() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _read(SharedPreferences.getInstance);
     final raw = prefs.getString(_manifestKey);
     if (raw == null) return const SyncManifest(deviceId: '', createdAt: 0);
     try {
@@ -889,36 +909,36 @@ class SyncManifestBuilder implements SyncManifestProvider {
 
   @override
   Future<void> writeLocalManifest(SyncManifest manifest) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_manifestKey, jsonEncode(manifest.toJson()));
+    final prefs = await _read(SharedPreferences.getInstance);
+    await _write(() => prefs.setString(_manifestKey, jsonEncode(manifest.toJson())));
   }
 
   Future<void> markDeleted(String type, String id) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _read(SharedPreferences.getInstance);
     final raw = prefs.getString(_deletedKey);
     final deleted = raw != null
         ? (jsonDecode(raw) as List).cast<Map<String, dynamic>>().toList()
         : <Map<String, dynamic>>[];
     deleted.add({'type': type, 'id': id});
-    await prefs.setString(_deletedKey, jsonEncode(deleted));
+    await _write(() => prefs.setString(_deletedKey, jsonEncode(deleted)));
   }
 
   @override
   Future<void> clearLocalManifest() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_manifestKey);
-    await prefs.remove(_deletedKey);
+    final prefs = await _read(SharedPreferences.getInstance);
+    await _write(() => prefs.remove(_manifestKey));
+    await _write(() => prefs.remove(_deletedKey));
   }
 
   @override
   Future<void> clearDeleted() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_deletedKey);
+    final prefs = await _read(SharedPreferences.getInstance);
+    await _write(() => prefs.remove(_deletedKey));
   }
 
   @override
   Future<bool> isDeleted(String type, String id) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _read(SharedPreferences.getInstance);
     final raw = prefs.getString(_deletedKey);
     if (raw == null) return false;
     final deleted = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();

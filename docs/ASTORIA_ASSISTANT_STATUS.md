@@ -1,6 +1,32 @@
 # Astoria Assistant — implementation status
 
 Updated: 2026-11-02. Active plan: [ASTORIA_ASSISTANT_PLAN.md](ASTORIA_ASSISTANT_PLAN.md).
+
+Current no-build continuation: bounded read-only specialists are connected and
+verified in the original Send cycle, without extra sessions or effect authority.
+The historical Memory keyless-export credential gap is fixed and verified through
+synthetic DB-to-ZIP export; this is not migration or plaintext cleanup. Loaded-title
+rename/conditional Undo, Chub custody, bounded recorded Studio outcomes and passive
+rich text are verified slices; see the current handoff for evidence and limits.
+Saucepan token custody is also verified, with plaintext preserved and native-device
+limits explicit. Global persona/ordinary-preset selection and bounded native
+diagnostic presentation are verified. Existing-identity DataCat linked-account custody
+is verified with guarded approval publication and fenced first-install compatibility.
+Linked/anonymous client and owner suites pass 142 distinct cases, including exact
+unverified-write outcomes. Cold absent-binding history remains unknown. Twenty-eight
+affected Memory catalog/session/wizard regressions pass. Constructed
+Studio request/callback metrics are verified in 46 projection and 20 native runtime/
+source/UI cases, with no provider-wire or token-use claim. Originating-graph regex
+custody now passes 28 native/port cases. One Memory entry revision/Undo has 38 passing
+cases plus the actual pushed handoff and rendered-header Back case. Desktop cloud OAuth
+passes 55 synthetic cases and 35 existing diagnostic/consistency regressions.
+Rout.my image custody/current error-publication guards now pass the selected native
+connection, lifecycle and model-UI cases, with codec/provider regressions passing.
+Other image providers and live generation are not claimed. Definition freezing passes
+35 pure/native cases; its native limit remains 64. Six private FIFO preferences
+regressions pass 32 cases; scoped changed-source analysis has no errors/warnings.
+No new release build,
+live call, private data access or push occurred.
 Read-access redesign commit: `d73093fb` on
 `feat/astoria-assistant` (original baseline `4f1f9d58`). Subsequent bounded UI
 verification fixes are complete for the named Send/settings debts and recorded
@@ -61,10 +87,11 @@ in the local repository history. No push was performed.
 **The assistant is integrated and enabled, but the complete original product plan
 is not finished.** The November 1 request delivered a bounded implementation slice:
 one global data-read consent, autonomous multi-source reading and a simpler UI.
-It does not resume the entire original backlog or authorize private runtime access,
+That request did not resume the entire original backlog or authorize private runtime access,
 installation or release actions. The read-access backend and simplified UI are
 implemented. Native source/permission and the bounded Send/settings UI evidence
-are accepted. This is not full product or device acceptance.
+are accepted. The later explicit November 2 instruction resumes the active plan
+without builds. This is still not full product or device acceptance.
 
 ## November 1 product decision
 
@@ -126,6 +153,11 @@ or sent.
 | Context | Manual and automatic compaction with an encrypted checkpoint and the remaining conversation suffix; compaction does not delete stored history. |
 | Permissions | One global encrypted application-data read consent, frozen technical source ownership, revocation and separate dangerous-action authority. Legacy exact-source/recipient policies remain compatibility-only. See [global permissions](ASTORIA_GLOBAL_PERMISSIONS.md). |
 | Setup and actions | Theme/provider entries open native settings. Existing bounded UI/configuration and character/persona/lorebook/preset/Studio/Memory tools retain their original action-specific restrictions; the read grant does not enable every action. This is not arbitrary application control or a universal mutation/Undo engine. |
+| Loaded roleplay title | Exact native-confirmed rename and retained conditional Undo for one selected, idle original chat owner. Absent/null/empty/text titles, unrelated data and native replacement/cascade retirement are covered. No bootstrap or full roleplay CRUD; external/untracked ABA is not certified. |
+| Recorded Studio diagnosis | Finite actual phase/controller/call outcomes, stable retry attempts, exact opaque source/parent references and explicit missing/ambiguous links. Native credential-backed runs omit raw captures. Not full history, narrative truth or causal diagnosis. |
+| Passive rich replies | Native selectable headings/lists/literal code fences without links, loaders, HTML execution or actions. Current-policy projected text remains the only input. |
+| Chub credentials | Dedicated guarded vault custody and native consumers; provider state has no key, logout records an empty tombstone, HTTP publication preserves original and current redaction. Legacy plaintext is retained; other credential families and native-device validation remain open. |
+| Saucepan credentials | Dedicated guarded bearer-token custody, native extraction/account consumers, newest login/set/logout admission and empty tombstone. Failed storage permits no fallback; corrupt handle metadata does not hide authentication. Legacy plaintext stays; device/URL-dialog UI validation is not claimed. |
 | Integrity and recovery | Bounded database/session/Collector/Ledger checks and specific repairs, conditional repair Undo, native SQLite snapshots, separate cold-start restore on Windows/Android. Restore preparation in chat is informational; it does not perform restore or restart. |
 | Source navigation | Four read-only tools across eleven domains, fixed typed coverage of the 64 SQLite tables, autonomous bounded catalog/search/read after one consent, trusted bounded index preparation and encrypted catalog/body disclosure provenance before the actual model POST. Private infrastructure and non-SQLite preferences are not arbitrary raw sources. |
 | Support reports | Native safe facts and optional personal commentary, full immutable preview/exclusions, separate one-use native save approval, recipient-encrypted ciphertext and a Windows DPAPI-protected local decoder. A real public recipient is provisioned; private custody remains outside the client/Git. No upload/Discord automation. |
@@ -178,7 +210,7 @@ below verify the new access slice, not a rerun of every nine-domain legacy case.
 | Security foundation | Assistant credential/broker/redaction path is integrated. Compatibility deliberately retains legacy Drift fallback; full migration of every original secret family is not established as complete. |
 | Workspace and history | Integrated. Rich list/code-block rendering and some originally proposed generation overrides remain outside the current narrower UI. |
 | Guided setup | Theme/provider entry uses ordinary native settings for global-profile users. Memory Books has a verified five-question native wizard with separately confirmed session/global plans, fresh Undo, local readiness and exact-owner Books navigation. Live/provider/device validation is not claimed. |
-| Tools, skills, agents and DCP | Actual tool execution and compaction are integrated. Curated diagnostic skills, bounded specialist agents and the full structured diagnostic product remain open. Tool rounds use the dedicated native transport, not the originally proposed streaming tool-event extension to `ChatTransport`. |
+| Tools, skills, agents and DCP | Actual tool execution, compaction, curated diagnostic skills and bounded read-only specialist profiles in the original loop are integrated. Full structured causal diagnosis remains open. Tool rounds share the dedicated native transport and budget, not an extra model session or a streaming tool-event extension to `ChatTransport`. |
 | Support reports | The bounded native facts/commentary, immutable preview/exclusions, recipient encryption, `.astreport` save and DPAPI-protected decoder slice is integrated with targeted native/UI evidence and explicit public-recipient provisioning. Physical-device/provider I/O and the richer original diagnostic product are not claimed complete. |
 
 The Memory Books quick action is wired to the native wizard. The extended graphical
@@ -326,7 +358,7 @@ raw-plugin writers, a manual GUI/device run or a live provider.
   bounded redesign does not reopen all old gates or create a new full-suite
   certification project.
 
-## Current diagnostic slice — partial
+## Current diagnostic slice — first native path verified
 
 The November 2 root continuation added five immutable diagnostic checklists and
 deterministic observations over already-admitted native metadata. They introduce
@@ -337,14 +369,86 @@ Current model/local help/report UI wording was aligned with global read consent,
 connected preferences and the existing encrypted report preview/save flow.
 
 Seventeen pure diagnostic cases plus one local-help and one existing native
-regeneration case pass. Scoped analysis has no errors/warnings. The four new
-diagnostic native UI cases remain failing before their first POST in the existing
-owned-file fixture; their intended integration assertions have not been reached.
-No new build or full diagnostic delivery is claimed. The fixture-repair loop is
-stopped without relaxing safety or increasing budgets; see the handoff for the
-concrete earlier memory-identity refusal and remaining file-fixture uncertainty.
+regeneration case pass. Four native UI cases now pass actual Send/read/correlated
+continuation/durable answer, DCP duplicates, provider-prose rejection and native
+Stop (23 distinct relevant cases). Scoped analysis has no errors/warnings; the
+two changed tests report no issues. The old timeout was a tap before the native
+input-button rebuild; a subsequent unavailable tool was an incompatible legacy
+embedding seed. Only fixture timing and original-native synthetic target setup
+were corrected, with all assertions, original owners and budgets retained.
+The committed checkpoint is `6f4dd35a`; follow-up test/evidence updates are local.
+No live model quality or full causal diagnostic delivery is claimed.
 Diagnostics remains the active product slice; extended actions and credential
 migration have not been started by this continuation.
+
+### Linked recorded failures and requested Windows build
+
+The existing `requestDiagnostics` source supplies one complete finite-column
+failure observation and a run-local request reference only for exactly one
+session/run/call/attempt match. Missing/duplicate captures do not yield a guessed
+link. Recorded HTTP/timeout/parser outcomes are facts about that saved event, not
+proof of credential validity or root cause. Current redaction, original ownership,
+source budgets and separate action/report approvals remain unchanged; no new tool,
+schema, permission or probe was added.
+
+Sixteen new cases pass, including the actual five-POST native Send/source-read/
+encrypted-answer path. Twelve affected first-slice cases were refreshed, not
+counted again. The latest selected run passed 28 cases plus one existing saved-
+data/truncated-capture/privacy regression. Scoped analysis has no errors/warnings;
+13 existing navigation infos remain. The two corrected test files report no issues.
+
+The requested Windows release build passed in 76.3s. Run
+`build/windows/x64/runner/Release/Astoria.exe` with the full Release directory.
+It is the default **dev** channel. The running Debug was left untouched; no agent
+launch, installation, process kill, live call, private-data access or push occurred.
+These source/test/evidence updates remain uncommitted after `6f4dd35a`. This is a
+usable bounded diagnostic delivery and fresh build, not whole-plan completion.
+
+### Current saved Studio block validation
+
+The real `StudioPresetCodec`/`StudioPresetValidator` now supplies a complete
+native Studio settings unit. Existing validation behavior/messages are preserved,
+with finite rule codes added. The unit exposes counts, bounded coded issues and
+unambiguous block-array positions, not private IDs/content or authored diagnostic
+prose. Original strict shape, source/current-owner/redaction/ROOT fences remain;
+ordinary presets with the same ID do not receive a Studio validation result.
+
+This is saved codec/block-rule validation only, not runtime normalization, full
+agent-graph/required-controller execution, historical prompts/phases, connection
+validity or narrative semantics. It does not rewrite the preset or grant repairs.
+Recovery warnings, truncated issue lists and missing checks remain explicit.
+
+Twelve new cases pass (seven pure, four native FILE/source, one native five-POST
+UI path); nine existing validator and eight affected advice cases pass as
+regressions. Scoped analysis has no errors/warnings, with one unchanged navigation
+info; the corrected new test reports no issues. Source/evidence updates are local
+after `6f4dd35a`. The latest Windows release build passed in **84.1s** with Studio
+validation included, superseding the pre-Studio 76.3s output. Default dev channel,
+full Release folder required. The running Debug was not stopped or launched.
+The user explicitly resumed coding after that pause, not an application launch.
+The following topology slice is newer than the 84.1s build; no new build was run.
+
+### Current saved Studio agent topology
+
+A separate complete native settings unit now uses the real phase splitter and
+ontology-declared requirements on enabled, ordered codec agents. It reports finite
+observations for Think without Main Writer, codec suppression, conflicting saved
+identity/toggles, unavailable declared prerequisites, disabled locked controllers,
+order/writer ambiguity and actual legacy final fallback. Original array positions
+replace private IDs; saved presets and vaults are not changed, controllers are not
+executed. The existing block-validation unit remains independently redacted.
+
+Thirteen new cases pass (ten pure, two native FILE/source, one five-POST native UI)
+plus thirteen refreshed Studio/advice regressions: selected run 26/26. New inference
+warning/style hints were corrected; scoped analysis has no errors/warnings, and
+the three corrected files report no issues. No source tool, permission, shape/
+owner/Stop/redaction fence, runtime behavior or quota was weakened.
+
+The scope is current saved topology only, not actual controller outcomes/retries,
+full graph/runtime/auxiliary lanes, historical evidence or connection validity.
+Full diagnostic agents, runtime/history checks, extended actions and credential
+migration remain subsequent scope. Updates are local after `6f4dd35a`; app/process,
+commit, push and rebuild actions were not performed by this continuation.
 
 ## Plan and history pointers
 

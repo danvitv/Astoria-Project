@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 
+import '../../../core/credentials/image_routmy_credential_owner.dart';
 import '../../../core/llm/transport/llm_capture_context.dart';
 import '../../../core/llm/transport/llm_request_capture.dart';
 import '../image_gen_capabilities.dart';
@@ -23,7 +24,11 @@ import 'xai_image_provider.dart';
 /// instruction) has already been applied by the caller; this class only knows
 /// about endpoints, credentials and per-model parameter validation.
 class ImageGenDispatcher {
-  const ImageGenDispatcher();
+  const ImageGenDispatcher({this.routmyCredentials, this.routmyClientFactory});
+
+  final ImageRoutmyCredentialOwner? routmyCredentials;
+  /// Trusted transport fixture seam; never an alternate secret source.
+  final RoutmyImageProvider Function(String, void Function())? routmyClientFactory;
 
   Future<Uint8List> generate({
     required ImageGenSettings settings,
@@ -41,7 +46,9 @@ class ImageGenDispatcher {
     // showed every request it made except the one that drew it.
     LlmRequestCapture.recordAuxiliary(
       stage: captureContext?.stage ?? 'image.generate',
-      endpoint: settings.useSameEndpoint
+      endpoint: settings.apiType == ImageGenApiType.routmy
+          ? settings.routmyMirror.baseUrl
+          : settings.useSameEndpoint
           ? llmEndpoint
           : settings.customEndpoint,
       model: _captureModel(settings),
@@ -334,29 +341,48 @@ class ImageGenDispatcher {
     String? instructionAspectRatio,
     String? instructionImageSize, {
     CancelToken? cancelToken,
-  }) {
+  }) async {
     final images = _imagesOf(references);
-    return RoutmyImageProvider(
-      baseUrl: settings.routmyMirror.baseUrl,
-    ).generate(
-      apiKey: settings.routmyApiKey,
-      model: settings.routmyModel,
-      // rout.my sends references without captions — name them in the prompt.
-      prompt: imagePromptWithReferenceLabels(prompt, references),
-      aspectRatio: _validOverride(
-        instructionAspectRatio,
-        RoutMyConstants.aspectRatios,
-        settings.routmyAspectRatio,
-      ),
-      imageSize: _validOverride(
-        instructionImageSize,
-        RoutMyConstants.imageSizes,
-        settings.routmyImageSize,
-      ),
-      quality: settings.routmyQuality,
-      referenceImages: images,
-      cancelToken: cancelToken,
-    );
+    final owner = routmyCredentials;
+    if (owner == null) throw StateError('Native rout.my credential owner unavailable');
+    try {
+      return await owner.withApiKey(
+        origin: settings.routmyMirror.baseUrl,
+        consume: (apiKey, checkCurrent) => (routmyClientFactory?.call(
+          settings.routmyMirror.baseUrl,
+          checkCurrent,
+        ) ?? RoutmyImageProvider(
+          baseUrl: settings.routmyMirror.baseUrl,
+          checkCurrent: checkCurrent,
+        )).generate(
+          apiKey: apiKey,
+          model: settings.routmyModel,
+          // References have no captions — name them in the prompt.
+          prompt: imagePromptWithReferenceLabels(prompt, references),
+          aspectRatio: _validOverride(
+            instructionAspectRatio,
+            RoutMyConstants.aspectRatios,
+            settings.routmyAspectRatio,
+          ),
+          imageSize: _validOverride(
+            instructionImageSize,
+            RoutMyConstants.imageSizes,
+            settings.routmyImageSize,
+          ),
+          quality: settings.routmyQuality,
+          referenceImages: images,
+          cancelToken: cancelToken,
+        ),
+      );
+    } catch (_) {
+      if (cancelToken?.isCancelled == true) {
+        throw DioException.requestCancelled(
+          requestOptions: RequestOptions(path: settings.routmyMirror.baseUrl),
+          reason: 'Image generation cancelled',
+        );
+      }
+      rethrow;
+    }
   }
 
   /// `size` for a per-tag aspect ratio on the OpenAI images API, or null when

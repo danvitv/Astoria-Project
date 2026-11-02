@@ -41,6 +41,92 @@ Map<String, Object?> runtime(String credential) => {
 
 void main() {
   test(
+    'keyless Memory history strips only audited credentials and endpoints',
+    () {
+      final settings = {
+        for (final prefix in [
+          'generation',
+          'aux',
+          'sidecar',
+          'postCleaner',
+          'consolidation',
+        ])
+          '${prefix}ApiKey': 'SYNTHETIC_HISTORY_${prefix}_SECRET',
+        for (final prefix in [
+          'generation',
+          'aux',
+          'sidecar',
+          'postCleaner',
+          'consolidation',
+        ])
+          '${prefix}Endpoint':
+              'https://user:pass@history.example.test/api?key=secret&size=512',
+        'generationSource': 'custom',
+        'maxTokens': 512,
+        'unknown': {
+          'token': 'inert story token',
+          'generationApiKey': 'inert nested text',
+        },
+      };
+      final raw = jsonEncode(settings);
+      final row = {
+        'session_id': 'synthetic-session',
+        'settings_json': raw,
+        'entries_json': 'ordinary story',
+      };
+      final stripped = BackupSecrets.stripRow('memory_book_rows', row);
+      final output = jsonDecode(stripped['settings_json'] as String) as Map;
+      for (final prefix in [
+        'generation',
+        'aux',
+        'sidecar',
+        'postCleaner',
+        'consolidation',
+      ]) {
+        expect(output['${prefix}ApiKey'], '');
+        expect(
+          output['${prefix}Endpoint'],
+          'https://history.example.test/api?key=&size=512',
+        );
+      }
+      expect(output['unknown'], settings['unknown']);
+      expect(output['generationSource'], 'custom');
+      expect(output['maxTokens'], 512);
+      expect(stripped['entries_json'], row['entries_json']);
+      expect(row['settings_json'], raw); // Never change the original row.
+      expect(
+        BackupSecrets.refillRow('memory_book_rows', stripped, row),
+        stripped,
+      );
+    },
+  );
+
+  test(
+    'unattestable historical settings are omitted only in keyless projection',
+    () {
+      for (final raw in [
+        '{"generationApiKey":"SYNTHETIC_SECRET"',
+        '["SYNTHETIC_SECRET"]',
+        '"SYNTHETIC_SECRET"',
+      ]) {
+        final row = {'settings_json': raw};
+        expect(
+          BackupSecrets.stripRow('memory_book_rows', row)['settings_json'],
+          '{}',
+        );
+        expect(row['settings_json'], raw);
+        expect(BackupSecrets.stripRow('characters', row), row);
+      }
+      const raw = ' { "maxTokens" : 100 } ';
+      expect(
+        BackupSecrets.stripRow('memory_book_rows', {
+          'settings_json': raw,
+        })['settings_json'],
+        raw,
+      );
+    },
+  );
+  test(
     'URI scrubber blanks only auth and preserves nonsecret query encoding',
     () {
       const raw =
@@ -237,6 +323,31 @@ void main() {
         '${Platform.environment['LOCALAPPDATA']}/Temp/opencode',
       ).createTemp('astoria_structured_backup_');
       images = ImageStorageService(temp.path);
+      await db
+          .into(db.chatSessions)
+          .insert(
+            ChatSessionsCompanion.insert(
+              sessionId: 'history-synthetic',
+              characterId: 'history-character',
+              sessionIndex: 0,
+              messagesJson: '[]',
+            ),
+          );
+      await db
+          .into(db.memoryBookRows)
+          .insert(
+            MemoryBookRowsCompanion.insert(
+              sessionId: 'history-synthetic',
+              settingsJson: Value(
+                jsonEncode({
+                  'generationApiKey': 'source-history-key',
+                  'generationEndpoint': endpoint,
+                  'consolidationApiKey': 'source-history-consolidation',
+                  'unknown': {'token': 'inert-history'},
+                }),
+              ),
+            ),
+          );
       for (final id in ['same', 'changed']) {
         await db
             .into(db.apiConfigs)
@@ -315,6 +426,13 @@ void main() {
         expect(jsonEncode(studio), contains('inert-restore'));
         expect(jsonEncode(studio), contains('ordinary-style'));
         expect(jsonEncode(studio), contains('ordinary-payload'));
+        final history = await archiveRows(file, 'memory_book_rows');
+        expect(jsonEncode(history), isNot(contains('source-history')));
+        expect(jsonEncode(history), contains('inert-history'));
+        expect(
+          (await db.select(db.memoryBookRows).getSingle()).settingsJson,
+          contains('source-history-key'),
+        );
         final prefs = await archiveJson(file, 'preferences.json');
         expect(jsonEncode(prefs), isNot(contains('source-')));
         expect(prefs['gz_imggen_settings'], contains('ordinary-text'));
@@ -459,6 +577,10 @@ void main() {
       expect(
         (await archiveRows(file, 'api_configs')).first['endpoint'],
         endpoint,
+      );
+      expect(
+        jsonEncode(await archiveRows(file, 'memory_book_rows')),
+        contains('source-history-key'),
       );
       expect(
         jsonEncode(await archiveRows(file, 'studio_preset_rows')),

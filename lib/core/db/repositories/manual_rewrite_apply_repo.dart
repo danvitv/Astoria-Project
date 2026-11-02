@@ -16,6 +16,7 @@ import 'session_canon_checkpoint_repo.dart';
 import 'session_lorebook_embedding_job_repo.dart';
 import 'session_lorebook_evolution_repo.dart';
 import 'session_lorebook_revision_repo.dart';
+import 'session_deletion_queries.dart';
 
 /// The only durable request shape accepted by manual apply.  It is stored in
 /// the immutable operation-revision snapshot; callers never provide it.
@@ -682,12 +683,15 @@ class ManualRewriteApplyRepo {
           ),
         );
     final rebound =
-        await (_db.update(_db.chatSessions)..where(
-              (row) =>
-                  row.sessionId.equals(session.sessionId) &
-                  row.characterId.equals(source.id),
-            ))
-            .write(ChatSessionsCompanion(characterId: Value(fork.id)));
+        await SessionDeletionQueries.trackInventoryMutation(
+          _db,
+          () => (_db.update(_db.chatSessions)..where(
+                (row) =>
+                    row.sessionId.equals(session.sessionId) &
+                    row.characterId.equals(source.id),
+              ))
+              .write(ChatSessionsCompanion(characterId: Value(fork.id))),
+        );
     if (rebound != 1) throw const _ApplyBlocked('staleSessionCharacter');
     return fork;
   }

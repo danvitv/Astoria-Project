@@ -5,6 +5,11 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/models/character.dart';
+import 'package:glaze_flutter/core/credentials/cloud_oauth_credential_owner.dart';
+import 'package:glaze_flutter/core/credentials/cloud_oauth_record.dart';
+import 'package:glaze_flutter/core/credentials/credential_vault.dart';
+import 'package:glaze_flutter/core/credentials/secret_redaction_coordinator.dart';
+import 'package:glaze_flutter/core/preferences/tracked_shared_preferences.dart';
 import 'package:glaze_flutter/features/cloud_sync/cloud_adapter.dart';
 import 'package:glaze_flutter/features/cloud_sync/cloud_read_only_adapter.dart';
 import 'package:glaze_flutter/features/cloud_sync/services/dropbox/dropbox_adapter.dart';
@@ -21,6 +26,7 @@ import 'package:shared_preferences_platform_interface/shared_preferences_platfor
 import 'sync_conflict_diagnostics_download_test.dart' show CapabilitySpy;
 import 'sync_conflict_diagnostics_test.dart' as fixtures;
 import 'sync_lifecycle_test.dart' as fakes;
+import 'credentials/fake_credential_storage.dart';
 
 class _PreferencesSpy extends SharedPreferencesStorePlatform {
   final values = <String, Object>{'flutter.sentinel': fixtures.canary};
@@ -65,6 +71,7 @@ class _Characters extends fakes.FakeCharacterStore {
 }
 
 class _Auth extends DropboxAuth {
+  _Auth(CloudOAuthCredentialOwner credentials) : super(credentials: credentials);
   int ordinaryTokenCalls = 0;
   @override
   Future<String> getValidToken() async {
@@ -164,6 +171,23 @@ void main() {
     SharedPreferencesStorePlatform.instance = prefs;
   });
 
+  Future<_Auth> protectedAuth() async {
+    final original = await TrackedSharedPreferences.getInstance();
+    final redaction = SecretRedactionCoordinator();
+    addTearDown(redaction.dispose);
+    final owner = CloudOAuthCredentialOwner(
+      vault: CredentialVault(storage: FakeCredentialStorage(), buildChannel: 'dev'),
+      redaction: redaction, originalPreferences: Future.value(original),
+      provider: CloudOAuthProvider.dropbox);
+    await owner.store(CloudOAuthPair(accessToken: fixtures.canary,
+      refreshToken: 'SYNTHETIC_DIAGNOSTIC_REFRESH',
+      expiresAt: DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch),
+      owner.beginOperation());
+    // Authentication fixture acquisition is not diagnostic I/O.
+    prefs.reads = 0;
+    return _Auth(owner);
+  }
+
   test(
     'default selector uses real Dropbox capability with unavailable auth',
     () async {
@@ -186,15 +210,7 @@ void main() {
       final chars = _Characters();
       final c = fixtures.conflict('character');
       chars.data[c.id] = Character(id: c.id, name: fixtures.canary);
-      final auth = _Auth()
-        ..loadTokens({
-          'dropbox': {
-            'access_token': fixtures.canary,
-            'expires_at': DateTime.now()
-                .add(const Duration(hours: 1))
-                .millisecondsSinceEpoch,
-          },
-        });
+      final auth = await protectedAuth();
       final beforeTokens = jsonEncode(auth.saveTokens());
       final beforeCard = jsonEncode(chars.data[c.id]!.toJson());
       final http = _Http()..body = beforeCard;
@@ -338,15 +354,7 @@ void main() {
       final chars = _Characters();
       final c = fixtures.conflict('character');
       chars.data[c.id] = Character(id: c.id, name: fixtures.canary);
-      final auth = _Auth()
-        ..loadTokens({
-          'dropbox': {
-            'access_token': fixtures.canary,
-            'expires_at': DateTime.now()
-                .add(const Duration(hours: 1))
-                .millisecondsSinceEpoch,
-          },
-        });
+      final auth = await protectedAuth();
       final http = _Http()
         ..entered = Completer<void>()
         ..gate = Completer<void>()

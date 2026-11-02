@@ -11,6 +11,7 @@ import 'package:glaze_flutter/core/models/support_models.dart';
 import 'package:glaze_flutter/core/state/credential_vault_provider.dart';
 import 'package:glaze_flutter/core/state/connection_revision_provider.dart';
 import 'package:glaze_flutter/core/state/db_provider.dart';
+import 'package:glaze_flutter/core/state/lorebook_embedding_provider.dart';
 import 'package:glaze_flutter/core/state/shared_prefs_provider.dart';
 import 'package:glaze_flutter/features/settings/app_settings_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/models/support_model_tool_ui_ports.dart';
@@ -19,6 +20,7 @@ import 'package:glaze_flutter/features/support_assistant/state/support_model_pro
 import 'package:glaze_flutter/features/support_assistant/state/support_model_dependencies.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_model_workspace_binding.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_native_provider.dart';
+import 'package:glaze_flutter/features/support_assistant/state/support_data_consent_admission.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_workspace_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_model_catalog_provider.dart';
 import 'package:glaze_flutter/shared/shell/nav_height_provider.dart';
@@ -130,6 +132,7 @@ final class ToolLoopFixture {
         shellHeaderProvider,
         supportConnectionsProvider,
         supportModelCatalogProvider,
+        supportDataConsentAdmissionProvider,
       });
     }
     f.container = ProviderContainer(
@@ -152,6 +155,9 @@ final class ToolLoopFixture {
         themeProvider.overrideWith((ref) => f.theme),
         supportModelPrivateAdapterFactoryProvider.overrideWithValue(f.adapter),
         if (screen) ...[
+          // Memory's ORIGINAL widget and native adapter share this exact root.
+          // Do not introduce a child scope merely to suppress vector UI startup.
+          vectorSearchAvailableProvider.overrideWithValue(false),
           supportConnectionsProvider.overrideWithValue(const []),
           supportModelCatalogProvider.overrideWithValue(null),
           supportConnectionMetadataProvider.overrideWith(
@@ -225,6 +231,11 @@ final class ToolLoopFixture {
         );
     f.bridge = f.container.read(supportModelUiBridgeProvider);
     if (screen) {
+      // Action-loop cases start after the optional read invitation was declined.
+      // This is presentation state only: no data grant or action confirmation.
+      f.container
+          .read(supportDataConsentAdmissionProvider.notifier)
+          .markOffered();
       final workspace = f.container.read(supportWorkspaceProvider.notifier);
       await workspace.refresh();
       workspace.selectSession(native.session);

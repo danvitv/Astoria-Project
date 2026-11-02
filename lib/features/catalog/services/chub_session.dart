@@ -7,6 +7,22 @@ class ChubSession {
   const ChubSession({required this.token, this.userName});
 }
 
+/// The caller captures controller, notifier/build, mode epoch and lifetime
+/// before calling. A late page result is not an admitted native auth action.
+Future<ChubSession?> captureChubSessionProbe({
+  required Future<Object?> Function() evaluate,
+  required bool Function() isCurrent,
+}) async {
+  try {
+    if (!isCurrent()) return null;
+    final raw = await evaluate();
+    if (!isCurrent()) return null;
+    return parseChubSessionProbe(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
 /// JS evaluated inside a chub.ai WebView to read the session the site itself
 /// keeps in `localStorage`.
 ///

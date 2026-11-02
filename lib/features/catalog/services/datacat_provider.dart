@@ -1,10 +1,14 @@
 import 'dart:math';
 
-import 'package:dio/dio.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/credentials/credential_vault.dart';
+import '../../../core/credentials/datacat_anonymous_credential_owner.dart';
+import '../../../core/credentials/datacat_anonymous_transport.dart';
+import '../../../core/state/credential_vault_provider.dart';
+import '../../../core/state/shared_prefs_provider.dart';
 
 import 'greeting_normalizer.dart';
-import 'catalog_http.dart';
 import '../catalog_models.dart';
 import 'extraction_status.dart';
 
@@ -23,9 +27,6 @@ import 'extraction_status.dart';
 /// recovering a JanitorAI card whose definition its creator closed (DataCat
 /// scrapes those, and the public endpoint does not serve them).
 
-const _base = 'https://datacat.run';
-const _keyDevice = 'gz_dc_device';
-const _keyToken = 'gz_dc_token';
 const _saucepanCdnBase = 'https://cdn.saucepan.ai';
 const _imageBase = 'https://ella.janitorai.com/bot-avatars/';
 
@@ -40,96 +41,218 @@ String _uuid() {
   );
 }
 
-Future<String> _getDeviceToken() async {
-  final prefs = await SharedPreferences.getInstance();
-  var token = prefs.getString(_keyDevice);
-  if (token == null) {
-    token = _uuid();
-    await prefs.setString(_keyDevice, token);
+/// Native extraction composition only. No token or account state is retained by
+/// this service. A polling job keeps ONE original owner across all its awaits.
+final class DatacatAnonymousExtractor {
+  DatacatAnonymousExtractor({
+    required DatacatAnonymousCredentialOwner credentials,
+    required DatacatAnonymousTransport transport,
+    bool Function()? isCurrent,
+    Future<void> Function(Duration)? delay,
+  }) : _credentials = credentials,
+       _transport = transport,
+       _externalCurrent = isCurrent ?? (() => true),
+       _delay = delay ?? ((duration) => Future<void>.delayed(duration));
+
+  final DatacatAnonymousCredentialOwner _credentials;
+  final DatacatAnonymousTransport _transport;
+  final bool Function() _externalCurrent;
+  final Future<void> Function(Duration) _delay;
+  bool _retired = false;
+  bool get _current {
+    if (_retired) return false;
+    try {
+      if (!_externalCurrent()) _retired = true;
+    } catch (_) {
+      _retired = true;
+    }
+    return !_retired;
   }
-  return token;
-}
 
-Future<String?> _getSessionToken() async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs.getString(_keyToken);
-}
-
-Future<void> _setSessionToken(String token) async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_keyToken, token);
-}
-
-Map<String, String> _authHeaders(String token) => {
-      'X-Session-Token': token,
-      'Origin': 'https://datacat.run',
-      'Referer': 'https://datacat.run/',
-    };
-
-Future<String> datacatInit() async {
-  final deviceToken = await _getDeviceToken();
-  final data = await catalogPost(
-    '$_base/api/liberator/identify',
-    {'deviceToken': deviceToken},
-    {
-      'Origin': 'https://datacat.run',
-      'Referer': 'https://datacat.run/',
-    },
+  _DatacatAnonymousJob _job() => _DatacatAnonymousJob(
+    this,
+    _credentials.captureOperation(isCurrent: () => _current),
   );
-  final sessionToken = data['sessionToken'] as String?;
-  if (sessionToken == null) throw Exception('DataCat: no sessionToken');
-  await _setSessionToken(sessionToken);
-  return sessionToken;
-}
 
-Future<String> _getToken() async {
-  var token = await _getSessionToken();
-  token ??= await datacatInit();
-  return token;
-}
+  Future<void> initialize() {
+    final job = _job();
+    // initialize() itself claims the new epoch synchronously before its await.
+    final pending = _credentials.initialize(job.owner, _transport.identify);
+    return _settle(job, pending);
+  }
 
-/// Runs an authenticated DataCat call, re-establishing the session once when
-/// the server rejects the token it was made with.
-///
-/// The anonymous session token comes from `/api/liberator/identify` and is kept
-/// in SharedPreferences with no expiry, so it outlives whatever the server is
-/// still willing to honour. A token DataCat has forgotten answers 401/403 to
-/// every call carrying it, and the browse path used to be the only one that
-/// knew how to replace one — it ran a throwaway probe request before each
-/// search purely to find out. Every other endpoint dead-ended: the card detail
-/// showed `HTTP 403: Forbidden` behind a Retry button that re-sent the same
-/// dead token, which is why retrying never helped.
-///
-/// A 403 can also be DataCat's bot protection, which no amount of fresh
-/// sessions will cure. One retry is what tells the two apart — and the wasted
-/// request only happens on a failure that was already fatal.
-Future<T> _datacatAuthed<T>(Future<T> Function(String token) call) async {
-  final token = await _getToken();
-  try {
-    return await call(token);
-  } on DioException catch (e) {
-    final status = catalogErrorStatus(e);
-    if (status != 401 && status != 403) rethrow;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_keyToken);
-    return await call(await datacatInit());
+  Future<Map<String, dynamic>> _authed(
+    _DatacatAnonymousJob job,
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      job.check();
+      Map<String, dynamic>? value;
+      DatacatAnonymousHttpException? failure;
+      await _credentials.withToken(job.owner, _transport.identify, (
+        token,
+        current,
+      ) async {
+        try {
+          value = await _transport.request(
+            method,
+            path,
+            token,
+            current,
+            body: body,
+          );
+          job.check();
+        } on DatacatAnonymousHttpException catch (error) {
+          job.check();
+          // Keep only the fixed safe status outside the vault consumer callback.
+          failure = error;
+        }
+      });
+      job.check();
+      if (failure == null) return value!;
+      if (attempt != 0 || (failure!.status != 401 && failure!.status != 403)) {
+        throw failure!;
+      }
+      // Original native owner only: one identify/retry, no plaintext removal,
+      // old-response replacement, anonymous storage-failure fallback or probe.
+      await _credentials.initialize(job.owner, _transport.identify);
+      job.check();
+    }
+    throw const DatacatAnonymousHttpException(0);
+  }
+
+  Future<T> _settle<T>(_DatacatAnonymousJob job, Future<T> pending) async {
+    try {
+      final result = await pending;
+      job.check();
+      return result;
+    } on CredentialVaultAdmissionDenied {
+      rethrow;
+    } on CredentialVaultException {
+      job.check();
+      rethrow;
+    } on DatacatAnonymousHttpException {
+      job.check();
+      rethrow;
+    } catch (_) {
+      job.check();
+      throw const DatacatAnonymousHttpException(0);
+    }
+  }
+
+  Future<DownloadedCharacter> getCharacter(String uuid) {
+    final job = _job();
+    return _settle(job, _getCharacter(job, uuid));
+  }
+
+  Future<String?> getCharacterAvatar(String uuid) {
+    final job = _job();
+    return _settle(job, _getCharacterAvatar(job, uuid));
+  }
+
+  Future<ExtractionResult> extractAndPoll(
+    String url, {
+    void Function(String phase)? onPhaseChange,
+  }) {
+    final job = _job();
+    return _settle(
+      job,
+      _extractAndPoll(job, url, onPhaseChange: onPhaseChange),
+    );
+  }
+
+  void dispose() {
+    _retired = true;
+    _credentials.dispose();
+    _transport.dispose();
   }
 }
 
-Future<Map<String, dynamic>> _datacatGet(String path) =>
-    _datacatAuthed((token) => catalogGet('$_base$path', _authHeaders(token)));
+final class _DatacatAnonymousJob {
+  _DatacatAnonymousJob(this.native, this.owner);
+  final DatacatAnonymousExtractor native;
+  final DatacatAnonymousOperation owner;
+  void check() => owner.check();
+  Future<Map<String, dynamic>> get(String path) =>
+      native._authed(this, 'GET', path);
+  Future<Map<String, dynamic>> post(String path, Map<String, dynamic> body) =>
+      native._authed(this, 'POST', path, body: body);
+}
 
-Future<Map<String, dynamic>> _datacatPost(
-  String path,
-  Map<String, dynamic> body,
-) => _datacatAuthed(
-  (token) => catalogPost('$_base$path', body, _authHeaders(token)),
-);
+DatacatAnonymousExtractor? _originalNative;
+DatacatAnonymousExtractor _native() =>
+    _originalNative ??
+    (throw const CredentialVaultException(
+      CredentialVaultFailure.storageUnavailable,
+    ));
+
+/// Native transport factory, not a cached client that a retired extractor could
+/// close beneath its replacement. Synthetic fixtures inject an HTTP adapter here.
+final datacatAnonymousTransportFactoryProvider =
+    Provider<DatacatAnonymousTransport Function()>((ref) {
+      final redaction = ref.watch(secretRedactionCoordinatorProvider);
+      return () => DatacatAnonymousTransport(redaction: redaction);
+    });
+
+/// The parent keeps this native provider alive in its existing composition root.
+/// Disposed/replaced graphs never restore a previous global extraction owner.
+final datacatAnonymousExtractorProvider = Provider<DatacatAnonymousExtractor>((
+  ref,
+) {
+  final original = ref.watch(sharedPreferencesProvider.future);
+  final redaction = ref.watch(secretRedactionCoordinatorProvider);
+  final credentials = DatacatAnonymousCredentialOwner(
+    vault: ref.watch(credentialVaultProvider),
+    redaction: redaction,
+    originalPreferences: original,
+  );
+  late final DatacatAnonymousExtractor native;
+  native = DatacatAnonymousExtractor(
+    credentials: credentials,
+    transport: ref.watch(datacatAnonymousTransportFactoryProvider)(),
+    isCurrent: () => identical(_originalNative, native),
+  );
+  _originalNative = native;
+  ref.onDispose(() {
+    native.dispose();
+    if (identical(_originalNative, native)) _originalNative = null;
+  });
+  return native;
+});
+
+/// No raw token is returned to the caller; identify remains a native action.
+Future<void> datacatInit() => _native().initialize();
+Future<DownloadedCharacter> datacatGetCharacter(String uuid) =>
+    _native().getCharacter(uuid);
+Future<String?> datacatGetCharacterAvatar(String uuid) =>
+    _native().getCharacterAvatar(uuid);
+Future<ExtractionResult> datacatExtractAndPoll(
+  String url, {
+  void Function(String phase)? onPhaseChange,
+}) {
+  try {
+    // No outer await can convert terminal retirement into a publishable error.
+    return _native().extractAndPoll(url, onPhaseChange: onPhaseChange);
+  } catch (_) {
+    return Future.value(
+      ExtractionResult(error: 'DataCat extraction is unavailable.'),
+    );
+  }
+}
 
 String? _pickAvatarSource(Map<String, dynamic> raw, Map<String, dynamic> meta) {
-  return (raw['avatar'] ?? raw['image'] ?? raw['image_url'] ??
-          raw['avatar_url'] ?? raw['max_res_url'] ?? meta['image'] ??
-          meta['image_url'] ?? meta['avatar'] ?? meta['avatar_url']) as String?;
+  return (raw['avatar'] ??
+          raw['image'] ??
+          raw['image_url'] ??
+          raw['avatar_url'] ??
+          raw['max_res_url'] ??
+          meta['image'] ??
+          meta['image_url'] ??
+          meta['avatar'] ??
+          meta['avatar_url'])
+      as String?;
 }
 
 String? _resolveAvatarUrl(String? url) {
@@ -153,7 +276,9 @@ Map<String, dynamic>? _pickRecoveryVariant(Map<String, dynamic> char) {
   final variants = char['content_variants'];
   if (variants is! List) return null;
   for (final v in variants) {
-    if (v is Map && v['isPrimary'] == true && v['isRecoveryPlaceholder'] != true) {
+    if (v is Map &&
+        v['isPrimary'] == true &&
+        v['isRecoveryPlaceholder'] != true) {
       final content = v['content'];
       if (content is Map) return content.cast<String, dynamic>();
     }
@@ -197,9 +322,11 @@ CharacterData datacatCharacterData(Map<String, dynamic> char) {
 
   final isSaucepan = char['primary_content_source_kind'] == 'saucepan';
   final recovered = _pickRecoveryVariant(char);
-  final v2Data = (char['chara_card_v2_json'] is Map &&
+  final v2Data =
+      (char['chara_card_v2_json'] is Map &&
           (char['chara_card_v2_json'] as Map)['data'] is Map)
-      ? ((char['chara_card_v2_json'] as Map)['data'] as Map).cast<String, dynamic>()
+      ? ((char['chara_card_v2_json'] as Map)['data'] as Map)
+            .cast<String, dynamic>()
       : const <String, dynamic>{};
   final companion = (char['companion_snapshot'] is Map)
       ? (char['companion_snapshot'] as Map).cast<String, dynamic>()
@@ -207,15 +334,21 @@ CharacterData datacatCharacterData(Map<String, dynamic> char) {
 
   final definition = isSaucepan
       ? pick([
-          s(recovered?['description']), s(recovered?['personality']),
-          s(v2Data['description']), s(char['description']),
+          s(recovered?['description']),
+          s(recovered?['personality']),
+          s(v2Data['description']),
+          s(char['description']),
         ])
       : pick([
-          s(char['personality']), s(recovered?['personality']),
+          s(char['personality']),
+          s(recovered?['personality']),
           _stripDatacatMarkers(s(v2Data['description'])),
         ]);
-  final scenario =
-      pick([s(char['scenario']), s(recovered?['scenario']), s(v2Data['scenario'])]);
+  final scenario = pick([
+    s(char['scenario']),
+    s(recovered?['scenario']),
+    s(v2Data['scenario']),
+  ]);
   final creatorNotes = isSaucepan
       ? pick([s(companion['full_description']), s(v2Data['creator_notes'])])
       : pick([s(char['description']), s(v2Data['creator_notes'])]);
@@ -223,14 +356,15 @@ CharacterData datacatCharacterData(Map<String, dynamic> char) {
   // Multiple first messages ("alternate greetings"). The top-level field is
   // often an empty [] while the real list lives in chara_card_v2_json; pick the
   // first NON-EMPTY list rather than the first non-null (mirrors the reference).
-  final altG = [
-    char['alternate_greetings'],
-    recovered?['alternate_greetings'],
-    v2Data['alternate_greetings'],
-  ].firstWhere(
-    (a) => a is List && a.isNotEmpty,
-    orElse: () => const <dynamic>[],
-  );
+  final altG =
+      [
+        char['alternate_greetings'],
+        recovered?['alternate_greetings'],
+        v2Data['alternate_greetings'],
+      ].firstWhere(
+        (a) => a is List && a.isNotEmpty,
+        orElse: () => const <dynamic>[],
+      );
   // Every greeting the row carries, folded into an opening line plus
   // alternates. `first_messages` is Janitor's plural field and DataCat mirrors
   // Janitor rows, so a card can arrive with its whole set there and nothing in
@@ -251,7 +385,11 @@ CharacterData datacatCharacterData(Map<String, dynamic> char) {
     ],
   );
 
-  final name = pick([s(char['chat_name']), s(char['chatName']), s(char['name'])]);
+  final name = pick([
+    s(char['chat_name']),
+    s(char['chatName']),
+    s(char['name']),
+  ]);
 
   return CharacterData(
     name: name.isEmpty ? 'Unknown' : name,
@@ -259,8 +397,11 @@ CharacterData datacatCharacterData(Map<String, dynamic> char) {
     personality: '',
     scenario: scenario,
     firstMes: greetings.firstMes,
-    mesExample:
-        pick([s(char['example_dialogs']), s(char['mes_example']), s(v2Data['mes_example'])]),
+    mesExample: pick([
+      s(char['example_dialogs']),
+      s(char['mes_example']),
+      s(v2Data['mes_example']),
+    ]),
     creatorNotes: creatorNotes,
     systemPrompt: s(v2Data['system_prompt']),
     postHistoryInstructions: s(v2Data['post_history_instructions']),
@@ -279,9 +420,14 @@ CharacterData datacatCharacterData(Map<String, dynamic> char) {
 /// makes that lease obtainable and is the supported path for a character it
 /// already knows — but a row this session just created is read here, in the
 /// same session that created it.
-Future<DownloadedCharacter> datacatGetCharacter(String uuid) async {
+Future<DownloadedCharacter> _getCharacter(
+  _DatacatAnonymousJob job,
+  String uuid,
+) async {
+  job.check();
   final ts = DateTime.now().millisecondsSinceEpoch;
-  final data = await _datacatGet('/api/characters/$uuid?t=$ts&sourceKind=janitor');
+  final data = await job.get('/api/characters/$uuid?t=$ts&sourceKind=janitor');
+  job.check();
   final char = (data['character'] ?? data) as Map<String, dynamic>;
   return DownloadedCharacter(
     charData: datacatCharacterData(char),
@@ -290,53 +436,64 @@ Future<DownloadedCharacter> datacatGetCharacter(String uuid) async {
 }
 
 String _detectExtractionSource(String url) {
-  if (RegExp(r'^https?://(?:www\.)?saucepan\.ai/companion/', caseSensitive: false).hasMatch(url)) {
+  if (RegExp(
+    r'^https?://(?:www\.)?saucepan\.ai/companion/',
+    caseSensitive: false,
+  ).hasMatch(url)) {
     return 'saucepan';
   }
   return 'janitor';
 }
 
-Future<Map<String, dynamic>> _datacatExtract(String url, {bool publicFeed = true}) async {
+Future<Map<String, dynamic>> _datacatExtract(
+  _DatacatAnonymousJob job,
+  String url, {
+  bool publicFeed = true,
+}) {
+  job.check();
   final idempotencyKey = _uuid();
   final source = _detectExtractionSource(url);
 
   if (source == 'saucepan') {
-    return _datacatPost(
-      '/api/saucepan-extract/run',
-      {
-        'companion': url,
-        'extractHidden': false,
-        'includeSearch': true,
-        'alwaysReextract': false,
-        'netnsRole': 'general_scraper',
-        'sourceKind': 'one_off',
-        'sourceRef': idempotencyKey,
-        'vpnNamespace': 'general_scraper',
-        'idempotencyKey': idempotencyKey,
-      },
-    );
+    return job.post('/api/saucepan-extract/run', {
+      'companion': url,
+      'extractHidden': false,
+      'includeSearch': true,
+      'alwaysReextract': false,
+      'netnsRole': 'general_scraper',
+      'sourceKind': 'one_off',
+      'sourceRef': idempotencyKey,
+      'vpnNamespace': 'general_scraper',
+      'idempotencyKey': idempotencyKey,
+    });
   }
 
-  return _datacatPost(
-    '/api/character/smart-extract-v2',
-    {
-      'url': url,
-      'appearOnPublicFeed': publicFeed,
-      'useSeparateWorkerServer': true,
-      'inlinePostExtractCreatorProfile': true,
-      'idempotencyKey': idempotencyKey,
-    },
-  );
+  return job.post('/api/character/smart-extract-v2', {
+    'url': url,
+    'appearOnPublicFeed': publicFeed,
+    'useSeparateWorkerServer': true,
+    'inlinePostExtractCreatorProfile': true,
+    'idempotencyKey': idempotencyKey,
+  });
 }
 
-Future<Map<String, dynamic>> _datacatExtractionStatus() =>
-    _datacatGet('/api/extraction/status?t=${DateTime.now().millisecondsSinceEpoch}');
+Future<Map<String, dynamic>> _datacatExtractionStatus(
+  _DatacatAnonymousJob job,
+) => job.get(
+  '/api/extraction/status?t=${DateTime.now().millisecondsSinceEpoch}',
+);
 
-Future<String?> datacatGetCharacterAvatar(String uuid) async {
+Future<String?> _getCharacterAvatar(
+  _DatacatAnonymousJob job,
+  String uuid,
+) async {
+  job.check();
   final ts = DateTime.now().millisecondsSinceEpoch;
-  final data = await _datacatGet('/api/characters/$uuid?t=$ts');
+  final data = await job.get('/api/characters/$uuid?t=$ts');
+  job.check();
   final char = (data['character'] ?? data) as Map<String, dynamic>;
-  final meta = (data['metadata'] ?? <String, dynamic>{}) as Map<String, dynamic>;
+  final meta =
+      (data['metadata'] ?? <String, dynamic>{}) as Map<String, dynamic>;
   return _resolveAvatarUrl(_pickAvatarSource(char, meta));
 }
 
@@ -347,19 +504,29 @@ class ExtractionResult {
   final String? error;
   final String? phase;
 
-  ExtractionResult({this.charData, this.avatarUrl, this.characterId, this.error, this.phase});
+  ExtractionResult({
+    this.charData,
+    this.avatarUrl,
+    this.characterId,
+    this.error,
+    this.phase,
+  });
 }
 
-Future<ExtractionResult> datacatExtractAndPoll(
+Future<ExtractionResult> _extractAndPoll(
+  _DatacatAnonymousJob job,
   String url, {
   void Function(String phase)? onPhaseChange,
 }) async {
   try {
-    final extractRes = await _datacatExtract(url);
+    job.check();
+    final extractRes = await _datacatExtract(job, url);
+    job.check();
 
     if (extractRes['characterId'] != null) {
       final charId = extractRes['characterId'] as String;
-      final result = await datacatGetCharacter(charId);
+      final result = await _getCharacter(job, charId);
+      job.check();
       return ExtractionResult(
         charData: result.charData,
         avatarUrl: result.avatarUrl,
@@ -368,10 +535,13 @@ Future<ExtractionResult> datacatExtractAndPoll(
     }
 
     final myRequestId = extractRes['requestId'] as String?;
-    final preStatus = await _datacatExtractionStatus();
+    final preStatus = await _datacatExtractionStatus(job);
+    job.check();
     final prevRunId = (preStatus['run']?['requestId'] ?? '') as String;
-    final uuidMatch = RegExp(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', caseSensitive: false)
-        .firstMatch(url);
+    final uuidMatch = RegExp(
+      r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+      caseSensitive: false,
+    ).firstMatch(url);
     final targetUuid = uuidMatch?.group(0);
 
     const maxAttempts = 60;
@@ -383,10 +553,12 @@ Future<ExtractionResult> datacatExtractAndPoll(
     var emptyReadings = 0;
 
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
-      await Future<void>.delayed(const Duration(seconds: 3));
+      await job.native._delay(const Duration(seconds: 3));
+      job.check();
 
       try {
-        final status = await _datacatExtractionStatus();
+        final status = await _datacatExtractionStatus(job);
+        job.check();
         final reading = readExtractionStatus(
           status,
           requestId: myRequestId,
@@ -394,13 +566,16 @@ Future<ExtractionResult> datacatExtractAndPoll(
           targetUuid: targetUuid,
         );
         onPhaseChange?.call(reading.phase);
+        job.check();
 
         final characterId = reading.characterId;
         if (characterId != null) {
-          final result = await datacatGetCharacter(characterId);
+          final result = await _getCharacter(job, characterId);
+          job.check();
           String? avatarUrl = result.avatarUrl;
           if (avatarUrl == null && _detectExtractionSource(url) == 'saucepan') {
-            avatarUrl = await datacatGetCharacterAvatar(characterId);
+            avatarUrl = await _getCharacterAvatar(job, characterId);
+            job.check();
           }
           return ExtractionResult(
             charData: result.charData,
@@ -420,11 +595,22 @@ Future<ExtractionResult> datacatExtractAndPoll(
         } else {
           emptyReadings = 0;
         }
-      } catch (_) {}
+      } on DatacatAnonymousHttpException catch (error) {
+        job.check(); // Only transient safe HTTP failures may keep polling.
+        // _authed already used the one native identify/retry. Polling cannot
+        // turn its terminal authentication refusal into sixty fresh recoveries.
+        if (error.status == 401 || error.status == 403) rethrow;
+      }
     }
 
     return ExtractionResult(error: 'Extraction timed out');
-  } catch (e) {
-    return ExtractionResult(error: e.toString());
+  } on DatacatAnonymousHttpException catch (error) {
+    job.check();
+    return ExtractionResult(error: error.toString());
+  } on CredentialVaultAdmissionDenied {
+    rethrow;
+  } catch (_) {
+    job.check();
+    return ExtractionResult(error: 'DataCat extraction is unavailable.');
   }
 }

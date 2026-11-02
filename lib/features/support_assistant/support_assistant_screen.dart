@@ -58,11 +58,16 @@ class SupportAssistantScreen extends ConsumerStatefulWidget {
   /// Framework SaveFile seam only; never a snapshot/source or approval override.
   final SupportBackupFileDialog backupFileDialog;
 
+  /// Native pushed handoffs retain their original screen/controller underneath.
+  /// Standalone router entry keeps its existing return-to-library behavior.
+  final bool returnToPreviousRoute;
+
   const SupportAssistantScreen({
     super.key,
     this.initialTopic,
     this.welcomeAvatar,
     this.backupFileDialog = const SupportBackupPlatformFileDialog(),
+    this.returnToPreviousRoute = false,
   });
 
   @override
@@ -183,7 +188,16 @@ class _SupportAssistantScreenState
       FocusManager.instance.primaryFocus?.unfocus();
       return;
     }
-    _navigateBackToCharacters();
+    if (widget.returnToPreviousRoute) {
+      // This is an explicitly pushed native route, not GoRouter's standalone
+      // /support location. maybePop would re-enter GlazeScaffold's guarded Back.
+      final navigator = Navigator.of(context);
+      if (ModalRoute.of(context)?.isCurrent == true && navigator.canPop()) {
+        navigator.pop();
+      }
+    } else {
+      _navigateBackToCharacters();
+    }
   }
 
   Future<void> _openSessionsSheet() async {
@@ -577,7 +591,10 @@ class _SupportAssistantScreenState
                                 key: _themeEntry,
                                 compact: true,
                               ),
-                              SupportMemorySetupEntry(key: _memoryEntry, compact: true),
+                              SupportMemorySetupEntry(
+                                key: _memoryEntry,
+                                compact: true,
+                              ),
                               SupportProviderEntry(
                                 key: _providerEntry,
                                 compact: true,

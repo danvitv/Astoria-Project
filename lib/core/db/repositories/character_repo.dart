@@ -10,6 +10,7 @@ import '../../llm/character_tokens.dart';
 import '../../utils/time_helpers.dart';
 import '../../utils/platform_paths.dart';
 import '../../application/sync_repo_interfaces.dart';
+import '../../application/session_deletion_store.dart';
 import 'character_deletion_repo.dart';
 
 part 'character_app_control.dart';
@@ -47,7 +48,12 @@ class VariantGroupStats {
 
 class CharacterRepo implements SyncCharacterStore {
   final AppDatabase _db;
-  CharacterRepo(this._db);
+  final CharacterDeletionRepo _deletion;
+  CharacterRepo(this._db, {SessionMutationStarted? onMutationStarted})
+    : _deletion = CharacterDeletionRepo(
+        _db,
+        onMutationStarted: onMutationStarted,
+      );
 
   List<OrderClauseGenerator<$CharactersTable>> _orderBy(
     CharacterSortField field,
@@ -335,7 +341,7 @@ class CharacterRepo implements SyncCharacterStore {
 
   @override
   Future<void> delete(String id) async {
-    await CharacterDeletionRepo(_db).deleteCharacters({id});
+    await _deletion.deleteCharacters({id});
   }
 
   /// Membership predicate for a variation group. Legacy rows (and catalog

@@ -4,6 +4,9 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 
 import '../../../../core/constants/build_channel.dart';
+import '../../../../core/credentials/cloud_oauth_record.dart';
+import '../../../../core/credentials/cloud_oauth_credential_owner.dart';
+import '../../../../core/credentials/credential_vault.dart';
 import '../../cloud_adapter.dart';
 import '../../cloud_read_only_adapter.dart';
 import '../../sync_models.dart';
@@ -49,7 +52,9 @@ class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
               connectTimeout: const Duration(seconds: 30),
               receiveTimeout: const Duration(seconds: 120),
             ),
-          );
+          ) {
+    _auth.requests.protect(_dio, CloudOAuthProvider.dropbox);
+  }
 
   /// Canonical cloud path (`/Astoria-dev/characters/x.json`) to the
   /// App-folder-relative path Dropbox expects (`/dev/characters/x.json`).
@@ -92,6 +97,7 @@ class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
 
   Future<Map<String, String>> _headers() async {
     final token = await _auth.getValidToken();
+    _auth.requests.check();
     return {'Authorization': 'Bearer $token'};
   }
 
@@ -101,24 +107,30 @@ class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
     T Function(Map<String, dynamic>)? fromJson,
   }) async {
     final headers = await _headers();
+    _auth.requests.check();
     headers['Content-Type'] = 'application/json';
     final response = await _dio.post<Map<String, dynamic>>(
       '$_apiBase$endpoint',
       data: jsonEncode(body),
       options: Options(headers: headers),
     );
+    _auth.requests.check();
     if (fromJson != null && response.data != null) {
       return fromJson(response.data!);
     }
     return response.data as T;
   }
 
-  Future<T> _retryOn401<T>(Future<T> Function() fn) async {
+  Future<T> _retryOn401<T>(Future<T> Function() fn) =>
+      _auth.requests.run(() => _retryCurrentOn401(fn));
+
+  Future<T> _retryCurrentOn401<T>(Future<T> Function() fn) async {
     try {
       return await fn();
     } on DioException catch (e) {
       if (e.response?.statusCode == 401) {
         await _auth.getValidToken();
+        _auth.requests.check();
         return await fn();
       }
       rethrow;
@@ -156,6 +168,10 @@ class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
 
   @override
   Future<void> ensureFolder(String path) async {
+    return _auth.requests.run(() => _ensureFolder(path));
+  }
+
+  Future<void> _ensureFolder(String path) async {
     final stripped = _stripPrefix(path);
     if (_ensuredFolders.contains(stripped)) return;
 
@@ -168,7 +184,9 @@ class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
         await _retryOn401(
           () => _apiCall<dynamic>('/files/create_folder_v2', {'path': current}),
         );
+        _auth.requests.check();
       } on DioException catch (e) {
+        _auth.requests.check();
         if (e.response?.statusCode != 409) rethrow;
       }
       _ensuredFolders.add(current);
@@ -237,7 +255,21 @@ class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
   }
 
   @override
-  Future<String> downloadReadOnly(String path) async {
+  Future<String> downloadReadOnly(String path) => _auth.requests
+      .run(() => _downloadReadOnly(path))
+      .catchError((Object error) {
+        if (error is CloudReadOnlyDownloadException) throw error;
+        if (error is CredentialVaultAdmissionDenied) {
+          throw const CloudReadOnlyDownloadException(
+            CloudReadOnlyDownloadStatus.reauthenticate,
+          );
+        }
+        throw const CloudReadOnlyDownloadException(
+          CloudReadOnlyDownloadStatus.unreadable,
+        );
+      });
+
+  Future<String> _downloadReadOnly(String path) async {
     final match = _readOnlyPath.matchAsPrefix(path);
     if (match == null || match.end != path.length) {
       throw const CloudReadOnlyDownloadException(
@@ -245,6 +277,9 @@ class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
       );
     }
     final token = _auth.requireExistingTokenForReadOnlyDownload();
+    _auth.requests.retainCredentialGuard(
+      _auth.captureReadOnlyCredentialGuard(),
+    );
     try {
       final response = await _dio.post<String>(
         '$_contentBase/files/download',
@@ -301,6 +336,10 @@ class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
 
   @override
   Future<void> deleteFolder(String path) async {
+    return _auth.requests.run(() => _deleteFolder(path));
+  }
+
+  Future<void> _deleteFolder(String path) async {
     final stripped = _stripPrefix(path);
     if (stripped.isEmpty) {
       await _retryOn401(() => _deleteAllInRoot());
@@ -354,14 +393,20 @@ class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
         },
       );
       await _waitForDeleteBatch(result);
-    } catch (_) {
+    } catch (error) {
+      if (error is CloudOAuthRetiredCommit) rethrow;
+      _auth.requests.check();
       for (final entry in entries) {
         try {
           await _apiCall<dynamic>('/files/delete_v2', {
             'path': entry['path_lower'] ?? entry['path_display'],
           });
-        } catch (_) {}
+        } catch (error) {
+          if (error is CloudOAuthRetiredCommit) rethrow;
+          _auth.requests.check();
+        }
         await Future<void>.delayed(const Duration(milliseconds: 300));
+        _auth.requests.check();
       }
     }
   }
@@ -383,7 +428,7 @@ class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
       tag = check['.tag'] as String?;
       if (tag == 'complete') return;
       if (tag == 'failed') {
-        throw Exception('Dropbox delete_batch failed: $check');
+        throw StateError('Dropbox delete_batch failed');
       }
     }
 
@@ -391,7 +436,7 @@ class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
       throw Exception('Dropbox delete_batch did not complete in time');
     }
     if (tag == 'failed') {
-      throw Exception('Dropbox delete_batch failed: $result');
+      throw StateError('Dropbox delete_batch failed');
     }
   }
 
@@ -443,16 +488,20 @@ class DropboxAdapter implements CloudAdapter, CloudReadOnlyAdapter {
   @override
   Future<Map<String, dynamic>?> getAccountInfo() async {
     try {
-      final result = await _apiCall<Map<String, dynamic>>(
-        '/users/get_current_account',
-        {},
-      );
-      return {
-        'name': result['name']?['display_name'],
-        'email': result['email'],
-        'account_id': result['account_id'],
-      };
-    } catch (_) {
+      return await _auth.requests.run(() async {
+        final result = await _apiCall<Map<String, dynamic>>(
+          '/users/get_current_account',
+          {},
+        );
+        final safe = _auth.requests.redact({
+          'name': result['name']?['display_name'],
+          'email': result['email'],
+          'account_id': result['account_id'],
+        });
+        return safe is Map<String, dynamic> ? safe : null;
+      });
+    } catch (error) {
+      if (error is CloudOAuthRetiredCommit) rethrow;
       return null;
     }
   }

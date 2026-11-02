@@ -30,16 +30,24 @@ const _sortMap = <String, _SortEntry>{
 
 List<CatalogTag> _cachedChubTags = [];
 bool _chubTagsFetched = false;
+int _chubTagEpoch = 0;
 List<CatalogTag> getCachedChubTags() => _cachedChubTags;
 
 /// Drops the cached tag list so the next fetch runs — used when the account key
 /// changes and the tag universe may differ.
 void resetChubTagCache() {
+  _chubTagEpoch++;
   _cachedChubTags = [];
   _chubTagsFetched = false;
 }
 
-Future<List<CatalogTag>> fetchChubTags({String? apiKey}) async {
+Future<List<CatalogTag>> fetchChubTags({
+  String? apiKey,
+  bool Function()? isCurrent,
+}) async {
+  final epoch = _chubTagEpoch;
+  bool current() => epoch == _chubTagEpoch && (isCurrent?.call() ?? true);
+  if (!current()) return [];
   if (_chubTagsFetched) return _cachedChubTags;
 
   try {
@@ -49,13 +57,19 @@ Future<List<CatalogTag>> fetchChubTags({String? apiKey}) async {
     final allChars = <Map<String, dynamic>>[];
     for (final sortOrder in sortOrders) {
       for (var page = 1; page <= pagesPerSort; page++) {
+        if (!current()) return [];
         try {
-          final params = 'search=&first=200&page=$page&sort=$sortOrder&nsfw=true&nsfl=true&include_forks=false&min_tokens=50';
+          final params =
+              'search=&first=200&page=$page&sort=$sortOrder&nsfw=true&nsfl=true&include_forks=false&min_tokens=50';
           final data = await catalogGet(
             '$_apiBase/search?$params',
             chubHeaders(apiKey: apiKey),
           );
-          final nodes = ((data['nodes'] ?? data['data']?['nodes']) as List?)?.cast<Map<String, dynamic>>() ?? [];
+          if (!current()) return [];
+          final nodes =
+              ((data['nodes'] ?? data['data']?['nodes']) as List?)
+                  ?.cast<Map<String, dynamic>>() ??
+              [];
           if (nodes.isEmpty) break;
           allChars.addAll(nodes);
         } catch (_) {
@@ -68,12 +82,15 @@ Future<List<CatalogTag>> fetchChubTags({String? apiKey}) async {
     for (final char in allChars) {
       for (final tag in (char['topics'] as List?) ?? []) {
         final normalized = (tag as String).toLowerCase().trim();
-        if (normalized.isNotEmpty && normalized.length > 1 && normalized.length < 40) {
+        if (normalized.isNotEmpty &&
+            normalized.length > 1 &&
+            normalized.length < 40) {
           tagCounts[normalized] = (tagCounts[normalized] ?? 0) + 1;
         }
       }
     }
 
+    if (!current()) return [];
     _cachedChubTags = tagCounts.entries
         .toList()
         .sorted((a, b) => b.value.compareTo(a.value))
@@ -84,7 +101,7 @@ Future<List<CatalogTag>> fetchChubTags({String? apiKey}) async {
     _chubTagsFetched = true;
   } catch (_) {}
 
-  return _cachedChubTags;
+  return current() ? _cachedChubTags : [];
 }
 
 Future<CatalogSearchResult> chubSearch({
@@ -120,26 +137,35 @@ Future<CatalogSearchResult> chubSearch({
   final params = StringBuffer(
     'first=$limit&page=$page&sort=${sortEntry.sort}&nsfw=$nsfw&nsfl=$nsfl&include_forks=true&min_tokens=$minTokens&venus=false',
   );
-  if (sortEntry.maxDaysAgo != null) params.write('&max_days_ago=${sortEntry.maxDaysAgo}');
+  if (sortEntry.maxDaysAgo != null)
+    params.write('&max_days_ago=${sortEntry.maxDaysAgo}');
   if (query.isNotEmpty) params.write('&search=${Uri.encodeComponent(query)}');
-  if (filters.maxTokens < 100000) params.write('&max_tokens=${filters.maxTokens}');
+  if (filters.maxTokens < 100000)
+    params.write('&max_tokens=${filters.maxTokens}');
 
   final includeTags = filters.tagNames;
   final excludeTags = filters.excludeTagNames;
-  if (includeTags.isNotEmpty) params.write('&topics=${includeTags.map(Uri.encodeComponent).join(',')}');
-  if (excludeTags.isNotEmpty) params.write('&excludetopics=${excludeTags.map(Uri.encodeComponent).join(',')}');
+  if (includeTags.isNotEmpty)
+    params.write('&topics=${includeTags.map(Uri.encodeComponent).join(',')}');
+  if (excludeTags.isNotEmpty)
+    params.write(
+      '&excludetopics=${excludeTags.map(Uri.encodeComponent).join(',')}',
+    );
 
   // Chub-only content flags, mapped straight onto the site's own parameters.
   if (filters.nsfwOnly) params.write('&nsfw_only=true');
   if (filters.requireImages) params.write('&require_images=true');
   if (filters.requireLore) params.write('&require_lore=true');
   if (filters.requireCustomPrompt) params.write('&require_custom_prompt=true');
-  if (filters.requireExampleDialogues) params.write('&require_example_dialogues=true');
-  if (filters.requireAlternateGreetings) params.write('&require_alternate_greetings=true');
+  if (filters.requireExampleDialogues)
+    params.write('&require_example_dialogues=true');
+  if (filters.requireAlternateGreetings)
+    params.write('&require_alternate_greetings=true');
   if (filters.recommendedVerified) params.write('&recommended_verified=true');
   if (filters.excludeMine) params.write('&exclude_mine=true');
   if (filters.inclusiveOr) params.write('&inclusive_or=true');
-  if (filters.minAiRating > 0) params.write('&min_ai_rating=${filters.minAiRating}');
+  if (filters.minAiRating > 0)
+    params.write('&min_ai_rating=${filters.minAiRating}');
   if (filters.minTags > 0) params.write('&min_tags=${filters.minTags}');
 
   final data = await catalogGet(
@@ -147,13 +173,19 @@ Future<CatalogSearchResult> chubSearch({
     chubHeaders(apiKey: apiKey),
   );
   final container = data['data'] as Map<String, dynamic>?;
-  final nodes = ((data['nodes'] ?? container?['nodes']) as List?)?.cast<Map<String, dynamic>>() ?? [];
+  final nodes =
+      ((data['nodes'] ?? container?['nodes']) as List?)
+          ?.cast<Map<String, dynamic>>() ??
+      [];
 
   return CatalogSearchResult(
     characters: nodes.map(_normalizeNode).toList(),
     // The site's own response nests the running total under `data.count`; it is
     // capped at 100000 for very broad queries.
-    total: (container?['count'] as int?) ?? (data['total'] as int?) ?? nodes.length,
+    total:
+        (container?['count'] as int?) ??
+        (data['total'] as int?) ??
+        nodes.length,
     hasMore: (container?['cursor'] ?? data['cursor']) != null,
   );
 }
@@ -220,7 +252,11 @@ CatalogItem _normalizeNode(Map<String, dynamic> node) {
   return CatalogItem(
     id: fullPath,
     name: (node['name'] ?? 'Unknown') as String,
-    avatarUrl: ((node['avatar_url'] ?? node['max_res_url'] ?? '$_avatarBase$fullPath/avatar.webp') as String?),
+    avatarUrl:
+        ((node['avatar_url'] ??
+                node['max_res_url'] ??
+                '$_avatarBase$fullPath/avatar.webp')
+            as String?),
     description: (node['tagline'] ?? '') as String,
     tags: [isTopicNsfw ? 'NSFW' : 'SFW', ...cleanTopics],
     tokens: (node['nTokens'] ?? node['n_tokens'] ?? 0) as int,
@@ -236,7 +272,8 @@ CatalogItem _normalizeNode(Map<String, dynamic> node) {
 /// Maps one Chub node onto a Glaze card. Public for the same reason as
 /// [datacatCharacterData].
 CharacterData chubCharacterData(Map<String, dynamic> node) {
-  final def = (node['definition'] ?? <String, dynamic>{}) as Map<String, dynamic>;
+  final def =
+      (node['definition'] ?? <String, dynamic>{}) as Map<String, dynamic>;
   final fullPath = (node['fullPath'] ?? node['full_path'] ?? '') as String;
   final creator = fullPath.split('/').first;
   final topics = (node['topics'] as List?)?.cast<String>() ?? [];

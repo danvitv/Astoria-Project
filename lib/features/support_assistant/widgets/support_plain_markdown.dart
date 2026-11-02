@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+part 'support_plain_markdown_blocks.dart';
+
 /// Passive, native-selectable support text. This is not a full Markdown engine.
 ///
 /// Only paired `*italic*` and `**bold**` delimiters are removed. Different kinds
@@ -14,9 +16,19 @@ import 'package:flutter/material.dart';
 /// Backtick-delimited text is literal through an equal-length closing backtick
 /// run (or end of input for an unmatched opener); backticks are also preserved.
 ///
+/// Line-start headings (`#` through `######`) and list markers (`-`, `+`, `*`,
+/// or up to nine digits followed by `.` / `)`) receive native text styles. Their
+/// markers, indentation and line endings stay visible. Completed backtick or
+/// tilde fences receive a monospace style, with all contents and fences literal.
+/// Fences require at least three matching characters, at most three leading
+/// spaces, and an equal-width closing line containing only trailing spaces/tabs.
+/// Incomplete or malformed fences receive no block style. There is no syntax
+/// highlighting, list renumbering, hanging indent or independent code viewport.
+///
 /// Links, images, HTML, URLs and tool-shaped prose have no special behavior:
 /// their syntax stays text, with only the above emphasis rules applied outside
-/// backticks. There are no resource loaders, recognizers or action callbacks.
+/// backticks and completed code fences. There are no resource loaders,
+/// recognizers or action callbacks.
 /// Native selection gestures remain available; no context menu is installed.
 /// This widget does not sanitize or authorize text: pass already-verified text.
 class SupportPlainMarkdown extends StatelessWidget {
@@ -30,7 +42,7 @@ class SupportPlainMarkdown extends StatelessWidget {
 
   /// Builds an immutable, flat span tree without a context or side effects.
   ///
-  /// Parsing is O(n) time and O(n) space, with at most two open delimiters,
+  /// Parsing is O(n) time and O(n) space, with at most two open emphasis delimiters,
   /// no recursion and no regular expressions. Oversize input throws a fixed
   /// [ArgumentError] before scanning; it is never silently truncated and the
   /// exception contains no input text. The caller owns the limited-outcome UI.
@@ -57,36 +69,46 @@ class _EmphasisScanner {
   _EmphasisScanner(this.text);
 
   TextSpan toTextSpan(TextStyle? style) {
-    _scan();
-    final spans = <TextSpan>[];
+    final blocks = _SupportBlockScanner(text).scan();
+    _scan(blocks);
+    final builder = _SupportBlockSpanBuilder(text, style, blocks);
     var offset = 0;
     var emphasis = 0;
     for (final marker in _markers) {
       if (!marker.matched) continue;
       if (offset < marker.offset) {
-        spans.add(
-          TextSpan(
-            text: text.substring(offset, marker.offset),
-            style: _style(emphasis),
-          ),
-        );
+        builder.add(offset, marker.offset, emphasis);
       }
       emphasis ^= marker.width == 1 ? 1 : 2;
       offset = marker.offset + marker.width;
     }
-    if (offset < text.length || spans.isEmpty) {
-      spans.add(
-        TextSpan(text: text.substring(offset), style: _style(emphasis)),
-      );
+    if (offset < text.length || builder.spans.isEmpty) {
+      builder.add(offset, text.length, emphasis);
     }
-    return TextSpan(style: style, children: List<TextSpan>.unmodifiable(spans));
+    return TextSpan(
+      style: style,
+      children: List<TextSpan>.unmodifiable(builder.spans),
+    );
   }
 
-  void _scan() {
+  void _scan(List<_SupportTextBlock> blocks) {
     var offset = 0;
     var backslashes = 0;
     var backticks = 0;
+    var blockIndex = 0;
     while (offset < text.length) {
+      while (blockIndex < blocks.length && blocks[blockIndex].end <= offset) {
+        blockIndex++;
+      }
+      if (blockIndex < blocks.length) {
+        final block = blocks[blockIndex];
+        if (block.kind == _SupportBlockKind.code && block.start == offset) {
+          offset = block.end;
+          backslashes = 0;
+          backticks = 0;
+          continue;
+        }
+      }
       final code = text.codeUnitAt(offset);
       if (code == 0x60) {
         final start = offset;

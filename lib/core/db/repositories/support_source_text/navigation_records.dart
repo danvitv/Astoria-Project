@@ -188,6 +188,9 @@ extension _NavRecords on SupportSourceNavigationRepo {
           r.kind,
           state: r.state,
           binding: r.binding,
+          // Only this native-generated diagnostic label. Never forward
+          // authored block names/text through generic contents metadata.
+          label: _studioValidationMetadataLabel(source, r),
         ),
       ),
       next: page.next,

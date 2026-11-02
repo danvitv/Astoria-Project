@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:glaze_flutter/core/llm/agent_runner.dart';
+import 'package:glaze_flutter/core/llm/transport/llm_capture_context.dart';
 import 'package:glaze_flutter/core/llm/history_assembler.dart';
 import 'package:glaze_flutter/core/llm/macro_engine.dart';
 import 'package:glaze_flutter/core/llm/studio/studio_context.dart';
@@ -51,6 +52,7 @@ class _CapturingAgentRunner extends AgentRunner {
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
     void Function(String text)? onIntermediateUpdate,
     Future<void> Function()? beforeSend,
+    LlmCaptureContext? diagnosticContext,
   }) async {
     capturedMessages = messages;
     capturedIsFinalResponse = isFinalResponse;
@@ -85,6 +87,7 @@ class _FailedThinkRunner extends _CapturingAgentRunner {
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
     void Function(String text)? onIntermediateUpdate,
     Future<void> Function()? beforeSend,
+    LlmCaptureContext? diagnosticContext,
   }) async {
     calls++;
     return const AgentRunResult(text: '');

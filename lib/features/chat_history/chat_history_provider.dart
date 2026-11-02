@@ -348,21 +348,28 @@ class ChatHistoryNotifier extends AsyncNotifier<List<ChatSessionInfo>> {
   }
 
   Future<void> renameSession(String sessionId, String newName) async {
-    final chatRepo = ref.read(chatRepoProvider);
-    final updated = await chatRepo.renameSession(
-      sessionId: sessionId,
-      name: newName,
-    );
-    if (updated == null) return;
-    ChatSessionService.updateCache(updated);
-    final durableName = updated.sessionVars['sessionName'];
-    state = state.whenData(
-      (sessions) => [
-        for (final item in sessions)
-          item.sessionId == sessionId
-              ? item.withSessionName(durableName)
-              : item,
-      ],
-    );
+    if (!ref.mounted || sessionId.isEmpty) return;
+    final mutations = ref.read(chatSourceMutationRegistryProvider);
+    final admission = mutations.beginObservedMutation(sessionId: sessionId);
+    try {
+      final updated = await ref.read(chatRepoProvider).renameSession(
+        sessionId: sessionId,
+        name: newName,
+      );
+      if (!ref.mounted || updated == null ||
+          !identical(admission.checkpoint, mutations.sessionCheckpoint(sessionId))) return;
+      ChatSessionService.updateCache(updated);
+      final durableName = updated.sessionVars['sessionName'];
+      state = state.whenData(
+        (sessions) => [
+          for (final item in sessions)
+            item.sessionId == sessionId
+                ? item.withSessionName(durableName)
+                : item,
+        ],
+      );
+    } finally {
+      admission.settle();
+    }
   }
 }

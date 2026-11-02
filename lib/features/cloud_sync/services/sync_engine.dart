@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/preferences/saved_preferences_owner.dart';
 import '../../../core/preferences/tracked_shared_preferences.dart';
+import '../../../core/credentials/cloud_oauth_credential_owner.dart';
 
 import '../cloud_adapter.dart';
 import '../sync_models.dart';
@@ -92,6 +93,44 @@ class SyncEngine {
   late final SyncBinaryAssetSyncer _binarySyncer;
   late final SyncUnorderedAggregateBridge _unorderedBridge;
   bool _includeApiKeys = false;
+  final void Function()? _checkOriginalWorkflow;
+  int _committedLocalWrites = 0;
+
+  void _checkCurrent() {
+    try {
+      _checkOriginalWorkflow?.call();
+    } catch (_) {
+      throw SyncWorkflowRetired(_committedLocalWrites);
+    }
+  }
+
+  Future<T> _read<T>(Future<T> Function() original) async {
+    _checkCurrent();
+    final result = await original();
+    _checkCurrent();
+    return result;
+  }
+
+  Future<void> _commit(Future<void> Function() original) async {
+    _checkCurrent();
+    await original(); // Settle the invoked write; retirement is not rollback.
+    _committedLocalWrites++;
+    _checkCurrent();
+  }
+
+  void Function(SyncProgress) _guardProgress(
+    void Function(SyncProgress) original,
+  ) => (progress) {
+    _checkCurrent();
+    original(progress);
+  };
+  void Function() _captureActiveGuard() {
+    final queue = _queue.captureActiveGuard();
+    return () {
+      _checkCurrent();
+      queue();
+    };
+  }
 
   SyncEngine(
     this._adapter,
@@ -126,6 +165,7 @@ class SyncEngine {
     this._operationDelayMs = 300,
     this._wipePollInterval = const Duration(seconds: 2),
     this._rewriteJobHistoryStore,
+    this._checkOriginalWorkflow,
   ]) {
     _binarySyncer = SyncBinaryAssetSyncer(
       _adapter,
@@ -133,11 +173,14 @@ class SyncEngine {
       _personaRepo,
       _presetRepo,
       _imageStorage,
+      _checkCurrent,
+      _commit,
     );
     _unorderedBridge = SyncUnorderedAggregateBridge(
-      download: _adapter.download,
+      download: (path) => _read(() => _adapter.download(path)),
       readLocal: _readLocalEntity,
-      isDeleted: _manifestBuilder.isDeleted,
+      isDeleted: (type, id) =>
+          _read(() => _manifestBuilder.isDeleted(type, id)),
     );
   }
 
@@ -153,11 +196,13 @@ class SyncEngine {
     required void Function(SyncProgress) onProgress,
     bool? includeApiKeys,
   }) async {
+    _checkCurrent();
+    onProgress = _guardProgress(onProgress);
     _includeApiKeys =
         includeApiKeys ??
-        ((await SharedPreferences.getInstance()).getBool(
-              SyncSerialization.syncIncludeApiKeysPrefKey,
-            ) ??
+        ((await _read(
+              SharedPreferences.getInstance,
+            )).getBool(SyncSerialization.syncIncludeApiKeysPrefKey) ??
             false);
     await _adapter.ensureFolder(cloudBase);
     await _adapter.ensureFolder('$cloudBase/characters');
@@ -180,7 +225,7 @@ class SyncEngine {
     await _adapter.ensureFolder('$cloudBase/rewrite_job_history');
 
     onProgress(const SyncProgress(message: 'Building sync manifest...'));
-    final previousManifest = await _manifestBuilder.readLocalManifest();
+    final previousManifest = await _read(_manifestBuilder.readLocalManifest);
     SyncManifest? cloudManifest;
     try {
       final raw = await _adapter.download(cloudPath('manifest', 'manifest'));
@@ -201,8 +246,8 @@ class SyncEngine {
     // merge any cloud-only history before computing the final manifest; a
     // local prefix must not replace a longer cloud history.
     await _mergeCloudRewriteJobHistory(cloudManifest);
-    var localManifest = await _manifestBuilder.buildLocalManifest(
-      cloudManifest: cloudManifest,
+    var localManifest = await _read(
+      () => _manifestBuilder.buildLocalManifest(cloudManifest: cloudManifest),
     );
     if (cloudManifest != null) {
       for (final key in localManifest.trackerSnapshotRestoreHashes.keys) {
@@ -231,7 +276,7 @@ class SyncEngine {
     localManifest = await _bridgeCharacterHashes(localManifest, cloudManifest);
     localManifest = await _unorderedBridge.bridge(localManifest, cloudManifest);
     // Fingerprint the bytes that include keys, not an accepted keyless hash.
-    final apiPushSnapshot = (await _apiRepo.getAll()).map((a) {
+    final apiPushSnapshot = (await _read(_apiRepo.getAll)).map((a) {
       return (_includeApiKeys ? a : a.copyWith(apiKey: '', embeddingApiKey: ''))
           .toJson();
     }).toList();
@@ -488,7 +533,7 @@ class SyncEngine {
         final cloudChat = cloudManifest.entries[chatKey];
         if (cloudChat == null ||
             cloudChat.deleted ||
-            await _manifestBuilder.isDeleted('chat', history.id)) {
+            await _read(() => _manifestBuilder.isDeleted('chat', history.id))) {
           continue;
         }
         if (!cleanedEntries.containsKey(chatKey)) {
@@ -513,8 +558,8 @@ class SyncEngine {
     );
     await _adapter.upload(cloudPath('manifest', 'manifest'), manifestJson);
     await _unorderedBridge.verifyAnchors(localManifest);
-    await _manifestBuilder.writeLocalManifest(updatedManifest);
-    await _manifestBuilder.clearDeleted();
+    await _commit(() => _manifestBuilder.writeLocalManifest(updatedManifest));
+    await _commit(_manifestBuilder.clearDeleted);
   }
 
   Future<({Set<String> paths, Set<String> foldersWithFiles})>
@@ -558,13 +603,19 @@ class SyncEngine {
     required void Function(SyncProgress) onProgress,
     required void Function(SyncConflict) onConflict,
   }) async {
+    _checkCurrent();
+    onProgress = _guardProgress(onProgress);
     final cloudManifest = await _downloadCloudManifest();
+    _checkCurrent();
     if (cloudManifest == null) return;
-    final previousManifest = await _manifestBuilder.readLocalManifest();
+    final previousManifest = await _read(_manifestBuilder.readLocalManifest);
     final isFirstSync = previousManifest.lastSync == 0;
     final localManifest = await _unorderedBridge.bridge(
       await _bridgeCharacterHashes(
-        await _manifestBuilder.buildLocalManifest(cloudManifest: cloudManifest),
+        await _read(
+          () =>
+              _manifestBuilder.buildLocalManifest(cloudManifest: cloudManifest),
+        ),
         cloudManifest,
       ),
       cloudManifest,
@@ -615,7 +666,9 @@ class SyncEngine {
             ignorePreviouslyAccepted:
                 (cloudEntry.type == 'reconciliation_state' ||
                     cloudEntry.type == 'session_lorebook_overlays') &&
-                (await _manifestBuilder.isDeleted('chat', cloudEntry.id) ||
+                (await _read(
+                      () => _manifestBuilder.isDeleted('chat', cloudEntry.id),
+                    ) ||
                     (previousManifest.acceptedLocalHashes[cloudEntry.key] !=
                             '' &&
                         await _dependentStateMissing(cloudEntry))),
@@ -663,7 +716,7 @@ class SyncEngine {
         if (cloudEntry.type == 'chat') {
           final charId = localData?['characterId'] as String?;
           if (charId != null) {
-            final character = await _characterRepo.getById(charId);
+            final character = await _read(() => _characterRepo.getById(charId));
             characterName = character?.name;
           }
         }
@@ -691,6 +744,7 @@ class SyncEngine {
     }
 
     for (final c in conflicts) {
+      _checkCurrent();
       onConflict(c);
     }
 
@@ -721,14 +775,19 @@ class SyncEngine {
     List<String>? resolvedAsCloud,
     bool pushLocalChanges = false,
   }) async {
+    _checkCurrent();
+    onProgress = _guardProgress(onProgress);
     final cloudManifest =
         await _loadCloudManifestForPendingPull() ??
         await _downloadCloudManifest();
     if (cloudManifest == null) return;
-    final previousManifest = await _manifestBuilder.readLocalManifest();
+    final previousManifest = await _read(_manifestBuilder.readLocalManifest);
     final localManifest = await _unorderedBridge.bridge(
       await _bridgeCharacterHashes(
-        await _manifestBuilder.buildLocalManifest(cloudManifest: cloudManifest),
+        await _read(
+          () =>
+              _manifestBuilder.buildLocalManifest(cloudManifest: cloudManifest),
+        ),
         cloudManifest,
       ),
       cloudManifest,
@@ -769,7 +828,9 @@ class SyncEngine {
             ignorePreviouslyAccepted:
                 (cloudEntry.type == 'reconciliation_state' ||
                     cloudEntry.type == 'session_lorebook_overlays') &&
-                (await _manifestBuilder.isDeleted('chat', cloudEntry.id) ||
+                (await _read(
+                      () => _manifestBuilder.isDeleted('chat', cloudEntry.id),
+                    ) ||
                     (previousManifest.acceptedLocalHashes[cloudEntry.key] !=
                             '' &&
                         await _dependentStateMissing(cloudEntry))),
@@ -884,6 +945,7 @@ class SyncEngine {
         final tasks = <Future<void> Function()>[];
         for (final entry in entries) {
           tasks.add(() async {
+            _checkCurrent();
             processed++;
             onProgress(
               SyncProgress(
@@ -907,10 +969,13 @@ class SyncEngine {
                 entry,
               );
               _verifyRewriteHistoryHash(entry, cloudData);
-              final merged = await _rewriteJobHistoryStore!.mergeBySessionId(
-                entry.id,
-                cloudData,
-              );
+              late Map<String, dynamic> merged;
+              await _commit(() async {
+                merged = await _rewriteJobHistoryStore!.mergeBySessionId(
+                  entry.id,
+                  cloudData,
+                );
+              });
               // Only accept the cloud hash when it covers the entire local
               // union; otherwise the next push must publish local-only jobs.
               if (SyncSerialization.computeSyncHash(merged) == entry.hash) {
@@ -921,6 +986,7 @@ class SyncEngine {
               // A standalone cloud tombstone must not erase local records.
             } else {
               await _pullEntry(entry);
+              _checkCurrent();
               appliedEntries.add(entry);
             }
           });
@@ -946,12 +1012,14 @@ class SyncEngine {
       // primary entities first, current lore projections second, and immutable
       // reconciliation provenance last.
       final primaryErrors = await applyEntries(primaryEntries);
+      _checkCurrent();
       if (primaryErrors.isNotEmpty) {
         throw SyncQueueAggregateError(primaryErrors);
       }
       // Restore only after any owning chat import has completed, but before the
       // session consistency pass and the dependent history imports.
       final snapshotErrors = await applyEntries(snapshotRestoreEntries);
+      _checkCurrent();
       if (snapshotErrors.isNotEmpty) {
         throw SyncQueueAggregateError(snapshotErrors);
       }
@@ -964,8 +1032,13 @@ class SyncEngine {
           )
           .map((entry) => entry.id)
           .toSet();
-      if (touchedSessionIds.isNotEmpty) {
-        await _reconcilePulledSessions?.call(touchedSessionIds);
+      final reconcile = _reconcilePulledSessions;
+      if (reconcile != null) {
+        // Each callback owns ONE atomic session transaction. A started session
+        // may settle; its completion cannot admit the next session transaction.
+        for (final sessionId in touchedSessionIds) {
+          await _commit(() => reconcile({sessionId}));
+        }
       }
 
       final taskErrors = <Object>[
@@ -991,9 +1064,12 @@ class SyncEngine {
     SyncManifest cloudManifest, {
     List<SyncManifestEntry> acceptedCloudEntries = const [],
   }) async {
-    final rebuilt = await _manifestBuilder.buildLocalManifest(
-      cloudManifest: cloudManifest,
-      applyAcceptedHashes: false,
+    _checkCurrent();
+    final rebuilt = await _read(
+      () => _manifestBuilder.buildLocalManifest(
+        cloudManifest: cloudManifest,
+        applyAcceptedHashes: false,
+      ),
     );
     await _unorderedBridge.verifyAnchors(localManifest);
     final entries = Map<String, SyncManifestEntry>.from(rebuilt.entries);
@@ -1011,7 +1087,9 @@ class SyncEngine {
           (baselineEntry.type == 'reconciliation_state' ||
               baselineEntry.type == 'session_lorebook_overlays');
       if ((explicitlyAcceptedEmpty &&
-              await _manifestBuilder.isDeleted('chat', baselineEntry.id)) ||
+              await _read(
+                () => _manifestBuilder.isDeleted('chat', baselineEntry.id),
+              )) ||
           (rebuiltEntry == null
               ? !explicitlyAcceptedEmpty
               : rebuiltEntry.hash != accepted.value)) {
@@ -1035,19 +1113,21 @@ class SyncEngine {
         acceptedLocalHashes[entry.key] = rebuiltEntry?.hash ?? '';
       }
     }
-    await _manifestBuilder.writeLocalManifest(
-      rebuilt.copyWith(
-        version: SyncManifest.currentVersion,
-        createdAt: cloudManifest.createdAt != 0
-            ? cloudManifest.createdAt
-            : rebuilt.createdAt,
-        lastSync: DateTime.now().millisecondsSinceEpoch,
-        entries: entries,
-        acceptedLocalHashes: acceptedLocalHashes,
-        trackerSnapshotRestoreHashes: trackerSnapshotRestoreHashes,
+    await _commit(
+      () => _manifestBuilder.writeLocalManifest(
+        rebuilt.copyWith(
+          version: SyncManifest.currentVersion,
+          createdAt: cloudManifest.createdAt != 0
+              ? cloudManifest.createdAt
+              : rebuilt.createdAt,
+          lastSync: DateTime.now().millisecondsSinceEpoch,
+          entries: entries,
+          acceptedLocalHashes: acceptedLocalHashes,
+          trackerSnapshotRestoreHashes: trackerSnapshotRestoreHashes,
+        ),
       ),
     );
-    await _manifestBuilder.clearDeleted();
+    await _commit(_manifestBuilder.clearDeleted);
   }
 
   Future<bool> _canRestoreTrackerSnapshots(
@@ -1064,7 +1144,7 @@ class SyncEngine {
         localChat.deleted ||
         cloudChat == null ||
         cloudChat.deleted ||
-        await _manifestBuilder.isDeleted('chat', snapshot.id)) {
+        await _read(() => _manifestBuilder.isDeleted('chat', snapshot.id))) {
       return false;
     }
     if (localChat.hash == cloudChat.hash) return true;
@@ -1080,7 +1160,12 @@ class SyncEngine {
     SyncManifest local,
     SyncManifest cloud,
   ) async {
-    final checkActive = _queue.captureActiveGuard();
+    final queueActive = _queue.captureActiveGuard();
+    void checkActive() {
+      _checkCurrent();
+      queueActive();
+    }
+
     final data = await SyncSerialization.readRequiredCloudEntity(
       _adapter,
       entry,
@@ -1099,8 +1184,8 @@ class SyncEngine {
       items.cast<Map<String, dynamic>>(),
     );
     final chatKey = entryKey('chat', entry.id);
-    final expectedChat = await _chatRepo.getById(entry.id);
-    final metadata = await _chatRepo.getAllSessionMetadata();
+    final expectedChat = await _read(() => _chatRepo.getById(entry.id));
+    final metadata = await _read(_chatRepo.getAllSessionMetadata);
     final chats = metadata.where((chat) => chat.sessionId == entry.id);
     final currentChatHash = chats.isEmpty
         ? null
@@ -1108,8 +1193,8 @@ class SyncEngine {
     final initialChatHash =
         local.acceptedLocalHashes[chatKey] ?? local.entries[chatKey]?.hash;
     final current = await _readLocalEntity(entry.type, entry.id);
-    if (await _manifestBuilder.isDeleted('chat', entry.id) ||
-        await _manifestBuilder.isDeleted(entry.type, entry.id) ||
+    if (await _read(() => _manifestBuilder.isDeleted('chat', entry.id)) ||
+        await _read(() => _manifestBuilder.isDeleted(entry.type, entry.id)) ||
         expectedChat == null ||
         currentChatHash == null ||
         (currentChatHash != initialChatHash &&
@@ -1122,7 +1207,7 @@ class SyncEngine {
       );
     }
     if (!chatSessionContentEquals(
-      await _chatRepo.getById(entry.id),
+      await _read(() => _chatRepo.getById(entry.id)),
       expectedChat,
     )) {
       throw StateError('Chat changed during tracker snapshot restore; retry');
@@ -1130,15 +1215,17 @@ class SyncEngine {
     checkActive();
     final store = _trackerSnapshotStore;
     if (store is SyncAtomicTrackerSnapshotStore) {
-      await store.replaceBySessionId(
-        entry.id,
-        decoded.snapshots,
-        expectedSnapshots: (current['items'] as List)
-            .cast<Map<String, dynamic>>()
-            .map(TrackerSnapshot.fromJson)
-            .toList(),
-        expectedChat: expectedChat,
-        checkCurrent: checkActive,
+      await _commit(
+        () => store.replaceBySessionId(
+          entry.id,
+          decoded.snapshots,
+          expectedSnapshots: (current['items'] as List)
+              .cast<Map<String, dynamic>>()
+              .map(TrackerSnapshot.fromJson)
+              .toList(),
+          expectedChat: expectedChat,
+          checkCurrent: checkActive,
+        ),
       );
     } else {
       await _applyCloudTrackerSnapshots(entry.id, data);
@@ -1167,7 +1254,10 @@ class SyncEngine {
       case 'reconciliation_state':
         return !await _hasReconciliationState(entry.id);
       case 'session_lorebook_overlays':
-        return await _sessionLorebookOverlayStore?.getBySessionId(entry.id) ==
+        return await _read(
+              () async =>
+                  _sessionLorebookOverlayStore?.getBySessionId(entry.id),
+            ) ==
             null;
       default:
         return false;
@@ -1179,6 +1269,7 @@ class SyncEngine {
       final raw = await _adapter.download(cloudPath('manifest', 'manifest'));
       return SyncManifest.fromJson(jsonDecode(raw) as Map<String, dynamic>);
     } catch (_) {
+      _checkCurrent();
       return null;
     }
   }
@@ -1186,12 +1277,14 @@ class SyncEngine {
   static const _pendingManifestKey = 'gz_sync_pending_pull_manifest';
 
   Future<void> _saveCloudManifestForPendingPull(SyncManifest manifest) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_pendingManifestKey, jsonEncode(manifest.toJson()));
+    final prefs = await _read(SharedPreferences.getInstance);
+    await _commit(() async {
+      await prefs.setString(_pendingManifestKey, jsonEncode(manifest.toJson()));
+    });
   }
 
   Future<SyncManifest?> _loadCloudManifestForPendingPull() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _read(SharedPreferences.getInstance);
     final raw = prefs.getString(_pendingManifestKey);
     if (raw == null) return null;
     try {
@@ -1202,8 +1295,10 @@ class SyncEngine {
   }
 
   Future<void> _clearPendingPullManifest() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_pendingManifestKey);
+    final prefs = await _read(SharedPreferences.getInstance);
+    await _commit(() async {
+      await prefs.remove(_pendingManifestKey);
+    });
   }
 
   Future<void> resolveConflict(SyncConflict conflict, String choice) async {
@@ -1213,7 +1308,9 @@ class SyncEngine {
       await _pullEntry(conflict.cloudEntry);
     }
 
-    final rebuiltManifest = await _manifestBuilder.buildLocalManifest();
+    final rebuiltManifest = await _read(
+      () => _manifestBuilder.buildLocalManifest(),
+    );
     final updatedEntries = Map<String, SyncManifestEntry>.from(
       rebuiltManifest.entries,
     );
@@ -1234,10 +1331,12 @@ class SyncEngine {
     if (choice == 'cloud' && !deferCloudApply) {
       restoreHashes.remove(conflict.key);
     }
-    await _manifestBuilder.writeLocalManifest(
-      rebuiltManifest.copyWith(
-        entries: updatedEntries,
-        trackerSnapshotRestoreHashes: restoreHashes,
+    await _commit(
+      () => _manifestBuilder.writeLocalManifest(
+        rebuiltManifest.copyWith(
+          entries: updatedEntries,
+          trackerSnapshotRestoreHashes: restoreHashes,
+        ),
       ),
     );
   }
@@ -1254,6 +1353,8 @@ class SyncEngine {
   Future<void> wipeCloudData({
     required void Function(SyncProgress) onProgress,
   }) async {
+    _checkCurrent();
+    onProgress = _guardProgress(onProgress);
     onProgress(const SyncProgress(message: 'Deleting cloud data...'));
     try {
       await _adapter.deleteFolder(cloudBase);
@@ -1287,7 +1388,7 @@ class SyncEngine {
     if (entry.type == 'reconciliation_state' &&
         reconciliation is SyncPagedReconciliationStateStore) {
       await ReconciliationPageTransport(
-        checkActive: _queue.captureActiveGuard(),
+        checkActive: _captureActiveGuard(),
       ).upload(_adapter, entry, reconciliation);
       return;
     }
@@ -1310,6 +1411,7 @@ class SyncEngine {
   }
 
   Future<void> _pullEntry(SyncManifestEntry entry) async {
+    _checkCurrent();
     if (entry.deleted) {
       await _deleteLocalEntity(entry.type, entry.id);
       return;
@@ -1322,9 +1424,11 @@ class SyncEngine {
     }
 
     final cloudData = await SyncSerialization.readCloudEntity(_adapter, entry);
+    _checkCurrent();
     if (cloudData == null) return;
 
     await _applyCloudEntity(entry.type, entry.id, cloudData);
+    _checkCurrent();
 
     if (entry.type == 'character') {
       await _binarySyncer.pullCharacterAvatar(entry.id);
@@ -1339,7 +1443,7 @@ class SyncEngine {
     if (entry.type == 'chat') {
       final charId = cloudData['characterId'] as String?;
       if (charId != null) {
-        final character = await _characterRepo.getById(charId);
+        final character = await _read(() => _characterRepo.getById(charId));
         if (character != null &&
             !_binarySyncer.localFileExists(character.avatarPath)) {
           await _binarySyncer.pullCharacterAvatar(charId);
@@ -1353,7 +1457,7 @@ class SyncEngine {
   /// entity itself is already current, without reapplying its cloud JSON.
   Future<void> _repairMissingBinaryAssets(SyncManifestEntry entry) async {
     if (entry.type == 'character') {
-      var character = await _characterRepo.getById(entry.id);
+      var character = await _read(() => _characterRepo.getById(entry.id));
       if (character == null) return;
       if (!_binarySyncer.localFileExists(character.avatarPath)) {
         await _binarySyncer.pullCharacterAvatar(entry.id);
@@ -1364,7 +1468,7 @@ class SyncEngine {
         await _binarySyncer.pullCharacterGallery(entry.id);
       }
     } else if (entry.type == 'persona') {
-      final persona = await _personaRepo.getById(entry.id);
+      final persona = await _read(() => _personaRepo.getById(entry.id));
       if (persona != null &&
           !_binarySyncer.localFileExists(persona.avatarPath)) {
         await _binarySyncer.pullPersonaAvatar(entry.id);
@@ -1388,7 +1492,7 @@ class SyncEngine {
         continue;
       }
       if (entry.type == 'character') {
-        final character = await _characterRepo.getById(entry.id);
+        final character = await _read(() => _characterRepo.getById(entry.id));
         if (character?.avatarPath != null &&
             !_binarySyncer.localFileExists(character!.avatarPath)) {
           final repaired = await _binarySyncer.pullCharacterAvatar(entry.id);
@@ -1397,7 +1501,7 @@ class SyncEngine {
           }
         }
       } else if (entry.type == 'persona') {
-        final persona = await _personaRepo.getById(entry.id);
+        final persona = await _read(() => _personaRepo.getById(entry.id));
         if (persona?.avatarPath != null &&
             !_binarySyncer.localFileExists(persona!.avatarPath)) {
           final repaired = await _binarySyncer.pullPersonaAvatar(entry.id);
@@ -1472,7 +1576,9 @@ class SyncEngine {
         // when the resulting canonical payload no longer has the cloud hash.
         return true;
       case 'memory_book':
-        final localMb = await _memoryBookRepo.getBySessionId(cloudEntry.id);
+        final localMb = await _read(
+          () => _memoryBookRepo.getBySessionId(cloudEntry.id),
+        );
         if (localMb == null) return false;
         final cloudData = await SyncSerialization.readCloudEntity(
           _adapter,
@@ -1486,7 +1592,9 @@ class SyncEngine {
         final equal = localHash == cloudHash;
         return equal;
       case 'studio_config':
-        final localConfig = await _studioConfigStore.getById(cloudEntry.id);
+        final localConfig = await _read(
+          () => _studioConfigStore.getById(cloudEntry.id),
+        );
         if (localConfig == null) return false;
         final cloudData = await SyncSerialization.readCloudEntity(
           _adapter,
@@ -1497,7 +1605,7 @@ class SyncEngine {
             SyncSerialization.computeStudioConfigHash(localConfig.toJson());
       case 'api_presets':
         if (cloudManifest.apiKeysIncluded) return false;
-        final localAll = await _apiRepo.getAll();
+        final localAll = await _read(_apiRepo.getAll);
         final cloudData = await SyncSerialization.readCloudEntity(
           _adapter,
           cloudEntry,
@@ -1544,7 +1652,9 @@ class SyncEngine {
           cloudEntry.hash == localEntry.hash) {
         continue;
       }
-      final character = await _characterRepo.getById(cloudEntry.id);
+      final character = await _read(
+        () => _characterRepo.getById(cloudEntry.id),
+      );
       if (character == null) continue;
       final localData = character.toJson();
       final cloudData = await SyncSerialization.readRequiredCloudEntity(
@@ -1580,7 +1690,9 @@ class SyncEngine {
               )) {
         // Downloading introduced a checkpoint: do not accept an older local
         // snapshot if a card edit or binary replacement landed meanwhile.
-        final current = await _characterRepo.getById(cloudEntry.id);
+        final current = await _read(
+          () => _characterRepo.getById(cloudEntry.id),
+        );
         if (current == null) continue;
         final currentData = current.toJson();
         if (SyncCharacterHash.compute(
@@ -1605,33 +1717,34 @@ class SyncEngine {
   }
 
   Future<Map<String, dynamic>?> _readLocalEntity(String type, String id) async {
+    _checkCurrent();
     try {
       switch (type) {
         case 'character':
-          final c = await _characterRepo.getById(id);
+          final c = await _read(() => _characterRepo.getById(id));
           if (c == null) return null;
           return c.toJson();
         case 'persona':
-          final p = await _personaRepo.getById(id);
+          final p = await _read(() => _personaRepo.getById(id));
           if (p == null) return null;
           return p.toJson();
         case 'chat':
-          final s = await _chatRepo.getById(id);
+          final s = await _read(() => _chatRepo.getById(id));
           if (s == null) return null;
           return stripImagesFromSession(s.toJson());
         case 'memory_book':
-          final mb = await _memoryBookRepo.getBySessionId(id);
+          final mb = await _read(() => _memoryBookRepo.getBySessionId(id));
           if (mb == null) return null;
           return mb.toJson();
         case 'lorebooks':
-          final all = await _lorebookRepo.getAll()
+          final all = await _read(_lorebookRepo.getAll)
             ..sort((a, b) => a.id.compareTo(b.id));
           return {
             '__singleton': true,
             'items': all.map((l) => l.toJson()).toList(),
           };
         case 'api_presets':
-          final all = await _apiRepo.getAll();
+          final all = await _read(_apiRepo.getAll);
           final items = all.map((a) {
             if (!_includeApiKeys) {
               return a.copyWith(apiKey: '', embeddingApiKey: '').toJson();
@@ -1640,69 +1753,74 @@ class SyncEngine {
           }).toList();
           return {'__singleton': true, 'items': items};
         case 'theme_presets':
-          final all = await _presetRepo.getAll();
+          final all = await _read(_presetRepo.getAll);
           return {
             '__singleton': true,
             'items': all.map((p) => p.toJson()).toList(),
           };
         case 'ui_themes':
-          final all = await _themePresetRepo.getAll();
+          final all = await _read(_themePresetRepo.getAll);
           return {
             '__singleton': true,
             'items': all.map((t) => t.toJson()).toList(),
           };
         case 'extension_preset':
-          final ep = await _extensionPresetRepo.getById(id);
+          final ep = await _read(() => _extensionPresetRepo.getById(id));
           if (ep == null) return null;
           return ep.toJson();
         case 'extensions_settings':
-          final s = await _extensionsSettingsStore.get();
+          final s = await _read(_extensionsSettingsStore.get);
           return {'__singleton': true, 'settings': s.toJson()};
         case 'local_storage':
           return _readLocalStorage();
         case 'info_block':
           // id == sessionId for info_block entries
-          final blocks = await _infoBlockStore.getBySessionId(id);
+          final blocks = await _read(() => _infoBlockStore.getBySessionId(id));
           if (blocks.isEmpty) return null;
           return SyncSerialization.infoBlocksPayload(blocks);
         case 'tracker_snapshot':
-          final snaps = await _trackerSnapshotStore.getBySessionId(id);
+          final snaps = await _read(
+            () => _trackerSnapshotStore.getBySessionId(id),
+          );
           return {'__trackerSnapshots': true, 'items': snaps};
         case 'tracker_value':
-          final trackers = await _trackerValueStore.getBySessionId(id);
+          final trackers = await _read(
+            () => _trackerValueStore.getBySessionId(id),
+          );
           return {'__trackerValues': true, 'items': trackers};
         case 'studio_config':
-          final config = await _studioConfigStore.getById(id);
+          final config = await _read(() => _studioConfigStore.getById(id));
           return config?.toJson();
         case 'studio_preset':
           if (_studioPresetStore == null) return null;
-          final preset = await _studioPresetStore.getById(id);
+          final preset = await _read(() => _studioPresetStore.getById(id));
           return preset?.toJson();
         case 'chat_summary':
           if (_chatSummaryStore == null) return null;
-          return _chatSummaryStore.getBySessionId(id);
+          return _read(() => _chatSummaryStore.getBySessionId(id));
         case 'character_folders':
           if (_characterFolderStore == null) return null;
-          return _characterFolderStore.getAll();
+          return _read(_characterFolderStore.getAll);
         case 'memory_graph':
           if (_memoryGraphStore == null) return null;
-          return _memoryGraphStore.getBySessionId(id);
+          return _read(() => _memoryGraphStore.getBySessionId(id));
         case 'character_knowledge':
           if (_characterKnowledgeStore == null) return null;
-          return _characterKnowledgeStore.getBySessionId(id);
+          return _read(() => _characterKnowledgeStore.getBySessionId(id));
         case 'session_lorebook_overlays':
           if (_sessionLorebookOverlayStore == null) return null;
-          return _sessionLorebookOverlayStore.getBySessionId(id);
+          return _read(() => _sessionLorebookOverlayStore.getBySessionId(id));
         case 'reconciliation_state':
           if (_reconciliationStateStore == null) return null;
-          return _reconciliationStateStore.getBySessionId(id);
+          return _read(() => _reconciliationStateStore.getBySessionId(id));
         case 'rewrite_job_history':
           if (_rewriteJobHistoryStore == null) return null;
-          return _rewriteJobHistoryStore.getBySessionId(id);
+          return _read(() => _rewriteJobHistoryStore.getBySessionId(id));
         default:
           return null;
       }
     } catch (_) {
+      _checkCurrent();
       return null;
     }
   }
@@ -1712,6 +1830,7 @@ class SyncEngine {
     String id,
     Map<String, dynamic> data,
   ) async {
+    _checkCurrent();
     try {
       switch (type) {
         case 'character':
@@ -1721,10 +1840,10 @@ class SyncEngine {
           await _applyCloudPersona(id, data);
           break;
         case 'chat':
-          await _chatRepo.put(ChatSession.fromJson(data));
+          await _commit(() => _chatRepo.put(ChatSession.fromJson(data)));
           break;
         case 'memory_book':
-          await _memoryBookRepo.put(MemoryBook.fromJson(data));
+          await _commit(() => _memoryBookRepo.put(MemoryBook.fromJson(data)));
           break;
         case 'lorebooks':
           await _applyLorebooksWithEmbeddingCleanup(data);
@@ -1744,13 +1863,17 @@ class SyncEngine {
           await _applyUiThemes(data);
           break;
         case 'extension_preset':
-          await _extensionPresetRepo.put(ExtensionPreset.fromJson(data));
+          await _commit(
+            () => _extensionPresetRepo.put(ExtensionPreset.fromJson(data)),
+          );
           break;
         case 'extensions_settings':
           final settingsJson = data['settings'] as Map<String, dynamic>?;
           if (settingsJson != null) {
-            await _extensionsSettingsStore.put(
-              ExtensionsSettings.fromJson(settingsJson),
+            await _commit(
+              () => _extensionsSettingsStore.put(
+                ExtensionsSettings.fromJson(settingsJson),
+              ),
             );
           }
           break;
@@ -1767,53 +1890,66 @@ class SyncEngine {
           await _applyCloudTrackerValues(id, data);
           break;
         case 'studio_config':
-          await _studioConfigStore.put(StudioAgentCodec.decodeConfig(data));
+          await _commit(
+            () => _studioConfigStore.put(StudioAgentCodec.decodeConfig(data)),
+          );
           break;
         case 'studio_preset':
           if (_studioPresetStore != null) {
-            await _studioPresetStore.put(
-              StudioPresetCodec.decodePreset(data).preset,
+            await _commit(
+              () => _studioPresetStore.put(
+                StudioPresetCodec.decodePreset(data).preset,
+              ),
             );
           }
           break;
         case 'chat_summary':
           if (_chatSummaryStore != null) {
-            await _chatSummaryStore.putRaw(data);
+            await _commit(() => _chatSummaryStore.putRaw(data));
           }
           break;
         case 'character_folders':
           if (_characterFolderStore != null) {
-            await _characterFolderStore.applyAll(data);
+            await _commit(() => _characterFolderStore.applyAll(data));
           }
           break;
         case 'memory_graph':
           if (_memoryGraphStore != null) {
-            await _memoryGraphStore.applyBySessionId(id, data);
+            await _commit(() => _memoryGraphStore.applyBySessionId(id, data));
           }
           break;
         case 'character_knowledge':
           if (_characterKnowledgeStore != null) {
-            await _characterKnowledgeStore.applyBySessionId(id, data);
+            await _commit(
+              () => _characterKnowledgeStore.applyBySessionId(id, data),
+            );
           }
           break;
         case 'session_lorebook_overlays':
           if (_sessionLorebookOverlayStore != null) {
-            await _sessionLorebookOverlayStore.applyBySessionId(id, data);
+            await _commit(
+              () => _sessionLorebookOverlayStore.applyBySessionId(id, data),
+            );
           }
           break;
         case 'reconciliation_state':
           if (_reconciliationStateStore != null) {
-            await _reconciliationStateStore.mergeBySessionId(id, data);
+            await _commit(() async {
+              await _reconciliationStateStore.mergeBySessionId(id, data);
+            });
           }
           break;
         case 'rewrite_job_history':
           if (_rewriteJobHistoryStore == null) {
             throw StateError('Rewrite history sync store unavailable');
           }
-          await _rewriteJobHistoryStore.mergeBySessionId(id, data);
+          await _commit(() async {
+            await _rewriteJobHistoryStore.mergeBySessionId(id, data);
+          });
           break;
       }
     } catch (_) {
+      _checkCurrent();
       if (type == 'chat' ||
           type == 'lorebooks' ||
           type == 'extension_preset' ||
@@ -1843,9 +1979,9 @@ class SyncEngine {
     }
 
     // Replace existing blocks for this session with the cloud version.
-    await _infoBlockStore.deleteBySessionId(sessionId);
+    await _commit(() => _infoBlockStore.deleteBySessionId(sessionId));
     for (final item in items) {
-      await _infoBlockStore.insert(InfoBlock.fromJson(item));
+      await _commit(() => _infoBlockStore.insert(InfoBlock.fromJson(item)));
     }
   }
 
@@ -1867,12 +2003,18 @@ class SyncEngine {
     final decoded = SyncTrackerSnapshotDecoder.decode(sessionId, items);
     final store = _trackerSnapshotStore;
     if (store is SyncAtomicTrackerSnapshotStore) {
-      await store.replaceBySessionId(sessionId, decoded.snapshots);
+      await _commit(
+        () => store.replaceBySessionId(
+          sessionId,
+          decoded.snapshots,
+          checkCurrent: _checkCurrent,
+        ),
+      );
       return;
     }
-    await _trackerSnapshotStore.deleteBySessionId(sessionId);
+    await _commit(() => _trackerSnapshotStore.deleteBySessionId(sessionId));
     for (final item in decoded.items) {
-      await _trackerSnapshotStore.insertRaw(item);
+      await _commit(() => _trackerSnapshotStore.insertRaw(item));
     }
   }
 
@@ -1889,9 +2031,9 @@ class SyncEngine {
       return;
     }
 
-    await _trackerValueStore.deleteBySessionId(sessionId);
+    await _commit(() => _trackerValueStore.deleteBySessionId(sessionId));
     for (final item in items) {
-      await _trackerValueStore.insertRaw(item);
+      await _commit(() => _trackerValueStore.insertRaw(item));
     }
   }
 
@@ -1901,7 +2043,7 @@ class SyncEngine {
     String id,
     Map<String, dynamic> data,
   ) async {
-    final local = await _characterRepo.getById(id);
+    final local = await _read(() => _characterRepo.getById(id));
     final json = Map<String, dynamic>.from(data);
     json.remove('avatarPath');
     if (data.containsKey('gallery')) {
@@ -1932,7 +2074,7 @@ class SyncEngine {
             : local.gallery,
       );
     }
-    await _characterRepo.put(character);
+    await _commit(() => _characterRepo.put(character));
   }
 
   List<GalleryEntry> _cloudGallery(String id, Map<String, dynamic> data) {
@@ -1959,14 +2101,14 @@ class SyncEngine {
   }
 
   Future<void> _applyCloudPersona(String id, Map<String, dynamic> data) async {
-    final local = await _personaRepo.getById(id);
+    final local = await _read(() => _personaRepo.getById(id));
     final json = Map<String, dynamic>.from(data);
     json.remove('avatarPath');
     var persona = Persona.fromJson(json);
     if (local != null) {
       persona = persona.copyWith(avatarPath: local.avatarPath);
     }
-    await _personaRepo.put(persona);
+    await _commit(() => _personaRepo.put(persona));
   }
 
   Future<void> _applySingleton<T>(
@@ -1999,17 +2141,17 @@ class SyncEngine {
     }
 
     if (idOf != null) {
-      final existing = await getAll();
+      final existing = await _read(getAll);
       for (final entity in existing) {
         final id = idOf(entity);
         if (!cloudIds.contains(id)) {
-          await delete(id);
+          await _commit(() => delete(id));
         }
       }
     }
 
     for (final entity in parsed) {
-      await put(entity);
+      await _commit(() => put(entity));
     }
   }
 
@@ -2032,15 +2174,15 @@ class SyncEngine {
     final cloudIds = {for (final lb in parsed) lb.id};
 
     // Delete lorebooks no longer in the cloud, including their embedding vectors.
-    final existing = await _lorebookRepo.getAll();
+    final existing = await _read(_lorebookRepo.getAll);
     for (final lb in existing) {
       if (!cloudIds.contains(lb.id)) {
-        await _lorebookRepo.delete(lb.id);
-        await _embeddingRepo.deleteBySourceId(lb.id);
+        await _commit(() => _lorebookRepo.delete(lb.id));
+        await _commit(() => _embeddingRepo.deleteBySourceId(lb.id));
       }
     }
 
-    await _lorebookRepo.putAll(parsed);
+    await _commit(() => _lorebookRepo.putAll(parsed));
 
     await _rebuildLorebookActivationsPrefs(parsed);
   }
@@ -2062,7 +2204,7 @@ class SyncEngine {
       }
     }
     final activations = LorebookActivations(character: charMap, chat: chatMap);
-    await _saveLorebookActivations(activations);
+    await _commit(() => _saveLorebookActivations(activations));
   }
 
   /// Applies cloud api_presets while preserving local API keys and embedding
@@ -2080,7 +2222,7 @@ class SyncEngine {
       items = [data];
     }
 
-    final existing = await _apiRepo.getAll();
+    final existing = await _read(_apiRepo.getAll);
     final localById = {for (final a in existing) a.id: a};
 
     final cloudIds = <String>{};
@@ -2138,13 +2280,13 @@ class SyncEngine {
           llmRouteMatches: llmRouteMatches,
         ),
       );
-      await _apiRepo.put(merged);
+      await _commit(() => _apiRepo.put(merged));
     }
 
     // Delete local configs that no longer exist in cloud.
     for (final local in existing) {
       if (!cloudIds.contains(local.id)) {
-        await _apiRepo.delete(local.id);
+        await _commit(() => _apiRepo.delete(local.id));
       }
     }
   }
@@ -2270,93 +2412,102 @@ class SyncEngine {
       items = [data];
     }
     final presets = items.map((j) => themePresetFromStoredJson(j)).toList();
-    await _themePresetRepo.putAll(presets);
+    await _commit(() => _themePresetRepo.putAll(presets));
   }
 
   Future<void> _deleteLocalEntity(String type, String id) async {
+    _checkCurrent();
     try {
       switch (type) {
         case 'character':
-          await _characterDeletionStore.deleteCharacters({id});
+          await _commit(() async {
+            await _characterDeletionStore.deleteCharacters({id});
+          });
           break;
         case 'persona':
-          await _personaRepo.delete(id);
+          await _commit(() => _personaRepo.delete(id));
           break;
         case 'chat':
-          await _sessionDeletionStore.deleteSession(id);
+          await _commit(() async {
+            await _sessionDeletionStore.deleteSession(id);
+          });
           break;
         case 'memory_book':
-          await _memoryBookRepo.deleteBySessionId(id);
+          await _commit(() => _memoryBookRepo.deleteBySessionId(id));
           break;
         case 'lorebooks':
-          final all = await _lorebookRepo.getAll();
+          final all = await _read(_lorebookRepo.getAll);
           for (final lb in all) {
-            await _lorebookRepo.delete(lb.id);
-            await _embeddingRepo.deleteBySourceId(lb.id);
+            await _commit(() => _lorebookRepo.delete(lb.id));
+            await _commit(() => _embeddingRepo.deleteBySourceId(lb.id));
           }
           break;
         case 'api_presets':
-          final apis = await _apiRepo.getAll();
+          final apis = await _read(_apiRepo.getAll);
           for (final a in apis) {
-            await _apiRepo.delete(a.id);
+            await _commit(() => _apiRepo.delete(a.id));
           }
           break;
         case 'theme_presets':
-          final presets = await _presetRepo.getAll();
+          final presets = await _read(_presetRepo.getAll);
           for (final p in presets) {
-            await _presetRepo.delete(p.id);
+            await _commit(() => _presetRepo.delete(p.id));
           }
           break;
         case 'ui_themes':
-          await _themePresetRepo.putAll([]);
+          await _commit(() => _themePresetRepo.putAll([]));
           break;
         case 'local_storage':
           await _deleteLocalStorage();
           break;
         case 'extension_preset':
-          await _extensionPresetRepo.delete(id);
+          await _commit(() => _extensionPresetRepo.delete(id));
           break;
         case 'info_block':
           // id == sessionId for info_block entries
-          await _infoBlockStore.deleteBySessionId(id);
+          await _commit(() => _infoBlockStore.deleteBySessionId(id));
           break;
         case 'tracker_snapshot':
-          await _trackerSnapshotStore.deleteBySessionId(id);
+          await _commit(() => _trackerSnapshotStore.deleteBySessionId(id));
           break;
         case 'tracker_value':
-          await _trackerValueStore.deleteBySessionId(id);
+          await _commit(() => _trackerValueStore.deleteBySessionId(id));
           break;
         case 'studio_config':
-          await _studioConfigStore.delete(id);
+          await _commit(() => _studioConfigStore.delete(id));
           break;
         case 'studio_preset':
           if (_studioPresetStore != null) {
-            await _studioPresetStore.delete(id);
+            await _commit(() => _studioPresetStore.delete(id));
           }
           break;
         case 'chat_summary':
           if (_chatSummaryStore != null) {
-            await _chatSummaryStore.deleteBySessionId(id);
+            await _commit(() => _chatSummaryStore.deleteBySessionId(id));
           }
           break;
         case 'memory_graph':
           if (_memoryGraphStore != null) {
-            await _memoryGraphStore.deleteBySessionId(id);
+            await _commit(() => _memoryGraphStore.deleteBySessionId(id));
           }
           break;
         case 'character_knowledge':
           if (_characterKnowledgeStore != null) {
-            await _characterKnowledgeStore.deleteBySessionId(id);
+            await _commit(() => _characterKnowledgeStore.deleteBySessionId(id));
           }
           break;
         case 'session_lorebook_overlays':
           if (_sessionLorebookOverlayStore != null) {
-            await _sessionLorebookOverlayStore.deleteBySessionId(id);
+            await _commit(
+              () => _sessionLorebookOverlayStore.deleteBySessionId(id),
+            );
           }
           break;
         case 'reconciliation_state':
           if (_reconciliationStateStore != null) {
-            await _reconciliationStateStore.deleteBySessionId(id);
+            await _commit(
+              () => _reconciliationStateStore.deleteBySessionId(id),
+            );
           }
           break;
         // Rewrite history has no independent tombstones. The owning chat's
@@ -2365,7 +2516,9 @@ class SyncEngine {
           break;
         // extensions_settings has no meaningful "delete" — it's always present.
       }
-    } catch (_) {}
+    } catch (_) {
+      _checkCurrent();
+    }
   }
 
   Future<void> _mergeCloudReconciliationState(
@@ -2383,14 +2536,14 @@ class SyncEngine {
           previouslyAccepted.hash == entry.hash &&
           (await _hasReconciliationState(entry.id) ||
               previousManifest.acceptedLocalHashes[entry.key] == '') &&
-          !await _manifestBuilder.isDeleted('chat', entry.id)) {
+          !await _read(() => _manifestBuilder.isDeleted('chat', entry.id))) {
         continue;
       }
-      if (await _manifestBuilder.isDeleted(entry.type, entry.id) ||
-          await _manifestBuilder.isDeleted('chat', entry.id)) {
+      if (await _read(() => _manifestBuilder.isDeleted(entry.type, entry.id)) ||
+          await _read(() => _manifestBuilder.isDeleted('chat', entry.id))) {
         continue;
       }
-      if (await _chatRepo.getById(entry.id) == null) {
+      if (await _read(() => _chatRepo.getById(entry.id)) == null) {
         final chatEntry = cloudManifest.entries[entryKey('chat', entry.id)];
         if (chatEntry == null || chatEntry.deleted) {
           throw StateError(
@@ -2401,7 +2554,7 @@ class SyncEngine {
           _adapter,
           chatEntry,
         );
-        await _chatRepo.put(ChatSession.fromJson(chatData));
+        await _commit(() => _chatRepo.put(ChatSession.fromJson(chatData)));
       }
       await _mergeReconciliationEntry(entry);
     }
@@ -2410,9 +2563,9 @@ class SyncEngine {
   Future<bool> _hasReconciliationState(String sessionId) async {
     final store = _reconciliationStateStore;
     if (store is SyncPagedReconciliationStateStore) {
-      return store.hasBySessionId(sessionId);
+      return _read(() => store.hasBySessionId(sessionId));
     }
-    return await store?.getBySessionId(sessionId) != null;
+    return await _read(() async => store?.getBySessionId(sessionId)) != null;
   }
 
   Future<void> _mergeReconciliationEntry(SyncManifestEntry entry) async {
@@ -2420,18 +2573,22 @@ class SyncEngine {
     if (store == null) return;
     if (store is SyncPagedReconciliationStateStore) {
       await ReconciliationPageTransport(
-        checkActive: _queue.captureActiveGuard(),
+        checkActive: _captureActiveGuard(),
       ).withDownloadedSource(
         _adapter,
         entry,
-        (source) => store.mergeFromSource(entry.id, source),
+        (source) => _commit(() async {
+          await store.mergeFromSource(entry.id, source);
+        }),
       );
     } else {
       final data = await SyncSerialization.readRequiredCloudEntity(
         _adapter,
         entry,
       );
-      await store.mergeBySessionId(entry.id, data);
+      await _commit(() async {
+        await store.mergeBySessionId(entry.id, data);
+      });
     }
   }
 
@@ -2447,12 +2604,13 @@ class SyncEngine {
   Future<void> _mergeCloudRewriteJobHistory(SyncManifest? cloudManifest) async {
     final store = _rewriteJobHistoryStore;
     if (store == null || cloudManifest == null) return;
-    final localSessions = (await _chatRepo.getAllSessionMetadata())
-        .map((session) => session.sessionId)
-        .toSet();
+    final localSessions = (await _read(
+      _chatRepo.getAllSessionMetadata,
+    )).map((session) => session.sessionId).toSet();
     for (final entry in cloudManifest.entries.values) {
       if (entry.type != 'rewrite_job_history' || entry.deleted) continue;
-      if (await _manifestBuilder.isDeleted('chat', entry.id)) continue;
+      if (await _read(() => _manifestBuilder.isDeleted('chat', entry.id)))
+        continue;
       final chatEntry = cloudManifest.entries[entryKey('chat', entry.id)];
       if (chatEntry == null || chatEntry.deleted) {
         continue;
@@ -2461,7 +2619,7 @@ class SyncEngine {
       // deleted. The ordinary pull phase decides whether a cloud chat is
       // reintroduced; history only follows an already present local chat.
       if (!localSessions.contains(entry.id)) continue;
-      final local = await store.getBySessionId(entry.id);
+      final local = await _read(() => store.getBySessionId(entry.id));
       if (local != null &&
           SyncSerialization.computeSyncHash(local) == entry.hash) {
         continue;
@@ -2471,12 +2629,14 @@ class SyncEngine {
         entry,
       );
       _verifyRewriteHistoryHash(entry, cloudData);
-      await store.mergeBySessionId(entry.id, cloudData);
+      await _commit(() async {
+        await store.mergeBySessionId(entry.id, cloudData);
+      });
     }
   }
 
   Future<Map<String, dynamic>?> _readLocalStorage() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _read(SharedPreferences.getInstance);
     final pipelineSettings = prefs.getString(
       SyncSerialization.pipelineSettingsKey,
     );
@@ -2502,66 +2662,68 @@ class SyncEngine {
     );
   }
 
-  Future<void> _applyLocalStorage(Map<String, dynamic> data) =>
-      SavedPreferencesWrites.run(data.keys, () async {
-        final prefs = await TrackedSharedPreferences.getInstance();
-        final pipelineSettings = data[SyncSerialization.pipelineSettingsKey];
-        if (pipelineSettings is String) {
-          if (pipelineSettings.isEmpty) {
-            await prefs.remove(SyncSerialization.pipelineSettingsKey);
-          } else {
-            await prefs.setString(
-              SyncSerialization.pipelineSettingsKey,
-              pipelineSettings,
-            );
-          }
-        }
-        final activeStudioPresetId =
-            data[SyncSerialization.activeStudioPresetKey];
-        if (activeStudioPresetId is String) {
-          if (activeStudioPresetId.isEmpty) {
-            await prefs.remove(SyncSerialization.activeStudioPresetKey);
-          } else {
-            await prefs.setString(
-              SyncSerialization.activeStudioPresetKey,
-              activeStudioPresetId,
-            );
-          }
-        }
-        await _applyLocalStorageString(
-          prefs,
-          data,
-          SyncSerialization.globalRegexScriptsKey,
+  Future<void> _applyLocalStorage(
+    Map<String, dynamic> data,
+  ) => SavedPreferencesWrites.run(data.keys, () async {
+    final original = await _read(TrackedSharedPreferences.getInstance);
+    final prefs = _SyncWorkflowPreferences(original, _checkCurrent, _commit);
+    final pipelineSettings = data[SyncSerialization.pipelineSettingsKey];
+    if (pipelineSettings is String) {
+      if (pipelineSettings.isEmpty) {
+        await prefs.remove(SyncSerialization.pipelineSettingsKey);
+      } else {
+        await prefs.setString(
+          SyncSerialization.pipelineSettingsKey,
+          pipelineSettings,
         );
-        await _applyLocalStorageString(
-          prefs,
-          data,
-          SyncSerialization.studioRegexScriptsKey,
+      }
+    }
+    final activeStudioPresetId = data[SyncSerialization.activeStudioPresetKey];
+    if (activeStudioPresetId is String) {
+      if (activeStudioPresetId.isEmpty) {
+        await prefs.remove(SyncSerialization.activeStudioPresetKey);
+      } else {
+        await prefs.setString(
+          SyncSerialization.activeStudioPresetKey,
+          activeStudioPresetId,
         );
-        final rawAppSettings = data[SyncSerialization.appSettingsKey];
-        if (rawAppSettings is Map) {
-          await AppSettingsPreferences.applyPartial(
-            prefs,
-            Map<String, dynamic>.from(rawAppSettings),
-          );
-        }
-        final layout = data[SyncSerialization.chatLayoutKey];
-        if (layout is Map<String, dynamic>) {
-          await SyncSerialization.applyChatLayout(prefs, layout);
-        }
-      });
+      }
+    }
+    await _applyLocalStorageString(
+      prefs,
+      data,
+      SyncSerialization.globalRegexScriptsKey,
+    );
+    await _applyLocalStorageString(
+      prefs,
+      data,
+      SyncSerialization.studioRegexScriptsKey,
+    );
+    final rawAppSettings = data[SyncSerialization.appSettingsKey];
+    if (rawAppSettings is Map) {
+      await AppSettingsPreferences.applyPartial(
+        prefs,
+        Map<String, dynamic>.from(rawAppSettings),
+      );
+    }
+    final layout = data[SyncSerialization.chatLayoutKey];
+    if (layout is Map<String, dynamic>) {
+      await SyncSerialization.applyChatLayout(prefs, layout);
+    }
+  });
 
   Future<void> _applyLocalStorageString(
     SharedPreferences prefs,
     Map<String, dynamic> data,
     String key,
   ) => SavedPreferencesWrites.run([key], () async {
+    _checkCurrent();
     final value = data[key];
     if (value is! String) return;
     if (value.isEmpty) {
-      await TrackedSharedPreferences.wrap(prefs).remove(key);
+      await prefs.remove(key);
     } else {
-      await TrackedSharedPreferences.wrap(prefs).setString(key, value);
+      await prefs.setString(key, value);
     }
   });
 
@@ -2573,7 +2735,8 @@ class SyncEngine {
       SyncSerialization.studioRegexScriptsKey,
     ],
     () async {
-      final prefs = await TrackedSharedPreferences.getInstance();
+      final original = await _read(TrackedSharedPreferences.getInstance);
+      final prefs = _SyncWorkflowPreferences(original, _checkCurrent, _commit);
       await prefs.remove(SyncSerialization.pipelineSettingsKey);
       await prefs.remove(SyncSerialization.activeStudioPresetKey);
       await prefs.remove(SyncSerialization.globalRegexScriptsKey);
@@ -2582,4 +2745,110 @@ class SyncEngine {
       await SyncSerialization.applyChatLayout(prefs, const {});
     },
   );
+}
+
+/// Already acknowledged local callbacks are facts, not a rollback promise.
+final class SyncWorkflowRetired implements CloudOAuthRetiredCommit {
+  const SyncWorkflowRetired(this.committedLocalWrites);
+  final int committedLocalWrites;
+  @override
+  String toString() =>
+      'Cloud sync workflow retired ($committedLocalWrites local writes settled)';
+}
+
+/// Only the original sync preference callbacks, including multi-field helpers.
+/// No private-key custody, whole-store operation, or replacement lookup exists.
+final class _SyncWorkflowPreferences implements SharedPreferences {
+  _SyncWorkflowPreferences(this._original, this._check, this._commit);
+  final SharedPreferences _original;
+  final void Function() _check;
+  final Future<void> Function(Future<void> Function()) _commit;
+  Future<bool> _write(String key, Future<bool> Function() action) async {
+    if (!AppSettingsPreferences.keys.contains(key) &&
+        !AppSettingsPreferences.legacyKeys.contains(key) &&
+        !SyncSerialization.chatLayoutPrefKeys.contains(key) &&
+        !const {
+          SyncSerialization.pipelineSettingsKey,
+          SyncSerialization.activeStudioPresetKey,
+          SyncSerialization.globalRegexScriptsKey,
+          SyncSerialization.studioRegexScriptsKey,
+        }.contains(key)) {
+      throw StateError('Unexpected cloud preference write');
+    }
+    await _commit(() async {
+      _check();
+      if (!await action())
+        throw StateError('Cloud preference write not acknowledged');
+    });
+    return true;
+  }
+
+  @override
+  Object? get(String key) {
+    _check();
+    return _original.get(key);
+  }
+
+  @override
+  bool? getBool(String key) {
+    _check();
+    return _original.getBool(key);
+  }
+
+  @override
+  int? getInt(String key) {
+    _check();
+    return _original.getInt(key);
+  }
+
+  @override
+  double? getDouble(String key) {
+    _check();
+    return _original.getDouble(key);
+  }
+
+  @override
+  String? getString(String key) {
+    _check();
+    return _original.getString(key);
+  }
+
+  @override
+  List<String>? getStringList(String key) {
+    _check();
+    return _original.getStringList(key);
+  }
+
+  @override
+  bool containsKey(String key) {
+    _check();
+    return _original.containsKey(key);
+  }
+
+  @override
+  Set<String> getKeys() {
+    _check();
+    return _original.getKeys();
+  }
+
+  @override
+  Future<bool> setBool(String key, bool value) =>
+      _write(key, () => _original.setBool(key, value));
+  @override
+  Future<bool> setInt(String key, int value) =>
+      _write(key, () => _original.setInt(key, value));
+  @override
+  Future<bool> setDouble(String key, double value) =>
+      _write(key, () => _original.setDouble(key, value));
+  @override
+  Future<bool> setString(String key, String value) =>
+      _write(key, () => _original.setString(key, value));
+  @override
+  Future<bool> setStringList(String key, List<String> value) =>
+      _write(key, () => _original.setStringList(key, value));
+  @override
+  Future<bool> remove(String key) => _write(key, () => _original.remove(key));
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw StateError('Unsupported cloud preference operation');
 }

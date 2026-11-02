@@ -28,6 +28,7 @@ final class MemorySetupNativeFixture {
   MemorySetupNativeFixture(this.domain);
   final DomainLoopFixture domain;
   late MemorySetupService service;
+  bool _hasService = false;
   late TrackedSharedPreferences prefs;
   late MemorySetupPreferencesBacking backing;
   SharedPreferencesStorePlatform? previousBackend;
@@ -113,12 +114,15 @@ final class MemorySetupNativeFixture {
       onBookChanged: (_) {},
       loadConnectionMetadata: (current) => metadata.load(isCurrent: current),
     );
+    _hasService = true;
     if (grant) {
       expect(service.start(controller.view.displayedIntent), isTrue);
       if (selectTarget)
         expect(
           service.selectTarget(
-            service.targets.singleWhere((t) => t.sessionId == DomainLoopFixture.session),
+            service.targets.singleWhere(
+              (t) => t.sessionId == DomainLoopFixture.session,
+            ),
           ),
           isTrue,
         );
@@ -126,7 +130,7 @@ final class MemorySetupNativeFixture {
   }
 
   void close() {
-    service.retire();
+    if (_hasService) service.retire();
     alive = false;
     if (previousBackend case final previous?)
       SharedPreferencesStorePlatform.instance = previous;
@@ -137,14 +141,16 @@ void memorySetupTest(
   String name,
   Future<void> Function(WidgetTester, MemorySetupNativeFixture) body, {
   bool selectTarget = true,
+  // Seed/refresh the original loaded owner before capturing wizard custody.
+  Future<void> Function(MemorySetupNativeFixture)? beforeInitialize,
 }) {
   domainLoopTest(name, (tester, domain) async {
     final f = MemorySetupNativeFixture(domain);
     try {
-      await configurationAction(
-        tester,
-        () => f.initialize(selectTarget: selectTarget),
-      );
+      await configurationAction(tester, () async {
+        if (beforeInitialize != null) await beforeInitialize(f);
+        await f.initialize(selectTarget: selectTarget);
+      });
       await body(tester, f);
     } finally {
       f.close();

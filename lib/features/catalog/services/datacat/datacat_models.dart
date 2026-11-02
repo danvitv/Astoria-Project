@@ -316,6 +316,7 @@ class DatacatAccountStatus {
   final String rateTier;
   final String? displayName;
   final List<String> scopes;
+  final bool credentialUnavailable;
 
   const DatacatAccountStatus({
     this.accountState = 'unlinked',
@@ -323,6 +324,7 @@ class DatacatAccountStatus {
     this.rateTier = '',
     this.displayName,
     this.scopes = const [],
+    this.credentialUnavailable = false,
   });
 
   /// The two states that mean this installation is bound to something.
@@ -344,12 +346,33 @@ class DatacatAccountStatus {
         : _str(account['username']);
     return DatacatAccountStatus(
       accountState: _str(json['accountState']),
-      boundToAccountToken: _map(json['installation'])['boundToAccountToken'] == true,
+      boundToAccountToken:
+          _map(json['installation'])['boundToAccountToken'] == true,
       rateTier: _str(_map(json['rateLimit'])['tier']),
       displayName: name.isEmpty ? null : name,
       scopes: scopes,
     );
   }
+}
+
+/// Nonsecret account approval only. Polling ids/codes and intervals stay inside
+/// the account service. Every later display, copy or navigation must still be
+/// admitted by the original owner and the original/current redaction policies.
+final class DatacatAccountApproval {
+  final String uri;
+  final String? userCode;
+  final Duration expiresIn;
+  final bool Function(String uri) _canNavigate;
+
+  DatacatAccountApproval({
+    required this.uri,
+    required bool Function(String uri) canNavigate,
+    this.userCode,
+    this.expiresIn = const Duration(minutes: 10),
+  }) : _canNavigate = canNavigate;
+
+  bool get canPublish => _canNavigate(uri);
+  bool canNavigate(String uri) => canPublish && _canNavigate(uri);
 }
 
 /// A started device flow — either an account link or a human-verification
@@ -384,7 +407,11 @@ class DatacatDeviceFlow {
   factory DatacatDeviceFlow.fromJson(Map<String, dynamic> json) =>
       DatacatDeviceFlow(
         id: _str(json['linkId'] ?? json['verificationId']),
-        deviceCode: _str(json['deviceCode']),
+        // Registration and exchange must agree on the original wire type.
+        // Coercing a numeric/list code could publish an unregistered secret.
+        deviceCode: json['deviceCode'] is String
+            ? json['deviceCode'] as String
+            : '',
         userCode: json['userCode'] as String?,
         uri: _str(
           json['authorizationUriComplete'] ??

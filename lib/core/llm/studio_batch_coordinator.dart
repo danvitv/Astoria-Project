@@ -7,6 +7,8 @@ import 'studio_message_builder.dart';
 import 'controller_batcher.dart';
 import 'studio_turn_config_snapshot.dart';
 import 'studio/studio_context.dart';
+import 'diagnostics/studio_runtime_diagnostics.dart';
+import 'transport/llm_capture_context.dart';
 
 /// Runs a batch group of Studio chat-time trackers: builds the batched
 /// system prompt + per-agent task text, fires a single LLM request, parses
@@ -94,6 +96,12 @@ class StudioBatchCoordinator {
     final batchAgent = group.agents.first;
     List<ControllerBatchResult>? lastParsed;
     String? lastError;
+    final diagnostics = StudioRuntimeDiagnostics.forRun(cancelToken, sessionId);
+    final call = diagnostics?.newCall(
+      'studio.controller',
+      agentId: batchAgent.id,
+    );
+    LlmCaptureContext? lastCall;
     for (var attempt = 1; attempt <= 3; attempt++) {
       if (cancelToken.isCancelled) {
         throw const AgentRunFailedException(
@@ -102,6 +110,7 @@ class StudioBatchCoordinator {
           reason: 'cancelled',
         );
       }
+      lastCall = call?.withAttempt(attempt);
       try {
         final result = await _runner.runAgent(
           agent: batchAgent,
@@ -116,9 +125,19 @@ class StudioBatchCoordinator {
           batchTemperature: group.batchTemperature,
           charName: context.macroContext.charName,
           userName: context.macroContext.userName,
+          diagnosticContext: lastCall,
         );
         final parsed = _batcher.parseBatchResponse(result.text, group);
-        if (_allOk(parsed)) return parsed;
+        if (_allOk(parsed)) {
+          if (!cancelToken.isCancelled) {
+            diagnostics?.record(
+              lastCall,
+              StudioRuntimeOutcome.executed,
+              StudioRuntimeReason.controllerAccepted,
+            );
+          }
+          return parsed;
+        }
         lastParsed = parsed;
         final failedCount = parsed
             .where((result) => result.status != 'ok')
@@ -129,6 +148,13 @@ class StudioBatchCoordinator {
         lastError = error.reason;
         _log('batch ${group.key} attempt $attempt failed: $lastError');
       }
+    }
+    if (!cancelToken.isCancelled) {
+      diagnostics?.record(
+        lastCall,
+        StudioRuntimeOutcome.blockingFailure,
+        StudioRuntimeReason.requiredTrackerFailed,
+      );
     }
     return lastParsed ??
         group.agents

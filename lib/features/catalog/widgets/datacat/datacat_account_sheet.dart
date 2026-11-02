@@ -15,12 +15,15 @@ import '../../../../shared/widgets/glaze_toast.dart';
 import '../../../../shared/widgets/sheet_view.dart';
 import '../../../chat/bridge/chat_webview_environment.dart';
 import '../../datacat_account_provider.dart';
-import '../../services/datacat/datacat_account.dart';
 import '../../services/datacat/datacat_models.dart';
 
 /// Entry point for the "DataCat account" row. Offers to unlink when an account
 /// is already linked, and starts the device flow when it is not.
-Future<void> openDatacatAccountSheet(BuildContext context, WidgetRef ref) async {
+Future<void> openDatacatAccountSheet(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  final notifier = ref.read(datacatAccountProvider.notifier);
   if (!ref.read(datacatAccountProvider).linked) {
     await showDatacatLinkSheet(context);
     return;
@@ -35,7 +38,16 @@ Future<void> openDatacatAccountSheet(BuildContext context, WidgetRef ref) async 
         isDestructive: true,
         onTap: () async {
           Navigator.of(context, rootNavigator: true).pop();
-          await ref.read(datacatAccountProvider.notifier).unlink();
+          try {
+            await notifier.unlink();
+          } catch (_) {
+            if (context.mounted) {
+              GlazeToast.show(
+                context,
+                'DataCat account could not be unlinked securely',
+              );
+            }
+          }
         },
       ),
       BottomSheetItem(
@@ -78,7 +90,7 @@ class DatacatLinkSheet extends ConsumerStatefulWidget {
 }
 
 class _DatacatLinkSheetState extends ConsumerState<DatacatLinkSheet> {
-  DatacatDeviceFlow? _flow;
+  DatacatAccountApproval? _flow;
   Object? _error;
   bool _closed = false;
 
@@ -95,14 +107,16 @@ class _DatacatLinkSheetState extends ConsumerState<DatacatLinkSheet> {
   }
 
   Future<void> _start() async {
+    final notifier = ref.read(datacatAccountProvider.notifier);
     try {
-      final flow = await startDatacatLink();
-      if (!mounted) return;
-      setState(() => _flow = flow);
-
-      final status = await awaitDatacatLink(flow, isCancelled: () => _closed);
+      await notifier.link(
+        onFlow: (flow) {
+          if (mounted && !_closed && flow.canPublish)
+            setState(() => _flow = flow);
+        },
+        isCancelled: () => _closed,
+      );
       if (!mounted || _closed) return;
-      ref.read(datacatAccountProvider.notifier).applyStatus(status);
       Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted || _closed) return;
@@ -156,7 +170,7 @@ class _DatacatLinkSheetState extends ConsumerState<DatacatLinkSheet> {
     }
 
     final flow = _flow;
-    if (flow == null) {
+    if (flow == null || !flow.canPublish) {
       return Padding(
         padding: EdgeInsets.only(top: topPad + 40),
         child: Column(
@@ -180,7 +194,7 @@ class _DatacatLinkSheetState extends ConsumerState<DatacatLinkSheet> {
       padding: EdgeInsets.only(top: topPad),
       child: Column(
         children: [
-          if (flow.userCode != null) _UserCode(code: flow.userCode!),
+          if (flow.userCode != null) _UserCode(approval: flow),
           Expanded(
             child: InAppWebView(
               initialUrlRequest: URLRequest(url: WebUri(flow.uri)),
@@ -190,9 +204,20 @@ class _DatacatLinkSheetState extends ConsumerState<DatacatLinkSheet> {
                 cacheEnabled: true,
                 thirdPartyCookiesEnabled: true,
                 isInspectable: false,
+                useShouldOverrideUrlLoading: true,
                 useHybridComposition: true,
                 userAgent: janitorWebViewUserAgent,
               ),
+              shouldOverrideUrlLoading: (_, action) async {
+                final uri = action.request.url?.toString();
+                return mounted &&
+                        !_closed &&
+                        identical(_flow, flow) &&
+                        uri != null &&
+                        flow.canNavigate(uri)
+                    ? NavigationActionPolicy.ALLOW
+                    : NavigationActionPolicy.CANCEL;
+              },
               webViewEnvironment:
                   defaultTargetPlatform == TargetPlatform.windows
                   ? chatWebViewEnvironment
@@ -215,12 +240,14 @@ class _DatacatLinkSheetState extends ConsumerState<DatacatLinkSheet> {
 
 /// The short approval code, tappable to copy.
 class _UserCode extends StatelessWidget {
-  final String code;
+  final DatacatAccountApproval approval;
 
-  const _UserCode({required this.code});
+  const _UserCode({required this.approval});
 
   @override
   Widget build(BuildContext context) {
+    if (!approval.canPublish) return const SizedBox.shrink();
+    final code = approval.userCode!;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
       child: Column(
@@ -228,18 +255,16 @@ class _UserCode extends StatelessWidget {
           Text(
             'datacat_account_link_hint'.tr(),
             textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              color: context.cs.onSurfaceVariant,
-            ),
+            style: TextStyle(fontSize: 12, color: context.cs.onSurfaceVariant),
           ),
           const SizedBox(height: 8),
           GlazeActionButton(
             icon: Icons.copy_rounded,
             label: code,
             onTap: () async {
+              if (!approval.canPublish) return;
               await Clipboard.setData(ClipboardData(text: code));
-              if (context.mounted) {
+              if (context.mounted && approval.canPublish) {
                 GlazeToast.show(context, 'datacat_account_code_copied'.tr());
               }
             },

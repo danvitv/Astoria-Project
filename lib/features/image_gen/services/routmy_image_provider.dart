@@ -7,10 +7,17 @@ import 'image_gen_http.dart';
 import '../image_gen_models.dart';
 
 class RoutmyImageProvider {
-  final ImageGenHttp _http = ImageGenHttp();
+  final ImageGenHttp _http;
   final String baseUrl;
+  final void Function()? checkCurrent;
 
-  RoutmyImageProvider({this.baseUrl = RoutMyConstants.baseUrl});
+  /// Direct injection is retained for isolated provider fixtures. Production
+  /// dispatch always supplies the native owner's operation guard and key.
+  RoutmyImageProvider({
+    this.baseUrl = RoutMyConstants.baseUrl,
+    this.checkCurrent,
+    ImageGenHttp? http,
+  }) : _http = http ?? ImageGenHttp(followRedirects: false);
 
   Future<Uint8List> generate({
     required String apiKey,
@@ -80,12 +87,14 @@ class RoutmyImageProvider {
       if (!isSeedreamModel) 'quality': ?normalizedQuality,
     };
 
+    checkCurrent?.call();
     final json = await _http.post(
       url: url,
       apiKey: apiKey,
       body: body,
       cancelToken: cancelToken,
     );
+    checkCurrent?.call();
     return _extractImageBytes(json, cancelToken: cancelToken);
   }
 
@@ -128,6 +137,7 @@ class RoutmyImageProvider {
       imageFields.add((fieldName, bytes, 'reference-$i.png', 'image/png'));
     }
 
+    checkCurrent?.call();
     final json = await _http.postMultipart(
       url: url,
       fields: fields,
@@ -135,6 +145,7 @@ class RoutmyImageProvider {
       apiKey: apiKey,
       cancelToken: cancelToken,
     );
+    checkCurrent?.call();
     return _extractImageBytes(json, cancelToken: cancelToken);
   }
 
@@ -211,24 +222,13 @@ class RoutmyImageProvider {
         json['b64_json'] == null;
     if (!isTask) return;
 
-    final safeStatus = _safeTaskValue(status, maxLength: 40);
-    final safeId = _safeTaskValue(id, maxLength: 120);
+    // Provider-controlled status/IDs are not required to explain this contract
+    // failure. Omitting them avoids punctuation repair/truncation turning an
+    // echoed credential into a fragment the owner's redactor cannot recognize.
     throw Exception(
       'rout.my returned an asynchronous image task '
-      '(status=$safeStatus, id=$safeId), but no polling endpoint is documented',
+      'but no polling endpoint is documented',
     );
-  }
-
-  String _safeTaskValue(Object? value, {required int maxLength}) {
-    if (value == null) return 'unknown';
-    if (value is! String && value is! num && value is! bool) return 'unknown';
-    final sanitized = value.toString().replaceAll(
-      RegExp(r'[^A-Za-z0-9._:\-]'),
-      '_',
-    );
-    return sanitized.length <= maxLength
-        ? sanitized
-        : '${sanitized.substring(0, maxLength)}...';
   }
 
   String _base64Payload(String value) {
@@ -252,7 +252,9 @@ class RoutmyImageProvider {
       return ImageGenHttp.base64ToBytes(_base64Payload(url));
     }
     try {
+      checkCurrent?.call();
       final response = await _http.getRaw(url, cancelToken: cancelToken);
+      checkCurrent?.call();
       final bytes = response.data;
       if (bytes == null || bytes.isEmpty) {
         throw Exception('rout.my image download returned an empty response');

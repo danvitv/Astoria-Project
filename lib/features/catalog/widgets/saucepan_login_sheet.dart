@@ -12,7 +12,9 @@ import '../saucepan_account_provider.dart';
 /// Menu entry point for the "Saucepan Account" item. When already logged in it
 /// offers a log-out sheet; otherwise it opens the login form.
 Future<void> openSaucepanAccountSheet(
-    BuildContext context, WidgetRef ref) async {
+  BuildContext context,
+  WidgetRef ref,
+) async {
   if (!ref.read(saucepanAccountProvider).isLoggedIn) {
     await showSaucepanLoginSheet(context);
     return;
@@ -102,13 +104,14 @@ class _SaucepanLoginFormState extends ConsumerState<_SaucepanLoginForm> {
       setState(() => _error = 'error_handle_password_required'.tr());
       return;
     }
-    _run(() =>
-        ref.read(saucepanAccountProvider.notifier).login(handle, password));
+    _run(
+      () => ref.read(saucepanAccountProvider.notifier).login(handle, password),
+    );
   }
 
   void _saveToken() {
-    final token = _token.text.trim();
-    if (token.isEmpty) {
+    final token = _token.text;
+    if (token.trim().isEmpty) {
       setState(() => _error = 'error_token_required'.tr());
       return;
     }
@@ -153,8 +156,10 @@ class _SaucepanLoginFormState extends ConsumerState<_SaucepanLoginForm> {
           ],
           if (_error != null) ...[
             const SizedBox(height: 12),
-            Text(_error!,
-                style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+            Text(
+              _error!,
+              style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+            ),
           ],
         ],
       ),
@@ -178,8 +183,10 @@ class _SaucepanLoginFormState extends ConsumerState<_SaucepanLoginForm> {
         hintStyle: TextStyle(color: cs.onSurfaceVariant, fontSize: 14),
         filled: true,
         fillColor: cs.surfaceContainerHighest,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 12,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide.none,
@@ -201,12 +208,15 @@ class _SaucepanLoginFormState extends ConsumerState<_SaucepanLoginForm> {
             ? const SizedBox(
                 width: 18,
                 height: 18,
-                child:
-                    GlazeSpinner(color: Colors.white),
+                child: GlazeSpinner(color: Colors.white),
               )
-            : Text(label,
-                style:
-                    const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            : Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
       ),
     );
   }

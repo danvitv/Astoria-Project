@@ -16,11 +16,20 @@ enum SupportAppDomainOperation {
   memorySettings('astoria_memory_settings'),
   memoryDraft('astoria_memory_draft_vector'),
   memoryCatalog('astoria_memory_catalog_rebuild'),
+  memoryEntryText('astoria_memory_entry_text_revise'),
+  memoryEntryTextUndo('astoria_memory_entry_text_undo'),
   extensionDisable('astoria_extension_block_disable'),
   databaseRepair('astoria_database_repair'),
   databaseUndo('astoria_database_repair_undo'),
   sessionRepair('astoria_session_repair'),
-  sessionUndo('astoria_session_repair_undo');
+  sessionUndo('astoria_session_repair_undo'),
+  sessionRename('astoria_session_rename'),
+  sessionTitleUndo('astoria_session_rename_undo'),
+  activePersona('astoria_active_persona_set'),
+  activePreset('astoria_active_preset_set'),
+  activeSelectionUndo('astoria_active_selection_undo'),
+  globalRegexDisable('astoria_global_regex_disable'),
+  globalRegexUndo('astoria_global_regex_undo');
 
   const SupportAppDomainOperation(this.action);
   final String action;

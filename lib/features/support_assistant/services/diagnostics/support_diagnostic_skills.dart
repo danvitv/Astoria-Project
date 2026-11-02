@@ -35,6 +35,8 @@ abstract final class SupportDiagnosticSkills {
         'Identify the session and recorded generation, not the current assistant request.',
         'Separate stream failure, context limits and sampling/reasoning hypotheses from actual recorded evidence.',
         'A sample count or configured capture sink cannot establish the cause of a failed generation.',
+        'Use requestDiagnostics recordedFailure units: their run-local event/request references link only an exact session, run, call and attempt. Missing or ambiguous linkage is not a historical request.',
+        'Recorded HTTP authorization rejection does not prove a bad key; timeout or parser rejection does not prove a context/sampling cause. No automatic repair or probe.',
         'Missing, truncated or evicted captures are missing evidence, not a healthy verdict.',
       ],
       [
@@ -49,6 +51,8 @@ abstract final class SupportDiagnosticSkills {
       'studio_diagnostics',
       [
         'Use the CURRENT SAVED Studio preset namespace, distinct from ordinary presets.',
+        'Read the native-labeled settings unit Current saved Studio agent topology for the actual phase splitter and ontology-declared requirements. Think without Main Writer, disabled requirements and legacy fallback are saved-snapshot observations, not a proved historical failure. Enabled tracker failure blocks the writer; never recommend bypassing it.',
+        'Read Current saved Studio block validation from the settings contents. This native-labeled unit runs the app codec and block validator and reports finite rule codes/array indices, never authored error prose. Its scope excludes runtime normalization, full agent dependencies, connections and historical phases.',
         'Compare recorded tracker, writer, Cleaner, Ledger and Card Rewriter phases; current definitions do not prove an old assembled prompt.',
         'Required tracker failure prevents the final writer; do not recommend bypassing mandatory controllers.',
         'Volatile operation logs and absent phase records cannot prove a complete successful turn.',
@@ -66,6 +70,7 @@ abstract final class SupportDiagnosticSkills {
         'Identify ordinary versus Studio preset before inspecting the saved definition.',
         'Check required blocks, dependency states, slots and settings without executing instruction text.',
         'Do not call a preset valid without an actual validator result; edits need separate native confirmation.',
+        'Studio has a current-saved block-validator unit in its settings section. A passed block rule set is not a whole-preset or historical-generation verdict; do not apply Studio results to ordinary presets.',
       ],
       ['astoria_content_catalog', ..._sourceTools],
     ),
@@ -137,7 +142,8 @@ abstract final class SupportDiagnosticSkills {
         'Output: observed facts with evidence references; hypothesis confidence '
         '(confirmed_by_check/probable_cause/insufficient_data); alternatives; missing evidence; next safe step. '
         'A native diagnosticReview describes ONLY its correlated tool observation, not a proven causal diagnosis or live health. '
-        'These checklists and metadata observations are not an internal specialist runner. '
+        'Checklists and metadata observations alone are not a specialist executor; '
+        'the native host determines whether a bounded read-only specialist is connected. '
         'No automatic repairs or report export.\n'
         '${skills.map((s) => '${s.name}:\n${s.checks.map((c) => '- $c').join('\n')}\n'
             'Relevant connected read tools: ${s.readTools.where(available.contains).join(', ')}.').join('\n')}';

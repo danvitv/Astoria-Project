@@ -27,7 +27,7 @@ extension PersonaAppControl on PersonaRepo {
         if (!current() || await getById(value.id) != null || !current()) {
           return false;
         }
-        await _db.customStatement(
+        await _selectionTargetWrite(value.id, () => _db.customStatement(
           '''
         INSERT INTO personas (persona_id, name, display_name, prompt, created_at)
         VALUES (?, ?, ?, ?, ?)
@@ -39,7 +39,7 @@ extension PersonaAppControl on PersonaRepo {
             value.prompt,
             value.createdAt,
           ],
-        );
+        ));
         return true;
       });
 
@@ -58,10 +58,10 @@ extension PersonaAppControl on PersonaRepo {
       PersonaControlText.displayName => 'display_name',
       PersonaControlText.prompt => 'prompt',
     };
-    await _db.customStatement(
+    await _selectionTargetWrite(latest.id, () => _db.customStatement(
       'UPDATE personas SET $column = ? WHERE persona_id = ?',
       [value, latest.id],
-    );
+    ));
     return true;
   });
 }

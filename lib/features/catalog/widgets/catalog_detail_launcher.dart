@@ -102,9 +102,11 @@ class _CatalogDetailLauncherState
         case CatalogProvider.datacat:
           result = await _fetchDatacatCard();
         case CatalogProvider.chub:
-          result = await chubGetCharacter(
-            widget.item.fullPath ?? widget.item.id,
-            apiKey: ref.read(chubAccountProvider).apiKey,
+          result = await ref.read(chubAccountProvider.notifier).withApiKey(
+            (key) => chubGetCharacter(
+              widget.item.fullPath ?? widget.item.id,
+              apiKey: key,
+            ),
           );
       }
       if (mounted) setState(() => _downloaded = result);

@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'chat_session_write_queue.dart';
+import 'chat_native_session_title_port.dart';
 
 /// Separate native maintenance custody, never a loaded ChatNotifier. Its
 /// barrier belongs to the actual admitted queued effect, not a persisted lease.
@@ -17,12 +18,22 @@ final class ChatNativeOwner {
     required this.isIdle,
     required this.queue,
     required this.refresh,
+    this.titles,
   });
   final String characterId;
   final String? Function() sessionId;
   final bool Function() isIdle;
   final ChatSessionWriteQueue queue;
-  final Future<bool> Function(String sessionId, int publication) refresh;
+
+  /// The admitted source guard must be checked after reads and before cache or
+  /// state publication; queue publication alone cannot detect history renames.
+  final Future<bool> Function(
+    String sessionId,
+    int publication,
+    bool Function() sourceCurrent,
+  )
+  refresh;
+  final ChatNativeSessionTitlePort? titles;
 }
 
 final class ChatNativeOwnerRegistry {

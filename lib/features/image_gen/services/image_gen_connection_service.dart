@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
+import '../../../core/credentials/image_routmy_credential_owner.dart';
 import '../../../core/llm/transport/endpoint_normalizer.dart';
 import '../image_gen_models.dart';
 import 'comfyui_image_provider.dart';
@@ -10,9 +11,11 @@ import 'comfyui_image_provider.dart';
 /// settings sheet. Generation itself remains in the provider-specific clients.
 class ImageGenConnectionService {
   final Dio _dio;
+  final ImageRoutmyCredentialOwner? _routmy;
 
-  ImageGenConnectionService({Dio? dio})
-    : _dio =
+  ImageGenConnectionService({Dio? dio, ImageRoutmyCredentialOwner? routmyCredentials})
+    : _routmy = routmyCredentials,
+      _dio =
           dio ??
           Dio(
             BaseOptions(
@@ -58,15 +61,13 @@ class ImageGenConnectionService {
           settings.naisteraApiKey,
         );
       case ImageGenApiType.routmy:
-        if (settings.routmyApiKey.trim().isEmpty) {
-          throw StateError('rout.my API key not configured');
-        }
         // `/v1/models` is a public catalog and answers 200 for any key, so a
         // real probe has to hit an authenticated route.
-        await _checkRoutmyChat(
-          settings.routmyMirror.baseUrl,
-          settings.routmyApiKey,
-        );
+        await _withRoutmy(settings, (key, checkCurrent) async {
+          checkCurrent();
+          await _checkRoutmyChat(settings.routmyMirror.baseUrl, key);
+          checkCurrent();
+        });
       case ImageGenApiType.openrouter:
         if (settings.openrouter.apiKey.trim().isEmpty) {
           throw StateError('OpenRouter API key not configured');
@@ -134,35 +135,55 @@ class ImageGenConnectionService {
   Future<List<RoutmyModelInfo>> fetchRoutmyModels(
     ImageGenSettings settings,
   ) async {
-    final data = await _get(
-      '${settings.routmyMirror.baseUrl}/v1/models',
-      settings.routmyApiKey,
-    );
-    final models = data is Map ? data['data'] : null;
-    if (models is! List) return const [];
-    final result = <RoutmyModelInfo>[];
-    for (final raw in models.whereType<Map<Object?, Object?>>()) {
-      final id = raw['id']?.toString() ?? '';
-      if (id.isEmpty) continue;
-      final endpoints = raw['endpoints'];
-      final endpointList = endpoints is List
-          ? endpoints.map((endpoint) => endpoint.toString()).toList()
-          : const <String>[];
-      final isImage = endpointList.isEmpty
-          ? _looksLikeImageModel(id)
-          : endpointList.any((endpoint) => endpoint.contains('/images/'));
-      if (!isImage) continue;
-      result.add(
-        RoutmyModelInfo(
-          id: id,
-          name: raw['name']?.toString() ?? '',
-          supportsEdits: endpointList.any(
-            (endpoint) => endpoint.contains('/images/edits'),
-          ),
-        ),
+    final publicText = _routmy?.capturePublicTextGuard() ?? (String _) => false;
+    final result = await _withRoutmy<List<RoutmyModelInfo>>(settings, (key, checkCurrent) async {
+      checkCurrent();
+      final data = await _get(
+        '${settings.routmyMirror.baseUrl}/v1/models',
+        key,
+        followRedirects: false,
       );
-    }
-    return result;
+      checkCurrent();
+      final models = data is Map ? data['data'] : null;
+      if (models is! List) return const [];
+      final result = <RoutmyModelInfo>[];
+      for (final raw in models.whereType<Map<Object?, Object?>>()) {
+        final id = raw['id'];
+        final name = raw['name'] ?? '';
+        if (id is! String || name is! String || id.isEmpty ||
+            !publicText(id) || !publicText(name)) continue;
+        final endpoints = raw['endpoints'];
+        final endpointList = endpoints is List
+            ? endpoints.map((endpoint) => endpoint.toString()).toList()
+            : const <String>[];
+        final isImage = endpointList.isEmpty
+            ? _looksLikeImageModel(id)
+            : endpointList.any((endpoint) => endpoint.contains('/images/'));
+        if (!isImage) continue;
+        result.add(
+          RoutmyModelInfo(
+            id: id,
+            name: name,
+            supportsEdits: endpointList.any(
+              (endpoint) => endpoint.contains('/images/edits'),
+            ),
+          ),
+        );
+      }
+      return result;
+    });
+    // Native custody adds awaits after response extraction. Recheck the actual
+    // current sink at the successful return boundary, not just while decoding.
+    return result.where((model) => publicText(model.id) && publicText(model.name)).toList();
+  }
+
+  Future<T> _withRoutmy<T>(
+    ImageGenSettings settings,
+    Future<T> Function(String, void Function()) consume,
+  ) {
+    final owner = _routmy;
+    if (owner == null) throw StateError('Native rout.my credential owner unavailable');
+    return owner.withApiKey(origin: settings.routmyMirror.baseUrl, consume: consume);
   }
 
   /// Image models exposed by OpenRouter (`output_modalities=image`).
@@ -346,6 +367,7 @@ class ImageGenConnectionService {
     String url,
     String? apiKey, {
     Map<String, String> extraHeaders = const {},
+    bool followRedirects = true,
   }) async {
     final response = await _dio.get<dynamic>(
       url,
@@ -356,6 +378,7 @@ class ImageGenConnectionService {
           ...extraHeaders,
         },
         validateStatus: (_) => true,
+        followRedirects: followRedirects,
       ),
     );
     final status = response.statusCode ?? 0;
@@ -383,6 +406,7 @@ class ImageGenConnectionService {
       options: Options(
         headers: {'Authorization': 'Bearer $apiKey'},
         validateStatus: (_) => true,
+        followRedirects: false,
       ),
     );
     final status = response.statusCode ?? 0;

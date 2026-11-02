@@ -223,7 +223,9 @@ final class BackupLoopFixture {
       'hapticFeedback': false,
       'messageVibration': false,
     });
-    final prefs = await SharedPreferences.getInstance();
+    // The source reader must retain the actual tracked plugin producer. The
+    // existing test installs an in-memory plugin before this call; no user store.
+    final prefs = await TrackedSharedPreferences.getInstance();
     final theme = ThemeNotifier(storage: AppControlMemoryTheme());
     isolation.extraAllowed.addAll({
       supportAppActionRegistryProvider,
@@ -528,10 +530,17 @@ final class BackupLoopFixture {
       );
     });
     await tester.enterText(find.byType(TextField).first, text);
-    await backupLoopReal(
-      tester,
-      () => tester.tap(find.byKey(const ValueKey('support_composer_send_btn'))),
+    // TextController changes schedule the native button rebuild. Without this
+    // frame the gesture still targets the previous empty-input disabled button.
+    await tester.pump();
+    final send = find.byKey(const ValueKey('support_composer_send_btn'));
+    expect(send.hitTestable(), findsOneWidget);
+    expect(
+      tester.widget<IconButton>(send).onPressed,
+      isNotNull,
+      reason: 'The native Send must be enabled after entering its input.',
     );
+    await backupLoopReal(tester, () => tester.tap(send));
     await backupLoopUntil(
       tester,
       () => picker ? dialog.choices == 1 : wire.isNotEmpty,

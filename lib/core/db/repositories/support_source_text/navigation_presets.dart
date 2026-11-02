@@ -184,6 +184,7 @@ extension _NavPresets on SupportSourceNavigationRepo {
     final records = <nav.DataRecord>[];
     final blocks = _shape.list(decoded['blocks_json']).map(_shape.map).toList();
     final agents = _shape.list(decoded['agents_json']).map(_shape.map).toList();
+    records.addAll(_studioValidationUnits(source, row, decoded));
     final blockIndices = {
       for (var i = 0; i < blocks.length; i++) blocks[i]['id'] as String: i,
     };

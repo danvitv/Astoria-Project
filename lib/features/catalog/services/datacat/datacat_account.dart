@@ -1,190 +1,285 @@
-import 'package:shared_preferences/shared_preferences.dart';
-
+import '../../../../core/constants/app_version.dart';
+import '../../../../core/credentials/datacat_account_credential_owner.dart';
+import 'datacat_account_transport.dart';
 import 'datacat_client.dart';
 import 'datacat_errors.dart';
 import 'datacat_models.dart';
 
-/// Linking a DataCat account to this installation, via the device flow.
-///
-/// Only community writes need this — browsing, tags, creators and card
-/// transfers all work without an account. So nothing here is on a startup path:
-/// the link is made when the user asks for it, and its absence is a reason to
-/// hide the kudos button, not to fail a request.
-
-const _keyUserToken = 'gz_dc_user_token';
-const _keyUserName = 'gz_dc_user_name';
-const _keyScopes = 'gz_dc_scopes';
-
-/// The stored `dcv1_…` token, or null when no account is linked.
-///
-/// Kept in preferences beside the installation id it is bound to: the token is
-/// only usable from this installation, so it is worth exactly nothing anywhere
-/// else — which is also why it does not go through the card-transfer lease's
-/// memory-only treatment.
-Future<String?> datacatUserToken() async {
-  final prefs = await SharedPreferences.getInstance();
-  final token = prefs.getString(_keyUserToken);
-  return (token == null || token.isEmpty) ? null : token;
-}
-
-Future<String?> datacatLinkedName() async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs.getString(_keyUserName);
-}
-
-Future<List<String>> datacatGrantedScopes() async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs.getStringList(_keyScopes) ?? const [];
-}
-
-Future<void> _storeLink({
-  required String token,
-  String? name,
-  List<String> scopes = const [],
-}) async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_keyUserToken, token);
-  await prefs.setStringList(_keyScopes, scopes);
-  if (name != null && name.isNotEmpty) {
-    await prefs.setString(_keyUserName, name);
-  } else {
-    await prefs.remove(_keyUserName);
+/// Native linked-account lifecycle. Only nonsecret account state is returned;
+/// tokens live in the owner's callback, never in provider/UI/service fields.
+final class DatacatAccountService {
+  DatacatAccountService({
+    required DatacatAccountCredentialOwner credentials,
+    required DatacatAccountTransport transport,
+  }) : _credentials = credentials,
+       _transport = transport;
+  final DatacatAccountCredentialOwner _credentials;
+  final DatacatAccountTransport _transport;
+  bool _disposed = false;
+  bool Function() captureAuthGuard() {
+    final current = _credentials.captureAuthGuard();
+    return () => !_disposed && current();
   }
-}
 
-Future<void> _clearLink() async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.remove(_keyUserToken);
-  await prefs.remove(_keyUserName);
-  await prefs.remove(_keyScopes);
-}
+  void dispose() {
+    _disposed = true;
+    _credentials.dispose();
+    _transport.dispose();
+  }
 
-/// Starts the device flow. The user approves it on the hosted page the returned
-/// flow points at; nothing is linked until [awaitDatacatLink] succeeds.
-Future<DatacatDeviceFlow> startDatacatLink() async {
-  final data = await datacatPost(
-    '/account-links',
-    // `installationId` is a required body field, and `clientName` is what the
-    // user sees on the approval page.
-    body: await datacatDeviceBody(),
-  );
-  final flow = DatacatDeviceFlow.fromJson(data);
-  if (flow.id.isEmpty || flow.uri.isEmpty) {
+  Future<DatacatCredentialAccount> load() => _credentials.load();
+
+  Map<String, dynamic> _deviceBody(
+    String device, [
+    Map<String, dynamic> extra = const {},
+  ]) => {
+    'installationId': device,
+    'clientName': datacatClientName,
+    'clientVersion': appVersion,
+    ...extra,
+  };
+
+  /// Start and exchange retain ONE original admission and device, not a fresh
+  /// lookup when the approval page eventually completes. No fabricated grants.
+  Future<DatacatCredentialAccount> link({
+    void Function(DatacatAccountApproval)? onFlow,
+    bool Function()? isCancelled,
+  }) => _credentials.link((device, ownerCurrent, commit) async {
+    bool current() => !_disposed && ownerCurrent();
+    final publicApproval = _transport.captureApprovalValidator();
+    final data = await _transport.request(
+      'POST',
+      '/account-links',
+      body: _deviceBody(device),
+      isCurrent: current,
+    );
+    _transport.check(current);
+    final flow = DatacatDeviceFlow.fromJson(data);
+    if (flow.id.isEmpty ||
+        flow.deviceCode.isEmpty ||
+        !publicApproval(flow.uri, flow.userCode)) {
+      throw const DatacatApiException(
+        status: 0,
+        message: 'DataCat did not return a link request',
+      );
+    }
+    // This guard captures public fields only, never the raw flow/deviceCode.
+    final userCode = flow.userCode;
+    final approval = DatacatAccountApproval(
+      uri: flow.uri,
+      userCode: userCode,
+      expiresIn: flow.expiresIn,
+      canNavigate: (uri) => current() && publicApproval(uri, userCode),
+    );
+    _transport.check(current);
+    if (!approval.canPublish)
+      throw const DatacatApiException(
+        status: 0,
+        message: 'DataCat did not return a safe approval page',
+      );
+    onFlow?.call(approval);
+    _transport.check(current);
+    final deadline = DateTime.now().add(flow.expiresIn);
+    while (DateTime.now().isBefore(deadline)) {
+      _transport.check(current);
+      await Future<void>.delayed(flow.interval);
+      _transport.check(current);
+      try {
+        final data = await _transport.request(
+          'POST',
+          '/account-links/${Uri.encodeComponent(flow.id)}/token',
+          body: _deviceBody(device, {'deviceCode': flow.deviceCode}),
+          isCurrent: current,
+        );
+        _transport.check(current);
+        // Only the original protocol's accessToken is accepted as the grant.
+        // Other aliases are redaction coverage, NOT permission to forge a link.
+        final token = data['accessToken'];
+        if (token is! String || token.isEmpty) continue;
+        final account = datacatMap(data['account']);
+        final name = datacatString(account['displayName']).isNotEmpty
+            ? datacatString(account['displayName'])
+            : datacatString(account['username']);
+        final scopes = data['scopes'] is List
+            ? (data['scopes'] as List)
+                  .whereType<String>()
+                  .where((s) => s.isNotEmpty)
+                  .toList()
+            : <String>[];
+        await commit(token, name.isEmpty ? null : name, scopes);
+        _transport.check(current);
+        return;
+      } on DatacatApiException catch (error) {
+        _transport.check(current);
+        if (error.isPending) continue;
+        rethrow;
+      }
+    }
     throw const DatacatApiException(
-      status: 0,
-      message: 'DataCat did not return a link request',
+      status: 410,
+      message: 'The link request expired',
     );
+  }, isCancelled: () => _disposed || (isCancelled?.call() ?? false));
+
+  /// Owner guards are retained through HTTP and after the caller's await.
+  /// Safe API failures are carried out of useSecret without raw exception causes.
+  Future<T> withAccount<T>(
+    Future<T> Function(
+      String? token,
+      String? device,
+      DatacatCredentialAccount account,
+      bool Function() current,
+    )
+    consume, {
+    bool requiredAccount = false,
+  }) async {
+    final originalCurrent = captureAuthGuard();
+    DatacatApiException? failure;
+    final result = await _credentials.withAccount<T?>((
+      token,
+      device,
+      account,
+      ownerCurrent,
+    ) async {
+      bool current() => !_disposed && ownerCurrent();
+      _transport.check(current);
+      try {
+        final value = await consume(token, device, account, current);
+        _transport.check(current);
+        return value;
+      } on DatacatApiException catch (error) {
+        _transport.check(current);
+        failure = error;
+        return null;
+      }
+    }, requiredAccount: requiredAccount);
+    _transport.check(originalCurrent);
+    if (failure != null) throw failure!;
+    return result as T;
   }
-  return flow;
-}
 
-/// Waits for the user to approve [flow], then stores the token it yields.
-///
-/// Same shape as the verification exchange: a `409` is the server saying "not
-/// approved yet", which is the normal state for most of this loop, so it waits
-/// rather than failing. A `410` is the link expiring, which no amount of
-/// waiting fixes.
-Future<DatacatAccountStatus> awaitDatacatLink(
-  DatacatDeviceFlow flow, {
-  bool Function()? isCancelled,
-}) async {
-  final deadline = DateTime.now().add(flow.expiresIn);
-
-  while (DateTime.now().isBefore(deadline)) {
-    if (isCancelled?.call() ?? false) {
-      throw const DatacatApiException(status: 0, message: 'Linking cancelled');
-    }
-    await Future<void>.delayed(flow.interval);
-
+  Future<DatacatAccountStatus> status() => withAccount((
+    token,
+    device,
+    account,
+    current,
+  ) async {
     try {
-      final data = await datacatPost(
-        '/account-links/${flow.id}/token',
-        body: await datacatDeviceBody({'deviceCode': flow.deviceCode}),
-      );
-      final token = datacatString(data['accessToken']);
-      if (token.isEmpty) continue;
-
-      final account = datacatMap(data['account']);
-      final displayName = datacatString(account['displayName']).isNotEmpty
-          ? datacatString(account['displayName'])
-          : datacatString(account['username']);
-      final scopes = (data['scopes'] as List?)
-          ?.map(datacatString)
-          .where((s) => s.isNotEmpty)
-          .toList();
-      await _storeLink(
+      final data = await _transport.request(
+        'GET',
+        '/account/status',
         token: token,
-        name: displayName,
-        scopes: scopes ?? const [],
+        device: device,
+        isCurrent: current,
       );
-      // The exchange already says everything the status endpoint would, and it
-      // is the only place the granted scopes are reported.
+      _transport.check(current);
+      // Missing, malformed or future states are not evidence of revocation.
+      // Decide from the original finite protocol value, not a parsed fallback.
+      final originalState = data['accountState'];
+      if (data['success'] == false ||
+          originalState is! String ||
+          !const {
+            'unlinked',
+            'linked_anonymous',
+            'logged_in',
+          }.contains(originalState)) {
+        return DatacatAccountStatus(
+          accountState: account.authenticated ? 'logged_in' : 'unknown',
+          displayName: account.displayName,
+          scopes: account.scopes,
+          credentialUnavailable: true,
+        );
+      }
+      final status = DatacatAccountStatus.fromJson(
+        _transport.safeData(data),
+        scopes: account.scopes,
+      );
+      if (status.accountState != originalState) {
+        return DatacatAccountStatus(
+          accountState: account.authenticated ? 'logged_in' : 'unknown',
+          displayName: account.displayName,
+          scopes: account.scopes,
+          credentialUnavailable: true,
+        );
+      }
+      if (originalState == 'unlinked' && data['success'] != true) {
+        return DatacatAccountStatus(
+          accountState: account.authenticated ? 'logged_in' : 'unknown',
+          displayName: account.displayName,
+          scopes: account.scopes,
+          credentialUnavailable: true,
+        );
+      }
+      if (token != null && originalState == 'unlinked') {
+        await _credentials.forgetRevoked(isCurrent: current);
+        _transport.check(current);
+        return const DatacatAccountStatus();
+      }
+      return status;
+    } on DatacatApiException catch (error) {
+      _transport.check(current);
+      if (error.isUnauthorized) {
+        if (token != null) {
+          await _credentials.forgetRevoked(isCurrent: current);
+          _transport.check(current);
+        }
+        return const DatacatAccountStatus();
+      }
+      // A network blip is not a logout, and a revoked token is not permission
+      // for migration cleanup or an implicit remote revoke.
       return DatacatAccountStatus(
-        accountState: datacatString(data['accountState']),
-        boundToAccountToken: true,
-        displayName: displayName.isEmpty ? null : displayName,
-        scopes: scopes ?? const [],
+        accountState: account.authenticated ? 'logged_in' : 'unlinked',
+        displayName: account.displayName,
+        scopes: account.scopes,
+        credentialUnavailable: true,
       );
-    } on DatacatApiException catch (e) {
-      // Not approved yet — keep waiting. The contract calls this a 409; the
-      // live server uses 428 for the sibling verification flow, so both count.
-      if (e.isPending) continue;
-      rethrow;
     }
-  }
+  });
 
-  throw const DatacatApiException(
-    status: 410,
-    message: 'The link request expired',
+  Future<Map<String, dynamic>> communityRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+    Map<String, Object?> query = const {},
+    bool requiredAccount = false,
+  }) => withAccount((token, device, account, current) async {
+    final data = await _transport.request(
+      method,
+      path,
+      token: token,
+      device: device,
+      body: body,
+      query: query,
+      isCurrent: current,
+    );
+    _transport.check(current);
+    return _transport.safeData(data);
+  }, requiredAccount: requiredAccount);
+
+  Future<DatacatCredentialAccount> setToken(
+    String token, {
+    required String installationId,
+    String? name,
+    List<String> scopes = const [],
+  }) => _credentials.setToken(
+    token,
+    installationId: installationId,
+    name: name,
+    scopes: scopes,
   );
-}
 
-/// Where this installation stands: linked or not, and under which rate tier.
-///
-/// Reads the server rather than the stored token, so a token revoked from the
-/// website shows up as unlinked here instead of as a mystery 401 on the next
-/// kudos. The granted scopes are not part of this answer — only the token
-/// exchange reports them — so the stored set is carried through. A failed read
-/// reports what is stored rather than claiming nothing is linked: a network
-/// blip is not a logout.
-Future<DatacatAccountStatus> datacatAccountStatus() async {
-  final token = await datacatUserToken();
-  final scopes = await datacatGrantedScopes();
-  try {
-    final data = await datacatGet(
-      '/account/status',
-      auth: DatacatAuth(userToken: token, withInstallationId: true),
-    );
-    final status = DatacatAccountStatus.fromJson(data, scopes: scopes);
-    if (token != null && !status.linked) await _clearLink();
-    return status;
-  } on DatacatApiException catch (e) {
-    if (e.isUnauthorized) {
-      await _clearLink();
-      return const DatacatAccountStatus();
-    }
-    return DatacatAccountStatus(
-      // Unreachable, not unlinked: keep showing what is stored.
-      accountState: token == null ? 'unlinked' : 'logged_in',
-      displayName: await datacatLinkedName(),
-      scopes: scopes,
-    );
-  }
-}
-
-/// Revokes the linked token server-side and forgets it locally.
-///
-/// The local half runs whatever the server says: a token the server has already
-/// dropped is still a token this installation must stop sending.
-Future<void> datacatUnlink() async {
-  final token = await datacatUserToken();
-  if (token != null) {
-    try {
-      await datacatDelete(
-        '/account',
-        auth: DatacatAuth(userToken: token, withInstallationId: true),
-      );
-    } catch (_) {}
-  }
-  await _clearLink();
+  /// Only this explicit native action revokes remotely. Never used by migration
+  /// or passive status reads; local truth follows verified secure readback.
+  Future<DatacatCredentialAccount> unlink() =>
+      _credentials.unlink((token, device, ownerCurrent) async {
+        bool current() => !_disposed && ownerCurrent();
+        await _transport.request(
+          'DELETE',
+          '/account',
+          token: token,
+          device: device,
+          isCurrent: current,
+        );
+        _transport.check(current);
+      });
 }

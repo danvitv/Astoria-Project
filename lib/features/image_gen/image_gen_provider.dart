@@ -1,13 +1,60 @@
-import 'dart:convert';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/credentials/image_routmy_credential_owner.dart';
+import '../../../core/credentials/image_routmy_legacy_source.dart';
+import '../../../core/credentials/credential_vault.dart';
+import '../../../core/state/credential_vault_provider.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../core/state/shared_prefs_provider.dart';
 import 'image_gen_models.dart';
 import 'image_gen_settings_codec.dart';
 import 'services/image_gen_service.dart';
+
+final imageRoutmyCredentialOwnerProvider = Provider<ImageRoutmyCredentialOwner>((ref) {
+  final owner = ImageRoutmyCredentialOwner(
+    vault: ref.watch(credentialVaultProvider),
+    redaction: ref.watch(secretRedactionCoordinatorProvider),
+    originalPreferences: ref.read(sharedPreferencesProvider.future),
+  );
+  ref.onDispose(owner.dispose);
+  return owner;
+});
+
+final imageRoutmyAuthProvider =
+    AsyncNotifierProvider<ImageRoutmyAuthNotifier, ImageRoutmyAuthSummary>(
+      ImageRoutmyAuthNotifier.new,
+    );
+
+class ImageRoutmyAuthNotifier extends AsyncNotifier<ImageRoutmyAuthSummary> {
+  int _intent = 0;
+
+  @override
+  Future<ImageRoutmyAuthSummary> build() =>
+      ref.watch(imageRoutmyCredentialOwnerProvider).load();
+
+  Future<void> setApiKey(String input) async {
+    final owner = ref.read(imageRoutmyCredentialOwnerProvider);
+    final intent = ++_intent;
+    // Native setter owns admission synchronously, not a provider-state save.
+    final pending = owner.setApiKey(input);
+    final ownsPublication = owner.captureAuthPublicationGuard();
+    try {
+      final summary = await pending;
+      if (ref.mounted && intent == _intent && ownsPublication() &&
+          owner.isCurrentSummary(summary)) {
+        state = AsyncData(summary);
+      }
+    } on CredentialVaultAdmissionDenied {
+      // Retirement is not a protected-storage outage. The newer owner/intent
+      // supplies its own summary; do not repaint it with a stale failure.
+    } catch (_) {
+      if (ref.mounted && intent == _intent && ownsPublication()) {
+        state = const AsyncData(ImageRoutmyAuthSummary(unavailable: true));
+      }
+    }
+  }
+}
 
 final imageGenSettingsProvider =
     AsyncNotifierProvider<ImageGenSettingsNotifier, ImageGenSettings>(
@@ -16,20 +63,33 @@ final imageGenSettingsProvider =
 
 class ImageGenSettingsNotifier extends AsyncNotifier<ImageGenSettings> {
   static const _key = 'gz_imggen_settings';
+  int _intent = 0;
+  late ImageRoutmyCredentialOwner _routmy;
 
   @override
   Future<ImageGenSettings> build() async {
-    final prefs = await ref.read(sharedPreferencesProvider.future);
+    _intent++;
+    _service = null;
+    _routmy = ref.watch(imageRoutmyCredentialOwnerProvider);
+    final lease = _routmy.source.captureSettings();
+    final prefs = await _routmy.source.preferences(lease, () => ref.mounted);
     final raw = prefs.getString(_key);
     if (raw != null) {
-      try {
-        return ImageGenSettingsCodec.fromJson(
-          jsonDecode(raw) as Map<String, dynamic>,
-        );
-      } catch (_) {}
+      final json = ImageRoutmyLegacySource.decode(raw)!;
+      final safe = Map<String, dynamic>.of(json)
+        ..remove('routmyApiKey')
+        ..remove('ruRoutmyApiKey');
+      // Seed only the image slot before ordinary native saves can retire the
+      // original legacy revision. This is secure import, never a network probe.
+      await _routmy.load();
+      await _routmy.source.preferences(lease, () => ref.mounted);
+      // Secret never hydrates the immutable settings/provider snapshot.
+      return _publicModels(ImageGenSettingsCodec.fromJson(safe));
     }
+    await _routmy.load();
+    await _routmy.source.preferences(lease, () => ref.mounted);
     final migrated = await _migrateFromJsKeys(prefs);
-    if (migrated != null) return migrated;
+    if (migrated != null) return _publicModels(migrated);
     return const ImageGenSettings();
   }
 
@@ -47,7 +107,6 @@ class ImageGenSettingsNotifier extends AsyncNotifier<ImageGenSettings> {
       openaiQuality: prefs.getString('gz_imggen_quality') ?? 'standard',
       geminiAspectRatio: prefs.getString('gz_imggen_aspect_ratio') ?? '1:1',
       geminiImageSize: prefs.getString('gz_imggen_gemini_image_size') ?? '1K',
-      routmyApiKey: prefs.getString('gz_imggen_routmy_api_key') ?? '',
       routmyModel:
           prefs.getString('gz_imggen_routmy_model') ??
           'google/gemini-3.1-flash-image-preview',
@@ -72,10 +131,8 @@ class ImageGenSettingsNotifier extends AsyncNotifier<ImageGenSettings> {
       ),
       imageContextCount: _safeInt(prefs, 'gz_imggen_image_context_count', 1),
     );
-    await prefs.setString(
-      _key,
-      jsonEncode(ImageGenSettingsCodec.toJson(settings)),
-    );
+    // Reading legacy JS options does not grant settings/key cleanup permission.
+    // Ordinary settings are saved only by a later explicit native action.
     return settings;
   }
 
@@ -95,12 +152,57 @@ class ImageGenSettingsNotifier extends AsyncNotifier<ImageGenSettings> {
   }
 
   Future<void> save(ImageGenSettings settings) async {
-    final prefs = await ref.read(sharedPreferencesProvider.future);
-    await prefs.setString(
-      _key,
-      jsonEncode(ImageGenSettingsCodec.toJson(settings)),
+    final intent = ++_intent;
+    if (settings.routmyApiKey.isNotEmpty) {
+      // Only the explicit native owner entry may rotate this credential.
+      throw StateError('Use the native rout.my key replacement action');
+    }
+    final previous = state.value;
+    if (previous == null) throw StateError('Image settings are still loading');
+    final ordinary = ImageGenSettingsCodec.toJson(settings)
+      ..remove('routmyApiKey')
+      ..remove('ruRoutmyApiKey');
+    final before = ImageGenSettingsCodec.toJson(previous);
+    // A codec round-trip may normalize old/other-provider data. Do not let an
+    // unrelated native toggle rewrite it: persist only genuinely changed rows.
+    final changed = <String, dynamic>{
+      for (final entry in ordinary.entries)
+        if (!_sameSetting(entry.value, before[entry.key])) entry.key: entry.value,
+    };
+    final publicText = _routmy.capturePublicTextGuard();
+    bool publicModels() => publicText(settings.routmyModel) &&
+        settings.routmyModels.every((model) =>
+            publicText(model.id) && publicText(model.name));
+    if (!publicModels()) throw const CredentialVaultAdmissionDenied();
+    if (changed.isEmpty) return;
+    await _routmy.source.saveSettings(
+      changed,
+      isCurrent: () => ref.mounted && intent == _intent && publicModels(),
     );
-    state = AsyncData(settings);
+    if (ref.mounted && intent == _intent && publicModels()) {
+      state = AsyncData(settings);
+    }
+  }
+
+  ImageGenSettings _publicModels(ImageGenSettings settings) {
+    final publicText = _routmy.capturePublicTextGuard();
+    return settings.copyWith(
+      routmyModel: publicText(settings.routmyModel) ? settings.routmyModel : '',
+      routmyModels: settings.routmyModels.where((model) =>
+          publicText(model.id) && publicText(model.name)).toList(),
+    );
+  }
+
+  static bool _sameSetting(Object? a, Object? b) {
+    if (a is List && b is List) {
+      return a.length == b.length &&
+          Iterable<int>.generate(a.length).every((i) => _sameSetting(a[i], b[i]));
+    }
+    if (a is Map && b is Map) {
+      return a.length == b.length &&
+          a.keys.every((key) => b.containsKey(key) && _sameSetting(a[key], b[key]));
+    }
+    return a == b;
   }
 
   Future<void> updateEnabled(bool enabled) async {
@@ -116,8 +218,12 @@ class ImageGenSettingsNotifier extends AsyncNotifier<ImageGenSettings> {
   ImageGenService? _service;
   Future<ImageGenService> getServiceAsync() async {
     if (_service != null) return _service!;
+    final originalOwner = _routmy;
     final storage = await ref.read(imageStorageProvider.future);
-    _service = ImageGenService(storage);
+    if (!ref.mounted || !identical(_routmy, originalOwner)) {
+      throw StateError('Image settings owner retired');
+    }
+    _service = ImageGenService(storage, routmyCredentials: originalOwner);
     return _service!;
   }
 
@@ -125,7 +231,7 @@ class ImageGenSettingsNotifier extends AsyncNotifier<ImageGenSettings> {
     if (_service != null) return _service!;
     final storage = ref.read(imageStorageProvider).value;
     if (storage == null) return null;
-    _service = ImageGenService(storage);
+    _service = ImageGenService(storage, routmyCredentials: _routmy);
     return _service!;
   }
 }

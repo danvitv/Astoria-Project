@@ -21,10 +21,11 @@ final class SupportNativeDomainSources {
     Iterable<String> sessions, {
     String? queuedSession,
     bool allowMaintenance = false,
+    bool Function()? collateralIsCurrent,
   }) {
     if (!isOriginalOwnerCurrent() ||
         mutations.isDisposed ||
-        !owners.isCurrent) {
+        !owners.isCurrent || collateralIsCurrent?.call() == false) {
       return null;
     }
     final checkpoints = <String, Object>{};
@@ -55,6 +56,7 @@ final class SupportNativeDomainSources {
       native,
       queuedSession,
       offline,
+      collateralIsCurrent,
     );
   }
 }
@@ -66,6 +68,7 @@ final class SupportNativeDomainObservation {
     this.owners,
     this.queuedSession,
     this.maintenanceOwners,
+    this.collateralIsCurrent,
   ) : ownerRevision = sources.owners.revision;
   final SupportNativeDomainSources sources;
   final Map<String, Object> checkpoints;
@@ -73,6 +76,7 @@ final class SupportNativeDomainObservation {
   final String? queuedSession;
   final Map<String, SupportNativeSessionMaintenanceOwner> maintenanceOwners;
   final int ownerRevision;
+  final bool Function()? collateralIsCurrent;
   bool _began = false;
   bool get current =>
       !_began &&
@@ -80,6 +84,7 @@ final class SupportNativeDomainObservation {
       !sources.mutations.isDisposed &&
       sources.owners.isCurrent &&
       sources.owners.revision == ownerRevision &&
+      collateralIsCurrent?.call() != false &&
       checkpoints.entries.every(
         (e) =>
             !sources.mutations.isSessionPending(e.key) &&
@@ -157,6 +162,7 @@ final class SupportNativeDomainScope implements SupportAppDomainSourceLease {
         !sources.isOriginalOwnerCurrent() ||
         sources.mutations.isDisposed ||
         !sources.owners.isCurrent ||
+        observation.collateralIsCurrent?.call() == false ||
         (observation.maintenanceOwners.isEmpty &&
             sources.owners.revision != observation.ownerRevision) ||
         !events.entries.every(
@@ -191,16 +197,17 @@ final class SupportNativeDomainScope implements SupportAppDomainSourceLease {
     // refresh success from absence; retained durable facts report refreshPending.
     var refreshed = observation.maintenanceOwners.isEmpty;
     for (final entry in observation.owners.entries) {
-      if (!isCurrent ||
-          !entry.value.queue.isCurrentPublication(publications[entry.key]!)) {
+      final publication = publications[entry.key]!;
+      bool current() =>
+          isCurrent && entry.value.queue.isCurrentPublication(publication);
+      if (!current()) {
         refreshed = false;
         continue;
       }
-      refreshed =
-          await entry.value.refresh(entry.key, publications[entry.key]!) &&
-          refreshed;
+      final latest = await entry.value.refresh(entry.key, publication, current);
+      refreshed = current() && latest && refreshed;
     }
-    return refreshed;
+    return isCurrent && refreshed;
   }
 
   @override

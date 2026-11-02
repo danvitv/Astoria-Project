@@ -53,8 +53,11 @@ import 'app_control/backup/support_backup_file_host.dart';
 import 'app_control/backup/support_database_backup_adapter.dart';
 import 'support_model_tool_payloads.dart';
 import 'support_model_tool_outcome.dart';
+import 'support_native_definition_selection.dart';
 import 'diagnostics/support_diagnostic_skills.dart';
 import 'diagnostics/support_diagnostic_review.dart';
+import 'diagnostics/support_diagnostic_agent.dart';
+import 'diagnostics/support_diagnostic_presentation.dart';
 
 export '../models/support_model_view.dart';
 export '../models/support_model_tool_ui_ports.dart';

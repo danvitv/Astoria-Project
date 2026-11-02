@@ -2,15 +2,39 @@ import 'studio_config.dart';
 
 enum StudioPresetValidationSeverity { warning, error }
 
+/// Native rule identity, not a classification parsed from authored IDs/messages.
+enum StudioPresetValidationCode {
+  unknown,
+  emptyBlockId,
+  duplicateBlockId,
+  unsupportedSection,
+  unsupportedInsertionMode,
+  depthWithoutDepth,
+  depthOutsideMode,
+  depthOnNonInstruction,
+  unsupportedInstructionRole,
+  instructionContextSelected,
+  unknownTargetAgent,
+  emptyInstructionContent,
+  missingContextSource,
+  contextTargetAgent,
+  sourceFreeContextSelected,
+  sourceFreeTargetAgent,
+  ignoredBlockContent,
+  priorBriefsOutsideFinal,
+}
+
 final class StudioPresetValidationIssue {
   final StudioPresetValidationSeverity severity;
   final String message;
   final String? blockId;
+  final StudioPresetValidationCode code;
 
   const StudioPresetValidationIssue({
     required this.severity,
     required this.message,
     this.blockId,
+    this.code = StudioPresetValidationCode.unknown,
   });
 }
 
@@ -46,9 +70,21 @@ abstract final class StudioPresetValidator {
     for (final block in preset.blocks) {
       final id = block.id.trim();
       if (id.isEmpty) {
-        issues.add(_error(block, 'Block id must not be empty.'));
+        issues.add(
+          _error(
+            block,
+            StudioPresetValidationCode.emptyBlockId,
+            'Block id must not be empty.',
+          ),
+        );
       } else if (!ids.add(id)) {
-        issues.add(_error(block, 'Block id "$id" is duplicated.'));
+        issues.add(
+          _error(
+            block,
+            StudioPresetValidationCode.duplicateBlockId,
+            'Block id "$id" is duplicated.',
+          ),
+        );
       }
       if (!supportedSections.contains(block.section)) {
         // A block in an unknown section is never assembled into a prompt, so
@@ -57,19 +93,37 @@ abstract final class StudioPresetValidator {
         // as inert data. Erroring here would make a preset the app itself
         // stores and exports impossible to import back.
         issues.add(
-          _warning(block, 'Unsupported Studio section "${block.section}".'),
+          _warning(
+            block,
+            StudioPresetValidationCode.unsupportedSection,
+            'Unsupported Studio section "${block.section}".',
+          ),
         );
       }
 
       if (!supportedInsertionModes.contains(block.insertionMode)) {
-        issues.add(_warning(block, 'Unsupported insertion mode.'));
+        issues.add(
+          _warning(
+            block,
+            StudioPresetValidationCode.unsupportedInsertionMode,
+            'Unsupported insertion mode.',
+          ),
+        );
       } else if (block.insertionMode == 'depth' && block.depth == null) {
         issues.add(
-          _warning(block, 'Depth insertion mode is set without a depth.'),
+          _warning(
+            block,
+            StudioPresetValidationCode.depthWithoutDepth,
+            'Depth insertion mode is set without a depth.',
+          ),
         );
       } else if (block.insertionMode != 'depth' && block.depth != null) {
         issues.add(
-          _warning(block, 'Depth is set but insertion mode is not "depth".'),
+          _warning(
+            block,
+            StudioPresetValidationCode.depthOutsideMode,
+            'Depth is set but insertion mode is not "depth".',
+          ),
         );
       }
       if (block.insertionMode == 'depth' &&
@@ -81,23 +135,43 @@ abstract final class StudioPresetValidator {
         // those types is ignored at runtime, so flag it rather than silently
         // dropping the author's intent.
         issues.add(
-          _warning(block, 'Depth insertion only applies to instructions.'),
+          _warning(
+            block,
+            StudioPresetValidationCode.depthOnNonInstruction,
+            'Depth insertion only applies to instructions.',
+          ),
         );
       }
 
       switch (block.type) {
         case StudioBlockType.instruction:
           if (!supportedRoles.contains(block.role)) {
-            issues.add(_error(block, 'Unsupported instruction role.'));
+            issues.add(
+              _error(
+                block,
+                StudioPresetValidationCode.unsupportedInstructionRole,
+                'Unsupported instruction role.',
+              ),
+            );
           }
           if (block.contextSlot != null) {
             issues.add(
-              _error(block, 'Instruction blocks cannot select context.'),
+              _error(
+                block,
+                StudioPresetValidationCode.instructionContextSelected,
+                'Instruction blocks cannot select context.',
+              ),
             );
           }
           final target = block.targetAgentId;
           if (target != null && !targetAgentIds.contains(target)) {
-            issues.add(_error(block, 'Unknown target agent "$target".'));
+            issues.add(
+              _error(
+                block,
+                StudioPresetValidationCode.unknownTargetAgent,
+                'Unknown target agent "$target".',
+              ),
+            );
           }
           if (block.enabled &&
               block.content.trim().isEmpty &&
@@ -108,15 +182,31 @@ abstract final class StudioPresetValidator {
             // malformed, so this stays a warning — as an error it made those
             // presets un-importable after export.
             issues.add(
-              _warning(block, 'Instruction content must not be empty.'),
+              _warning(
+                block,
+                StudioPresetValidationCode.emptyInstructionContent,
+                'Instruction content must not be empty.',
+              ),
             );
           }
         case StudioBlockType.context:
           if (block.contextSlot == null) {
-            issues.add(_error(block, 'Context source is required.'));
+            issues.add(
+              _error(
+                block,
+                StudioPresetValidationCode.missingContextSource,
+                'Context source is required.',
+              ),
+            );
           }
           if (block.targetAgentId != null) {
-            issues.add(_error(block, 'Context blocks cannot target an agent.'));
+            issues.add(
+              _error(
+                block,
+                StudioPresetValidationCode.contextTargetAgent,
+                'Context blocks cannot target an agent.',
+              ),
+            );
           }
           _warnIgnoredContent(block, issues);
         case StudioBlockType.history:
@@ -129,6 +219,7 @@ abstract final class StudioPresetValidator {
             issues.add(
               StudioPresetValidationIssue(
                 severity: StudioPresetValidationSeverity.warning,
+                code: StudioPresetValidationCode.priorBriefsOutsideFinal,
                 blockId: block.id,
                 message: 'Prior briefs are normally used in the final section.',
               ),
@@ -147,10 +238,22 @@ abstract final class StudioPresetValidator {
     List<StudioPresetValidationIssue> issues,
   ) {
     if (block.contextSlot != null) {
-      issues.add(_error(block, '${block.type.name} cannot select context.'));
+      issues.add(
+        _error(
+          block,
+          StudioPresetValidationCode.sourceFreeContextSelected,
+          '${block.type.name} cannot select context.',
+        ),
+      );
     }
     if (block.targetAgentId != null) {
-      issues.add(_error(block, '${block.type.name} cannot target an agent.'));
+      issues.add(
+        _error(
+          block,
+          StudioPresetValidationCode.sourceFreeTargetAgent,
+          '${block.type.name} cannot target an agent.',
+        ),
+      );
     }
   }
 
@@ -162,6 +265,7 @@ abstract final class StudioPresetValidator {
     issues.add(
       StudioPresetValidationIssue(
         severity: StudioPresetValidationSeverity.warning,
+        code: StudioPresetValidationCode.ignoredBlockContent,
         blockId: block.id,
         message: '${block.type.name} block content is ignored.',
       ),
@@ -170,18 +274,22 @@ abstract final class StudioPresetValidator {
 
   static StudioPresetValidationIssue _error(
     StudioPresetBlock block,
+    StudioPresetValidationCode code,
     String message,
   ) => StudioPresetValidationIssue(
     severity: StudioPresetValidationSeverity.error,
+    code: code,
     blockId: block.id,
     message: message,
   );
 
   static StudioPresetValidationIssue _warning(
     StudioPresetBlock block,
+    StudioPresetValidationCode code,
     String message,
   ) => StudioPresetValidationIssue(
     severity: StudioPresetValidationSeverity.warning,
+    code: code,
     blockId: block.id,
     message: message,
   );

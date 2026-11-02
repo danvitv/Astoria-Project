@@ -16,13 +16,29 @@ class SyncBinaryAssetSyncer {
   final SyncPersonaStore _personaRepo;
   final SyncPresetStore _presetRepo;
   final SyncImageStore _imageStorage;
+  final void Function()? _checkOriginal;
+  final Future<void> Function(Future<void> Function())? _originalCommit;
+  void _check() => _checkOriginal?.call();
+  Future<T> _read<T>(Future<T> Function() action) async {
+    _check();
+    final result = await action();
+    _check();
+    return result;
+  }
+  Future<void> _commit(Future<void> Function() action) async {
+    _check();
+    final commit = _originalCommit;
+    if (commit != null) { await commit(action); }
+    else { await action(); }
+    _check();
+  }
 
   SyncBinaryAssetSyncer(
     this._adapter,
     this._characterRepo,
     this._personaRepo,
     this._presetRepo,
-    this._imageStorage,
+    this._imageStorage, [this._checkOriginal, this._originalCommit]
   );
 
   /// Extensions probed when pulling a binary whose stored extension is unknown
@@ -30,19 +46,19 @@ class SyncBinaryAssetSyncer {
   static const _imageExtensions = ['png', 'jpg', 'webp', 'gif'];
 
   Future<void> pushCharacterAvatar(String charId) async {
-    final c = await _characterRepo.getById(charId);
+    final c = await _read(() => _characterRepo.getById(charId));
     if (c?.avatarPath == null) return;
     final path = _imageStorage.absolutePath(c!.avatarPath);
     if (path == null) return;
     final file = File(path);
-    if (!await file.exists()) return;
-    final bytes = await file.readAsBytes();
+    if (!await _read(file.exists)) return;
+    final bytes = await _read(file.readAsBytes);
     final ext = c.avatarPath!.split('.').last;
     await _adapter.uploadBinary(galleryCloudPath(charId, 'avatar', ext), bytes);
   }
 
   Future<bool> pullCharacterAvatar(String charId) async {
-    final c = await _characterRepo.getById(charId);
+    final c = await _read(() => _characterRepo.getById(charId));
     if (c == null) return false;
 
     for (final ext in _imageExtensions) {
@@ -50,33 +66,29 @@ class SyncBinaryAssetSyncer {
         galleryCloudPath(charId, 'avatar', ext),
       );
       if (bytes == null || bytes.isEmpty) continue;
-      final localPath = await _imageStorage.saveBytes(
-        bytes,
-        'avatars',
-        charId,
-        ext,
-      );
-      await _characterRepo.updateAvatarPath(charId, localPath);
+      late String localPath;
+      await _commit(() async { localPath = await _imageStorage.saveBytes(bytes, 'avatars', charId, ext); });
+      await _commit(() => _characterRepo.updateAvatarPath(charId, localPath));
       return true;
     }
     return false;
   }
 
   Future<void> pushPersonaAvatar(String personaId) async {
-    final p = await _personaRepo.getById(personaId);
+    final p = await _read(() => _personaRepo.getById(personaId));
     if (p?.avatarPath == null) return;
     final path = _imageStorage.absolutePath(p!.avatarPath);
     if (path == null) return;
     final file = File(path);
-    if (!await file.exists()) return;
-    final bytes = await file.readAsBytes();
+    if (!await _read(file.exists)) return;
+    final bytes = await _read(file.readAsBytes);
     final ext = p.avatarPath!.split('.').last;
     await _adapter.ensureFolder('$cloudBase/persona_avatars/$personaId');
     await _adapter.uploadBinary(personaAvatarCloudPath(personaId, ext), bytes);
   }
 
   Future<bool> pullPersonaAvatar(String personaId) async {
-    final p = await _personaRepo.getById(personaId);
+    final p = await _read(() => _personaRepo.getById(personaId));
     if (p == null) return false;
 
     for (final ext in _imageExtensions) {
@@ -84,13 +96,9 @@ class SyncBinaryAssetSyncer {
         personaAvatarCloudPath(personaId, ext),
       );
       if (bytes == null || bytes.isEmpty) continue;
-      final relativePath = await _imageStorage.saveBytes(
-        bytes,
-        'avatars',
-        personaId,
-        ext,
-      );
-      await _personaRepo.updateAvatarPath(personaId, relativePath);
+      late String relativePath;
+      await _commit(() async { relativePath = await _imageStorage.saveBytes(bytes, 'avatars', personaId, ext); });
+      await _commit(() => _personaRepo.updateAvatarPath(personaId, relativePath));
       return true;
     }
     return false;
@@ -103,7 +111,7 @@ class SyncBinaryAssetSyncer {
   /// path are skipped — they ship with the app on every device.
   Future<void> pushPresetImages() async {
     try {
-      final presets = await _presetRepo.getAll();
+      final presets = await _read(_presetRepo.getAll);
       var folderEnsured = false;
       for (final preset in presets) {
         final path = preset.imagePath;
@@ -111,8 +119,8 @@ class SyncBinaryAssetSyncer {
         final absPath = _imageStorage.absolutePath(path);
         if (absPath == null) continue;
         final file = File(absPath);
-        if (!await file.exists()) continue;
-        final bytes = await file.readAsBytes();
+        if (!await _read(file.exists)) continue;
+        final bytes = await _read(file.readAsBytes);
         if (!folderEnsured) {
           await _adapter.ensureFolder('$cloudBase/preset_images');
           folderEnsured = true;
@@ -123,7 +131,7 @@ class SyncBinaryAssetSyncer {
           bytes,
         );
       }
-    } catch (_) {}
+    } catch (_) { _check(); }
   }
 
   /// Downloads the cover of every preset that references a file this device
@@ -136,34 +144,35 @@ class SyncBinaryAssetSyncer {
   /// told the image is gone, and the UI simply shows no cover meanwhile.
   Future<void> pullPresetImages() async {
     try {
-      final presets = await _presetRepo.getAll();
+      final presets = await _read(_presetRepo.getAll);
       for (final preset in presets) {
         final path = preset.imagePath;
         if (path == null || path.isEmpty || _isBundledAsset(path)) continue;
         final storageId = presetImageStorageIdOf(path);
         if (storageId == null) continue;
         final absPath = _imageStorage.absolutePath(path);
-        if (absPath != null && await File(absPath).exists()) continue;
+        if (absPath != null && await _read(File(absPath).exists)) continue;
 
         for (final ext in _extensionsToProbe(path)) {
           try {
             final bytes = await _adapter.downloadBinary(
               presetImageCloudPath(preset.id, ext),
             );
+            _check();
             if (bytes.isEmpty) continue;
-            await _imageStorage.saveBytes(bytes, 'avatars', storageId, ext);
+            await _commit(() async { await _imageStorage.saveBytes(bytes, 'avatars', storageId, ext); });
             // The pushed and stored extensions agree in practice (covers are
             // always written as PNG), but honour a mismatch rather than leaving
             // the preset pointing at a file saved under another name.
             final relative = presetImageRelativePath(storageId, ext);
             if (relative != path) {
-              await _presetRepo.put(preset.copyWith(imagePath: relative));
+              await _commit(() => _presetRepo.put(preset.copyWith(imagePath: relative)));
             }
             break;
-          } catch (_) {}
+          } catch (_) { _check(); }
         }
       }
-    } catch (_) {}
+    } catch (_) { _check(); }
   }
 
   /// Bundled covers (a cloned featured preset) exist in every install's asset
@@ -180,15 +189,15 @@ class SyncBinaryAssetSyncer {
   }
 
   Future<void> pushCharacterGallery(String charId) async {
-    final c = await _characterRepo.getById(charId);
+    final c = await _read(() => _characterRepo.getById(charId));
     if (c == null || c.gallery.isEmpty) return;
     await _adapter.ensureFolder('$cloudBase/gallery/$charId');
     for (final entry in c.gallery) {
       final absPath = _imageStorage.absolutePath(entry.imagePath);
       if (absPath == null) continue;
       final file = File(absPath);
-      if (!await file.exists()) continue;
-      final bytes = await file.readAsBytes();
+      if (!await _read(file.exists)) continue;
+      final bytes = await _read(file.readAsBytes);
       final ext = entry.imagePath.split('.').last;
       await _adapter.uploadBinary(
         galleryCloudPath(charId, entry.id, ext),
@@ -198,7 +207,7 @@ class SyncBinaryAssetSyncer {
   }
 
   Future<void> pullCharacterGallery(String charId) async {
-    final c = await _characterRepo.getById(charId);
+    final c = await _read(() => _characterRepo.getById(charId));
     if (c == null) return;
 
     final updatedGallery = <GalleryEntry>[];
@@ -209,12 +218,8 @@ class SyncBinaryAssetSyncer {
           galleryCloudPath(charId, entry.id, ext),
         );
         if (bytes == null || bytes.isEmpty) continue;
-        final destPath = await _imageStorage.saveBytes(
-          bytes,
-          'gallery/$charId',
-          entry.id,
-          ext,
-        );
+        late String destPath;
+        await _commit(() async { destPath = await _imageStorage.saveBytes(bytes, 'gallery/$charId', entry.id, ext); });
         updatedGallery.add(entry.copyWith(imagePath: destPath));
         pulled = true;
         break;
@@ -225,19 +230,20 @@ class SyncBinaryAssetSyncer {
       }
     }
     if (!_galleriesEqual(updatedGallery, c.gallery)) {
-      await _characterRepo.updateGallery(charId, updatedGallery);
+      await _commit(() => _characterRepo.updateGallery(charId, updatedGallery));
     }
   }
 
   Future<Uint8List?> _downloadIfAvailable(String path) async {
     try {
-      return await _adapter.downloadBinary(path);
+      return await _read(() => _adapter.downloadBinary(path));
     } on CloudFileNotFoundException {
       return null;
     }
   }
 
   bool localFileExists(String? path) {
+    _check();
     if (path == null || path.isEmpty) return false;
     final abs = _imageStorage.absolutePath(path);
     return abs != null && File(abs).existsSync();

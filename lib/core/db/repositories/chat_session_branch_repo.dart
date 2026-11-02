@@ -11,6 +11,7 @@ import '../../utils/time_helpers.dart';
 import '../app_db.dart';
 import 'session_canon_checkpoint_repo.dart';
 import 'session_lorebook_embedding_job_repo.dart';
+import 'session_deletion_queries.dart';
 
 final class ChatSessionBranchResult {
   const ChatSessionBranchResult({
@@ -123,7 +124,10 @@ class ChatSessionBranchRepo {
       authorsNote: sourceSession.authorsNote,
       updatedAt: now,
     );
-    await db.into(db.chatSessions).insert(_sessionCompanion(session));
+    await SessionDeletionQueries.trackInventoryMutation(
+      db,
+      () => db.into(db.chatSessions).insert(_sessionCompanion(session)),
+    );
     final root = await _checkpointRepo.appendRootInTransaction(
       sessionId: session.id,
       characterId: character.id,

@@ -2,9 +2,9 @@ import 'dart:math';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../core/constants/app_version.dart';
+import '../../../../core/preferences/tracked_shared_preferences.dart';
 import '../catalog_http.dart';
 import 'datacat_errors.dart';
 
@@ -81,16 +81,22 @@ Future<Map<String, dynamic>> datacatDeviceBody([
 };
 
 Future<String> datacatInstallationId() async {
-  final prefs = await SharedPreferences.getInstance();
+  final prefs = await TrackedSharedPreferences.getInstance();
   var id = prefs.getString(_keyInstallationId);
   if (id == null) {
     id = _uuid();
     await prefs.setString(_keyInstallationId, id);
   }
   // The contract requires 16–160 chars of `[A-Za-z0-9._:-]`. A UUID satisfies
-  // both, but an id inherited from the old anonymous device token might not,
-  // and a rejected installation id fails every device flow with a 400.
-  return _validInstallationId(id) ? id : _replaceInstallationId(prefs);
+  // both. An invalid inherited id must be reported, not silently rebound.
+  if (!_validInstallationId(id)) {
+    // A linked token belongs to the original id. Repairing this nonsecret value
+    // would silently change its account binding, not fix the credential.
+    throw const DatacatApiException(
+      status: 0, message: 'DataCat installation binding is unavailable',
+    );
+  }
+  return id;
 }
 
 bool _validInstallationId(String id) =>
@@ -98,29 +104,19 @@ bool _validInstallationId(String id) =>
     id.length <= 160 &&
     RegExp(r'^[A-Za-z0-9._:-]+$').hasMatch(id);
 
-Future<String> _replaceInstallationId(SharedPreferences prefs) async {
-  final id = _uuid();
-  await prefs.setString(_keyInstallationId, id);
-  return id;
-}
-
 /// What a request carries besides the client id.
 ///
 /// The three credentials are independent: a discovery call needs none of them,
-/// a protected transfer needs [lease], and a community write needs
-/// [userToken] together with the installation id.
+/// a protected transfer needs [lease]. Linked-account headers are built only
+/// inside the trusted account owner's ephemeral callback, never retained here.
 class DatacatAuth {
-  /// A linked user's `dcv1_…` bearer token, for calls made as that account.
-  final String? userToken;
-
   /// A short-lived transfer lease from the human-verification flow.
   final String? lease;
 
-  /// Whether to send the installation id. Required alongside [userToken].
+  /// Whether to send the installation id for a protected transfer.
   final bool withInstallationId;
 
   const DatacatAuth({
-    this.userToken,
     this.lease,
     this.withInstallationId = false,
   });
@@ -133,16 +129,30 @@ Future<Map<String, String>> datacatHeaders(DatacatAuth auth) async {
     'Accept': 'application/json',
     if (datacatClientId.isNotEmpty) 'X-Datacat-Client-Id': datacatClientId,
   };
-  if (auth.userToken != null) {
-    headers['Authorization'] = 'Bearer ${auth.userToken}';
-  }
   if (auth.lease != null) {
     headers['X-Datacat-Verification-Lease'] = auth.lease!;
   }
-  if (auth.withInstallationId || auth.userToken != null) {
+  if (auth.withInstallationId) {
     headers['X-Datacat-Installation-Id'] = await datacatInstallationId();
   }
   return headers;
+}
+
+/// Trusted account transport only. Uses the original protected token/device
+/// pair, never a fresh preferences lookup, regeneration or anonymous fallback.
+Map<String, String> datacatAccountHeaders(String? token, String? device) {
+  if ((token != null && (token.isEmpty || device == null)) ||
+      (device != null && !_validInstallationId(device))) {
+    throw const DatacatApiException(
+      status: 0, message: 'DataCat installation binding is unavailable',
+    );
+  }
+  return {
+    'Accept': 'application/json',
+    if (datacatClientId.isNotEmpty) 'X-Datacat-Client-Id': datacatClientId,
+    if (token != null) 'Authorization': 'Bearer $token',
+    if (device != null) 'X-Datacat-Installation-Id': device,
+  };
 }
 
 /// Builds `$datacatApiBase$path?query`, dropping null and empty values.

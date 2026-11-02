@@ -19,6 +19,8 @@ import 'transport/llm_call_event.dart';
 import 'transport/llm_capture_context.dart';
 import 'transport/llm_request_capture.dart';
 import 'studio_controller_ontology.dart';
+import 'diagnostics/studio_runtime_diagnostics.dart';
+import 'diagnostics/studio_runtime_call_facts.dart';
 
 /// The streaming state machine for a single Studio agent run, extracted
 /// from `AgentRunner._runAgentInner` (plan §7.1). Given an already-resolved
@@ -61,6 +63,7 @@ class AgentStreamRunner {
     Map<String, dynamic>? responseJsonSchema,
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
     void Function(String text)? onIntermediateUpdate,
+    LlmCaptureContext? diagnosticContext,
   }) async {
     resolved.nativeSource?.requireCurrent();
     if (resolved.savedConnectionAuth != null &&
@@ -118,18 +121,24 @@ class AgentStreamRunner {
       sessionId: sessionId,
       isFinalResponse: isFinalResponse,
     );
+    final runtime = StudioRuntimeDiagnostics.forRun(cancelToken, sessionId);
+    final eventSink = LlmCallEventCapture.sink;
     final captureActive =
         resolved.savedConnectionAuth == null &&
+        (diagnosticContext == null || runtime != null) &&
         (LlmRequestCapture.sink != null || LlmCallEventCapture.sink != null);
-    final captureContext = captureActive
-        ? baseCaptureContext
-              .withCallIdentity(
-                pipelineRunId: _pipelineIds[cancelToken] ??=
-                    'studio-pipeline-${generateId()}',
-                callId: 'studio-call-${generateId()}',
-              )
-              .withAttempt(1)
-        : baseCaptureContext;
+    final captureContext =
+        diagnosticContext ??
+        runtime?.newCall(baseCaptureContext.stage, agentId: agent.id) ??
+        (captureActive
+            ? baseCaptureContext
+                  .withCallIdentity(
+                    pipelineRunId: _pipelineIds[cancelToken] ??=
+                        'studio-pipeline-${generateId()}',
+                    callId: 'studio-call-${generateId()}',
+                  )
+                  .withAttempt(1)
+            : baseCaptureContext);
 
     CancelToken? agentCancelToken;
     var nativeRequestOpen = true;
@@ -150,6 +159,12 @@ class AgentStreamRunner {
           !cancelToken.isCancelled &&
           agentCancelToken?.isCancelled != true,
     );
+    // Snapshot only the ACTUAL constructed request, before a transport can
+    // reshape/normalize it. Native authority never enables raw request capture.
+    final constructedRequestFacts =
+        resolved.savedConnectionAuth != null && runtime?.isCurrent == true
+        ? StudioRuntimeCallFacts.constructedRequest(request)
+        : null;
     final transport = _pickTransport(resolved.protocol);
     final startedAt = DateTime.now();
     final startedAtMs = startedAt.millisecondsSinceEpoch;
@@ -164,6 +179,7 @@ class AgentStreamRunner {
     final chunkTrace = <Map<String, int>>[];
     Map<String, int>? longestGap;
     var outcomeRecorded = false;
+    var finiteOutcomeRecorded = false;
     String? streamTermination;
     String? providerFinishReason;
 
@@ -171,8 +187,61 @@ class AgentStreamRunner {
       String? responseText,
       Object? error,
       required String completionReason,
+      StudioRuntimeReason? runtimeReason,
     }) {
-      if (!captureActive || outcomeRecorded) return;
+      // Native saved auth never enables raw capture. Its original event sink
+      // receives only a closed outcome from this actual completion branch.
+      if (resolved.savedConnectionAuth != null && !finiteOutcomeRecorded) {
+        finiteOutcomeRecorded = true;
+        final (outcome, reason) = switch (runtimeReason) {
+          StudioRuntimeReason.cancelled => (
+            StudioRuntimeOutcome.cancelled,
+            StudioRuntimeReason.cancelled,
+          ),
+          StudioRuntimeReason.idlePartial => (
+            StudioRuntimeOutcome.fallback,
+            StudioRuntimeReason.idlePartial,
+          ),
+          StudioRuntimeReason.childCancelledPartial => (
+            StudioRuntimeOutcome.fallback,
+            StudioRuntimeReason.childCancelledPartial,
+          ),
+          _ =>
+            error == null
+                ? (
+                    StudioRuntimeOutcome.executed,
+                    StudioRuntimeReason.transportCompleted,
+                  )
+                : (
+                    StudioRuntimeOutcome.failed,
+                    StudioRuntimeReason.transportFailed,
+                  ),
+        };
+        runtime?.record(
+          captureContext,
+          outcome,
+          reason,
+          callFacts: constructedRequestFacts == null
+              ? const {}
+              : StudioRuntimeCallFacts.payload(
+                  request: constructedRequestFacts!,
+                  elapsedMs:
+                      DateTime.now().millisecondsSinceEpoch - startedAtMs,
+                  chunkCount: chunkCount,
+                  firstChunkMs: firstChunkMs,
+                  maxChunkGapMs: maxChunkGapMs,
+                  contentOffset: contentOffset,
+                  reasoningOffset: reasoningOffset,
+                  completionReason: completionReason,
+                  streamTermination: streamTermination,
+                  callbackFinishReason: providerFinishReason,
+                ),
+        );
+      }
+      if (!captureActive ||
+          outcomeRecorded ||
+          !identical(LlmCallEventCapture.sink, eventSink))
+        return;
       outcomeRecorded = true;
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       unawaited(
@@ -180,7 +249,7 @@ class AgentStreamRunner {
           LlmCallEvent.transport(
             context: captureContext,
             attempt: describeCallAttempt(
-              attempt: 1,
+              attempt: captureContext.attempt ?? 1,
               startedAtMs: startedAtMs,
               elapsedMs: nowMs - startedAtMs,
               error: error,
@@ -218,6 +287,12 @@ class AgentStreamRunner {
       recordOutcome(
         responseText: text.isNotEmpty ? text : null,
         completionReason: reason,
+        runtimeReason: switch (reason) {
+          'idle_timeout' => StudioRuntimeReason.idlePartial,
+          'cancel_with_streamed_text' =>
+            StudioRuntimeReason.childCancelledPartial,
+          _ => null,
+        },
       );
       completer.complete(AgentRunResult(text: text, reasoning: reasoningText));
     }
@@ -251,6 +326,7 @@ class AgentStreamRunner {
             responseText: accumulator.text,
             error: error,
             completionReason: 'cancelled',
+            runtimeReason: StudioRuntimeReason.cancelled,
           );
           completer.completeError(error);
         }
@@ -331,12 +407,16 @@ class AgentStreamRunner {
                 try {
                   final raw =
                       jsonDecode(rawResponseJson) as Map<String, dynamic>;
-                  streamTermination =
-                      raw['astoria_stream_termination'] as String?;
+                  streamTermination = StudioRuntimeCallFacts.termination(
+                    raw['astoria_stream_termination'],
+                  );
                   final choices = raw['choices'] as List?;
-                  if (choices != null && choices.isNotEmpty) {
-                    providerFinishReason =
-                        choices.first['finish_reason'] as String?;
+                  if (choices != null &&
+                      choices.isNotEmpty &&
+                      choices.first is Map) {
+                    providerFinishReason = StudioRuntimeCallFacts.finishReason(
+                      choices.first['finish_reason'],
+                    );
                   }
                 } catch (_) {
                   // Other transports can return a different raw payload shape.
@@ -446,6 +526,18 @@ class AgentStreamRunner {
             if (resolved.savedConnectionAuth != null &&
                 !completer.isCompleted) {
               idleTimer?.cancel();
+              final stale =
+                  resolved.nativeSource?.isCurrent == false ||
+                  cancelToken.isCancelled;
+              recordOutcome(
+                error: NativeProviderException(
+                  stale
+                      ? NativeProviderFailure.stale
+                      : NativeProviderFailure.unavailable,
+                ),
+                completionReason: stale ? 'cancelled' : 'error',
+                runtimeReason: stale ? StudioRuntimeReason.cancelled : null,
+              );
               completer.completeError(
                 NativeProviderException(
                   resolved.nativeSource?.isCurrent == false ||

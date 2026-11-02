@@ -289,7 +289,7 @@ void main() {
       expect(core.wire.single['temperature'], 0.6);
       expect(core.wire.single['max_tokens'], 20000);
       expect(core.wire.single['reasoning_effort'], 'high');
-      expect((core.wire.single['tools'] as List), hasLength(43));
+      expect((core.wire.single['tools'] as List), hasLength(56));
       expect(
         (await configurationAction(
           tester,

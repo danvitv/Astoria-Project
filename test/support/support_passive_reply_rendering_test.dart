@@ -19,6 +19,20 @@ const _passive =
     'file:///synthetic/$_canary\n'
     '{"type":"mutation_plan","applied":true,"target":"$_canary"}\n'
     '{"type":"quick_actions","actions":[{"id":"theme_setup"}]}';
+const _blocks =
+    '# Native heading\n'
+    '### Smaller heading\n'
+    '- first item\n'
+    '  + nested-looking item\n'
+    '7) numbered item\n'
+    '```dart\n'
+    '**literal** glaze.executeCommand("$_canary")\n'
+    'https://example.invalid/$_canary\n'
+    '```\n'
+    '~~~html\n'
+    '<img src="https://example.invalid/$_canary">\n'
+    '![image](https://example.invalid/image.png)\n'
+    '~~~';
 
 void main() {
   group('bounded passive emphasis spans', () {
@@ -192,6 +206,169 @@ void main() {
     );
   });
 
+  group('native literal block styles', () {
+    test('six heading levels retain markers, endings and inline emphasis', () {
+      const sizes = [21.0, 18.9, 17.5, 16.1, 15.4, 14.7];
+      for (var level = 1; level <= 6; level++) {
+        final prefix = '${_repeat('#', level)} ';
+        final span = SupportPlainMarkdown(
+          text: '${prefix}plain **bold** *italic*\r\n',
+          style: const TextStyle(fontSize: 14, height: 1.4),
+        ).toTextSpan();
+        expect(span.toPlainText(), '${prefix}plain bold italic\r\n');
+        for (final child in span.children!.cast<TextSpan>()) {
+          expect(child.style!.fontSize, closeTo(sizes[level - 1], 0.001));
+        }
+        expect(span.children!.first.style!.fontWeight, FontWeight.w600);
+        expect(_runs(span), [
+          (text: '${prefix}plain ', emphasis: 0),
+          (text: 'bold', emphasis: 2),
+          (text: ' ', emphasis: 0),
+          (text: 'italic', emphasis: 1),
+          (text: '\r\n', emphasis: 0),
+        ]);
+        _expectTextOnly(span);
+      }
+    });
+
+    test('heading overrides stay finite without rewriting root style', () {
+      for (final size in [double.infinity, double.nan, -1.0, 0.0, 1000000.0]) {
+        final style = TextStyle(fontSize: size);
+        final span = SupportPlainMarkdown(
+          text: '# heading',
+          style: style,
+        ).toTextSpan();
+        expect(identical(span.style, style), isTrue);
+        final headingSize = span.children!.single.style!.fontSize!;
+        expect(headingSize.isFinite, isTrue);
+        expect(headingSize, inInclusiveRange(15.0, 36.0));
+      }
+    });
+
+    test('list prefixes remain text, never renumbered or interactive', () {
+      for (final prefix in [
+        '- ',
+        '+\t',
+        '* ',
+        '  - ',
+        '\t+ ',
+        '009. ',
+        '123456789) ',
+      ]) {
+        final source = '$prefix**item**\r\n';
+        final span = SupportPlainMarkdown(text: source).toTextSpan();
+        expect(span.toPlainText(), '${prefix}item\r\n');
+        expect(span.children!.first.toPlainText(), prefix);
+        expect(span.children!.first.style!.fontWeight, FontWeight.w600);
+        expect(span.children!.first.style!.fontSize, isNull);
+        expect(span.children![1].style!.fontWeight, FontWeight.w700);
+        _expectTextOnly(span);
+      }
+      for (final source in [
+        '####### text',
+        '#nospace',
+        '    # heading',
+        '-nospace',
+        '1234567890. item',
+        '> quote',
+        '| table |',
+        '- [ ] task',
+      ]) {
+        final span = SupportPlainMarkdown(text: source).toTextSpan();
+        expect(span.toPlainText(), source);
+        _expectTextOnly(span);
+        if (source != '- [ ] task') {
+          expect(span.children, hasLength(1));
+          expect(span.children!.single.style, isNull);
+        }
+      }
+    });
+
+    test('complete fences keep hostile contents literal and monospace', () {
+      for (final fence in ['```', '````', '~~~', '~~~~']) {
+        final code =
+            '  ${fence}synthetic-info\r\n$_passive\r\n'
+            '# not a heading\r\n- not a list\r\n'
+            '**literal** *literal*\r\n  $fence\t \r\n';
+        final span = SupportPlainMarkdown(
+          text: '**before**\n$code*after*',
+        ).toTextSpan();
+        expect(span.toPlainText(), 'before\n${code}after');
+        final leaf = span.children!.cast<TextSpan>().singleWhere(
+          (child) => child.style?.fontFamily == 'monospace',
+        );
+        expect(leaf.text, code);
+        expect(leaf.style!.fontWeight, FontWeight.w400);
+        expect(leaf.style!.fontStyle, FontStyle.normal);
+        expect(leaf.style!.height, 1.5);
+        expect(leaf.style!.fontSize, isNull);
+        _expectTextOnly(span);
+      }
+    });
+
+    test('code stays literal even inside a matched outer emphasis pair', () {
+      const code = '~~~text\n**literal** *literal*\n~~~\n';
+      final span = const SupportPlainMarkdown(
+        text: '**before\n${code}after**',
+        style: TextStyle(
+          fontWeight: FontWeight.w700,
+          fontStyle: FontStyle.italic,
+        ),
+      ).toTextSpan();
+      expect(span.toPlainText(), 'before\n${code}after');
+      final leaf = span.children!.cast<TextSpan>().singleWhere(
+        (child) => child.style?.fontFamily == 'monospace',
+      );
+      expect(leaf.text, code);
+      expect(leaf.style!.fontWeight, FontWeight.w400);
+      expect(leaf.style!.fontStyle, FontStyle.normal);
+      _expectTextOnly(span);
+    });
+
+    test('malformed fences retain the old literal/inline contract', () {
+      final cases = <String, String>{
+        '```dart\n**literal**': '```dart\n**literal**',
+        '```dart\n**literal**\n````': '```dart\n**literal**\n````',
+        '```dart\n**literal**\n``` tail *italic*':
+            '```dart\n**literal**\n``` tail italic',
+        '```da`rt\n**literal**\n```': '```da`rt\n**literal**\n```',
+        '    ```dart\n**literal**\n    ```':
+            '    ```dart\n**literal**\n    ```',
+        '~~~dart\n**bold**\n~~~~': '~~~dart\nbold\n~~~~',
+        '`inline\n# not heading\n- not list\n`':
+            '`inline\n# not heading\n- not list\n`',
+      };
+      for (final entry in cases.entries) {
+        final span = SupportPlainMarkdown(text: entry.key).toTextSpan();
+        expect(span.toPlainText(), entry.value);
+        expect(
+          span.children!.cast<TextSpan>().any(
+            (child) => child.style?.fontFamily == 'monospace',
+          ),
+          isFalse,
+        );
+        _expectTextOnly(span);
+      }
+    });
+
+    test('admitted block inputs stay deterministic, flat and linear-sized', () {
+      for (final source in [
+        _repeat('```\n**x**\n```\n', 4681),
+        _repeat('~~~\n**x**\n~~~\n', 4681),
+        _repeat('# h\n- a\n9) b\n', 5041),
+        '```\n${_repeat('🧪', 32764)}\n```',
+      ]) {
+        expect(source.length, lessThanOrEqualTo(65536));
+        final widget = SupportPlainMarkdown(text: source);
+        final span = widget.toTextSpan();
+        expect(span.toPlainText(), source);
+        expect(span.children!.length, lessThanOrEqualTo(source.length));
+        expect(widget.toTextSpan().toPlainText(), source);
+        _expectTextOnly(span);
+      }
+    });
+  });
+
   for (final width in [220.0, 360.0, 680.0, 1024.0]) {
     for (final scale in [1.0, 1.5, 2.0]) {
       testWidgets('passive selectable layout at width $width scale $scale', (
@@ -200,7 +377,9 @@ void main() {
         await tester.binding.setSurfaceSize(Size(width, 900));
         addTearDown(() => tester.binding.setSurfaceSize(null));
         await _withTripwires(tester, () async {
-          await tester.pumpWidget(_host('**bold** *italic*\n$_passive', scale));
+          await tester.pumpWidget(
+            _host('**bold** *italic*\n$_passive\n$_blocks', scale),
+          );
           await tester.pumpAndSettle();
           expect(tester.takeException(), isNull);
           final selectable = tester.widget<SelectableText>(
@@ -210,11 +389,21 @@ void main() {
           expect(selectable.onTap, isNull);
           expect(selectable.onSelectionChanged, isNull);
           expect(selectable.enableInteractiveSelection, isTrue);
-          expect(selectable.textSpan!.toPlainText(), 'bold italic\n$_passive');
+          expect(find.byType(SelectableText), findsOneWidget);
+          expect(
+            selectable.textSpan!.toPlainText(),
+            'bold italic\n$_passive\n$_blocks',
+          );
+          expect(
+            selectable.textSpan!.children!.cast<TextSpan>().where(
+              (child) => child.style?.fontFamily == 'monospace',
+            ),
+            hasLength(2),
+          );
           _expectTextOnly(selectable.textSpan!);
           final editor = tester.widget<EditableText>(find.byType(EditableText));
           expect(editor.readOnly, isTrue);
-          expect(editor.controller.text, 'bold italic\n$_passive');
+          expect(editor.controller.text, 'bold italic\n$_passive\n$_blocks');
           expect(
             tester
                 .state<EditableTextState>(find.byType(EditableText))
@@ -259,15 +448,25 @@ void main() {
   });
 }
 
-List<_Run> _runs(TextSpan span) => span.children!.map((child) {
-  final text = child as TextSpan;
-  return (
-    text: text.text!,
-    emphasis:
-        (text.style?.fontStyle == FontStyle.italic ? 1 : 0) |
-        (text.style?.fontWeight == FontWeight.w700 ? 2 : 0),
-  );
-}).toList();
+List<_Run> _runs(TextSpan span) {
+  final runs = <_Run>[];
+  for (final child in span.children!.cast<TextSpan>()) {
+    final emphasis =
+        (child.style?.fontStyle == FontStyle.italic ? 1 : 0) |
+        (child.style?.fontWeight == FontWeight.w700 ? 2 : 0);
+    // Block styling may split an otherwise unchanged emphasis run. Compare the
+    // exact text/emphasis contract independently of those new style boundaries.
+    if (runs.isNotEmpty && runs.last.emphasis == emphasis) {
+      runs[runs.length - 1] = (
+        text: runs.last.text + child.text!,
+        emphasis: emphasis,
+      );
+    } else {
+      runs.add((text: child.text!, emphasis: emphasis));
+    }
+  }
+  return runs;
+}
 
 void _expectTextOnly(TextSpan span) {
   expect(span.recognizer, isNull);

@@ -1,9 +1,12 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
+import '../../../core/credentials/image_routmy_credential_owner.dart';
+import '../../../core/credentials/secret_redactor.dart';
 import '../../../core/llm/transport/llm_capture_context.dart';
 import '../../../core/models/character.dart';
 import '../../../core/models/persona.dart';
@@ -22,11 +25,23 @@ import 'reference_matcher.dart';
 /// instruction) lives in [image_prompt_builder], reference collection in
 /// [ImageReferenceCollector] and the provider calls in [ImageGenDispatcher].
 class ImageGenService {
-  ImageGenService(this._imageStorage);
+  ImageGenService(
+    this._imageStorage, {
+    ImageRoutmyCredentialOwner? routmyCredentials,
+  }) : _routmy = routmyCredentials,
+       _errors = ImageGenErrorSanitizer(routmyCredentials: routmyCredentials),
+       _dispatcher = ImageGenDispatcher(routmyCredentials: routmyCredentials);
 
   final ImageStorageService _imageStorage;
+  final ImageRoutmyCredentialOwner? _routmy;
+  final ImageGenErrorSanitizer _errors;
   final ImageReferenceCollector _references = const ImageReferenceCollector();
-  final ImageGenDispatcher _dispatcher = const ImageGenDispatcher();
+  final ImageGenDispatcher _dispatcher;
+
+  bool Function() _publicationGuard(ImageGenSettings settings) =>
+      settings.apiType == ImageGenApiType.routmy
+      ? _routmy?.captureGuard() ?? () => false
+      : () => true;
 
   Future<String> processMessageImages({
     required String text,
@@ -41,6 +56,7 @@ class ImageGenService {
     void Function(String updatedText)? onUpdate,
     void Function(String error)? onError,
   }) async {
+    final ownsPublication = _publicationGuard(settings);
     if (!settings.enabled) {
       final disabledText = ImageTagMarkup.replaceAllImageGenTagsWithDisabled(
         text,
@@ -62,6 +78,7 @@ class ImageGenService {
     // error card instead of dropping it, and the tags of the still-running
     // images stay pending.
     void applyOutcome(int index, _ImageOutcome outcome) {
+      if (!ownsPublication()) return;
       var pendingIndex = 0;
       for (var i = 0; i < index; i++) {
         if (!resolved[i]) pendingIndex++;
@@ -75,11 +92,11 @@ class ImageGenService {
           : ImageTagMarkup.replaceTagWithError(
               currentText,
               pendingIndex,
-              outcome.error!,
+              _formatErrorString(outcome.error!),
             );
       resolved[index] = true;
       if (updated == currentText) return;
-      currentText = updated;
+      currentText = _errors.sanitizeMessageErrors(updated);
       onUpdate?.call(currentText);
     }
 
@@ -103,9 +120,11 @@ class ImageGenService {
         final outcome = await inFlight[i];
         if (outcome.cancelled) continue;
         applyOutcome(i, outcome);
-        if (outcome.error != null) onError?.call(outcome.error!);
+        if (ownsPublication() && outcome.error != null) {
+          onError?.call(_formatErrorString(outcome.error!));
+        }
       }
-      return currentText;
+      return _errors.sanitizeMessageErrors(currentText);
     }
 
     for (var i = 0; i < instructions.length; i++) {
@@ -113,10 +132,12 @@ class ImageGenService {
       final outcome = await run(instructions[i]);
       if (outcome.cancelled) break;
       applyOutcome(i, outcome);
-      if (outcome.error != null) onError?.call(outcome.error!);
+      if (ownsPublication() && outcome.error != null) {
+        onError?.call(_formatErrorString(outcome.error!));
+      }
     }
 
-    return currentText;
+    return _errors.sanitizeMessageErrors(currentText);
   }
 
   /// Generates and persists the image for a single instruction.
@@ -134,6 +155,7 @@ class ImageGenService {
     List<String>? recentImageContexts,
     CancelToken? cancelToken,
   }) async {
+    final ownsPublication = _publicationGuard(settings);
     final rawPrompt = instruction['prompt'] as String? ?? '';
     if (rawPrompt.isEmpty) {
       return _ImageOutcome.failure('Image prompt is empty');
@@ -156,18 +178,22 @@ class ImageGenService {
         instructionImageSize: instruction['image_size'] as String?,
         cancelToken: cancelToken,
       );
-      if (cancelToken?.isCancelled == true) return _ImageOutcome.cancelled();
+      if (cancelToken?.isCancelled == true || !ownsPublication())
+        return _ImageOutcome.cancelled();
       if (imageBytes.isEmpty) {
         return _ImageOutcome.failure('Provider returned no image data');
       }
 
       final savedPath = await _saveGeneratedImage(imageBytes);
-      if (cancelToken?.isCancelled == true) return _ImageOutcome.cancelled();
+      if (cancelToken?.isCancelled == true || !ownsPublication())
+        return _ImageOutcome.cancelled();
       return _ImageOutcome.success(savedPath);
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) return _ImageOutcome.cancelled();
       return _ImageOutcome.failure(_formatError(e));
     } catch (e) {
+      if (cancelToken?.isCancelled == true || !ownsPublication())
+        return _ImageOutcome.cancelled();
       return _ImageOutcome.failure(_formatErrorString(e.toString()));
     }
   }
@@ -192,6 +218,7 @@ class ImageGenService {
     CancelToken? cancelToken,
     LlmCaptureContext? captureContext,
   }) async {
+    final ownsPublication = _publicationGuard(settings);
     final collected = await _references.collect(
       settings: settings,
       prompt: prompt,
@@ -199,6 +226,7 @@ class ImageGenService {
       persona: persona,
       recentImageContexts: recentImageContexts,
     );
+    if (!ownsPublication()) throw StateError('Image credential owner retired');
 
     final isNaistera = settings.apiType == ImageGenApiType.naistera;
     final descriptionsMode = isNaistera
@@ -241,7 +269,7 @@ class ImageGenService {
       hasReferences: references.isNotEmpty,
     );
 
-    return _dispatcher.generate(
+    final bytes = await _dispatcher.generate(
       settings: settings,
       prompt: finalPrompt,
       references: references,
@@ -252,6 +280,8 @@ class ImageGenService {
       cancelToken: cancelToken,
       captureContext: captureContext,
     );
+    if (!ownsPublication()) throw StateError('Image credential owner retired');
+    return bytes;
   }
 
   /// Appearance blurb for a character or persona: the description of the
@@ -287,8 +317,7 @@ class ImageGenService {
   String _formatError(DioException e) => _formatErrorString(formatError(e));
 
   String _formatErrorString(String msg) {
-    if (msg.length > 200) msg = '${msg.substring(0, 197)}...';
-    return msg;
+    return _errors.sanitize(msg);
   }
 
   Future<String> _saveGeneratedImage(Uint8List bytes) async {
@@ -312,6 +341,67 @@ class ImageGenService {
   }
 
   static int _saveSeq = 0;
+}
+
+/// Error publication keeps the original native coverage, but does not freeze
+/// the active error sink. Call again at each downstream callback/queued write.
+/// Limits discard details instead of creating an unrecognizable key prefix.
+class ImageGenErrorSanitizer {
+  ImageGenErrorSanitizer({ImageRoutmyCredentialOwner? routmyCredentials})
+    : _originalSink = activeErrorRedactor ?? _defaultRedactor,
+      _originalCoverage = routmyCredentials?.capturePublicTextGuard();
+
+  static final _defaultRedactor = SecretRedactor();
+  // Image error payloads are flat JSON objects; instruction JSON is a string.
+  // Unlike the display codec's tag regex, this consumes ] inside JSON strings.
+  static final _errorTags = RegExp(
+    r'\[IMG:ERROR:(\{(?:[^{}"]|"(?:\\.|[^"\\])*")*\})\]',
+  );
+  final SecretRedactor _originalSink;
+  final bool Function(String)? _originalCoverage;
+
+  String sanitize(String text) {
+    var safe = _originalSink.redactText(text);
+    if (safe == SecretRedactor.limited) return safe;
+    safe = (activeErrorRedactor ?? _defaultRedactor).redactText(safe);
+    if (safe == SecretRedactor.limited) return safe;
+    // The owner's guard includes its captured and currently injected policies.
+    // If their coverage differs from the global sink, discard the whole detail.
+    if (_originalCoverage?.call(safe) == false) return SecretRedactor.removed;
+    return safe.length > 200 ? SecretRedactor.limited : safe;
+  }
+
+  String sanitizeMessageErrors(String content) => content.replaceAllMapped(
+    _errorTags,
+    (match) {
+      try {
+        final payload = jsonDecode(match.group(1)!) as Map<String, dynamic>;
+        final error = payload['error'];
+        payload['error'] = error is String
+            ? sanitize(error)
+            : SecretRedactor.removed;
+        // The display codec ends a tag at the first literal ]. Escaping within
+        // JSON keeps markers readable without changing instructions/variants.
+        final encoded = jsonEncode(payload).replaceAll(']', r'\u005d');
+        return '[IMG:ERROR:$encoded]';
+      } catch (_) {
+        return '[IMG:ERROR:{"error":"Image error details unavailable"}]';
+      }
+    },
+  );
+
+  bool messageErrorsAreCurrent(String content) {
+    for (final match in _errorTags.allMatches(content)) {
+      try {
+        final payload = jsonDecode(match.group(1)!) as Map<String, dynamic>;
+        final error = payload['error'];
+        if (error is! String || sanitize(error) != error) return false;
+      } catch (_) {
+        return false;
+      }
+    }
+    return true;
+  }
 }
 
 /// Result of one image request: a saved file, a message for the error card, or

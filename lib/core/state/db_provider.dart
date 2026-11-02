@@ -151,11 +151,21 @@ final migrationServiceProvider = FutureProvider<MigrationService>((ref) async {
 });
 
 final characterRepoProvider = Provider<CharacterRepo>((ref) {
-  return CharacterRepo(ref.watch(appDbProvider));
+  final mutations = ref.watch(chatSourceMutationRegistryProvider);
+  return CharacterRepo(
+    ref.watch(appDbProvider),
+    onMutationStarted: (sessionId) =>
+        mutations.beginMutation(sessionId: sessionId),
+  );
 });
 
 final chatRepoProvider = Provider<ChatRepo>((ref) {
-  return ChatRepo(ref.watch(appDbProvider));
+  final mutations = ref.watch(chatSourceMutationRegistryProvider);
+  return ChatRepo(
+    ref.watch(appDbProvider),
+    onMutationStarted: (sessionId) =>
+        mutations.beginMutation(sessionId: sessionId),
+  );
 });
 
 final ledgerReconciliationLeaseRepoProvider =
@@ -177,7 +187,12 @@ final sessionDeletionRepoProvider = Provider<SessionDeletionRepo>((ref) {
 });
 
 final characterDeletionRepoProvider = Provider<CharacterDeletionRepo>((ref) {
-  return CharacterDeletionRepo(ref.watch(appDbProvider));
+  final mutations = ref.watch(chatSourceMutationRegistryProvider);
+  return CharacterDeletionRepo(
+    ref.watch(appDbProvider),
+    onMutationStarted: (sessionId) =>
+        mutations.beginMutation(sessionId: sessionId),
+  );
 });
 
 final presetRepoProvider = Provider<PresetRepo>((ref) {

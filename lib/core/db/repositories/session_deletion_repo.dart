@@ -20,13 +20,16 @@ class SessionDeletionRepo implements SessionDeletionStore {
 
   @override
   Future<void> deleteSession(String sessionId) async {
-    final settle = _onMutationStarted?.call(sessionId);
+    final inventory = SessionDeletionQueries.beginInventoryMutation(_db);
+    void Function()? settle;
     try {
+      settle = _onMutationStarted?.call(sessionId);
       await _db.transaction(
         () => SessionDeletionQueries(_db).deleteSessionRows(sessionId),
       );
     } finally {
       settle?.call();
+      inventory();
     }
   }
 
@@ -49,13 +52,16 @@ class SessionDeletionRepo implements SessionDeletionStore {
             .map((item) => ChatMessage.fromJson(item as Map<String, dynamic>))
             .toList();
         final sessionVars = row.sessionVarsJson == null
-            ? <String, String>{}
-            : Map<String, String>.from(jsonDecode(row.sessionVarsJson!) as Map);
+            ? <String, dynamic>{}
+            : Map<String, dynamic>.from(
+                jsonDecode(row.sessionVarsJson!) as Map,
+              );
         if (resetBranchStamp) sessionVars.remove('branchedAt');
         if (countDeletedMessages) {
           final previous =
               int.tryParse(
-                sessionVars[ChatSessionX.deletedMessagesVarKey] ?? '',
+                sessionVars[ChatSessionX.deletedMessagesVarKey] as String? ??
+                    '',
               ) ??
               0;
           sessionVars[ChatSessionX.deletedMessagesVarKey] =
@@ -65,7 +71,9 @@ class SessionDeletionRepo implements SessionDeletionStore {
         final messagesJson = jsonEncode(
           replacementMessages.map((message) => message.toJson()).toList(),
         );
-        final sessionVarsJson = sessionVars.isEmpty
+        final sessionVarsJson = !resetBranchStamp && !countDeletedMessages
+            ? row.sessionVarsJson
+            : sessionVars.isEmpty
             ? null
             : jsonEncode(sessionVars);
         await CardEvolutionProposalRunRepo(
@@ -97,7 +105,12 @@ class SessionDeletionRepo implements SessionDeletionStore {
           sessionIndex: row.sessionIndex,
           messages: replacementMessages,
           updatedAt: row.updatedAt,
-          sessionVars: sessionVars,
+          // Display projection only; keep JSON-null in the durable raw map.
+          sessionVars: Map<String, String>.from({
+            for (final entry in sessionVars.entries)
+              if (entry.key != 'sessionName' || entry.value != null)
+                entry.key: entry.value,
+          }),
           authorsNote: _parseAuthorsNote(row.authorsNoteJson),
           draft: row.draft,
           lastScrollAnchor: row.lastScrollAnchorJson == null

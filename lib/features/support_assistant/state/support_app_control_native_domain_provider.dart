@@ -6,10 +6,17 @@ import '../../../core/state/character_folder_provider.dart';
 import '../../../core/state/preset_folder_provider.dart';
 import '../../../core/state/db_provider.dart';
 import '../../chat/state/chat_native_owner_registry.dart';
+import '../../memory/state/memory_native_entry_owner.dart';
 import '../models/support_app_action.dart';
 import '../services/app_control/native/support_native_domain_adapter.dart';
 import '../services/app_control/native/support_native_domain_sources.dart';
 import '../services/app_control/native/support_native_repair_discovery.dart';
+import '../services/app_control/native/support_native_session_title_adapter.dart';
+import '../services/app_control/native/support_native_memory_entry_adapter.dart';
+import '../services/app_control/native/support_native_active_selection_adapter.dart';
+import '../services/app_control/native/support_native_global_regex_adapter.dart';
+import 'support_app_control_native_global_regex_owner.dart';
+import 'support_app_control_native_selection_owner.dart';
 import 'support_app_control_content_provider.dart';
 import 'support_app_control_session_memory_provider.dart';
 import 'support_app_control_secondary_provider.dart';
@@ -36,6 +43,40 @@ final supportAppNativeDomainAdaptersProvider =
         maintenance: refresh.maintenance,
       );
       final repair = ref.watch(supportAppControlRepairAdaptersProvider);
+      final titles = SupportNativeSessionTitleAdapter(
+        support: ref.watch(supportRepoProvider),
+        sources: sources,
+      );
+      ref.onDispose(titles.dispose);
+      final memoryEntries = SupportNativeMemoryEntryAdapter(
+        originContainer: ref.container,
+        support: ref.watch(supportRepoProvider),
+        sources: sources,
+        owners: ref.watch(memoryNativeEntryOwnerRegistryProvider),
+      );
+      ref.onDispose(memoryEntries.dispose);
+      final selections = SupportNativeActiveSelectionAdapter(
+        support: ref.watch(supportRepoProvider),
+        personas: ref.watch(personaRepoProvider),
+        presets: presets,
+        chats: chats,
+        sources: sources,
+        ports: captureSupportNativeSelections(
+          ref,
+          () => ref.mounted && native.isCurrent,
+        ),
+      );
+      ref.onDispose(selections.dispose);
+      final regex = SupportNativeGlobalRegexAdapter(
+        support: ref.watch(supportRepoProvider),
+        chats: chats,
+        sources: sources,
+        port: captureSupportNativeGlobalRegex(
+          ref,
+          () => ref.mounted && native.isCurrent,
+        ),
+      );
+      ref.onDispose(regex.dispose);
       SupportNativeRepairDiscovery? discovery;
       if (repair.length == 2 &&
           repair[0] is SupportAppIntegrityAdapter &&
@@ -92,6 +133,10 @@ final supportAppNativeDomainAdaptersProvider =
       }
       return List.unmodifiable([
         for (final adapter in [
+          titles,
+          memoryEntries,
+          selections,
+          regex,
           ...ref.watch(supportAppControlContentAdaptersProvider),
           ...ref.watch(supportAppControlSessionMemoryProvider),
           ...ref.watch(supportAppControlSecondaryAdaptersProvider),

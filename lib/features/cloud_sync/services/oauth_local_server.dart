@@ -27,9 +27,9 @@ String oauthCodeFromRedirect(
     return params['code']!;
   }
   if (params.containsKey('error')) {
-    final error = params['error'] ?? 'unknown';
-    final desc = params['error_description'] ?? '';
-    throw Exception('OAuth error: $error $desc');
+    // The callback is untrusted. Never reflect its description into browser
+    // HTML, native exceptions, logs or provider state.
+    throw Exception('OAuth authorization failed');
   }
   throw Exception('No authorization code received');
 }
@@ -58,12 +58,23 @@ class OAuthLocalServer {
     Duration timeout = const Duration(minutes: 5),
     int port = 0,
     Future<bool> Function(Uri)? launchBrowser,
+    bool Function()? isCurrent,
+    void Function(Map<String, String>)? registerAliases,
   }) async {
+    bool current() => isCurrent?.call() ?? true;
+    void check() {
+      if (!current()) throw StateError('OAuth operation retired');
+    }
+    check();
     // Read from the request being made rather than passed in alongside it, so
     // it cannot drift away from what the provider was actually asked.
     final expectedState = Uri.parse(authUrl).queryParameters['state'];
 
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+    if (!current()) {
+      await server.close(force: true);
+      throw StateError('OAuth operation retired');
+    }
     final boundPort = server.port;
 
     final redirectUri = 'http://localhost:$boundPort';
@@ -73,48 +84,72 @@ class OAuthLocalServer {
     );
 
     final codeCompleter = Completer<String>();
+    final codeFuture = codeCompleter.future.timeout(timeout,
+      onTimeout: () => throw TimeoutException('OAuth flow timed out', timeout));
+    // A redirect error can precede the browser-launch acknowledgement. Attach
+    // its handler now without replacing the original future/error for the owner.
+    unawaited(codeFuture.then<void>((_) {}, onError: (Object _, StackTrace _) {}));
+    var handling = false;
+
+    Future<void> closeServer() async {
+      try { await server.close(force: true); } catch (_) {}
+    }
 
     server.listen((request) async {
       final response = request.response;
+      if (handling || codeCompleter.isCompleted) {
+        response.statusCode = 400;
+        await response.close();
+        return;
+      }
+      handling = true;
+      String? code;
       try {
-        final code = oauthCodeFromRedirect(
+        registerAliases?.call(request.uri.queryParameters);
+        check();
+        code = oauthCodeFromRedirect(
           request.uri.queryParameters,
           expectedState: expectedState,
         );
+      } catch (_) {
+        // Fixed response only, including callback/admission failures.
+      }
+      if (code != null && current()) {
         response
           ..statusCode = 200
           ..headers.contentType = ContentType.html
           ..write(_successHtml);
-        await response.close();
-        codeCompleter.complete(code);
-      } catch (e) {
-        final message = e is StateError ? e.message : '$e';
+      } else {
         response
           ..statusCode = 400
           ..headers.contentType = ContentType.html
-          ..write(_errorHtml.replaceAll('id="err">', 'id="err">$message'));
-        await response.close();
-        codeCompleter.completeError(e);
+          ..write(_errorHtml.replaceAll('id="err">', 'id="err">Authorization failed.'));
       }
-
-      await server.close(force: true);
+      try { await response.close(); } catch (_) { code = null; }
+      if (!codeCompleter.isCompleted) {
+        if (code != null && current()) {
+          codeCompleter.complete(code);
+        } else {
+          codeCompleter.completeError(StateError(
+            current() ? 'OAuth authorization failed' : 'OAuth operation retired'));
+        }
+      }
+      await closeServer();
     });
 
-    final launched = await (launchBrowser != null
-        ? launchBrowser(Uri.parse(url))
-        : launchUrl(Uri.parse(url)));
-    if (!launched) {
-      await server.close(force: true);
-      throw Exception('Could not launch browser for OAuth');
+    try {
+      check();
+      final launched = await (launchBrowser != null
+          ? launchBrowser(Uri.parse(url))
+          : launchUrl(Uri.parse(url)));
+      check();
+      if (!launched) throw Exception('Could not launch browser for OAuth');
+      final code = await codeFuture;
+      check();
+      return (code: code, redirectUri: redirectUri);
+    } finally {
+      await closeServer();
+      check();
     }
-
-    final code = await codeCompleter.future.timeout(
-      timeout,
-      onTimeout: () {
-        server.close(force: true);
-        throw TimeoutException('OAuth flow timed out', timeout);
-      },
-    );
-    return (code: code, redirectUri: redirectUri);
   }
 }

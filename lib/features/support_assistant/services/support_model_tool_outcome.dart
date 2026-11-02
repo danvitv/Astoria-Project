@@ -32,7 +32,8 @@ final class SupportModelToolOutcome {
     final lines = <String>[
       if (interrupted) 'Запрос остановлен. Дальнейшие действия не выполнялись.',
       for (final fact in _facts)
-        if (_sourceDescriptions.containsKey(fact))
+        if (_sourceDescriptions.containsKey(fact) &&
+            fact.content['effect'] == 'none')
           _sourceDescriptions[fact]!
         else if (fact.name == 'astoria_database_restore_prepare' &&
             fact.content['code'] == 'unavailable' &&

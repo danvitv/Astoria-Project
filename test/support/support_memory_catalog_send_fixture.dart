@@ -158,9 +158,10 @@ final class MemoryCatalogSendFixture {
         sessionId: () => target,
         isIdle: () => true,
         queue: queue,
-        refresh: (_, publication) async {
+        refresh: (_, publication, sourceCurrent) async {
+          if (!sourceCurrent()) return false;
           refreshed++;
-          return queue.isCurrentPublication(publication);
+          return sourceCurrent() && queue.isCurrentPublication(publication);
         },
       ),
     );

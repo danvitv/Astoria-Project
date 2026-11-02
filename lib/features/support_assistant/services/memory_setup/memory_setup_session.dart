@@ -30,14 +30,12 @@ extension _MemorySetupSession on MemorySetupService {
         !source())
       return null;
     final session = await chats.getById(_targetId!);
-    if (!source() || session == null || intent != _intent)
-      return null;
+    if (!source() || session == null || intent != _intent) return null;
     final observed = await books.observeForControl(_targetId!);
     if (!source() || intent != _intent) return null;
     if (observed == null) {
       final exists = await books.existsForSetup(_targetId!);
-      if (!source() || exists || intent != _intent)
-        return null;
+      if (!source() || exists || intent != _intent) return null;
     }
     final proposed = _sessionFields(a);
     final before = books.setupFieldSnapshot(observed, proposed.keys);
@@ -109,7 +107,10 @@ extension _MemorySetupSession on MemorySetupService {
     MemorySetupReview r,
     int intent,
   ) async {
-    bool live() => _intent == intent && _sourceCurrent(r._checkpoint) && r._bookTicket?.current == true;
+    bool live() =>
+        _intent == intent &&
+        _sourceCurrent(r._checkpoint) &&
+        r._bookTicket?.current == true;
     final undo = r._undo;
     if (undo != null) undo._used = true;
     if (!live() || !await _fresh() || !live()) return MemorySetupResult.refused;
@@ -157,7 +158,9 @@ extension _MemorySetupSession on MemorySetupService {
         }
         if (admitted() && owner.queue.isCurrentPublication(publication)) {
           refreshPending =
-              !await owner.refresh(_targetId!, publication) || refreshPending;
+              !await owner.refresh(_targetId!, publication, admitted) ||
+              !admitted() ||
+              refreshPending;
         } else {
           refreshPending = true;
         }

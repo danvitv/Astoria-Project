@@ -106,6 +106,7 @@ String _descriptionsModeLabel(CharacterDescriptionsMode mode) => switch (mode) {
 /// to the shipped shortlist until then.
 List<Widget> buildRoutmyModelFields(
   ImageGenSettings s, {
+  required bool Function(String) isPublicText,
   required bool isFetching,
   required VoidCallback onFetchModels,
   required ValueChanged<ImageGenSettings> onUpdate,
@@ -116,13 +117,20 @@ List<Widget> buildRoutmyModelFields(
   final aspect = s.routmyAspectRatio;
   final size = s.routmyImageSize;
   final quality = s.routmyQuality;
-  final catalog = s.routmyModels.map((m) => m.id).toList();
+  final catalog = s.routmyModels
+      .where((m) => isPublicText(m.id) && isPublicText(m.name))
+      .map((m) => m.id).toList();
   final items = catalog.isEmpty
       ? RoutMyConstants.models.map((e) => e.$1).toList()
       : catalog;
   final availableImageSizes = model == seedreamModel
       ? RoutMyConstants.seedreamImageSizes
       : RoutMyConstants.imageSizes;
+  String publicLabel(String value) {
+    if (!isPublicText(value)) return 'Model unavailable';
+    final label = s.routmyModelLabel(value);
+    return isPublicText(label) ? label : value;
+  }
 
   return [
     // MenuSelectorItem has no trailing slot, so the refresh button sits
@@ -132,20 +140,26 @@ List<Widget> buildRoutmyModelFields(
         Expanded(
           child: MenuSelectorItem(
             label: 'Model',
-            currentValue: s.routmyModelLabel(model),
+            currentValue: publicLabel(model),
             onTap: () => showOptions<String>(
               title: 'Model',
               items: items,
-              labelBuilder: s.routmyModelLabel,
+              labelBuilder: publicLabel,
               isSelected: (v) => model == v,
               onSelected: (v) {
+                if (!isPublicText(v)) return;
                 final seedreamSize =
                     v == seedreamModel &&
                         !RoutMyConstants.seedreamImageSizes.contains(size)
                     ? '2K'
                     : size;
                 onUpdate(
-                  s.copyWith(routmyModel: v, routmyImageSize: seedreamSize),
+                  s.copyWith(
+                    routmyModel: v,
+                    routmyImageSize: seedreamSize,
+                    routmyModels: s.routmyModels.where((entry) =>
+                        isPublicText(entry.id) && isPublicText(entry.name)).toList(),
+                  ),
                 );
               },
             ),

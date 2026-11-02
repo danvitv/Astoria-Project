@@ -53,6 +53,12 @@ final class _ModelRun {
   final _ModelBinding binding;
   final String text, userId, replyId, runId;
   late final diagnosticSkills = SupportDiagnosticSkills.select(text);
+  late final diagnosticAgent = isReattempt
+      ? null
+      : SupportDiagnosticAgent.forQuestion(text);
+  late final diagnosticPresentation = isCompact || diagnosticAgent == null
+      ? null
+      : SupportDiagnosticPresentation();
   final bool isCompact;
   final SupportReplyRegenerationObservation? regeneration;
   final SupportMessage? regenerationUser;
@@ -66,6 +72,7 @@ final class _ModelRun {
   PrivateTextOutcome? compactOutcome;
   SupportAppActionRegistry? originalActions;
   SupportDatabaseBackupAdapter? originalBackup;
+  SupportNativeDefinitionSelection? originalDefinitions;
   bool toolsResolved = false;
   _ModelSourceToolRun? originalSourceTools;
   int toolSequence = 0;
@@ -196,6 +203,7 @@ final class _ModelRun {
         await source.prepareAutomaticHistory(isCurrent: current);
         operation.check();
       }
+      resolveNativeTools(); // Freeze composed definitions before context reads.
       var initial = isReattempt
           ? await loadContext()
           : await loadManagedContext();
@@ -416,11 +424,21 @@ extension _ModelSettlement on _ModelRun {
             _ => operation.token.isCancelled ? 'stopped' : 'error',
           };
           try {
-            body = _safeText(
-              settlementRedactor.withKnownSecrets([binding.configuration.key]),
-              body,
-              65536,
-            );
+            final publicationRedactor = settlementRedactor.withKnownSecrets([
+              binding.configuration.key,
+            ]);
+            if (diagnosticPresentation case final presentation?) {
+              // Keep the original sanitation boundary BEFORE adding Markdown.
+              // A model JSON answer still gets its original JSON secret-field
+              // treatment; a new heading must not change that.
+              body = _safeText(publicationRedactor, body, 65536);
+              body = presentation.present(
+                body,
+                settlementStatus: status,
+                redactor: publicationRedactor,
+              );
+            }
+            body = _safeText(publicationRedactor, body, 65536);
           } catch (_) {
             body = '';
             status = 'limited';

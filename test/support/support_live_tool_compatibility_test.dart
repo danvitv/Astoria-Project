@@ -36,7 +36,7 @@ void main() {
       expect(f.screen.core.wire, hasLength(2));
       // This memory fixture has no original native source identity, so source
       // tools are unavailable even when the global source capability is on.
-      expect(f.screen.core.wire.first['tools'], hasLength(43));
+      expect(f.screen.core.wire.first['tools'], hasLength(56));
       final messages = (f.screen.core.wire.first['messages'] as List)
           .cast<Map<String, dynamic>>();
       expect(

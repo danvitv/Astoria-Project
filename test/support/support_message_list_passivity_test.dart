@@ -532,6 +532,84 @@ Future<void> _visuals(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets(
+    'native headings lists and code fences use the actual current-redacted feed',
+    (tester) async {
+      final fixture = SupportMessageListPassivityFixture();
+      await fixture.run(tester, () async {
+        final callbacks = _Callbacks();
+        const body =
+            '# Native heading\n'
+            '- first item\n'
+            '7) second item\n'
+            '```text\n$_hostile\n```\n'
+            '~~~text\n**literal** *literal*\n~~~';
+        const displayed =
+            '# Native heading\n'
+            '- first item\n'
+            '7) second item\n'
+            '```text\n$_sanitizedHostile\n```\n'
+            '~~~text\n**literal** *literal*\n~~~';
+        await tester.pumpWidget(
+          fixture.host(
+            callbacks.feed([_message(SupportMessageRole.assistant, body)]),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final renderer = _renderer(displayed);
+        _passiveBody(tester, renderer, displayed);
+        expect(_renderer(body), findsNothing);
+        final selectable = tester.widget<SelectableText>(
+          find.descendant(of: renderer, matching: find.byType(SelectableText)),
+        );
+        final leaves = selectable.textSpan!.children!.cast<TextSpan>().toList();
+        expect(leaves.first.text, '# Native heading\n');
+        expect(leaves.first.style!.fontSize, 21);
+        expect(leaves.first.style!.fontWeight, FontWeight.w600);
+        expect(
+          leaves
+              .where((leaf) => leaf.text == '- ' || leaf.text == '7) ')
+              .map((leaf) => leaf.style!.fontWeight),
+          [FontWeight.w600, FontWeight.w600],
+        );
+        final code = leaves
+            .where((leaf) => leaf.style?.fontFamily == 'monospace')
+            .toList();
+        expect(code, hasLength(2));
+        expect(code.first.text, '```text\n$_sanitizedHostile\n```\n');
+        expect(code.last.text, '~~~text\n**literal** *literal*\n~~~');
+        for (final leaf in code) {
+          expect(leaf.style!.fontWeight, FontWeight.w400);
+          expect(leaf.style!.fontStyle, FontStyle.normal);
+        }
+        expect(find.byType(SupportCardView), findsNothing);
+        _noDynamicResources();
+        final editorFinder = _editor(renderer);
+        await tester.longPressAt(_visibleGlyphPoint(tester, editorFinder));
+        await tester.pumpAndSettle();
+        final editor = tester.widget<EditableText>(editorFinder);
+        expect(editor.controller.selection.isCollapsed, isFalse);
+        // All block styles share the same native selection buffer; no per-block
+        // editor or alternate copy projection is introduced by the renderer.
+        editor.controller.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: displayed.length,
+        );
+        await tester.pump();
+        expect(
+          editor.controller.selection.textInside(editor.controller.text),
+          displayed,
+        );
+        expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+        _passiveBody(tester, renderer, displayed);
+        _noDynamicResources();
+        expect(tester.takeException(), isNull);
+        expect(callbacks.calls, isEmpty);
+        expect(fixture.localAssetLoads, isEmpty);
+      });
+    },
+  );
+
   for (final role in SupportMessageRole.values) {
     for (final old in [true, false]) {
       testWidgets(
@@ -806,7 +884,10 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(find.text('История и переходы к настройкам'), findsOneWidget);
+        expect(
+          find.text('Выбери модель в настройках. Локальная помощь — без сети.'),
+          findsOneWidget,
+        );
         expect(find.text('Астория Ассистент'), findsOneWidget);
         expect(find.byType(SupportCardView), findsOneWidget);
         _noDynamicResources(welcome: true);

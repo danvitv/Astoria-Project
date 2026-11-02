@@ -1,6 +1,9 @@
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/credentials/credential_vault.dart';
+import '../../core/credentials/saucepan_credential_owner.dart';
 import 'services/saucepan_extractor.dart';
 
 /// Persisted Saucepan account state. A configured bearer token *is* the
@@ -9,7 +12,13 @@ import 'services/saucepan_extractor.dart';
 class SaucepanAccount {
   final bool loggedIn;
   final String? handle;
-  const SaucepanAccount({this.loggedIn = false, this.handle});
+  final bool credentialUnavailable, metadataUnavailable;
+  const SaucepanAccount({
+    this.loggedIn = false,
+    this.handle,
+    this.credentialUnavailable = false,
+    this.metadataUnavailable = false,
+  });
 
   bool get isLoggedIn => loggedIn;
 }
@@ -18,49 +27,87 @@ class SaucepanAccount {
 /// [SaucepanExtractor] (same instance used for extraction) and mirrors its
 /// logged-in state, plus the display [handle], for the menu.
 class SaucepanAccountNotifier extends Notifier<SaucepanAccount> {
-  static const _handleKey = 'gz_saucepan_handle';
+  late SaucepanExtractor _extractor;
+  int _generation = 0, _publication = 0;
 
   @override
   SaucepanAccount build() {
-    _load();
+    _extractor = ref.watch(saucepanExtractorProvider);
+    unawaited(_load(_extractor, ++_generation, ++_publication));
     return const SaucepanAccount();
   }
 
-  Future<void> _load() async {
-    final ext = ref.read(saucepanExtractorProvider);
-    await ext.loadToken();
-    final prefs = await SharedPreferences.getInstance();
-    final handle = prefs.getString(_handleKey);
-    state = SaucepanAccount(loggedIn: ext.isLoggedIn, handle: handle);
+  bool _current(SaucepanExtractor ext, int generation, int publication) =>
+      ref.mounted &&
+      identical(ext, _extractor) &&
+      generation == _generation &&
+      publication == _publication;
+
+  SaucepanAccount _account(SaucepanCredentialAccount value) => SaucepanAccount(
+    loggedIn: value.authenticated,
+    handle: value.handle,
+    credentialUnavailable: value.unavailable,
+    metadataUnavailable: value.metadataUnavailable,
+  );
+
+  Future<void> _load(
+    SaucepanExtractor ext,
+    int generation,
+    int publication,
+  ) async {
+    try {
+      await ext.loadToken();
+      if (_current(ext, generation, publication)) state = _account(ext.account);
+    } on CredentialVaultAdmissionDenied {
+      // New native intent or retired original producer owns the completion.
+      if (_current(ext, generation, publication)) {
+        state = const SaucepanAccount(credentialUnavailable: true);
+      }
+    } catch (_) {
+      if (_current(ext, generation, publication)) {
+        state = const SaucepanAccount(credentialUnavailable: true);
+      }
+    }
+  }
+
+  Future<void> _mutate(
+    Future<void> Function(
+      SaucepanExtractor ext,
+      void Function(SaucepanCredentialAccount) publish,
+    )
+    operation,
+  ) async {
+    final ext = _extractor, generation = _generation;
+    final publication = ++_publication;
+    void publish(SaucepanCredentialAccount value) {
+      if (_current(ext, generation, publication)) state = _account(value);
+    }
+
+    // Invoke before await: login/setter/logout own their original admission.
+    final pending = operation(ext, publish);
+    final authCurrent = ext.captureAuthGuard();
+    await pending;
+    if (!_current(ext, generation, publication) || !authCurrent()) {
+      throw const CredentialVaultAdmissionDenied();
+    }
+    publish(ext.account);
   }
 
   /// Logs in with handle + password; throws [SaucepanException] on failure.
-  Future<void> login(String handle, String password) async {
-    final ext = ref.read(saucepanExtractorProvider);
-    await ext.login(handle, password);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_handleKey, handle.trim());
-    state = SaucepanAccount(loggedIn: true, handle: handle.trim());
-  }
+  Future<void> login(String handle, String password) => _mutate(
+    (ext, publish) => ext.login(handle, password, onCommitted: publish),
+  );
 
   /// Stores a pasted bearer token directly (no handle).
-  Future<void> setToken(String token) async {
-    final ext = ref.read(saucepanExtractorProvider);
-    await ext.setToken(token);
-    state = SaucepanAccount(loggedIn: ext.isLoggedIn, handle: state.handle);
-  }
+  Future<void> setToken(String token) =>
+      _mutate((ext, publish) => ext.setToken(token, onCommitted: publish));
 
   /// Clears the stored session.
-  Future<void> logout() async {
-    final ext = ref.read(saucepanExtractorProvider);
-    await ext.logout();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_handleKey);
-    state = const SaucepanAccount();
-  }
+  Future<void> logout() =>
+      _mutate((ext, publish) => ext.logout(onCommitted: publish));
 }
 
 final saucepanAccountProvider =
     NotifierProvider<SaucepanAccountNotifier, SaucepanAccount>(
-  SaucepanAccountNotifier.new,
-);
+      SaucepanAccountNotifier.new,
+    );

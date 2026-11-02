@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/preset.dart';
+import 'native_global_regex_port.dart';
 import 'shared_prefs_provider.dart';
 
 const _globalRegexKey = 'gz_global_regex_scripts';
@@ -85,27 +86,160 @@ List<int> _migrateGlazePlacementIds(List<int> placement) {
 }
 
 class GlobalRegexNotifier extends AsyncNotifier<List<PresetRegex>> {
+  int _nativeRevision = 0;
+  Object? _nativeProducer;
+  SavedPreferencesStore? _nativeStore;
+  TrackedSharedPreferences? _nativePreferences;
+  List<PresetRegex>? _nativeLoaded;
+  Object _nativeLoadedLifetime = Object();
+  bool Function() _nativeBuildCurrent = () => false;
+
+  /// Only an already-loaded original controller can issue this finite port.
+  /// No build, import, normalization or plugin lookup occurs during capture.
+  NativeGlobalRegexPort? captureNativePort(
+    TrackedSharedPreferences preferences,
+    bool Function() originalCurrent,
+  ) {
+    // AsyncNotifier.state and Ref reads can flush an invalidated build. Use only
+    // facts delivered by this build's listenSelf and synchronous disposal guard.
+    final buildCurrent = _nativeBuildCurrent;
+    if (!buildCurrent() || _nativeLoaded == null) {
+      return null;
+    }
+    if (!identical(preferences.delegate, _nativeProducer) ||
+        !identical(preferences.store, _nativeStore) ||
+        !preferences.store.current) {
+      return null;
+    }
+    final lifetime = _nativeLifetime;
+    final loadedLifetime = _nativeLoadedLifetime;
+    return NativeGlobalRegexPort(
+      controller: this,
+      preferences: preferences,
+      isOriginalOwnerCurrent: () =>
+          buildCurrent() &&
+          originalCurrent() &&
+          identical(lifetime, _nativeLifetime) &&
+          identical(loadedLifetime, _nativeLoadedLifetime),
+      revision: () => _nativeRevision,
+      loaded: () =>
+          buildCurrent() && identical(loadedLifetime, _nativeLoadedLifetime)
+          ? _nativeLoaded
+          : null,
+      publish: (scripts) {
+        _nativeRevision++;
+        state = AsyncData(scripts);
+      },
+    );
+  }
+
+  Object _nativeLifetime = Object();
+
   @override
-  Future<List<PresetRegex>> build() =>
-      SavedPreferencesWrites.run([_globalRegexKey], () async {
-        final prefs = await ref.read(sharedPreferencesProvider.future);
-        final raw = prefs.getString(_globalRegexKey);
-        if (raw == null || raw.isEmpty) return [];
-        try {
-          final list = jsonDecode(raw) as List;
-          final result = list
-              .map(
-                (e) => PresetRegex.fromJson(
-                  normalizeJsGlobalRegex(e as Map<String, dynamic>),
-                ),
-              )
-              .toList();
-          await _persist(result);
-          return result;
-        } catch (_) {
-          return [];
+  Future<List<PresetRegex>> build() {
+    final buildRef = ref;
+    final lifetime = _nativeLifetime = Object();
+    var alive = true;
+    NativeGlobalRegexProducerLifetime? originalProducer;
+    bool current() =>
+        alive &&
+        buildRef.mounted &&
+        identical(lifetime, _nativeLifetime) &&
+        (originalProducer?.current ?? true);
+    _nativeBuildCurrent = current;
+    _nativeProducer = null;
+    _nativeStore = null;
+    _nativePreferences = null;
+    _nativeLoaded = null;
+    _nativeLoadedLifetime = Object();
+    _nativeRevision++;
+    // Invalidate calls onDispose immediately, before the scheduled rebuild. The
+    // original snapshot and all its ports retire without reading notifier.state.
+    buildRef.onDispose(() {
+      alive = false;
+      if (identical(lifetime, _nativeLifetime)) _nativeLoaded = null;
+    });
+    final registry = buildRef.read(nativeGlobalRegexOwnerRegistryProvider);
+    buildRef.onDispose(
+      registry.register(buildRef.container, (originalCurrent) {
+        if (!current()) return null;
+        final preferences = _nativePreferences;
+        return preferences == null
+            ? null
+            : captureNativePort(preferences, originalCurrent);
+      }),
+    );
+    listenSelf((_, next) {
+      if (current()) {
+        if (next.isLoading || next.hasError) {
+          _nativeLoadedLifetime = Object();
         }
-      });
+        _nativeLoaded = next.isLoading || next.hasError ? null : next.value;
+      }
+    });
+    // Retain the actual producer future and existing raw-plugin store BEFORE
+    // awaiting. A tracked result carries its own original store; an untracked
+    // result may bind only this pre-await store, never a later matching lookup.
+    final originalStore = SavedPreferencesOwner.process.originalStore;
+    final producer = buildRef.read(sharedPreferencesProvider.future);
+    final producerSource = buildRef.container.allProviders().firstWhere(
+      (source) => source.provider == sharedPreferencesProvider,
+    );
+    final producerLifetime = NativeGlobalRegexProducerLifetime(
+      producerSource.container,
+      producerSource.provider,
+    );
+    originalProducer = producerLifetime;
+    buildRef.onDispose(producerLifetime.dispose);
+    return SavedPreferencesWrites.run([_globalRegexKey], () async {
+      final prefs = await producer;
+      if (!current()) return [];
+      // Retain the producer that actually loaded this notifier. A later graph
+      // cannot pair an old controller with a matching replacement store/cache.
+      if (current()) {
+        _nativeProducer = prefs is TrackedSharedPreferences
+            ? prefs.delegate
+            : prefs;
+        _nativeStore = prefs is TrackedSharedPreferences
+            ? prefs.store
+            : originalStore != null &&
+                  originalStore.current &&
+                  identical(originalStore.actualStore, prefs)
+            ? originalStore
+            : null;
+        _nativePreferences = prefs is TrackedSharedPreferences
+            ? prefs
+            : _nativeStore != null
+            ? TrackedSharedPreferences.wrap(prefs) as TrackedSharedPreferences
+            : null;
+      }
+      final raw = prefs.getString(_globalRegexKey);
+      if (raw == null || raw.isEmpty) return [];
+      try {
+        final list = jsonDecode(raw) as List;
+        final result = list
+            .map(
+              (e) => PresetRegex.fromJson(
+                normalizeJsGlobalRegex(e as Map<String, dynamic>),
+              ),
+            )
+            .toList();
+        if (!current()) return [];
+        // Normal UI initialization still normalizes, using the ORIGINAL producer
+        // retained before its await, not a replacement preference lookup.
+        await SavedPreferencesWrites.run([_globalRegexKey], () async {
+          if (!current()) return;
+          await prefs.setString(
+            _globalRegexKey,
+            jsonEncode(result.map((e) => e.toJson()).toList()),
+          );
+        });
+        return result;
+      } catch (_) {
+        return [];
+      }
+    });
+  }
 
   Future<void> _persist(List<PresetRegex> scripts) =>
       SavedPreferencesWrites.run([_globalRegexKey], () async {
@@ -116,6 +250,7 @@ class GlobalRegexNotifier extends AsyncNotifier<List<PresetRegex>> {
 
   Future<void> addRegex(PresetRegex regex) =>
       SavedPreferencesWrites.run([_globalRegexKey], () async {
+        _nativeRevision++;
         final current = state.value ?? [];
         final updated = [...current, regex];
         state = AsyncData(updated);
@@ -125,6 +260,7 @@ class GlobalRegexNotifier extends AsyncNotifier<List<PresetRegex>> {
   Future<void> updateRegex(PresetRegex regex) => SavedPreferencesWrites.run(
     [_globalRegexKey],
     () async {
+      _nativeRevision++;
       final current = state.value ?? [];
       final updated = current.map((r) => r.id == regex.id ? regex : r).toList();
       state = AsyncData(updated);
@@ -134,6 +270,7 @@ class GlobalRegexNotifier extends AsyncNotifier<List<PresetRegex>> {
 
   Future<void> removeRegex(String id) =>
       SavedPreferencesWrites.run([_globalRegexKey], () async {
+        _nativeRevision++;
         final current = state.value ?? [];
         final updated = current.where((r) => r.id != id).toList();
         state = AsyncData(updated);
@@ -142,6 +279,7 @@ class GlobalRegexNotifier extends AsyncNotifier<List<PresetRegex>> {
 
   Future<void> importFromJsBackup(List<dynamic> rawList) =>
       SavedPreferencesWrites.run([_globalRegexKey], () async {
+        _nativeRevision++;
         final existing = state.value ?? [];
         final existingIds = existing.map((e) => e.id).toSet();
         final imported = <PresetRegex>[];

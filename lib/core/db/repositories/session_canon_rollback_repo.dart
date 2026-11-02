@@ -12,6 +12,7 @@ import 'character_repo.dart';
 import 'session_canon_checkpoint_repo.dart';
 import 'session_lorebook_embedding_job_repo.dart';
 import 'session_lorebook_revision_repo.dart';
+import 'session_deletion_queries.dart';
 
 final class SessionCanonRollbackOutcome {
   const SessionCanonRollbackOutcome._({
@@ -99,14 +100,17 @@ class SessionCanonRollbackRepo {
 
     if (canRebindToTarget) {
       final changed =
-          await (db.update(db.chatSessions)..where(
-                (row) =>
-                    row.sessionId.equals(sessionId) &
-                    row.characterId.equals(current.id),
-              ))
-              .write(
-                ChatSessionsCompanion(characterId: Value(target.characterId)),
-              );
+          await SessionDeletionQueries.trackInventoryMutation(
+            db,
+            () => (db.update(db.chatSessions)..where(
+                  (row) =>
+                      row.sessionId.equals(sessionId) &
+                      row.characterId.equals(current.id),
+                ))
+                .write(
+                  ChatSessionsCompanion(characterId: Value(target.characterId)),
+                ),
+          );
       if (changed != 1) throw StateError('Rollback session owner is stale.');
       rollbackCharacterId = target.characterId;
       rollbackRevision = target.characterRevision;

@@ -6,7 +6,7 @@ extension _ModelToolActivity on _ModelRun {
     toolSequence++;
     toolCall = call;
     // Unknown provider names/arguments are not a display metadata capability.
-    toolAction = originalActions!.definitions.any((d) => d.name == call.name)
+    toolAction = toolDefinitions.any((d) => d.name == call.name)
         ? call.name
         : 'unknown';
     toolSourceLabel = null;

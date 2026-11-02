@@ -9,6 +9,7 @@ import 'package:glaze_flutter/core/llm/memory_draft_planner.dart';
 import 'package:glaze_flutter/core/llm/memory_injection_service.dart';
 import 'package:glaze_flutter/core/llm/transport/llm_capture_context.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
+import 'package:glaze_flutter/core/state/chat_source_mutation_provider.dart';
 import 'package:glaze_flutter/core/state/memory_settings_provider.dart';
 import 'package:glaze_flutter/core/state/memory_book_ops_provider.dart';
 import 'package:glaze_flutter/core/state/lorebook_embedding_provider.dart';
@@ -16,6 +17,7 @@ import 'package:glaze_flutter/features/settings/api_list_provider.dart';
 import 'package:glaze_flutter/features/memory/state/memory_draft_jobs_provider.dart';
 import 'package:glaze_flutter/features/chat/widgets/memory_books_tab.dart';
 import 'package:glaze_flutter/features/chat/widgets/memory_sheet.dart';
+import 'package:glaze_flutter/features/chat/state/chat_native_owner_registry.dart';
 import 'package:glaze_flutter/shared/widgets/glaze_action_button.dart';
 import 'package:glaze_flutter/shared/widgets/menu_group.dart';
 import 'package:glaze_flutter/features/support_assistant/support_assistant_screen.dart';
@@ -328,20 +330,7 @@ void main() {
             db = f.domain.screen.core.native.db;
         final books = c.read(memoryBookRepoProvider),
             chats = c.read(chatRepoProvider);
-        final session = (await chats.getById(DomainLoopFixture.session))!;
-        final seeded = session.copyWith(
-          messages: [
-            for (var i = 0; i < 20; i++)
-              ChatMessage(
-                id: 'range-$i',
-                role: i.isEven ? 'user' : 'assistant',
-                content: 'The blue harbour',
-              ),
-          ],
-        );
-        await chats.put(
-          seeded,
-        ); // Synthetic seed only, before plan observation.
+        final seeded = (await chats.getById(DomainLoopFixture.session))!;
         final setup = (await f.service.prepare(
           const MemorySetupAnswers(tokens: 1024),
           MemorySetupScope.session,
@@ -402,6 +391,42 @@ void main() {
         expect(result.totalTokens, lessThanOrEqualTo(1024));
         expect(result.maxInjectionTokens, lessThanOrEqualTo(1024));
       });
+    },
+    beforeInitialize: (f) async {
+      final c = f.domain.screen.core.container;
+      final chats = c.read(chatRepoProvider);
+      final session = (await chats.getById(DomainLoopFixture.session))!;
+      // Authoritative synthetic seed BEFORE the wizard captures its target.
+      await chats.put(
+        session.copyWith(
+          messages: [
+            for (var i = 0; i < 20; i++)
+              ChatMessage(
+                id: 'range-$i',
+                role: i.isEven ? 'user' : 'assistant',
+                content: 'The blue harbour',
+              ),
+          ],
+        ),
+      );
+      final sources = c.read(chatSourceMutationRegistryProvider);
+      final checkpoint = sources.sessionCheckpoint(DomainLoopFixture.session);
+      final owner = c
+          .read(chatNativeOwnerRegistryProvider)
+          .existing(DomainLoopFixture.session)!;
+      expect(
+        await owner.refresh(
+          DomainLoopFixture.session,
+          owner.queue.beginPublication(),
+          () =>
+              !sources.isSessionPending(DomainLoopFixture.session) &&
+              identical(
+                checkpoint,
+                sources.sessionCheckpoint(DomainLoopFixture.session),
+              ),
+        ),
+        isTrue,
+      );
     },
   );
 }

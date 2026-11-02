@@ -436,12 +436,22 @@ extension _NavApplication on SupportSourceNavigationRepo {
     final values = <String, Object?>{};
     final projection = _ApplicationProjection(this);
     var unavailable = row['_unreadable'] as String?;
+    final runtime = unavailable == null && table.table == 'llm_call_event_rows'
+        ? RecordedStudioRuntime.fromColumns(row)
+        : null;
     if (unavailable == null) {
       try {
         if (table.table == 'history_message_units' && row['_unitValid'] != 1)
           _fail(SupportSourceReadFailure.changed);
         for (final field in table.projection.keys) {
           if (field.startsWith('_')) continue;
+          // Native runtime payload is one versioned attested unit, never a set
+          // of generic authored substrings. Unknown/malformed optional facts
+          // cannot erase a known outcome or leak after whole-unit redaction.
+          if (field == 'payload_json' &&
+              table.table == 'llm_call_event_rows' &&
+              row['parser_name'] == 'studio_runtime_v1')
+            continue;
           final raw = row[field];
           if (field.endsWith('_json') && raw is String && raw.isNotEmpty) {
             values[field] = projection.jsonColumn(raw, field);
@@ -554,6 +564,60 @@ extension _NavApplication on SupportSourceNavigationRepo {
         emit(value, field);
       } else {
         emit({'field': field, 'value': value}, field);
+      }
+    }
+
+    if (unavailable == null && table.table == 'llm_call_event_rows') {
+      if (runtime != null) {
+        final requestRow = row['_diagnosticRequestRow'];
+        final phaseRow = row['_diagnosticPhaseRow'];
+        final summary = <String, Object?>{
+          ...runtime,
+          'eventReference': _applicationPosition(table.table, ordinal),
+          'identityLink': 'native_exact_session_run_call_attempt',
+          'requestLink': requestRow is int
+              ? 'exact_session_run_call_attempt'
+              : 'missing_or_ambiguous',
+          if (requestRow is int)
+            'requestReference': _applicationPosition(
+              'llm_request_capture_rows',
+              requestRow,
+            ),
+          'phaseLink': phaseRow is int
+              ? 'exact_session_run_parent_call'
+              : 'missing_or_ambiguous',
+          if (phaseRow is int)
+            'phaseReference': _applicationPosition(table.table, phaseRow),
+        };
+        final encoded = jsonEncode(summary);
+        if (_projectionPolicy!.redactText(encoded) == encoded) {
+          emit(summary, 'recordedStudioRuntime');
+        }
+      }
+      final observation = RecordedCallFailure.fromColumns(row);
+      if (observation != null) {
+        final requestRow = row['_diagnosticRequestRow'];
+        final summary = <String, Object?>{
+          ...observation,
+          'eventReference': _applicationPosition(table.table, ordinal),
+          'requestLink': requestRow is int
+              ? 'exact_session_run_call_attempt'
+              : 'missing_or_ambiguous',
+          if (requestRow is int)
+            'requestReference': _applicationPosition(
+              'llm_request_capture_rows',
+              requestRow,
+            ),
+        };
+        // New facts cannot silently change when they collide with a CURRENT
+        // secret. The ordinary saved-data projection remains available.
+        final encoded = jsonEncode(summary);
+        if (_projectionPolicy!.redactText(encoded) == encoded) {
+          emit(
+            summary,
+            'recordedFailure',
+          ); // One complete attested logical unit.
+        }
       }
     }
 

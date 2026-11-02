@@ -23,7 +23,15 @@ void main() {
             .read(supportAppActionRegistryProvider)
             .definitions,
       );
-      expect(definitions, hasLength(43));
+      expect(definitions, hasLength(46));
+      for (final name in [
+        'astoria_session_rename',
+        'astoria_session_title_receipts',
+        'astoria_session_rename_undo',
+      ]) {
+        final definition = definitions.singleWhere((d) => d.name == name);
+        expect(definition.parameters['additionalProperties'], isFalse);
+      }
       final backup = definitions.singleWhere(
         (d) => d.name == 'astoria_database_snapshot',
       );

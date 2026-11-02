@@ -9,10 +9,31 @@ import '../database_transaction_guard.dart';
 import '../../llm/prompt/exact_lorebook_manifest.dart';
 import 'lorebook_use_manifest_repo.dart';
 import 'session_deletion_queries.dart';
+import 'support_repo.dart';
+import '../../models/support_models.dart';
 import '../../models/chat_message.dart';
 import '../../application/sync_repo_interfaces.dart';
+import '../../application/session_deletion_store.dart';
 
 part 'chat_native_maintenance_source.dart';
+part 'chat_native_session_title.dart';
+
+final class ChatNativeSelectionInventory {
+  ChatNativeSelectionInventory._(this._repo,
+      List<({String sessionId, String characterId, int sessionIndex})> identities,
+      this._lifetime)
+      : _identities = List.unmodifiable(identities),
+        sessions = List.unmodifiable(identities.map((s) => s.sessionId));
+  final ChatRepo _repo;
+  final List<({String sessionId, String characterId, int sessionIndex})> _identities;
+  final List<String> sessions;
+  final bool Function() _lifetime;
+  bool _retired = false;
+  bool get current {
+    if (!_lifetime()) _retired = true;
+    return !_retired;
+  }
+}
 
 class _PreparedUserMessageAppend {
   const _PreparedUserMessageAppend({
@@ -30,7 +51,9 @@ class ChatRepo implements SyncChatStore {
   static const maxControlMetadataOffset = 0x7fffffff;
 
   final AppDatabase _db;
-  ChatRepo(this._db);
+  final SessionMutationStarted? _onMutationStarted;
+  ChatRepo(this._db, {SessionMutationStarted? onMutationStarted})
+    : _onMutationStarted = onMutationStarted;
   bool usesDatabase(AppDatabase database) => identical(_db, database);
 
   /// Read-only native maintenance projection; not a chat/UI hydration path.
@@ -129,6 +152,54 @@ class ChatRepo implements SyncChatStore {
   Future<List<SessionMetadata>> getAllSessionMetadata() async {
     final rows = await _sessionMetadataQuery().get();
     return rows.map(_projectedMetadata).toList();
+  }
+
+  /// One exact selection collateral inventory, captured before SQL and retained
+  /// through final preference CAS and Undo. Never transfer message/title bodies.
+  Future<ChatNativeSelectionInventory?> observeNativeSelectionInventory(
+      bool Function() isCurrent) async {
+    final lifetime = SessionDeletionQueries.captureInventoryLifetime(_db);
+    if (lifetime == null || !isCurrent()) return null;
+    final identities = await _selectionInventoryIdentities();
+    if (!lifetime() || !isCurrent()) return null;
+    return ChatNativeSelectionInventory._(this, identities, lifetime);
+  }
+
+  Future<List<({String sessionId, String characterId, int sessionIndex})>>
+      _selectionInventoryIdentities() async {
+    final rows = await (_db.selectOnly(_db.chatSessions)
+          ..addColumns([
+            _db.chatSessions.sessionId,
+            _db.chatSessions.characterId,
+            _db.chatSessions.sessionIndex,
+          ])
+          ..orderBy([OrderingTerm.asc(_db.chatSessions.sessionId)]))
+        .get();
+    return [
+      for (final row in rows)
+        (
+          sessionId: row.read(_db.chatSessions.sessionId)!,
+          characterId: row.read(_db.chatSessions.characterId)!,
+          sessionIndex: row.read(_db.chatSessions.sessionIndex)!,
+        ),
+    ];
+  }
+
+  /// Compare against the SAME original collateral, never capture/extend a later
+  /// inventory. SQL catches observed untracked differences, not external ABA.
+  Future<bool> revalidateNativeSelectionInventory(
+      ChatNativeSelectionInventory expected, bool Function() isCurrent) async {
+    if (!identical(expected._repo, this) || !expected.current || !isCurrent()) {
+      return false;
+    }
+    final latest = await _selectionInventoryIdentities();
+    if (!expected.current || !isCurrent()) return false;
+    if (latest.length != expected._identities.length ||
+        latest.indexed.any((e) => e.$2 != expected._identities[e.$1])) {
+      expected._retired = true;
+      return false;
+    }
+    return true;
   }
 
   /// Native control discovery, without titles, message bodies or session vars.
@@ -274,21 +345,36 @@ ORDER BY updated_at DESC
 
   @override
   Future<void> put(ChatSession session) async {
-    await _db
-        .into(_db.chatSessions)
-        .insertOnConflictUpdate(_toCompanion(session));
+    // Authoritative replacement intent retires prior observations even when the
+    // title compares equal or this write / the caller's later sync work fails.
+    final inventory = SessionDeletionQueries.beginInventoryMutation(_db);
+    void Function()? settle;
+    try {
+      settle = _onMutationStarted?.call(session.id);
+      await _db
+          .into(_db.chatSessions)
+          .insertOnConflictUpdate(_toCompanion(session));
+    } finally {
+      settle?.call();
+      inventory();
+    }
   }
 
   /// Inserts a newly allocated session without replacing an existing owner of
   /// the same globally unique session id.
   Future<bool> insertIfAbsent(ChatSession session) async {
-    final inserted = await _db
+    final inventory = SessionDeletionQueries.beginInventoryMutation(_db);
+    try {
+      final inserted = await _db
         .into(_db.chatSessions)
         .insertReturningOrNull(
           _toCompanion(session),
           mode: InsertMode.insertOrIgnore,
         );
-    return inserted != null;
+      return inserted != null;
+    } finally {
+      inventory();
+    }
   }
 
   /// Atomically appends a user message and clears the draft.
@@ -598,9 +684,11 @@ ORDER BY updated_at DESC
       final messagesJson = jsonEncode(
         updated.messages.map((e) => e.toJson()).toList(),
       );
-      final sessionVarsJson = updated.sessionVars.isNotEmpty
-          ? jsonEncode(updated.sessionVars)
-          : null;
+      final sessionVarsJson = _sessionVarsJsonWithDelta(
+        row.sessionVarsJson,
+        current.sessionVars,
+        updated.sessionVars,
+      );
       final authorsNoteJson = updated.authorsNote != null
           ? jsonEncode(updated.authorsNote!.toJson())
           : null;
@@ -701,9 +789,11 @@ ORDER BY updated_at DESC
       final messagesJson = jsonEncode(
         updated.messages.map((e) => e.toJson()).toList(),
       );
-      final sessionVarsJson = updated.sessionVars.isNotEmpty
-          ? jsonEncode(updated.sessionVars)
-          : null;
+      final sessionVarsJson = _sessionVarsJsonWithDelta(
+        row.sessionVarsJson,
+        baseSession.sessionVars,
+        generatedSession.sessionVars,
+      );
       final authorsNoteJson = updated.authorsNote != null
           ? jsonEncode(updated.authorsNote!.toJson())
           : null;
@@ -824,11 +914,48 @@ ORDER BY updated_at DESC
     return merged;
   }
 
+  /// The typed display projection cannot represent JSON-null titles. Only
+  /// explicit typed deltas may change raw storage; message/note edits must not
+  /// normalize it, and generated variable deltas must preserve newer raw keys.
+  String? _sessionVarsJsonWithDelta(
+    String? raw,
+    Map<String, String> before,
+    Map<String, String> after,
+  ) {
+    final removed = before.keys
+        .where((key) => !after.containsKey(key))
+        .toList();
+    final changed = after.entries
+        .where(
+          (entry) =>
+              !before.containsKey(entry.key) ||
+              before[entry.key] != entry.value,
+        )
+        .toList();
+    if (removed.isEmpty && changed.isEmpty) return raw;
+    final vars = _decodeJsonMap(raw);
+    for (final key in removed) {
+      vars.remove(key);
+    }
+    for (final entry in changed) {
+      vars[entry.key] = entry.value;
+    }
+    return vars.isEmpty ? null : jsonEncode(vars);
+  }
+
   @override
   Future<void> delete(String sessionId) async {
-    await (_db.delete(
-      _db.chatSessions,
-    )..where((t) => t.sessionId.equals(sessionId))).go();
+    final inventory = SessionDeletionQueries.beginInventoryMutation(_db);
+    void Function()? settle;
+    try {
+      settle = _onMutationStarted?.call(sessionId);
+      await (_db.delete(
+        _db.chatSessions,
+      )..where((t) => t.sessionId.equals(sessionId))).go();
+    } finally {
+      settle?.call();
+      inventory();
+    }
   }
 
   /// Atomically updates a single message's content and appends a new swipe.
@@ -1292,17 +1419,30 @@ ORDER BY updated_at DESC
   /// dependent data (memory books, summaries). Returns the deleted session IDs
   /// for sync-deletion tracking.
   Future<List<String>> deleteByCharacterId(String characterId) async {
-    return _db.transaction(() async {
-      final rows = await (_db.select(
-        _db.chatSessions,
-      )..where((t) => t.characterId.equals(characterId))).get();
-      final ids = rows.map((r) => r.sessionId).toList();
-      final deletion = SessionDeletionQueries(_db);
-      for (final id in ids) {
-        await deletion.deleteSessionRows(id);
+    final inventory = SessionDeletionQueries.beginInventoryMutation(_db);
+    final settlements = <void Function()>[];
+    try {
+      return await _db.transaction(() async {
+        final rows = await (_db.select(
+          _db.chatSessions,
+        )..where((t) => t.characterId.equals(characterId))).get();
+        final ids = rows.map((r) => r.sessionId).toList();
+        for (final id in ids) {
+          final settle = _onMutationStarted?.call(id);
+          if (settle != null) settlements.add(settle);
+        }
+        final deletion = SessionDeletionQueries(_db);
+        for (final id in ids) {
+          await deletion.deleteSessionRows(id);
+        }
+        return ids;
+      });
+    } finally {
+      for (final settle in settlements.reversed) {
+        settle();
       }
-      return ids;
-    });
+      inventory();
+    }
   }
 
   SessionMetadata _toMetadata(ChatSessionRow c) {
@@ -1519,9 +1659,7 @@ ORDER BY updated_at DESC
                 .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
                 .toList(),
         updatedAt: c.updatedAt,
-        sessionVars: c.sessionVarsJson != null
-            ? Map<String, String>.from(jsonDecode(c.sessionVarsJson!) as Map)
-            : {},
+        sessionVars: _modelSessionVars(c.sessionVarsJson),
         authorsNote: _parseAuthorsNote(c.authorsNoteJson),
         draft: c.draft,
         lastScrollAnchor:

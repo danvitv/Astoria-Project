@@ -6,6 +6,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/features/cloud_sync/cloud_adapter.dart';
 import 'package:glaze_flutter/features/cloud_sync/services/dropbox/dropbox_adapter.dart';
 import 'package:glaze_flutter/features/cloud_sync/services/dropbox/dropbox_auth.dart';
+import 'package:glaze_flutter/core/credentials/cloud_oauth_record.dart';
+
+import 'credentials/cloud_oauth_fixture.dart';
 
 class _DropboxResponseAdapter implements HttpClientAdapter {
   _DropboxResponseAdapter(this.body);
@@ -32,17 +35,14 @@ class _DropboxResponseAdapter implements HttpClientAdapter {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  DropboxAdapter dropboxWithResponse(String body) {
-    final auth = DropboxAuth()
-      ..loadTokens({
-        'dropbox': {
-          'access_token': 'test-token',
-          'refresh_token': 'test-refresh',
-          'expires_at': DateTime.now()
-              .add(const Duration(hours: 1))
-              .millisecondsSinceEpoch,
-        },
-      });
+  Future<DropboxAdapter> dropboxWithResponse(String body) async {
+    final fixture = await CloudOAuthFixture.create();
+    addTearDown(fixture.redaction.dispose);
+    final owner = fixture.owner(CloudOAuthProvider.dropbox);
+    await owner.store(CloudOAuthPair(accessToken: 'test-token', refreshToken: 'test-refresh',
+      expiresAt: DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch),
+      owner.beginOperation());
+    final auth = DropboxAuth(credentials: owner);
     final dio = Dio()..httpClientAdapter = _DropboxResponseAdapter(body);
     return DropboxAdapter(auth, dio: dio);
   }
@@ -52,7 +52,7 @@ void main() {
       '"error":{".tag":"path","path":{".tag":"not_found"}}}';
 
   test('missing binary returns CloudFileNotFoundException', () async {
-    final dropbox = dropboxWithResponse(missing);
+    final dropbox = await dropboxWithResponse(missing);
 
     await expectLater(
       dropbox.downloadBinary('/Astoria-dev/gallery/card/avatar.png'),
@@ -61,7 +61,7 @@ void main() {
   });
 
   test('missing JSON returns CloudFileNotFoundException', () async {
-    final dropbox = dropboxWithResponse(missing);
+    final dropbox = await dropboxWithResponse(missing);
 
     await expectLater(
       dropbox.download('/Astoria-dev/manifest.json'),
@@ -70,7 +70,7 @@ void main() {
   });
 
   test('another Dropbox 409 is not treated as a missing file', () async {
-    final dropbox = dropboxWithResponse(
+    final dropbox = await dropboxWithResponse(
       jsonEncode({
         'error_summary': 'path/restricted_content/...',
         'error': {

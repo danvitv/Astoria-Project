@@ -9,8 +9,11 @@ import '../../../core/state/db_provider.dart';
 import '../../../core/utils/time_helpers.dart';
 import '../../../shared/widgets/glaze_toast.dart';
 import '../../image_gen/image_gen_provider.dart';
+import '../../image_gen/image_gen_models.dart';
 import '../../settings/api_list_provider.dart';
 import '../../image_gen/services/image_tag_markup.dart';
+import '../../image_gen/services/image_gen_service.dart'
+    show ImageGenErrorSanitizer;
 import '../chat_session_service.dart';
 import '../chat_state.dart';
 
@@ -36,7 +39,16 @@ class ImageGenProcessor {
     final session = currentState.session;
     if (session == null) return;
 
+    // Original native image custody, captured before settings/service awaits.
+    // It is not reconstructed from JSON, an LLM key or a late provider lookup.
+    final imageOwner = _ref.read(imageRoutmyCredentialOwnerProvider);
+    final ownsImage = imageOwner.captureGuard();
+    final errors = ImageGenErrorSanitizer(routmyCredentials: imageOwner);
     final imgGenSettings = await _ref.read(imageGenSettingsProvider.future);
+    bool ownsPublication() =>
+        _ownsOperation &&
+        (imgGenSettings.apiType != ImageGenApiType.routmy || ownsImage());
+    if (!ownsPublication()) return;
 
     final targetIdx = targetMessageId == null
         ? session.messages.length - 1
@@ -57,14 +69,14 @@ class ImageGenProcessor {
       final disabledContent = ImageTagMarkup.replaceAllImageGenTagsWithDisabled(
         targetMsg.content,
       );
-      if (disabledContent == targetMsg.content || !_ownsOperation) return;
+      if (disabledContent == targetMsg.content || !ownsPublication()) return;
 
       latestSession = _replaceMessage(
         latestSession,
         stableTargetMessageId,
         targetSwipeId,
         targetAgentSwipeId,
-        disabledContent,
+        errors.sanitizeMessageErrors(disabledContent),
       );
       _onStateUpdate(currentState.copyWith(session: latestSession));
       final durable = await _persistMessageContent(
@@ -73,10 +85,15 @@ class ImageGenProcessor {
         targetSwipeId,
         targetAgentSwipeId,
         disabledContent,
+        ownsPublication: ownsPublication,
+        errors: errors,
       );
-      if (durable != null) {
+      if (durable != null &&
+          ownsPublication() &&
+          _messageErrorsAreCurrent(durable, stableTargetMessageId, errors)) {
         ChatSessionService.updateCache(durable);
-        if (_ownsOperation) {
+        if (ownsPublication() &&
+            _messageErrorsAreCurrent(durable, stableTargetMessageId, errors)) {
           _onStateUpdate(currentState.copyWith(session: durable));
         }
       }
@@ -118,7 +135,7 @@ class ImageGenProcessor {
     );
 
     final recentContexts = _collectRecentImageContexts(session.messages);
-    if (!_ownsOperation) return;
+    if (!ownsPublication()) return;
 
     debugPrint('[IMGGEN] → setting isGeneratingImage=true');
     _onStateUpdate(
@@ -140,13 +157,13 @@ class ImageGenProcessor {
           // A cancellation may race an image provider's progress callback.
           // Ownership checks at the caller prevent callbacks from an old
           // operation from reaching a replacement generation.
-          if (!_ownsOperation) return;
+          if (!ownsPublication()) return;
           latestSession = _replaceMessage(
             latestSession,
             stableTargetMessageId,
             targetSwipeId,
             targetAgentSwipeId,
-            updatedText,
+            errors.sanitizeMessageErrors(updatedText),
           );
           _onStateUpdate(
             currentState.copyWith(
@@ -156,16 +173,17 @@ class ImageGenProcessor {
           );
         },
         onError: (error) {
-          debugPrint('[IMGGEN] onError: $error');
+          if (!ownsPublication()) return;
+          debugPrint('[IMGGEN] onError: ${errors.sanitize(error)}');
           GlazeToast.showWithoutContext(
-            'Image gen: $error',
+            'Image gen: ${errors.sanitize(error)}',
             isError: true,
             duration: 4000,
           );
         },
       );
 
-      if (!_ownsOperation) return;
+      if (!ownsPublication()) return;
 
       if (_cancelToken?.isCancelled == true) {
         var cancelContent = updatedContent;
@@ -183,7 +201,7 @@ class ImageGenProcessor {
           stableTargetMessageId,
           targetSwipeId,
           targetAgentSwipeId,
-          cancelContent,
+          errors.sanitizeMessageErrors(cancelContent),
         );
         final durable = await _persistMessageContent(
           session.id,
@@ -191,8 +209,12 @@ class ImageGenProcessor {
           targetSwipeId,
           targetAgentSwipeId,
           cancelContent,
+          ownsPublication: ownsPublication,
+          errors: errors,
         );
-        if (durable != null) {
+        if (durable != null &&
+            ownsPublication() &&
+            _messageErrorsAreCurrent(durable, stableTargetMessageId, errors)) {
           latestSession = durable;
           ChatSessionService.updateCache(durable);
         }
@@ -204,7 +226,7 @@ class ImageGenProcessor {
         stableTargetMessageId,
         targetSwipeId,
         targetAgentSwipeId,
-        updatedContent,
+        errors.sanitizeMessageErrors(updatedContent),
       );
       final durable = await _persistMessageContent(
         session.id,
@@ -212,8 +234,12 @@ class ImageGenProcessor {
         targetSwipeId,
         targetAgentSwipeId,
         updatedContent,
+        ownsPublication: ownsPublication,
+        errors: errors,
       );
-      if (durable != null) {
+      if (durable != null &&
+          ownsPublication() &&
+          _messageErrorsAreCurrent(durable, stableTargetMessageId, errors)) {
         latestSession = durable;
         ChatSessionService.updateCache(durable);
       }
@@ -224,15 +250,64 @@ class ImageGenProcessor {
       // accepts this update only while the originating operation still owns
       // the active generation/session.
       if (_ownsOperation) {
+        final visibleSession =
+            ownsPublication() &&
+                _messageErrorsAreCurrent(
+                  latestSession,
+                  stableTargetMessageId,
+                  errors,
+                )
+            ? latestSession
+            : _errorDisplayProjection(session, errors);
         _onStateUpdate(
           currentState.copyWith(
-            session: latestSession,
+            // This error-only projection clears the transient flag. It is NOT
+            // a repository write/cache update or a claim of durable replacement.
+            session: visibleSession,
             isGeneratingImage: false,
           ),
         );
       }
     }
   }
+
+  ChatSession _errorDisplayProjection(
+    ChatSession original,
+    ImageGenErrorSanitizer errors,
+  ) => original.copyWith(
+    messages: [
+      for (final message in original.messages)
+        message.copyWith(
+          content: errors.sanitizeMessageErrors(message.content),
+          swipes: message.swipes.map(errors.sanitizeMessageErrors).toList(),
+          agentSwipes: [
+            for (final swipe in message.agentSwipes)
+              swipe.copyWith(
+                content: errors.sanitizeMessageErrors(swipe.content),
+              ),
+          ],
+          swipesMeta: [
+            for (final meta in message.swipesMeta)
+              {
+                ...meta,
+                if (meta['agentSwipes'] case final List stored)
+                  'agentSwipes': [
+                    for (final swipe in stored)
+                      if (swipe is Map && swipe['content'] is String)
+                        {
+                          ...swipe,
+                          'content': errors.sanitizeMessageErrors(
+                            swipe['content'] as String,
+                          ),
+                        }
+                      else
+                        swipe,
+                  ],
+              },
+          ],
+        ),
+    ],
+  );
 
   static ChatState? mergeOwnedStateUpdate({
     required ChatState? liveState,
@@ -298,21 +373,56 @@ class ImageGenProcessor {
     String messageId,
     int swipeId,
     int agentSwipeId,
-    String content,
-  ) {
-    return _ref
+    String content, {
+    required bool Function() ownsPublication,
+    required ImageGenErrorSanitizer errors,
+  }) async {
+    if (!ownsPublication()) return null;
+    final durable = await _ref
         .read(chatRepoProvider)
         .mutateMessage(
           sessionId: sessionId,
           messageId: messageId,
           updatedAt: currentTimestampSeconds(),
-          mutate: (message) => replaceImageContentAt(
-            message,
-            content,
-            swipeId: swipeId,
-            agentSwipeId: agentSwipeId,
-          ),
+          // This callback runs after the original repo's transaction/read
+          // queue. Guard here, not just before enqueueing the mutation.
+          mutate: (message) => !ownsPublication()
+              ? null
+              : replaceImageContentAt(
+                  message,
+                  errors.sanitizeMessageErrors(content),
+                  swipeId: swipeId,
+                  agentSwipeId: agentSwipeId,
+                ),
         );
+    // The transaction itself has awaited after mutate. Do not cache/publish an
+    // error that became private meanwhile, or invent a non-durable replacement.
+    return ownsPublication() &&
+            durable != null &&
+            _messageErrorsAreCurrent(durable, messageId, errors)
+        ? durable
+        : null;
+  }
+
+  bool _messageErrorsAreCurrent(
+    ChatSession session,
+    String messageId,
+    ImageGenErrorSanitizer errors,
+  ) {
+    final message = session.messages
+        .where((value) => value.id == messageId)
+        .firstOrNull;
+    if (message == null) return true;
+    final contents = [
+      message.content,
+      ...message.swipes,
+      ...message.agentSwipes.map((swipe) => swipe.content),
+      for (final meta in message.swipesMeta)
+        if (meta['agentSwipes'] case final List stored)
+          for (final swipe in stored.whereType<Map>())
+            if (swipe['content'] case final String content) content,
+    ];
+    return contents.every(errors.messageErrorsAreCurrent);
   }
 
   /// Rewrites the image blocks of the swipe the user is looking at.

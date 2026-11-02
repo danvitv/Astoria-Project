@@ -89,6 +89,7 @@ void main() {
             find.byType(SupportAssistantScreen),
           );
           expect(screen.initialTopic, topic.value);
+          expect(screen.returnToPreviousRoute, isFalse);
           expect(
             harness.workspace.topics,
             topic.value == null || topic.value!.isEmpty

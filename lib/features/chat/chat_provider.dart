@@ -34,6 +34,7 @@ import 'services/generation_pipeline.dart';
 import 'services/impersonation_service.dart';
 import 'state/chat_session_write_queue.dart';
 import 'state/chat_native_owner_registry.dart';
+import 'state/chat_native_session_title_port.dart';
 import 'state/generation_phase_provider.dart';
 import '../extensions/services/extension_post_gen_service.dart';
 
@@ -135,6 +136,16 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
         identical(_sessionBuildRetired, retired) &&
         !retired.isCompleted;
     _buildComplete = false;
+    bool titleOwnerCurrent() =>
+        current() &&
+        _buildComplete &&
+        !_sendInFlight &&
+        _sessionChangesInFlight == 0 &&
+        state.value != null &&
+        !state.value!.isGenerating &&
+        !state.value!.isGeneratingImage &&
+        !state.value!.isPostGenRunning &&
+        !state.value!.isSendPending;
     final nativeOwner = ChatNativeOwner(
       characterId: arg,
       sessionId: () =>
@@ -150,7 +161,12 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
           !state.value!.isPostGenRunning &&
           !state.value!.isSendPending,
       queue: _sessionWrites,
-      refresh: _refreshNativeLatest,
+      refresh: (id, publication, sourceCurrent) =>
+          _refreshNativeLatest(id, publication, current, sourceCurrent),
+      titles: ChatNativeSessionTitlePort(
+        buildRef.read(chatRepoProvider),
+        titleOwnerCurrent,
+      ),
     );
     buildRef.onDispose(
       buildRef.read(chatNativeOwnerRegistryProvider).register(nativeOwner),
@@ -303,8 +319,15 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
 
   /// Native repair refreshes only this SAME idle owner and latest durable row.
   /// It never writes a caller snapshot or creates/rebuilds a replacement chat.
-  Future<bool> _refreshNativeLatest(String sessionId, int publication) async {
+  Future<bool> _refreshNativeLatest(
+    String sessionId,
+    int publication,
+    bool Function() originalCurrent,
+    bool Function() sourceCurrent,
+  ) async {
     bool current() =>
+        originalCurrent() &&
+        sourceCurrent() &&
         ref.mounted &&
         _buildComplete &&
         !_sendInFlight &&

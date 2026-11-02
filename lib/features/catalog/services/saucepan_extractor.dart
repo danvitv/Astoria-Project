@@ -3,8 +3,13 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/credentials/credential_vault.dart';
+import '../../../core/credentials/saucepan_credential_owner.dart';
+import '../../../core/credentials/secret_redaction_coordinator.dart';
+import '../../../core/credentials/secret_redactor.dart';
+import '../../../core/state/credential_vault_provider.dart';
+import '../../../core/state/shared_prefs_provider.dart';
 import '../catalog_models.dart';
 
 /// Native (on-device) Saucepan (saucepan.ai) companion extraction — a Dart port
@@ -26,7 +31,6 @@ import '../catalog_models.dart';
 const String _saucepanBase = 'https://saucepan.ai';
 const String _saucepanUa =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
-const String _tokenPrefsKey = 'gz_saucepan_token';
 
 // ─── Fragment reassembly (verbatim port of Saucepan's client scheme) ─────────
 // 32-bit unsigned integer math throughout: `& 0xFFFFFFFF` emulates JS `>>> 0`
@@ -76,9 +80,10 @@ String assembleFragments(dynamic content) {
 
 /// Extracts the companion UUID from a `saucepan.ai/companion/<id>` URL.
 String? parseCompanionId(String url) {
-  final m = RegExp(r'saucepan\.ai/companion/([a-f0-9-]{8,64})',
-          caseSensitive: false)
-      .firstMatch(url);
+  final m = RegExp(
+    r'saucepan\.ai/companion/([a-f0-9-]{8,64})',
+    caseSensitive: false,
+  ).firstMatch(url);
   return m?.group(1);
 }
 
@@ -87,7 +92,7 @@ String? parseCompanionId(String url) {
 class SaucepanException implements Exception {
   final String message;
   final int status;
-  SaucepanException(this.message, {this.status = 0});
+  const SaucepanException(this.message, {this.status = 0});
   @override
   String toString() => message;
 }
@@ -96,125 +101,322 @@ class SaucepanException implements Exception {
 class SaucepanExtraction {
   final String companionId;
   final DownloadedCharacter character;
-  const SaucepanExtraction({required this.companionId, required this.character});
+  const SaucepanExtraction({
+    required this.companionId,
+    required this.character,
+  });
 }
 
-/// REST client for Saucepan: holds the bearer token (persisted in
-/// SharedPreferences), logs in, and extracts companions.
+/// Native REST consumer. Only secret-free account metadata is retained here;
+/// bearer tokens are ephemeral callback arguments from the Saucepan owner.
 class SaucepanExtractor {
-  SaucepanExtractor();
+  SaucepanExtractor({
+    SaucepanCredentialOwner? credentials,
+    SecretRedactionCoordinator? redaction,
+    Dio? dio,
+  }) : _credentials = credentials,
+       _redaction = redaction ?? SecretRedactionCoordinator(),
+       _dio =
+           dio ??
+           Dio(
+             BaseOptions(
+               connectTimeout: const Duration(seconds: 20),
+               receiveTimeout: const Duration(seconds: 20),
+               responseType: ResponseType.plain,
+               // Accept a 4xx without throwing so we can read the error body ourselves.
+               validateStatus: (_) => true,
+               // Never forward a bearer token or login body through an upstream redirect.
+               followRedirects: false,
+             ),
+           ) {
+    if (credentials != null && redaction == null) {
+      throw ArgumentError(
+        'Saucepan credentials require their redaction owner.',
+      );
+    }
+  }
 
-  final Dio _dio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 20),
-    receiveTimeout: const Duration(seconds: 20),
-    responseType: ResponseType.plain,
-    // Accept a 4xx without throwing so we can read the error body ourselves.
-    validateStatus: (_) => true,
-  ));
+  final SaucepanCredentialOwner? _credentials;
+  final SecretRedactionCoordinator _redaction;
+  final Dio _dio;
+  bool _disposed = false;
+  SaucepanCredentialAccount _account = const SaucepanCredentialAccount();
+  SaucepanCredentialAccount get account => _account;
+  bool get isLoggedIn => _account.authenticated;
+  SaucepanCredentialOwner get _owner =>
+      _credentials ?? (throw const SaucepanExceptionStorage());
 
-  String _token = '';
+  bool Function() captureAuthGuard() {
+    final current = _owner.captureAuthGuard();
+    return () => !_disposed && current();
+  }
 
-  bool get isLoggedIn => _token.trim().isNotEmpty;
+  void dispose() => _disposed = true;
 
-  Map<String, String> _headers({bool withAuth = false}) => {
-        'User-Agent': _saucepanUa,
-        'Accept': '*/*',
-        'Origin': _saucepanBase,
-        'Referer': '$_saucepanBase/',
-        'x-saucepan-client-version': '1',
-        if (withAuth && isLoggedIn) 'Authorization': 'Bearer $_token',
-      };
+  static void _check(bool Function() isCurrent) {
+    if (!isCurrent()) throw const CredentialVaultAdmissionDenied();
+  }
+
+  Map<String, String> _headers({String? token}) => {
+    'User-Agent': _saucepanUa,
+    'Accept': '*/*',
+    'Origin': _saucepanBase,
+    'Referer': '$_saucepanBase/',
+    'x-saucepan-client-version': '1',
+    if (token != null) 'Authorization': 'Bearer $token',
+  };
 
   /// Loads the persisted token (call once on boot / before use).
   Future<void> loadToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    _token = prefs.getString(_tokenPrefsKey) ?? '';
+    final current = captureAuthGuard();
+    final value = await _owner.load();
+    _check(current);
+    _account = value;
   }
 
   /// Sets and persists the bearer token directly (for users who paste one).
-  Future<void> setToken(String token) async {
-    _token = token.trim();
-    final prefs = await SharedPreferences.getInstance();
-    if (_token.isEmpty) {
-      await prefs.remove(_tokenPrefsKey);
-    } else {
-      await prefs.setString(_tokenPrefsKey, _token);
-    }
+  Future<void> setToken(
+    String token, {
+    void Function(SaucepanCredentialAccount)? onCommitted,
+  }) {
+    _redaction.registerSecret(token);
+    return _mutate(
+      (publish) => _owner.setToken(token, onCommitted: publish),
+      onCommitted,
+    );
   }
 
   /// Clears the stored session.
-  Future<void> logout() => setToken('');
+  Future<void> logout({
+    void Function(SaucepanCredentialAccount)? onCommitted,
+  }) => _mutate((publish) => _owner.logout(onCommitted: publish), onCommitted);
+
+  Future<void> _mutate(
+    Future<SaucepanCredentialAccount> Function(
+      void Function(SaucepanCredentialAccount) publish,
+    )
+    operation,
+    void Function(SaucepanCredentialAccount)? onCommitted,
+  ) async {
+    if (_disposed) throw const CredentialVaultAdmissionDenied();
+    final pending = operation((value) {
+      if (_disposed) throw const CredentialVaultAdmissionDenied();
+      _publish(value, onCommitted);
+    });
+    final current = captureAuthGuard();
+    final value = await pending;
+    _check(current);
+    _publish(value, onCommitted);
+  }
+
+  void _publish(
+    SaucepanCredentialAccount value,
+    void Function(SaucepanCredentialAccount)? onCommitted,
+  ) {
+    _account = value;
+    onCommitted?.call(value);
+    if (value.metadataUnavailable) {
+      throw SaucepanException(
+        'Saucepan authentication committed, but account metadata could not be saved.',
+      );
+    }
+  }
 
   /// Logs in with handle + password, storing the returned bearer token.
-  Future<void> login(String handle, String password) async {
-    final res = await _dio.post<String>(
-      '$_saucepanBase/api/v1/auth/sign_in_password',
-      data: jsonEncode({'handle': handle.trim(), 'password': password}),
-      options: Options(headers: {
-        ..._headers(),
-        'Content-Type': 'application/json',
-        'Referer': '$_saucepanBase/sign-in',
-      }),
+  Future<void> login(
+    String handle,
+    String password, {
+    void Function(SaucepanCredentialAccount)? onCommitted,
+  }) async {
+    _redaction.registerSecret(
+      password,
+    ); // Before admission, transport or errors.
+    final original = _redaction.redactor.withKnownSecrets([password]);
+    await _mutate(
+      (publish) => _owner.login(handle, (commit, ownerCurrent) async {
+        bool current() => !_disposed && ownerCurrent();
+        final res = await _request(
+          () => _dio.post<String>(
+            '$_saucepanBase/api/v1/auth/sign_in_password',
+            data: jsonEncode({'handle': handle.trim(), 'password': password}),
+            options: Options(
+              headers: {
+                ..._headers(),
+                'Content-Type': 'application/json',
+                'Referer': '$_saucepanBase/sign-in',
+              },
+              followRedirects: false,
+              responseType: ResponseType.plain,
+              validateStatus: (_) => true,
+            ),
+          ),
+          current,
+          registerReturnedToken: true,
+        );
+        final data = _tryJson(res.data);
+        if ((res.statusCode ?? 0) >= 300) {
+          throw _httpError(data, res.statusCode ?? 0, original);
+        }
+        final token = _returnedToken(data);
+        if (token == null || token.trim().isEmpty) {
+          throw SaucepanException('login succeeded but no token was returned');
+        }
+        _check(current);
+        await commit(token);
+        _check(current);
+      }, onCommitted: publish),
+      onCommitted,
     );
-    final data = _tryJson(res.data);
-    if ((res.statusCode ?? 0) >= 400) {
-      final msg = (data?['error'] is Map ? data!['error']['message'] : null)
-              ?.toString() ??
-          'Saucepan HTTP ${res.statusCode}';
-      throw SaucepanException(msg, status: res.statusCode ?? 0);
+  }
+
+  /// Errors deliberately carry no Dio request/response/headers/body/cause.
+  /// Partial-v2 response semantics prevent using catalogGet's all-or-throw API.
+  Future<Response<String>> _request(
+    Future<Response<String>> Function() send,
+    bool Function() isCurrent, {
+    bool registerReturnedToken = false,
+  }) async {
+    _check(isCurrent);
+    try {
+      final res = await send();
+      if (registerReturnedToken) {
+        final data = _tryJson(res.data);
+        for (final key in [
+          'token',
+          'access_token',
+          'session_token',
+          'sessionToken',
+        ]) {
+          final token = data?[key];
+          if (token is String) _redaction.registerSecret(token);
+        }
+      }
+      _check(isCurrent);
+      return res;
+    } on CredentialVaultAdmissionDenied {
+      rethrow;
+    } on DioException catch (error) {
+      _check(isCurrent);
+      throw SaucepanException(
+        'Saucepan request failed.',
+        status: error.response?.statusCode ?? 502,
+      );
+    } catch (_) {
+      _check(isCurrent);
+      throw SaucepanException('Saucepan request failed.', status: 502);
     }
-    final t = (data?['token'] ??
-            data?['access_token'] ??
-            data?['session_token'] ??
-            data?['sessionToken'])
-        ?.toString();
-    if (t == null || t.isEmpty) {
-      throw SaucepanException('login succeeded but no token was returned');
-    }
-    await setToken(t);
+  }
+
+  static String? _returnedToken(Map<String, dynamic>? data) {
+    final value =
+        data?['token'] ??
+        data?['access_token'] ??
+        data?['session_token'] ??
+        data?['sessionToken'];
+    return value is String ? value : null;
+  }
+
+  SaucepanException _httpError(
+    Map<String, dynamic>? data,
+    int status,
+    SecretRedactor original, {
+    int? publishedStatus,
+  }) {
+    final error = data?['error'];
+    final message = error is Map ? error['message'] : null;
+    final text = message is String ? message : 'Saucepan HTTP $status';
+    return SaucepanException(
+      _redaction.redactor.redactText(original.redactText(text)),
+      status: publishedStatus ?? status,
+    );
   }
 
   Future<({int status, Map<String, dynamic>? data})> _getJson(
     String path, {
-    bool withAuth = false,
+    required String token,
+    required bool Function() isCurrent,
   }) async {
-    final res = await _dio.get<String>(
-      '$_saucepanBase$path',
-      options: Options(headers: _headers(withAuth: withAuth)),
+    final res = await _request(
+      () => _dio.get<String>(
+        '$_saucepanBase$path',
+        options: Options(
+          headers: _headers(token: token),
+          followRedirects: false,
+          responseType: ResponseType.plain,
+          validateStatus: (_) => true,
+        ),
+      ),
+      isCurrent,
     );
+    _check(isCurrent);
     return (status: res.statusCode ?? 0, data: _tryJson(res.data));
   }
 
   /// Fetches a Saucepan companion by URL and builds a [DownloadedCharacter].
   /// Requires a stored token (definition + scenarios are auth-gated).
   Future<SaucepanExtraction> extractCompanion(String url) async {
-    // The extractor may be used before its async token-load finished (fresh app
-    // start); pull the persisted token in before deciding we're logged out.
-    if (_token.isEmpty) await loadToken();
-    if (!isLoggedIn) {
-      throw SaucepanException('No Saucepan token configured — log in first.',
-          status: 401);
+    final operationCurrent = captureAuthGuard();
+    // Carry only a safe typed failure outside the vault callback, whose generic
+    // consumer-error wrapper intentionally must not retain arbitrary exceptions.
+    SaucepanException? failure;
+    SaucepanExtraction? extraction;
+    try {
+      await _owner.withToken((token, ownerCurrent) async {
+        bool current() => operationCurrent() && ownerCurrent();
+        try {
+          extraction = await _extractWithToken(url, token, current);
+          _check(current);
+        } on SaucepanException catch (error) {
+          failure = error;
+        }
+      });
+    } on CredentialVaultException catch (error) {
+      _check(operationCurrent);
+      if (error.failure == CredentialVaultFailure.missing) {
+        throw SaucepanException(
+          'No Saucepan token configured — log in first.',
+          status: 401,
+        );
+      }
+      throw const SaucepanExceptionStorage();
     }
+    _check(operationCurrent);
+    if (failure != null) throw failure!;
+    return extraction!;
+  }
+
+  Future<SaucepanExtraction> _extractWithToken(
+    String url,
+    String token,
+    bool Function() isCurrent,
+  ) async {
+    final original = _redaction.redactor.withKnownSecrets([token]);
+    _check(isCurrent);
     final companionId = parseCompanionId(url);
     if (companionId == null) {
       throw SaucepanException('Not a Saucepan companion URL.', status: 400);
     }
 
-    final results = await Future.wait([
-      _getJson('/api/v1/companion/definition?companion_id=$companionId',
-          withAuth: true),
-      _getJson('/api/v2/companions/$companionId', withAuth: true),
-    ]);
-    final defRes = results[0];
-    final compRes = results[1];
+    final defRes = await _getJson(
+      '/api/v1/companion/definition?companion_id=$companionId',
+      token: token,
+      isCurrent: isCurrent,
+    );
+    _check(isCurrent);
+    final compRes = await _getJson(
+      '/api/v2/companions/$companionId',
+      token: token,
+      isCurrent: isCurrent,
+    );
+    _check(isCurrent);
 
-    if (defRes.status >= 400 || defRes.data == null) {
-      final msg = (defRes.data?['error'] is Map
-                  ? defRes.data!['error']['message']
-                  : null)
-              ?.toString() ??
-          'Saucepan HTTP ${defRes.status}';
-      throw SaucepanException(msg, status: defRes.status == 401 ? 401 : 502);
+    if (defRes.status >= 300 || defRes.data == null) {
+      throw _httpError(
+        defRes.data,
+        defRes.status,
+        original,
+        publishedStatus: defRes.status == 401 ? 401 : 502,
+      );
     }
 
     // Named prose sections from the definition endpoint.
@@ -230,9 +432,15 @@ class SaucepanExtractor {
 
     final companion = compRes.data?['companion'];
     final comp = companion is Map ? companion : const <String, dynamic>{};
-    if (compRes.status >= 400 || companion is! Map) {
-      debugPrint('[saucepan] greetings/metadata unavailable '
-          '(companions/$companionId HTTP ${compRes.status})');
+    if (compRes.status >= 300 || companion is! Map) {
+      debugPrint(
+        _redaction.redactor.redactText(
+          original.redactText(
+            '[saucepan] greetings/metadata unavailable '
+            '(companions/$companionId HTTP ${compRes.status})',
+          ),
+        ),
+      );
     }
 
     // Body: prefer the definition's "Companion Core", fall back to the v2 body.
@@ -246,8 +454,7 @@ class SaucepanExtractor {
     final scenarios = comp['starting_scenarios_fragments'];
     if (scenarios is List) {
       for (final sc in scenarios) {
-        final text =
-            sc is Map ? assembleFragments(sc['message']) : '';
+        final text = sc is Map ? assembleFragments(sc['message']) : '';
         if (text.trim().isNotEmpty) greetings.add(text);
       }
     }
@@ -262,7 +469,8 @@ class SaucepanExtractor {
     }
     if ((sections['Response Formatting Instructions'] ?? '').isNotEmpty) {
       notesParts.add(
-          '--- Response Formatting ---\n${sections['Response Formatting Instructions']}');
+        '--- Response Formatting ---\n${sections['Response Formatting Instructions']}',
+      );
     }
 
     final imageId = comp['image'] is Map ? comp['image']['id'] : null;
@@ -275,8 +483,9 @@ class SaucepanExtractor {
         name: (comp['display_name'] ?? comp['name'] ?? 'Unknown').toString(),
         description: description,
         firstMes: greetings.isNotEmpty ? greetings.first : '',
-        alternateGreetings:
-            greetings.length > 1 ? greetings.sublist(1) : const [],
+        alternateGreetings: greetings.length > 1
+            ? greetings.sublist(1)
+            : const [],
         mesExample: sections['Example Dialogue'] ?? '',
         creatorNotes: notesParts.join('\n\n'),
         tags: comp['tags'] is List
@@ -286,6 +495,7 @@ class SaucepanExtractor {
       avatarUrl: avatarUrl,
     );
 
+    _check(isCurrent);
     return SaucepanExtraction(companionId: companionId, character: character);
   }
 
@@ -300,10 +510,30 @@ class SaucepanExtractor {
   }
 }
 
-/// Singleton-ish provider for the Saucepan extractor (holds the loaded token).
+/// Fixed safe unavailable error: no original storage exception is retained.
+final class SaucepanExceptionStorage extends SaucepanException {
+  const SaucepanExceptionStorage()
+    : super('Saucepan credentials are unavailable.', status: 503);
+}
+
+final saucepanCredentialOwnerProvider = Provider<SaucepanCredentialOwner>((
+  ref,
+) {
+  final owner = SaucepanCredentialOwner(
+    vault: ref.watch(credentialVaultProvider),
+    redaction: ref.watch(secretRedactionCoordinatorProvider),
+    originalPreferences: ref.watch(sharedPreferencesProvider.future),
+  );
+  ref.onDispose(owner.dispose);
+  return owner;
+});
+
+/// Native composition: pure reassembly/URL helpers never acquire platform stores.
 final saucepanExtractorProvider = Provider<SaucepanExtractor>((ref) {
-  final extractor = SaucepanExtractor();
-  // Best-effort token load; callers can await [SaucepanExtractor.loadToken] too.
-  extractor.loadToken();
+  final extractor = SaucepanExtractor(
+    credentials: ref.watch(saucepanCredentialOwnerProvider),
+    redaction: ref.watch(secretRedactionCoordinatorProvider),
+  );
+  ref.onDispose(extractor.dispose);
   return extractor;
 });

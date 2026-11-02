@@ -216,4 +216,49 @@ void main() {
       expect(storage.values, isEmpty);
     },
   );
+
+  test(
+    'guarded import verifies an already-invoked write after revocation',
+    () async {
+      final entered = Completer<void>(), release = Completer<void>();
+      var current = true, checks = 0;
+      storage.beforeWrite = () async {
+        entered.complete();
+        await release.future;
+      };
+      final importing = vault.importIfAbsentGuarded(
+        slot,
+        synthetic,
+        isCurrent: () {
+          checks++;
+          return current;
+        },
+      );
+      await entered.future;
+      current = false;
+      release.complete();
+      final committed = await importing;
+      expect(committed.configured, true);
+      expect(checks, 2);
+      expect(storage.operations, ['read', 'write', 'read']);
+      expect(storage.values.values.single, synthetic);
+    },
+  );
+
+  test(
+    'throwing import admission is sanitized and preserves slot FIFO',
+    () async {
+      await expectLater(
+        vault.importIfAbsentGuarded(
+          slot,
+          synthetic,
+          isCurrent: () => throw StateError(synthetic),
+        ),
+        throwsA(isA<CredentialVaultAdmissionDenied>()),
+      );
+      expect(storage.operations, isEmpty);
+      await vault.store(slot, synthetic);
+      expect(storage.values.values.single, synthetic);
+    },
+  );
 }
