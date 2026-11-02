@@ -38,12 +38,14 @@ class ReconciliationStaging implements ReconciliationStateSource {
       source.schemaVersion,
       temporaryRoot: temporaryRoot,
     );
-    final files = <ReconciliationSection, RandomAccessFile>{};
+    final files = <ReconciliationSection, _BufferedStagingFile>{};
     var stagedBytes = 0;
     var rows = 0;
     try {
       for (final section in ReconciliationSection.values) {
-        files[section] = await staging.file(section).open(mode: FileMode.write);
+        files[section] = _BufferedStagingFile(
+          await staging.file(section).open(mode: FileMode.write),
+        );
         staging.counts[section] = 0;
       }
       staging.fingerprint = await ReconciliationJsonCodec.fingerprint(
@@ -59,11 +61,13 @@ class ReconciliationStaging implements ReconciliationStateSource {
               staging.counts[section]! >= ReconciliationJsonCodec.maxRunRows) {
             throw const FormatException('Too many reconciliation runs');
           }
-          await files[section]!.writeFrom(bytes);
-          await files[section]!.writeByte(10);
+          await files[section]!.writeRow(bytes);
           staging.counts[section] = staging.counts[section]! + 1;
         },
       );
+      for (final file in files.values) {
+        await file.flush();
+      }
       return staging;
     } catch (_) {
       for (final file in files.values) {
@@ -125,4 +129,32 @@ class ReconciliationStaging implements ReconciliationStateSource {
   }
 
   Future<void> dispose() => directory.delete(recursive: true);
+}
+
+/// Batch small rows instead of issuing two native file writes per record.
+/// Large records bypass the buffer; each section buffers at most 64 KiB.
+class _BufferedStagingFile {
+  _BufferedStagingFile(this.file);
+
+  static const _bufferBytes = 64 * 1024;
+  final RandomAccessFile file;
+  final _pending = BytesBuilder(copy: false);
+
+  Future<void> writeRow(List<int> bytes) async {
+    if (bytes.length >= _bufferBytes) {
+      await flush();
+      await file.writeFrom(bytes);
+      await file.writeByte(10);
+      return;
+    }
+    if (_pending.length + bytes.length + 1 > _bufferBytes) await flush();
+    _pending.add(bytes);
+    _pending.add(const [10]);
+  }
+
+  Future<void> flush() async {
+    if (_pending.isNotEmpty) await file.writeFrom(_pending.takeBytes());
+  }
+
+  Future<void> close() => file.close();
 }

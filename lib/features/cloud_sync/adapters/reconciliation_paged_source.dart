@@ -93,7 +93,9 @@ final class _ReconciliationDatabaseSource implements ReconciliationStateSource {
           'Reconciliation metadata exceeds row budget',
         );
       }
-      ReconciliationJsonCodec.encodeRow(row);
+      // Export encoding/fingerprinting and local metadata preflight enforce the
+      // exact encoded record budget. Do not serialize their rows a second time.
+      // Effects retain their own pre-decode budget check below.
       yield row;
     }
   }
@@ -110,7 +112,7 @@ final class _ReconciliationDatabaseSource implements ReconciliationStateSource {
       final encoded = effect.toJson();
       // Check the record budget before decoding its potentially huge states.
       ReconciliationJsonCodec.encodeRow(encoded);
-      if (await repo.validateEffect(run) is ReconciliationEffectValid) {
+      if (repo.validateEffectRow(run, effect) is ReconciliationEffectValid) {
         yield encoded;
       }
     }

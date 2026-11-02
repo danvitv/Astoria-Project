@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart' hide isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:glaze_flutter/core/application/sync_reconciliation_source.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/card_evolution_collector_run_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/card_evolution_observation_repo.dart';
@@ -10,6 +11,7 @@ import 'package:glaze_flutter/core/db/repositories/ledger_reconciliation_run_rep
 import 'package:glaze_flutter/core/models/card_evolution_observation.dart';
 import 'package:glaze_flutter/core/utils/cast_helpers.dart';
 import 'package:glaze_flutter/features/cloud_sync/adapters/ext_blocks_sync_stores.dart';
+import 'package:glaze_flutter/features/cloud_sync/services/sync_serialization.dart';
 
 void main() {
   late AppDatabase sourceDb;
@@ -71,6 +73,218 @@ void main() {
       isA<ReconciliationEffectValid>(),
     );
   });
+
+  test(
+    'paged export reads each effect once and preserves exact integrity',
+    () async {
+      final runs = await _appendChain(sourceDb, 2);
+      final repo = LedgerReconciliationRunRepo(sourceDb);
+      final before = await repo.captureState('session');
+      const after = ReconciliationStateSnapshot(
+        ledgerJson: '[{"name":"trust","value":{"a":1,"z":"猫😀"}}]',
+        knowledgeJson: '[{"id":"fact","text":"A \\"quoted\\" fact."}]',
+      );
+      for (final run in runs) {
+        await repo.recordEffect(
+          runId: run.id,
+          sessionId: 'session',
+          before: before,
+          after: after,
+          createdAt: run.createdAt,
+        );
+      }
+      await sourceDb.customStatement(
+        'DROP TRIGGER ledger_reconciliation_effects_no_update',
+      );
+      await sourceDb.customStatement(
+        'UPDATE ledger_reconciliation_effects SET after_state_hash = ? '
+        'WHERE run_id = ?',
+        ['tampered', runs.last.id],
+      );
+      final legacy = (await sourceStore.getBySessionId('session'))!;
+      expect(legacy['effects'], hasLength(1));
+      final probe = _EffectReadProbe();
+
+      final fingerprint = (await sourceDb.runWithInterceptor(
+        () => sourceStore.fingerprintBySessionId('session'),
+        interceptor: probe,
+      ))!;
+
+      expect(probe.effectReads, runs.length);
+      expect(probe.transactions, 1);
+      expect(fingerprint.hash, SyncSerialization.computeSyncHash(legacy));
+      expect(fingerprint.jsonBytes, utf8.encode(jsonEncode(legacy)).length);
+    },
+  );
+
+  test(
+    'already-read effect validation preserves all failure reasons',
+    () async {
+      final run = (await _appendChain(sourceDb, 1)).single;
+      final stored = await _storedRun(sourceDb, run.id);
+      final repo = LedgerReconciliationRunRepo(sourceDb);
+      final state = await repo.captureState('session');
+      expect(
+        await repo.validateEffect(stored),
+        isA<ReconciliationEffectInvalid>().having(
+          (validation) => validation.reason,
+          'reason',
+          'exact effect is unavailable',
+        ),
+      );
+      await repo.recordEffect(
+        runId: run.id,
+        sessionId: 'session',
+        before: state,
+        after: state,
+        createdAt: 1,
+      );
+      final effect = (await repo.readEffect(run.id))!;
+      final probe = _EffectReadProbe();
+      final validation = await sourceDb.runWithInterceptor(
+        () async => repo.validateEffectRow(stored, effect),
+        interceptor: probe,
+      );
+      expect(probe.effectReads, 0);
+      expect(validation, isA<ReconciliationEffectValid>());
+      final valid = validation as ReconciliationEffectValid;
+      expect(valid.before.ledgerJson, state.ledgerJson);
+      expect(valid.after.knowledgeJson, state.knowledgeJson);
+
+      final cases = <(Map<String, dynamic>?, String)>[
+        (null, 'exact effect is unavailable'),
+        (
+          {'runId': 'another-run'},
+          'effect does not belong to the reconciliation run',
+        ),
+        (
+          {'sessionId': 'another-session'},
+          'effect does not belong to the reconciliation run',
+        ),
+        ({'beforeLedgerJson': '{}'}, 'effect contains malformed state'),
+        ({'beforeKnowledgeJson': '[1]'}, 'effect contains malformed state'),
+        (
+          {'afterLedgerJson': '[ {"name":"trust"} ]'},
+          'effect contains malformed state',
+        ),
+        (
+          {'afterKnowledgeJson': 'invalid JSON'},
+          'effect contains malformed state',
+        ),
+        (
+          {'beforeStateHash': 'tampered'},
+          'effect integrity hashes do not match its state',
+        ),
+        (
+          {'afterStateHash': 'tampered'},
+          'effect integrity hashes do not match its state',
+        ),
+        (
+          {'actualEffectsJson': '{}'},
+          'effect integrity hashes do not match its state',
+        ),
+        (
+          {'effectsHash': 'tampered'},
+          'effect integrity hashes do not match its state',
+        ),
+      ];
+      for (final (changes, reason) in cases) {
+        final candidate = changes == null
+            ? null
+            : LedgerReconciliationEffectRow.fromJson({
+                ...effect.toJson(),
+                ...changes,
+              });
+        expect(
+          repo.validateEffectRow(stored, candidate),
+          isA<ReconciliationEffectInvalid>().having(
+            (validation) => validation.reason,
+            'reason',
+            reason,
+          ),
+          reason: '$changes',
+        );
+      }
+      final publicProbe = _EffectReadProbe();
+      expect(
+        await sourceDb.runWithInterceptor(
+          () => repo.validateEffect(stored),
+          interceptor: publicProbe,
+        ),
+        isA<ReconciliationEffectValid>(),
+      );
+      expect(publicProbe.effectReads, 1);
+    },
+  );
+
+  test('paged export still rejects oversized run records', () async {
+    final run = (await _appendChain(sourceDb, 1)).single;
+    final stored = await _storedRun(sourceDb, run.id);
+    await targetDb
+        .into(targetDb.ledgerReconciliationSuccessfulRuns)
+        .insert(
+          LedgerReconciliationSuccessfulRunRow.fromJson({
+            ...stored.toJson(),
+            'canonicalResultJson': jsonEncode({
+              'facts': ['x' * ReconciliationJsonCodec.maxRecordBytes],
+            }),
+          }),
+        );
+
+    final oversized = throwsA(
+      isA<FormatException>().having(
+        (error) => error.message,
+        'message',
+        'Reconciliation record exceeds memory budget',
+      ),
+    );
+    await expectLater(targetStore.fingerprintBySessionId('session'), oversized);
+    // Reading only effects must still bound its input run before validation,
+    // even when the run has no effect to export.
+    await expectLater(
+      targetStore.withExportSnapshot(
+        'session',
+        (source) =>
+            source.readSection(ReconciliationSection.effects).drain<void>(),
+      ),
+      oversized,
+    );
+  });
+
+  test(
+    'oversized corrupt effects fail the budget before state decoding',
+    () async {
+      final run = (await _appendChain(sourceDb, 1)).single;
+      await sourceDb
+          .into(sourceDb.ledgerReconciliationEffects)
+          .insert(
+            LedgerReconciliationEffectsCompanion.insert(
+              runId: run.id,
+              sessionId: 'session',
+              beforeLedgerJson: 'x' * ReconciliationJsonCodec.maxRecordBytes,
+              afterLedgerJson: '[]',
+              beforeKnowledgeJson: '[]',
+              afterKnowledgeJson: '[]',
+              actualEffectsJson: '{}',
+              beforeStateHash: 'invalid',
+              afterStateHash: 'invalid',
+              effectsHash: 'invalid',
+              createdAt: 1,
+            ),
+          );
+
+      await expectLater(
+        sourceStore.fingerprintBySessionId('session'),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            'Reconciliation record exceeds memory budget',
+          ),
+        ),
+      );
+    },
+  );
 
   test('accepts legacy payload v1 without exact effects', () async {
     await _appendChain(sourceDb, 1);
@@ -1057,6 +1271,27 @@ void main() {
       expect(collectors.single.ownerId, 'cloud-sync');
     },
   );
+}
+
+final class _EffectReadProbe extends QueryInterceptor {
+  int effectReads = 0;
+  int transactions = 0;
+
+  @override
+  TransactionExecutor beginTransaction(QueryExecutor parent) {
+    transactions++;
+    return parent.beginTransaction();
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) {
+    if (statement.contains('ledger_reconciliation_effects')) effectReads++;
+    return super.runSelect(executor, statement, args);
+  }
 }
 
 Future<void> _seedSession(AppDatabase db) => db.customStatement(

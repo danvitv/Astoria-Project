@@ -13,7 +13,11 @@ import 'sync_payload_transport.dart';
 /// Pages are independent gzip streams of section NDJSON. A record may span
 /// pages, so the per-file/page budgets do not cap the size of the entire journal.
 class ReconciliationPageTransport {
-  const ReconciliationPageTransport({this.temporaryRoot, this.checkActive});
+  const ReconciliationPageTransport({
+    this.temporaryRoot,
+    this.checkActive,
+    this.onProgress,
+  });
 
   static const pageBytes = 512 * 1024;
   static const _maxCompressedBytes = pageBytes + 8192;
@@ -22,6 +26,7 @@ class ReconciliationPageTransport {
   static final _hashPattern = RegExp(r'^[a-f0-9]{64}$');
   final Directory? temporaryRoot;
   final void Function()? checkActive;
+  final void Function(String)? onProgress;
 
   Future<void> upload(
     CloudAdapter adapter,
@@ -29,6 +34,7 @@ class ReconciliationPageTransport {
     SyncPagedReconciliationStateStore store,
   ) async {
     checkActive?.call();
+    onProgress?.call('Preparing ${entry.key}');
     final staging = await store.withExportSnapshot(
       entry.id,
       (source) => ReconciliationStaging.capture(
@@ -51,6 +57,7 @@ class ReconciliationPageTransport {
           bytes.add(chunk);
         }
         checkActive?.call();
+        onProgress?.call('Pushing ${entry.key}');
         await adapter.upload(entry.path, utf8.decode(bytes.takeBytes()));
         return;
       }
@@ -58,8 +65,16 @@ class ReconciliationPageTransport {
       checkActive?.call();
       final existing = await _publishedPageNames(adapter, entry);
       checkActive?.call();
+      var totalPages = 0;
+      for (final section in ReconciliationSection.values) {
+        final length = await staging.file(section).length();
+        checkActive?.call();
+        totalPages += (length + pageBytes - 1) ~/ pageBytes;
+      }
+      onProgress?.call('Pushing ${entry.key}: pages 0/$totalPages');
       final sections = <Map<String, dynamic>>[];
       var pageCount = 0;
+      var uploadedPages = 0;
       for (final section in ReconciliationSection.values) {
         final pages = <Map<String, dynamic>>[];
         await for (final page in _pages(staging.file(section))) {
@@ -84,12 +99,17 @@ class ReconciliationPageTransport {
               base64Encode(compressed),
             );
             checkActive?.call();
+            uploadedPages++;
           }
           pages.add({
             'hash': hash,
             'bytes': page.length,
             'compressedBytes': compressed.length,
           });
+          onProgress?.call(
+            'Pushing ${entry.key}: pages $pageCount/$totalPages '
+            '($uploadedPages uploaded)',
+          );
         }
         sections.add({
           'name': section.name,
@@ -113,6 +133,7 @@ class ReconciliationPageTransport {
       }
       // All immutable pages exist first; never remove pages an old reader needs.
       checkActive?.call();
+      onProgress?.call('Publishing ${entry.key} index');
       await adapter.upload(entry.path, root);
     } finally {
       await staging.dispose();

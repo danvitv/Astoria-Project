@@ -43,10 +43,21 @@ ordering. A consistent DB snapshot is held only while fingerprinting or writing
 private local staging, never during cloud requests. An export whose fingerprint
 changed since manifest building cannot publish under the older manifest hash.
 
+Local export validates each effect from the same row it exports, without a
+second effect query. The downstream codec still enforces exact record/metadata
+budgets; redundant outer row encoding is omitted. Private NDJSON staging batches
+small rows in at most 64 KiB per section (nine sections), while large rows bypass
+those buffers. All pending tails flush before the snapshot becomes usable.
+
 NDJSON section streams are divided into independent gzip pages. Existing
 content-addressed pages are reused, so unchanged immutable history is not
 re-uploaded on every sync. All pages are uploaded before the small root index;
 the overall sync manifest follows successful tasks as before.
+
+Progress counts completed entity tasks, not tasks started or retry attempts.
+Journal pushes distinguish local preparation, completed pages (and actual page
+uploads), and root publication. Overall manifest publication has its own phase
+label; a full entity counter does not mean that final publication has finished.
 
 On pull, the reader validates all descriptors before any page request, downloads
 and decompresses one bounded page at a time to private temporary files, then

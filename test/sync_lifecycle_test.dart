@@ -789,6 +789,7 @@ class SyncWorld {
 
   SyncWorld({
     Directory? imageDirectory,
+    FakeCloudAdapter? cloudAdapter,
     FakeReconciliationStateStore? reconciliationStateStore,
     FakeRewriteJobHistoryStore? rewriteJobHistoryStore,
     FakeSessionLorebookOverlayStore? sessionLorebookOverlayStore,
@@ -803,7 +804,7 @@ class SyncWorld {
     lorebooks = FakeLorebookStore();
     embeddings = FakeEmbeddingStore();
     images = FakeImageStore(imageDirectory);
-    cloud = FakeCloudAdapter();
+    cloud = cloudAdapter ?? FakeCloudAdapter();
     uiThemes = FakeThemePresetStore();
     studioConfigs = FakeStudioConfigStore();
     studioPresets = FakeStudioPresetStore();
@@ -2918,9 +2919,11 @@ void main() {
       final itemProgress = progressList.where(
         (p) => p.message?.contains('c2') ?? false,
       );
-      expect(itemProgress.length, 1);
-      expect(itemProgress.first.current, equals(1));
+      expect(itemProgress.length, 2);
+      expect(itemProgress.first.current, equals(0));
       expect(itemProgress.first.total, equals(1));
+      expect(itemProgress.last.current, equals(1));
+      expect(itemProgress.last.total, equals(1));
     },
   );
 

@@ -969,8 +969,15 @@ class LedgerReconciliationRunRepo {
 
   Future<ReconciliationEffectValidation> validateEffect(
     LedgerReconciliationSuccessfulRunRow run,
-  ) async {
-    final effect = await readEffect(run.id);
+  ) async => validateEffectRow(run, await readEffect(run.id));
+
+  /// Validates an already-read effect without another database query. Callers
+  /// reading for export must keep the run and effect in the same snapshot and
+  /// enforce the record budget before decoding the stored states here.
+  ReconciliationEffectValidation validateEffectRow(
+    LedgerReconciliationSuccessfulRunRow run,
+    LedgerReconciliationEffectRow? effect,
+  ) {
     if (effect == null) {
       return const ReconciliationEffectInvalid('exact effect is unavailable');
     }

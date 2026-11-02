@@ -395,7 +395,6 @@ class SyncEngine {
       if (entry.deleted) {
         if (cloudEntry != null && !cloudEntry.deleted) {
           tasks.add(() async {
-            processed++;
             onProgress(
               SyncProgress(
                 current: processed,
@@ -404,6 +403,15 @@ class SyncEngine {
               ),
             );
             await SyncSerialization.deleteCloudFileIfExists(_adapter, entry);
+            _checkCurrent();
+            processed++;
+            onProgress(
+              SyncProgress(
+                current: processed,
+                total: tasks.length,
+                message: 'Deleted ${entry.key}',
+              ),
+            );
           });
         }
         continue;
@@ -443,7 +451,6 @@ class SyncEngine {
       }
 
       tasks.add(() async {
-        processed++;
         onProgress(
           SyncProgress(
             current: processed,
@@ -461,9 +468,27 @@ class SyncEngine {
           }
           await _adapter.upload(entry.path, payload);
         } else {
-          await _pushEntry(entry);
+          await _pushEntry(
+            entry,
+            onProgress: (message) => onProgress(
+              SyncProgress(
+                current: processed,
+                total: tasks.length,
+                message: message,
+              ),
+            ),
+          );
         }
+        _checkCurrent();
         if (entry.type == 'api_presets') apiPayloadUploaded = true;
+        processed++;
+        onProgress(
+          SyncProgress(
+            current: processed,
+            total: tasks.length,
+            message: 'Pushed ${entry.key}',
+          ),
+        );
       });
     }
 
@@ -555,6 +580,13 @@ class SyncEngine {
     );
     final manifestJson = jsonEncode(
       updatedManifest.toJson(includeLocalState: false),
+    );
+    onProgress(
+      SyncProgress(
+        current: processed,
+        total: tasks.length,
+        message: 'Publishing sync manifest...',
+      ),
     );
     await _adapter.upload(cloudPath('manifest', 'manifest'), manifestJson);
     await _unorderedBridge.verifyAnchors(localManifest);
@@ -946,7 +978,6 @@ class SyncEngine {
         for (final entry in entries) {
           tasks.add(() async {
             _checkCurrent();
-            processed++;
             onProgress(
               SyncProgress(
                 current: processed,
@@ -989,6 +1020,15 @@ class SyncEngine {
               _checkCurrent();
               appliedEntries.add(entry);
             }
+            _checkCurrent();
+            processed++;
+            onProgress(
+              SyncProgress(
+                current: processed,
+                total: pullEntries.length,
+                message: 'Pulled ${entry.key}',
+              ),
+            );
           });
         }
         if (tasks.isEmpty) return const [];
@@ -1383,7 +1423,10 @@ class SyncEngine {
     } catch (_) {}
   }
 
-  Future<void> _pushEntry(SyncManifestEntry entry) async {
+  Future<void> _pushEntry(
+    SyncManifestEntry entry, {
+    void Function(String)? onProgress,
+  }) async {
     final checkActive = _captureActiveGuard();
     checkActive();
     final reconciliation = _reconciliationStateStore;
@@ -1391,6 +1434,7 @@ class SyncEngine {
         reconciliation is SyncPagedReconciliationStateStore) {
       await ReconciliationPageTransport(
         checkActive: checkActive,
+        onProgress: onProgress,
       ).upload(_adapter, entry, reconciliation);
       return;
     }

@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/application/sync_reconciliation_source.dart';
 import 'package:glaze_flutter/features/cloud_sync/services/reconciliation_page_transport.dart';
+import 'package:glaze_flutter/features/cloud_sync/services/sync_engine.dart';
 import 'package:glaze_flutter/features/cloud_sync/services/sync_serialization.dart';
 import 'package:glaze_flutter/features/cloud_sync/services/sync_queue.dart';
 import 'package:glaze_flutter/features/cloud_sync/sync_models.dart';
@@ -213,13 +214,28 @@ void main() {
   );
 
   test('existing immutable pages are not re-uploaded', () async {
+    final progress = <String>[];
+    transport = ReconciliationPageTransport(
+      temporaryRoot: temporaryRoot,
+      onProgress: progress.add,
+    );
     final source = _Source(100, 'proof ' * 1024);
     final entry = await _entry(source);
     await transport.upload(cloud, entry, _Store(source));
     final uploaded = cloud.uploadedPages;
+    expect(progress.first, 'Preparing ${entry.key}');
+    expect(progress.last, 'Publishing ${entry.key} index');
+    progress.clear();
     await transport.upload(cloud, entry, _Store(source));
     expect(cloud.uploadedPages, uploaded);
     expect(cloud.writes.last, entry.path);
+    final pages = progress.where((message) => message.contains(': pages '));
+    expect(pages, isNotEmpty);
+    expect(pages.first, contains('pages 0/'));
+    expect(
+      pages.skip(1).every((message) => message.endsWith('(0 uploaded)')),
+      isTrue,
+    );
   });
 
   test('interrupted replacement keeps the previous index readable', () async {
@@ -385,7 +401,21 @@ void main() {
       final senderStore = _Store(source);
       final sender = fixtures.SyncWorld(reconciliationStateStore: senderStore);
       await sender.chats.put(fixtures.makeChat(_session));
-      await sender.engine.pushEntities(onProgress: (_) {});
+      final progress = <SyncProgress>[];
+      await sender.engine.pushEntities(onProgress: progress.add);
+      final pageProgress = progress.where(
+        (event) => event.message?.contains(': pages ') ?? false,
+      );
+      expect(pageProgress, isNotEmpty);
+      expect(
+        pageProgress.every((event) => event.current < event.total),
+        isTrue,
+      );
+      final publishing = progress.singleWhere(
+        (event) =>
+            event.message == 'Publishing reconciliation_state:$_session index',
+      );
+      expect(publishing.current, lessThan(publishing.total));
       final entry = (await sender.manifestProvider.readLocalManifest())
           .entries[entryKey('reconciliation_state', _session)]!;
       expect(
