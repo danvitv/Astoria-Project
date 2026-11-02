@@ -11,6 +11,7 @@ import '../../../core/models/memory_book_api_settings.dart';
 import '../../../core/state/active_selection_provider.dart';
 import '../../../core/state/character_provider.dart';
 import '../../../core/state/db_provider.dart';
+import '../../../core/state/memory_custom_api_credentials_provider.dart';
 import '../../../core/state/summary_providers.dart';
 import '../../settings/api_list_provider.dart';
 
@@ -45,7 +46,21 @@ class SummaryGenerationService {
     CancelToken? cancelToken,
   }) async {
     final slot = _ref.read(pipelineSettingsProvider).memoryBookApi;
+    // Capture the original settings/ref custody before the first async read.
+    // The public slot is deliberately keyless; it is not an auth source.
+    final originalCustom = slot.generationSource == 'custom'
+        ? _ref
+              .read(memoryCustomApiCredentialOwnerProvider)
+              .capture(
+                slot,
+                isCurrent: () =>
+                    _ref.mounted && cancelToken?.isCancelled != true,
+              )
+        : null;
+    final originalRedactor = originalCustom?.captureRedactor();
+    originalCustom?.requireCurrent();
     final apiConfig = await _resolveConfig(slot);
+    originalCustom?.requireCurrent();
     if (apiConfig == null || apiConfig.mode == 'embedding') {
       throw Exception(
         'No chat API config found. Add one in API Settings first.',
@@ -54,9 +69,11 @@ class SummaryGenerationService {
 
     final service = _ref.read(summaryServiceProvider);
     final template = await service.getSummaryPrompt(session.id);
+    originalCustom?.requireCurrent();
 
     final gameTime = await _readGameTime(session.id);
-    return service.generateSummary(
+    originalCustom?.requireCurrent();
+    final result = await service.generateSummary(
       sessionId: session.id,
       history: session.messages,
       apiConfig: apiConfig,
@@ -70,7 +87,13 @@ class SummaryGenerationService {
         gameTime: gameTime,
       ),
       cancelToken: cancelToken,
+      memoryCustomApi: originalCustom,
+      originalCustomRedactor: originalRedactor,
     );
+    originalCustom?.requireCurrent();
+    return originalCustom == null
+        ? result
+        : originalCustom.redact(result, originalRedactor!).trim();
   }
 
   /// The Memory slot's connection, as one [ApiConfig] the summary can run on:
@@ -84,7 +107,7 @@ class SummaryGenerationService {
       return ApiConfig(
         id: 'memory-slot-custom',
         endpoint: slot.generationEndpoint,
-        apiKey: slot.generationApiKey,
+        apiKey: '',
         model: slot.generationModel,
         protocol: LlmProtocol.customChatCompletion,
         maxTokens: slot.generationMaxTokens ?? 0,

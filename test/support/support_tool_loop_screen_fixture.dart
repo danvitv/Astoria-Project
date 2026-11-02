@@ -7,7 +7,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqlite3/sqlite3.dart' as sqlite;
 import 'package:glaze_flutter/features/support_assistant/support_assistant_screen.dart';
 import 'package:glaze_flutter/features/support_assistant/services/support_message_display_projection.dart';
 import 'package:glaze_flutter/features/support_assistant/widgets/support_message_list.dart';
@@ -19,8 +21,9 @@ import 'support_tool_loop_fixture.dart';
 
 void toolLoopWidgetTest(
   String name,
-  Future<void> Function(WidgetTester, ToolLoopScreenFixture) body,
-) {
+  Future<void> Function(WidgetTester, ToolLoopScreenFixture) body, {
+  bool nativeSourceFile = false,
+}) {
   testWidgets(name, (tester) async {
     final isolation = ModelProviderIsolation();
     final messenger = tester.binding.defaultBinaryMessenger;
@@ -102,16 +105,45 @@ void toolLoopWidgetTest(
       return isolation.block('native $channel');
     };
     ToolLoopScreenFixture? fixture;
+    Directory? ownedDirectory;
+    File? originalFile;
+    sqlite.Database? originalConnection;
     try {
+      if (nativeSourceFile) {
+        // Create only this fixture's synthetic file BEFORE the original DB/ROOT
+        // and before the IO tripwire zone. It is never replacement authority.
+        await _real(tester, () async {
+          ownedDirectory = await Directory(
+            r'C:\Users\Даниил\AppData\Local\Temp\opencode',
+          ).createTemp('rewrite-native-original-');
+          originalFile = File('${ownedDirectory!.path}/original.db').absolute;
+          originalConnection = sqlite.sqlite3.open(originalFile!.path);
+          originalConnection!.execute('PRAGMA busy_timeout = 0');
+        });
+      }
       await HttpOverrides.runZoned(
         () => IOOverrides.runZoned(
           () async {
             try {
               final core = await _real(
                 tester,
-                () => ToolLoopFixture.create(isolation, screen: true),
+                () => ToolLoopFixture.create(
+                  isolation,
+                  screen: true,
+                  originalNativeConnection: originalConnection,
+                ),
               );
               fixture = ToolLoopScreenFixture(core);
+              if (nativeSourceFile) {
+                expect(
+                  core.native.db.nativeDataSourceIdentity?.belongsTo(
+                    core.native.db,
+                  ),
+                  isTrue,
+                  reason:
+                      'Source4 must belong to the original synthetic file DB.',
+                );
+              }
               await tester.pumpWidget(fixture!.host());
               await tester.pumpAndSettle();
               await body(tester, fixture!);
@@ -120,12 +152,25 @@ void toolLoopWidgetTest(
               await tester.pump();
               final original = fixture;
               if (original != null) {
-                await _real(tester, original.core.close);
+                if (nativeSourceFile) {
+                  // Issue the SAME original close in real async, then pump its
+                  // original fake-zone continuations with the existing join.
+                  final closing = await _real(
+                    tester,
+                    () async => (future: original.core.close()),
+                  );
+                  await original.join(tester, closing.future);
+                } else {
+                  await _real(tester, original.core.close);
+                }
                 original.router.dispose();
               }
             }
           },
-          createFile: (_) => isolation.block('file/default database'),
+          createFile: (path) =>
+              originalFile != null && p.equals(path, originalFile!.path)
+              ? originalFile!
+              : isolation.block('file/default database'),
           createDirectory: (_) => isolation.block('directory'),
           createLink: (_) => isolation.block('link'),
           socketConnect:
@@ -137,8 +182,18 @@ void toolLoopWidgetTest(
         createHttpClient: (_) => isolation.block('HTTP/socket'),
       );
     } finally {
-      await messenger.platformMessagesFinished;
-      messenger.allMessagesHandler = previous;
+      try {
+        await messenger.platformMessagesFinished;
+      } finally {
+        messenger.allMessagesHandler = previous;
+        // The graph has closed first. Dispose only the connection and directory
+        // created above, outside the tripwire zone; never an application path.
+        await _real(tester, () async {
+          originalConnection?.dispose();
+          final directory = ownedDirectory;
+          if (directory != null) await directory.delete(recursive: true);
+        });
+      }
       expect(isolation.attempts, isEmpty);
       expect(tester.takeException(), isNull);
     }
@@ -245,17 +300,16 @@ final class ToolLoopScreenFixture {
     return value;
   }
 
-  Future<void> terminal(WidgetTester tester) {
+  Future<void> terminal(WidgetTester tester, {SupportModelUiBridge? original}) {
+    final bridge = original ?? core.bridge;
     final signal = Completer<void>();
     void observe() {
-      if (!core.bridge.view.busy &&
-          core.bridge.view.saved &&
-          !signal.isCompleted) {
+      if (!bridge.view.busy && bridge.view.saved && !signal.isCompleted) {
         signal.complete();
       }
     }
 
-    final stop = core.bridge.listen(observe);
+    final stop = bridge.listen(observe);
     observe();
     return join(tester, signal.future).whenComplete(stop);
   }
@@ -329,6 +383,10 @@ final class ToolLoopScreenFixture {
 final class _ToolLoopTranslations extends AssetLoader {
   const _ToolLoopTranslations();
   @override
-  Future<Map<String, dynamic>> load(String path, Locale locale) async =>
-      const {};
+  Future<Map<String, dynamic>> load(String path, Locale locale) async => const {
+    // Match the native Russian button captions without loading asset files.
+    // Missing-key fallback text is not a representative compact pill label.
+    'rewrite_btn_approve': 'Одобрить',
+    'rewrite_btn_reject': 'Отклонить',
+  };
 }

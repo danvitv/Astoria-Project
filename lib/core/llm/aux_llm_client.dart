@@ -4,6 +4,8 @@ import 'package:dio/dio.dart';
 
 import '../models/pipeline_settings.dart';
 import '../credentials/native_provider_credentials.dart';
+import '../credentials/memory_custom_api_credential_owner.dart';
+import 'transport/memory_custom_api_transport.dart';
 import 'native_saved_connection_source.dart';
 import '../models/extra_request_parameter.dart';
 import '../utils/id_generator.dart';
@@ -30,6 +32,7 @@ class AuxApiConfig {
   final String? savedConnectionId;
   final SavedConnectionAuth? savedConnectionAuth;
   final NativePreparedSavedConnection? nativeSource;
+  final MemoryCustomApiInvocation? memoryCustomApi;
   final String endpoint;
   final String apiKey;
   final String model;
@@ -50,6 +53,7 @@ class AuxApiConfig {
     this.savedConnectionId,
     this.savedConnectionAuth,
     this.nativeSource,
+    this.memoryCustomApi,
     required this.endpoint,
     required this.apiKey,
     required this.model,
@@ -92,12 +96,14 @@ class AuxLlmClient {
   final AuxRetryPolicy retryPolicy;
   final NativeSavedConnectionSourceResolver? sources;
   final NativeProviderPurpose? purpose;
+  final HttpClientAdapter Function()? memoryCustomAdapterFactory;
 
   const AuxLlmClient({
     this.transportPicker = pickChatTransport,
     this.retryPolicy = const AuxRetryPolicy(),
     this.sources,
     this.purpose,
+    this.memoryCustomAdapterFactory,
   });
 
   /// Resolves the post-cleaner timeout from settings.
@@ -205,13 +211,26 @@ class AuxLlmClient {
           ? retryPolicy
           : const AuxRetryPolicy(maxAttempts: 1),
     );
-    final identifiedContext = config.savedConnectionAuth == null
+    final identifiedContext =
+        config.savedConnectionAuth == null && config.memoryCustomApi == null
         ? _identifiedContext(captureContext)
         : null;
     return runner.run(
       cancelToken: cancelToken,
       captureContext: identifiedContext,
-      onAttemptStart: onAttemptStart,
+      onAttemptStart: config.memoryCustomApi == null || onAttemptStart == null
+          ? onAttemptStart
+          : (attempt, maximum) async {
+              final original = config.memoryCustomApi!;
+              original.requireCurrent();
+              final snapshot = original.captureRedactor();
+              try {
+                await onAttemptStart(attempt, maximum);
+              } catch (error) {
+                throw StateError(original.redact(error.toString(), snapshot));
+              }
+              original.requireCurrent();
+            },
       onAttemptComplete: identifiedContext == null
           ? null
           : (attempt, responseText) => LlmCallEventCapture.record(
@@ -322,6 +341,21 @@ class AuxLlmClient {
   }
 
   void _requireNativeScope(AuxApiConfig config) {
+    final custom = config.memoryCustomApi;
+    if (custom != null) {
+      custom.requireCurrent();
+      if (config.apiKey.isNotEmpty ||
+          config.savedConnectionAuth != null ||
+          config.savedConnectionId != null ||
+          config.nativeSource != null ||
+          config.protocol != LlmProtocol.customChatCompletion ||
+          config.useResponsesApi ||
+          config.endpoint != custom.settings.generationEndpoint ||
+          config.model != custom.settings.generationModel ||
+          config.extraRequestParameters.isNotEmpty) {
+        throw const NativeProviderException(NativeProviderFailure.denied);
+      }
+    }
     final auth = config.savedConnectionAuth;
     if (auth == null) return;
     config.nativeSource?.requireCurrent();
@@ -412,7 +446,13 @@ class AuxLlmClient {
     bool Function()? isCurrent,
   }) async {
     _requireNativeScope(config);
-    final transport = transportPicker(config.protocol);
+    final custom = config.memoryCustomApi;
+    final transport = custom == null
+        ? transportPicker(config.protocol)
+        : MemoryCustomApiTransport(
+            custom,
+            adapterFactory: memoryCustomAdapterFactory,
+          );
     final nativeSource = config.nativeSource;
     String? result;
     Object? transportError;
@@ -481,7 +521,8 @@ class AuxLlmClient {
         onUpdate: (delta, reasoningDelta) {
           if (!acceptingCallbacks ||
               cancelToken?.isCancelled == true ||
-              config.nativeSource?.isCurrent == false) {
+              config.nativeSource?.isCurrent == false ||
+              config.memoryCustomApi?.isCurrent() == false) {
             return;
           }
           if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
@@ -492,7 +533,8 @@ class AuxLlmClient {
           guard?.dispose();
           if (!acceptingCallbacks ||
               cancelToken?.isCancelled == true ||
-              config.nativeSource?.isCurrent == false) {
+              config.nativeSource?.isCurrent == false ||
+              config.memoryCustomApi?.isCurrent() == false) {
             return;
           }
           callbackReceived = true;
@@ -523,6 +565,7 @@ class AuxLlmClient {
       throw const NativeProviderException(NativeProviderFailure.stale);
     }
     config.nativeSource?.requireCurrent();
+    config.memoryCustomApi?.requireCurrent();
     if (transportError != null) throw transportError!;
     if (!callbackReceived) {
       throw StateError('Aux transport ended without a result');
@@ -548,6 +591,9 @@ class AuxLlmClient {
     bool Function()? isCurrent,
   }) async {
     _requireNativeScope(config);
+    if (config.memoryCustomApi != null) {
+      throw const NativeProviderException(NativeProviderFailure.denied);
+    }
     final transport = transportPicker(config.protocol);
     final nativeSource = config.nativeSource;
     final accumulated = StringBuffer();

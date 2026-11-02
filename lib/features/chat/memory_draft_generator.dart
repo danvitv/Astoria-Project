@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/misc.dart';
 import '../../core/llm/aux_llm_client.dart';
 import '../../core/llm/native_saved_connection_source.dart';
 import '../../core/credentials/native_provider_credentials.dart';
+import '../../core/credentials/memory_custom_api_credential_owner.dart';
+import '../../core/state/memory_custom_api_credentials_provider.dart';
 import '../../core/llm/transport/transport_factory.dart';
 import '../../core/llm/transport/llm_capture_context.dart';
 import '../../core/llm/macro_engine.dart';
@@ -32,11 +34,14 @@ class MemoryDraftGenerator {
   final AuxLlmClient _llm;
   final NativeSavedConnectionSourceResolver? _sources;
   final bool Function() _isCurrent;
+  final MemoryCustomApiCredentialOwner? Function()? _customApiOwner;
 
   MemoryDraftGenerator(Ref ref, {AuxLlmClient? llm})
     : _read = ref.read,
       _sources = ref.read(nativeProviderRuntimeProvider)?.sources,
       _isCurrent = (() => ref.mounted),
+      _customApiOwner = (() =>
+          ref.read(memoryCustomApiCredentialOwnerProvider)),
       _llm =
           llm ??
           AuxLlmClient(
@@ -51,6 +56,8 @@ class MemoryDraftGenerator {
     : _read = ref.read,
       _sources = ref.read(nativeProviderRuntimeProvider)?.sources,
       _isCurrent = (() => ref.context.mounted),
+      _customApiOwner = (() =>
+          ref.read(memoryCustomApiCredentialOwnerProvider)),
       _llm =
           llm ??
           AuxLlmClient(
@@ -63,11 +70,16 @@ class MemoryDraftGenerator {
 
   /// Explicit dependency seam for non-widget settings/jobs and synthetic tests.
   MemoryDraftGenerator.settings({
-    required this._read,
-    this._llm = const AuxLlmClient(),
-    this._sources,
+    required T Function<T>(ProviderListenable<T> provider) read,
+    AuxLlmClient llm = const AuxLlmClient(),
+    NativeSavedConnectionSourceResolver? sources,
+    MemoryCustomApiCredentialOwner? customApiOwner,
     bool Function()? isCurrent,
-  }) : _isCurrent = isCurrent ?? _alwaysCurrent;
+  }) : _read = read,
+       _llm = llm,
+       _sources = sources,
+       _customApiOwner = (() => customApiOwner),
+       _isCurrent = isCurrent ?? _alwaysCurrent;
 
   static bool _alwaysCurrent() => true;
 
@@ -80,8 +92,21 @@ class MemoryDraftGenerator {
     required String sessionId,
     required Map<String, String> sessionVars,
     CancelToken? cancelToken,
+    MemoryCustomApiInvocation? originalCustomApi,
   }) async {
-    final original = _sources?.captureOriginalStamp();
+    final custom = pipeline.memoryBookApi.generationSource == 'custom'
+        ? originalCustomApi ??
+              _customApiOwner?.call()?.capture(
+                pipeline.memoryBookApi,
+                isCurrent: () =>
+                    _isCurrent() && cancelToken?.isCancelled != true,
+              )
+        : null;
+    // Custom Memory is not granted by the saved-connection stamp/purpose.
+    final original =
+        custom == null && pipeline.memoryBookApi.generationSource != 'custom'
+        ? _sources?.captureOriginalStamp()
+        : null;
     NativePreparedSavedConnection? source;
     void requireCurrent() {
       if (!_isCurrent() ||
@@ -91,6 +116,7 @@ class MemoryDraftGenerator {
         throw const NativeProviderException(NativeProviderFailure.stale);
       }
       source?.requireCurrent();
+      custom?.requireCurrent();
     }
 
     requireCurrent();
@@ -107,13 +133,17 @@ class MemoryDraftGenerator {
       resolvedApi = await apiResolver.resolve(
         settings: pipeline.memoryBookApi,
         originalStamp: original,
+        originalCustomApi: custom,
         isCurrent: () => _isCurrent() && cancelToken?.isCancelled != true,
       );
       source = resolvedApi.source;
       requireCurrent();
     }
 
-    if (_sources != null) await resolveConfiguration();
+    if (_sources != null ||
+        pipeline.memoryBookApi.generationSource == 'custom') {
+      await resolveConfiguration();
+    }
     requireCurrent();
     final manifest = MemorySourceManifest.capture(
       sessionId,
@@ -190,7 +220,10 @@ class MemoryDraftGenerator {
 
     // Legacy-only DI preserves the original prompt-then-config ordering. Native
     // composition resolves its keyless saved source before prompt collection.
-    if (_sources == null) await resolveConfiguration();
+    if (_sources == null &&
+        pipeline.memoryBookApi.generationSource != 'custom') {
+      await resolveConfiguration();
+    }
     requireCurrent();
 
     // Left on "auto", the output cap is the one configured on the connection

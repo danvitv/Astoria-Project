@@ -7,6 +7,26 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/features/image_gen/image_gen_models.dart';
 import 'package:glaze_flutter/features/image_gen/services/novelai_image_provider.dart';
+import 'package:glaze_flutter/features/image_gen/services/image_gen_http.dart';
+
+/// In-memory transport injection: added custody regressions open no sockets.
+final class _SyntheticNovelAiBytes implements HttpClientAdapter {
+  _SyntheticNovelAiBytes(this.bytes);
+  final List<int> bytes;
+  final requests = <RequestOptions>[];
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    requests.add(options);
+    return ResponseBody.fromBytes(bytes, 200);
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
 
 /// Starts a loopback server that answers every request with the raw [bytes].
 Future<(HttpServer, List<HttpRequest>, List<String>)> _byteServer(
@@ -37,6 +57,69 @@ String _endpoint(HttpServer server) =>
     'http://${server.address.address}:${server.port}';
 
 void main() {
+  group('NovelAI protected transport extraction (synthetic; UNRUN)', () {
+    final png = Uint8List.fromList([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+    final fixtures = <String, List<int>>{
+      'ZIP': _zip('image.png', png),
+      'JSON images': utf8.encode(
+        jsonEncode({
+          'images': [
+            {'image': base64Encode(png)},
+          ],
+        }),
+      ),
+      'JSON image': utf8.encode(
+        jsonEncode({'image': 'data:image/png;base64,${base64Encode(png)}'}),
+      ),
+      'raw bytes': png,
+      'plain base64': utf8.encode(base64Encode(png)),
+    };
+    for (final fixture in fixtures.entries) {
+      test(
+        '${fixture.key} retains extraction and JSON/Bearer route without redirects',
+        () async {
+          final adapter = _SyntheticNovelAiBytes(fixture.value);
+          final dio = Dio(
+            BaseOptions(
+              connectTimeout: const Duration(seconds: 60),
+              receiveTimeout: const Duration(seconds: 300),
+            ),
+          )..httpClientAdapter = adapter;
+          addTearDown(() => dio.close());
+          var checks = 0;
+          final result =
+              await NovelAIImageProvider(
+                http: ImageGenHttp(dio: dio),
+                checkCurrent: () => checks++,
+              ).generate(
+                apiKey: 'SYNTHETIC_PROTECTED_NAI_KEY',
+                settings: const NovelAIImageSettings(
+                  endpoint: ' https://synthetic-nai.invalid/custom/// ',
+                  apiKey: '',
+                  model: 'nai-diffusion-4-5-full',
+                  seed: 7,
+                ),
+                prompt: '1girl',
+              );
+          expect(result, png);
+          expect(checks, 2);
+          final request = adapter.requests.single;
+          expect(
+            request.uri.toString(),
+            'https://synthetic-nai.invalid/custom/ai/generate-image',
+          );
+          expect(
+            request.headers['Authorization'],
+            'Bearer SYNTHETIC_PROTECTED_NAI_KEY',
+          );
+          expect(request.headers['Content-Type'], 'application/json');
+          expect(request.followRedirects, isFalse);
+          expect(request.connectTimeout, const Duration(seconds: 60));
+          expect(request.receiveTimeout, const Duration(seconds: 300));
+        },
+      );
+    }
+  });
   group('NovelAIImageProvider', () {
     test('posts a v4 prompt with bearer auth and unwraps the ZIP', () async {
       final (server, requests, bodies) = await _byteServer(
@@ -45,8 +128,8 @@ void main() {
       addTearDown(() => server.close(force: true));
 
       final image = await NovelAIImageProvider().generate(
+        apiKey: 'tok',
         settings: NovelAIImageSettings(
-          apiKey: 'tok',
           endpoint: _endpoint(server),
           model: 'nai-diffusion-4-5-full',
           negativePrompt: 'bad hands',
@@ -112,8 +195,8 @@ void main() {
       addTearDown(() => server.close(force: true));
 
       await NovelAIImageProvider().generate(
+        apiKey: 'tok',
         settings: NovelAIImageSettings(
-          apiKey: 'tok',
           endpoint: _endpoint(server),
           model: 'nai-diffusion-3',
           qualityToggle: false,
@@ -135,8 +218,8 @@ void main() {
       addTearDown(() => server.close(force: true));
 
       await NovelAIImageProvider().generate(
+        apiKey: 'tok',
         settings: NovelAIImageSettings(
-          apiKey: 'tok',
           endpoint: _endpoint(server),
           model: 'nai-diffusion-5-full',
         ),
@@ -156,8 +239,8 @@ void main() {
       addTearDown(() => server.close(force: true));
 
       await NovelAIImageProvider().generate(
+        apiKey: 'tok',
         settings: NovelAIImageSettings(
-          apiKey: 'tok',
           endpoint: _endpoint(server),
           model: 'nai-diffusion-4-5-full',
         ),
@@ -171,12 +254,12 @@ void main() {
       final body = jsonDecode(bodies.single) as Map<String, dynamic>;
       final params = body['parameters'] as Map<String, dynamic>;
       expect(params['director_reference_images'], ['aW1n', 'cG5n']);
-      expect(
-        (params['director_reference_descriptions'] as List).length,
-        2,
-      );
+      expect((params['director_reference_descriptions'] as List).length, 2);
       expect(params['director_reference_strength_values'], [1.0, 1.0]);
-      expect(params['director_reference_secondary_strength_values'], [0.0, 0.0]);
+      expect(params['director_reference_secondary_strength_values'], [
+        0.0,
+        0.0,
+      ]);
       expect(params['director_reference_information_extracted'], [1.0, 1.0]);
     });
 
@@ -187,8 +270,8 @@ void main() {
       addTearDown(() => server.close(force: true));
 
       await NovelAIImageProvider().generate(
+        apiKey: 'tok',
         settings: NovelAIImageSettings(
-          apiKey: 'tok',
           endpoint: _endpoint(server),
           model: 'nai-diffusion-3',
         ),
@@ -210,8 +293,8 @@ void main() {
       addTearDown(() => server.close(force: true));
 
       await NovelAIImageProvider().generate(
+        apiKey: 'tok',
         settings: NovelAIImageSettings(
-          apiKey: 'tok',
           endpoint: _endpoint(server),
           model: 'nai-diffusion-4-5-full',
           width: 832,
@@ -241,10 +324,8 @@ void main() {
       addTearDown(() => server.close(force: true));
 
       final image = await NovelAIImageProvider().generate(
-        settings: NovelAIImageSettings(
-          apiKey: 'tok',
-          endpoint: _endpoint(server),
-        ),
+        apiKey: 'tok',
+        settings: NovelAIImageSettings(endpoint: _endpoint(server)),
         prompt: 'a cat',
       );
 
@@ -259,10 +340,8 @@ void main() {
       addTearDown(() => server.close(force: true));
 
       final image = await NovelAIImageProvider().generate(
-        settings: NovelAIImageSettings(
-          apiKey: 'tok',
-          endpoint: _endpoint(server),
-        ),
+        apiKey: 'tok',
+        settings: NovelAIImageSettings(endpoint: _endpoint(server)),
         prompt: 'a cat',
       );
 
@@ -275,10 +354,8 @@ void main() {
       addTearDown(() => server.close(force: true));
 
       final image = await NovelAIImageProvider().generate(
-        settings: NovelAIImageSettings(
-          apiKey: 'tok',
-          endpoint: _endpoint(server),
-        ),
+        apiKey: 'tok',
+        settings: NovelAIImageSettings(endpoint: _endpoint(server)),
         prompt: 'a cat',
       );
 
@@ -302,10 +379,8 @@ void main() {
 
       try {
         await NovelAIImageProvider().generate(
-          settings: NovelAIImageSettings(
-            apiKey: 'tok',
-            endpoint: _endpoint(server),
-          ),
+          apiKey: 'tok',
+          settings: NovelAIImageSettings(endpoint: _endpoint(server)),
           prompt: 'a cat',
         );
         fail('expected a DioException');
@@ -324,8 +399,14 @@ void main() {
       expect(NovelAIConstants.isV4('nai-diffusion-4-5-full'), isTrue);
       expect(NovelAIConstants.isV5('nai-diffusion-5-curated'), isTrue);
       expect(NovelAIConstants.isV4('nai-diffusion-3'), isFalse);
-      expect(NovelAIConstants.supportsReferences('nai-diffusion-4-5-full'), isTrue);
-      expect(NovelAIConstants.supportsReferences('nai-diffusion-5-full'), isFalse);
+      expect(
+        NovelAIConstants.supportsReferences('nai-diffusion-4-5-full'),
+        isTrue,
+      );
+      expect(
+        NovelAIConstants.supportsReferences('nai-diffusion-5-full'),
+        isFalse,
+      );
       expect(NovelAIConstants.supportsReferences('nai-diffusion-3'), isFalse);
     });
 
@@ -371,7 +452,10 @@ void main() {
       );
       // The curated V4.5 model has no furry-focus preset.
       expect(
-        NovelAIConstants.ucPresetText('nai-diffusion-4-5-curated', 'furry_focus'),
+        NovelAIConstants.ucPresetText(
+          'nai-diffusion-4-5-curated',
+          'furry_focus',
+        ),
         '',
       );
       expect(

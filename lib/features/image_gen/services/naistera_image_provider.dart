@@ -1,6 +1,13 @@
+import 'dart:collection';
 import 'dart:typed_data';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
+
+import '../../../core/credentials/image_naistera_destinations.dart';
+import '../../../core/credentials/image_openrouter_destinations.dart';
+import '../../../core/credentials/secret_redactor.dart';
+import '../../../core/utils/error_format.dart' show activeErrorRedactor;
 
 import '../image_gen_models.dart';
 import 'image_gen_http.dart';
@@ -18,12 +25,113 @@ class NaisteraImageProvider {
     this.baseUrl = NaisteraConstants.baseUrl,
     this.pollInterval = const Duration(seconds: 3),
     this.pollTimeout = const Duration(minutes: 10),
-  });
+    ImageGenHttp? http,
+    ImageGenHttp? assetHttp,
+    void Function()? checkCurrent,
+    bool Function(String)? isPublicValue,
+  }) : _http = http ?? ImageGenHttp(followRedirects: false),
+       _assetHttp = assetHttp ?? ImageGenHttp(followRedirects: false),
+       _checkCurrent = checkCurrent,
+       _isPublicValue = isPublicValue;
 
-  final ImageGenHttp _http = ImageGenHttp();
+  final ImageGenHttp _http, _assetHttp;
+  final void Function()? _checkCurrent;
+  final bool Function(String)? _isPublicValue;
+  static final _defaultPolicy = SecretRedactor();
   final String baseUrl;
   final Duration pollInterval;
   final Duration pollTimeout;
+
+  /// Naistera only: inspect original native JSON keys/string leaves before the
+  /// whole encoding. A carried JSON string must not gain another escaping layer
+  /// before policy sees it. Keep the whole check for aliases spanning fields.
+  /// No custom toJson/toString, clipping, cycles or unbounded traversal.
+  static bool nativeJsonIsPublic(Object? value, bool Function(String) public) {
+    try {
+      if (!_nativeJsonLeavesArePublic(value, public)) return false;
+      final whole = jsonEncode(value);
+      return whole.length <= 33554432 && public(whole);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Structural admission for the ephemeral projection, with no JSON encoding.
+  static bool isNativeJsonTree(Object? value) =>
+      _nativeJsonLeavesArePublic(value, (_) => true);
+
+  static bool _nativeJsonLeavesArePublic(
+    Object? value,
+    bool Function(String) public,
+  ) {
+    const maxDepth = 64, maxNodes = 8192, maxText = 33554432;
+    final active = HashSet<Object>.identity();
+    var nodes = 0, textLength = 0;
+    bool visit(Object? node, int depth) {
+      if (++nodes > maxNodes || depth > maxDepth) return false;
+      if (node is String) {
+        textLength += node.length;
+        return textLength <= maxText && public(node);
+      }
+      if (node == null || node is bool) return true;
+      if (node is num) return node.isFinite;
+      if (node is! List && node is! Map) return false;
+      if (!active.add(node)) return false;
+      try {
+        if (node is List) {
+          for (final child in node) {
+            if (!visit(child, depth + 1)) return false;
+          }
+        } else if (node is Map) {
+          for (final entry in node.entries) {
+            if (entry.key is! String ||
+                !visit(entry.key, depth + 1) ||
+                !visit(entry.value, depth + 1))
+              return false;
+          }
+        }
+        return true;
+      } finally {
+        active.remove(node);
+      }
+    }
+
+    try {
+      return visit(value, 0);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool Function(String) _capturePublic(String key) {
+    final original = (activeErrorRedactor ?? _defaultPolicy).withKnownSecrets(
+      [key],
+      maxInputLength: 33554432,
+      maxOutputLength: 33554432,
+    );
+    return (value) =>
+        (_isPublicValue?.call(value) ?? true) &&
+        ImageNaisteraDestinations.knownSecretFreeValue(original, value) &&
+        ImageNaisteraDestinations.knownSecretFreeValue(
+          (activeErrorRedactor ?? _defaultPolicy).withKnownSecrets(
+            [key],
+            maxInputLength: 33554432,
+            maxOutputLength: 33554432,
+          ),
+          value,
+        );
+  }
+
+  void _check(
+    bool Function(String) public,
+    CancelToken? cancelToken,
+    Iterable<String> values,
+  ) {
+    _checkCurrent?.call();
+    if (cancelToken?.isCancelled == true || !values.every(public)) {
+      throw StateError('Naistera image operation unavailable');
+    }
+  }
 
   Future<Uint8List> generate({
     required String apiKey,
@@ -36,6 +144,12 @@ class NaisteraImageProvider {
     bool supportsReferences = true,
     CancelToken? cancelToken,
   }) async {
+    final public = _capturePublic(apiKey); // Before every first HTTP await.
+    _check(public, cancelToken, [baseUrl, model, prompt, aspectRatio]);
+    if (!nativeJsonIsPublic(references, public)) {
+      throw StateError('Naistera image operation unavailable');
+    }
+    final destinations = ImageNaisteraDestinations(baseUrl);
     final normalizedModel = NaisteraConstants.normalizeModel(model);
     final body = <String, dynamic>{
       'prompt': prompt,
@@ -48,26 +162,72 @@ class NaisteraImageProvider {
     if (referenceObjects.isNotEmpty) {
       body['reference_objects'] = referenceObjects;
     }
-
-    var json = await _http.post(
-      url: _generateUrl,
-      apiKey: apiKey,
-      body: body,
-      cancelToken: cancelToken,
-    );
-
-    final rawJobId = json['job_id'];
-    final jobId = rawJobId is String ? rawJobId : '';
-    if (json['data_url'] is! String && jobId.isNotEmpty) {
-      json = await _pollJob(jobId, apiKey: apiKey, cancelToken: cancelToken);
+    final originalRequest = {
+      'model': model,
+      'prompt': prompt,
+      'aspectRatio': aspectRatio,
+      'references': references,
+    };
+    final receipts = <Map<String, dynamic>>[];
+    void check([Iterable<String> extra = const []]) {
+      _check(public, cancelToken, [
+        baseUrl,
+        destinations.generation,
+        model,
+        normalizedModel,
+        ...extra,
+      ]);
+      if (!nativeJsonIsPublic(originalRequest, public) ||
+          !nativeJsonIsPublic(body, public) ||
+          !nativeJsonIsPublic(receipts, public)) {
+        throw StateError('Naistera image operation unavailable');
+      }
     }
 
-    return _bytesFrom(json, cancelToken: cancelToken);
-  }
+    try {
+      void checkTree(Object? value) {
+        check();
+        if (!nativeJsonIsPublic(value, public)) {
+          throw StateError('Naistera image operation unavailable');
+        }
+      }
 
-  String get _generateUrl {
-    final base = baseUrl.replaceAll(RegExp(r'/+$'), '');
-    return base.endsWith('/api/generate') ? base : '$base/api/generate';
+      checkTree(body);
+      var json = await _http.post(
+        url: destinations.generation,
+        apiKey: apiKey,
+        body: body,
+        cancelToken: cancelToken,
+        followRedirects: false,
+      );
+      receipts.add(json);
+      checkTree(json);
+
+      final rawJobId = json['job_id'];
+      final jobId = rawJobId is String ? rawJobId : '';
+      if (json['data_url'] is! String && jobId.isNotEmpty) {
+        json = await _pollJob(
+          jobId,
+          apiKey: apiKey,
+          cancelToken: cancelToken,
+          destinations: destinations,
+          check: check,
+          retainReceipt: receipts.add,
+        );
+      }
+
+      final bytes = await _bytesFrom(
+        json,
+        cancelToken: cancelToken,
+        check: check,
+      );
+      checkTree(body);
+      checkTree(references);
+      checkTree(json);
+      return bytes;
+    } catch (_) {
+      throw StateError('Naistera image generation unavailable');
+    }
   }
 
   /// Naistera takes references as `{image, description}` pairs where `image`
@@ -101,58 +261,96 @@ class NaisteraImageProvider {
     required String apiKey,
     CancelToken? cancelToken,
   }) async {
-    final base = baseUrl.replaceAll(RegExp(r'/+$'), '');
-    final url = '$base/api/models';
+    final public = _capturePublic(apiKey);
+    final destinations = ImageNaisteraDestinations(baseUrl);
+    final url = destinations.models;
+    void check([Iterable<String> extra = const []]) =>
+        _check(public, cancelToken, [baseUrl, url, ...extra]);
+    check();
 
-    Map<String, dynamic> payload;
     try {
-      payload = await _http.getJson(
-        url: url,
-        apiKey: apiKey,
-        cancelToken: cancelToken,
-      );
-    } on DioException catch (error) {
-      if (apiKey.isEmpty ||
-          CancelToken.isCancel(error) ||
-          error.response != null) {
-        rethrow;
+      Map<String, dynamic> payload;
+      try {
+        payload = await _http.getJson(
+          url: url,
+          apiKey: apiKey,
+          cancelToken: cancelToken,
+          followRedirects: false,
+        );
+      } on DioException catch (error) {
+        if (apiKey.isEmpty ||
+            cancelToken?.isCancelled == true ||
+            CancelToken.isCancel(error) ||
+            error.response != null) {
+          rethrow;
+        }
+        // No response at all (connection refused, TLS, CORS-style block) — the
+        // public catalog still tells us which models exist.
+        check();
+        payload = await _http.getJson(
+          url: url,
+          cancelToken: cancelToken,
+          followRedirects: false,
+        );
       }
-      // No response at all (connection refused, TLS, CORS-style block) — the
-      // public catalog still tells us which models exist.
-      payload = await _http.getJson(url: url, cancelToken: cancelToken);
-    }
+      check();
 
-    final models = payload['models'];
-    if (models is! List) return const [];
-    final catalog = <NaisteraModelInfo>[];
-    for (final raw in models) {
-      if (raw is! Map) continue;
-      final model = Map<String, dynamic>.from(raw);
-      final id = (model['id'] ?? '').toString().trim();
-      if (id.isEmpty) continue;
-      if (model['visible'] == false || model['deprecated'] == true) continue;
-      catalog.add(
-        NaisteraModelInfo(
-          id: id,
-          name: (model['name'] ?? id).toString(),
-          references: model['references'] != false,
-        ),
-      );
+      final models = payload['models'];
+      if (models is! List) return const [];
+      final catalog = <NaisteraModelInfo>[];
+      for (final raw in models) {
+        if (raw is! Map) continue;
+        final model = Map<String, dynamic>.from(raw);
+        final rawId = (model['id'] ?? '').toString();
+        final id = rawId.trim();
+        final name = (model['name'] ?? id).toString();
+        if (![
+          rawId,
+          id,
+          name,
+          NaisteraConstants.normalizeModel(id),
+        ].every(public))
+          continue;
+        if (id.isEmpty) continue;
+        if (model['visible'] == false || model['deprecated'] == true) continue;
+        catalog.add(
+          NaisteraModelInfo(
+            id: id,
+            name: name,
+            references: model['references'] != false,
+          ),
+        );
+      }
+      check();
+      return catalog
+          .where(
+            (model) =>
+                public(model.id) &&
+                public(model.name) &&
+                public(NaisteraConstants.normalizeModel(model.id)),
+          )
+          .toList();
+    } catch (_) {
+      throw StateError('Naistera image catalog unavailable');
     }
-    return catalog;
   }
 
   Future<Map<String, dynamic>> _pollJob(
     String jobId, {
     required String apiKey,
     CancelToken? cancelToken,
+    required ImageNaisteraDestinations destinations,
+    required void Function([Iterable<String>]) check,
+    required void Function(Map<String, dynamic>) retainReceipt,
   }) async {
-    final base = _generateUrl;
-    final url = '$base/jobs/${Uri.encodeComponent(jobId)}';
+    final url = destinations.job(jobId);
+    check([jobId, url]);
     final deadline = DateTime.now().add(pollTimeout);
 
     while (DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(pollInterval);
+      check([jobId, url]);
+      if (!DateTime.now().isBefore(deadline)) break;
       if (cancelToken?.isCancelled ?? false) {
         throw Exception('Naistera generation cancelled');
       }
@@ -160,13 +358,15 @@ class NaisteraImageProvider {
         url: url,
         apiKey: apiKey,
         cancelToken: cancelToken,
+        followRedirects: false,
       );
+      retainReceipt(json);
+      check([jobId, url]);
       final rawStatus = json['status'];
       final status = (rawStatus is String ? rawStatus : '').toLowerCase();
       if (json['data_url'] is String || status == 'completed') return json;
       if (status == 'failed' || json['error'] != null) {
-        final detail = json['detail'] ?? json['error'] ?? 'Unknown error';
-        throw Exception('Naistera generation failed: $detail');
+        throw StateError('Naistera generation failed');
       }
     }
     throw Exception(
@@ -177,14 +377,25 @@ class NaisteraImageProvider {
   Future<Uint8List> _bytesFrom(
     Map<String, dynamic> json, {
     CancelToken? cancelToken,
+    required void Function([Iterable<String>]) check,
   }) async {
     final raw = json['data_url'];
     final dataUrl = raw is String ? raw : '';
+    check([dataUrl]);
     if (dataUrl.isEmpty) {
       throw Exception('No data_url in Naistera response');
     }
     if (dataUrl.startsWith('http://') || dataUrl.startsWith('https://')) {
-      return ImageGenHttp.downloadImage(dataUrl, cancelToken: cancelToken);
+      ImageOpenRouterDestinations.validateDownload(dataUrl);
+      // Separate asset client: no account bearer and no redirects. Never decode
+      // or normalize a signed query into the URL handed to the downloader.
+      final response = await _assetHttp.getRaw(
+        dataUrl,
+        cancelToken: cancelToken,
+        followRedirects: false,
+      );
+      check([dataUrl]);
+      return response.data ?? Uint8List(0);
     }
     return ImageGenHttp.base64ToBytes(ImageGenHttp.stripBase64Prefix(dataUrl));
   }

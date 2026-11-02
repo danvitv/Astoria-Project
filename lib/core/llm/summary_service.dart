@@ -1,5 +1,8 @@
 import 'package:dio/dio.dart';
 
+import '../credentials/credential_vault.dart';
+import '../credentials/memory_custom_api_credential_owner.dart';
+import '../credentials/secret_redactor.dart';
 import '../db/repositories/summary_repo.dart';
 import '../models/api_config.dart';
 import '../models/chat_message.dart';
@@ -48,8 +51,12 @@ class SummaryService {
   final AuxLlmClient _llm;
   final NativeSavedConnectionSourceResolver? _sources;
 
-  SummaryService(this._repo, {AuxLlmClient? llm, this._sources})
-    : _llm = llm ?? const AuxLlmClient();
+  SummaryService(
+    this._repo, {
+    AuxLlmClient? llm,
+    NativeSavedConnectionSourceResolver? sources,
+  }) : _llm = llm ?? const AuxLlmClient(),
+       _sources = sources;
 
   Future<String?> getSummary(String sessionId) async {
     final row = await _repo.get(sessionId);
@@ -140,12 +147,46 @@ class SummaryService {
     String? customPrompt,
     MacroContext? macroContext,
     CancelToken? cancelToken,
+    MemoryCustomApiInvocation? memoryCustomApi,
+    SecretRedactor? originalCustomRedactor,
 
     /// Pins the sampling temperature. Null keeps
     /// [kSummaryDefaultTemperature].
     double? temperature,
   }) async {
-    final original = _sources?.captureOriginalStamp();
+    final originalRedactor = memoryCustomApi == null
+        ? null
+        : originalCustomRedactor ?? memoryCustomApi.captureRedactor();
+    void requireCustom() {
+      if (memoryCustomApi == null) return;
+      memoryCustomApi.requireCurrent();
+      final slot = memoryCustomApi.settings;
+      if (cancelToken?.isCancelled == true ||
+          slot.generationSource != 'custom' ||
+          apiConfig.apiKey.isNotEmpty ||
+          apiConfig.embeddingApiKey.isNotEmpty ||
+          apiConfig.mode != 'chat' ||
+          apiConfig.protocol != LlmProtocol.customChatCompletion ||
+          apiConfig.useResponsesApi ||
+          apiConfig.omitTemperature ||
+          apiConfig.firstChunkTimeoutMs != _fallbackTimeoutMs ||
+          apiConfig.extraRequestParameters.isNotEmpty ||
+          apiConfig.endpoint != slot.generationEndpoint ||
+          apiConfig.model != slot.generationModel ||
+          apiConfig.maxTokens != (slot.generationMaxTokens ?? 0) ||
+          (temperature ?? kSummaryDefaultTemperature) !=
+              (slot.generationTemperature ?? kSummaryDefaultTemperature)) {
+        throw const CredentialVaultAdmissionDenied();
+      }
+      MemoryCustomApiCredentialOwner.destination(slot);
+    }
+
+    requireCustom();
+    // Only genuine custom custody bypasses the ordinary native-source denial.
+    // A keyless ApiConfig or synthetic id alone grants nothing.
+    final original = memoryCustomApi == null
+        ? _sources?.captureOriginalStamp()
+        : null;
     if (original != null) {
       await _sources!.requireLegacyOnly(
         originalStamp: original,
@@ -169,6 +210,7 @@ class SummaryService {
     // past — or that the model happened to weigh differently this time — was
     // quietly dropped. Read before the write below, which overwrites it.
     final previous = await getSummaryContent(sessionId);
+    requireCustom();
 
     final prompt = buildSummaryPrompt(
       history: history,
@@ -179,7 +221,8 @@ class SummaryService {
 
     final content = await _llm.callOnce(
       config: AuxApiConfig(
-        savedConnectionId: apiConfig.id,
+        savedConnectionId: memoryCustomApi == null ? apiConfig.id : null,
+        memoryCustomApi: memoryCustomApi,
         endpoint: apiConfig.endpoint,
         apiKey: apiConfig.apiKey,
         model: apiConfig.model,
@@ -207,6 +250,25 @@ class SummaryService {
         relatedArtifactId: sessionId,
       ),
     );
+
+    requireCustom();
+    if (memoryCustomApi != null) {
+      // Redact before trim or any other output transformation, then re-evaluate
+      // CURRENT policy inside the dependent write and at return publication.
+      final redactor = originalRedactor!;
+      final safe = memoryCustomApi.redact(content, redactor);
+      final durable = await _repo.putGeneratedCustomSummary(
+        sessionId: sessionId,
+        content: safe,
+        messageCount: history.length,
+        prompt: customPrompt,
+        original: memoryCustomApi,
+        originalRedactor: redactor,
+        isCurrent: () => cancelToken?.isCancelled != true,
+      );
+      requireCustom();
+      return memoryCustomApi.redact(durable, redactor).trim();
+    }
 
     final trimmed = content.trim();
     await _repo.put(

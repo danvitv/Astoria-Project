@@ -3,8 +3,11 @@ import '../../../models/support_app_action.dart';
 import 'support_native_domain_sources.dart';
 import 'support_native_session_title_adapter.dart';
 import 'support_native_memory_entry_adapter.dart';
+import 'support_native_memory_draft_adapter.dart';
+import 'support_native_memory_draft_removal_adapter.dart';
 import 'support_native_active_selection_adapter.dart';
 import 'support_native_global_regex_adapter.dart';
+import 'support_native_rewrite_reject_adapter.dart';
 
 /// Finite native composition. Repositories still own every domain patch/CAS;
 /// this adds only exact ROOT admission and original source/queue lifetime.
@@ -36,6 +39,7 @@ final class SupportNativeDomainAdapter implements SupportAppActionAdapter {
     final operation = SupportAppDomainOperation.forAction(action);
     if (operation == null || context.domainRoot == null) return prepared;
     final isMemory = action.startsWith('astoria_memory_');
+    final isRewrite = adapter is SupportNativeRewriteRejectAdapter;
     final isTitle =
         operation == SupportAppDomainOperation.sessionRename ||
         operation == SupportAppDomainOperation.sessionTitleUndo;
@@ -54,12 +58,31 @@ final class SupportNativeDomainAdapter implements SupportAppActionAdapter {
             arguments,
             context,
           )
+        : adapter is SupportNativeMemoryDraftAdapter
+        ? (adapter as SupportNativeMemoryDraftAdapter).targetSession(
+            action,
+            arguments,
+            context,
+          )
+        : adapter is SupportNativeMemoryDraftRemovalAdapter
+        ? (adapter as SupportNativeMemoryDraftRemovalAdapter).targetSession(
+            action,
+            arguments,
+            context,
+          )
+        : adapter is SupportNativeRewriteRejectAdapter
+        ? (adapter as SupportNativeRewriteRejectAdapter).targetSession(
+            action,
+            arguments,
+            context,
+          )
         : isMemory
         ? arguments['sessionId'] as String?
         : isRepair
         ? repairSession?.call(action, arguments, context)
         : null;
-    if ((isMemory || isRepair || isTitle) && queued == null) return null;
+    if ((isMemory || isRepair || isTitle || isRewrite) && queued == null)
+      return null;
     final fresh =
         arguments['operation'] == 'create' &&
         const {
@@ -106,12 +129,14 @@ final class SupportNativeDomainAdapter implements SupportAppActionAdapter {
           context.current &&
           observed.current &&
           prepared.observationIsCurrent(),
-      preview: {
-        ...prepared.preview,
-        'sourceSessionsFenced': ids.length,
-        'existingNativeOwners': observed.owners.length,
-        'nativeSourceFence': true,
-      },
+      preview: isRewrite
+          ? prepared.preview
+          : {
+              ...prepared.preview,
+              'sourceSessionsFenced': ids.length,
+              'existingNativeOwners': observed.owners.length,
+              'nativeSourceFence': true,
+            },
       execute: (admitted) async {
         if (!admitted() || !observed.current) {
           return SupportAppActionOutcome(SupportAppActionCode.stale);

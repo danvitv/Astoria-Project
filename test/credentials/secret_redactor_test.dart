@@ -17,6 +17,56 @@ void main() {
   late SecretRedactor redactor;
   setUp(() => redactor = SecretRedactor(knownSecrets: [canary]));
 
+  test(
+    'native known-only match keeps public signed fields without changing default redaction',
+    () {
+      const signed =
+          'https://synthetic-cdn.invalid/public.png?token=PUBLIC%2BVALUE%3D&credential=PUBLIC_SIG';
+      expect(redactor.isKnownSecretFree(signed), isTrue);
+      expect(redactor.redactText(signed), isNot(signed));
+      expect(redactor.redactUrl(signed), isNot(signed));
+    },
+  );
+
+  test(
+    'native whole-value matcher refuses all existing known literal representations',
+    () {
+      for (final value in [
+        canary,
+        Uri.encodeComponent(canary),
+        Uri.encodeFull(canary),
+        jsonEncode(canary),
+        base64Encode(utf8.encode(canary)),
+        base64UrlEncode(utf8.encode(canary)),
+      ]) {
+        expect(redactor.isKnownSecretFree('prefix $value suffix'), isFalse);
+      }
+      expect(redactor.isKnownSecretFree('public unrelated text'), isTrue);
+    },
+  );
+
+  test(
+    'native known-only check fails closed on exhausted or oversized original policies',
+    () {
+      final small = SecretRedactor(maxInputLength: 8);
+      expect(small.isKnownSecretFree('123456789'), isFalse);
+      final closed = SecretRedactor(
+        knownSecrets: List.generate(257, (i) => 'synthetic-$i'),
+      );
+      expect(closed.isKnownSecretFree('public'), isFalse);
+      expect(
+        closed
+            .withKnownSecrets(
+              const [],
+              maxInputLength: 33554432,
+              maxOutputLength: 33554432,
+            )
+            .isKnownSecretFree('public'),
+        isFalse,
+      );
+    },
+  );
+
   test('known values disappear from prose, JSON, encoded text and errors', () {
     for (final input in [
       'request failed with $canary in payload',

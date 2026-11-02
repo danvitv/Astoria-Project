@@ -8,6 +8,7 @@ import 'package:glaze_flutter/core/support/support_payload_cipher.dart';
 import 'package:glaze_flutter/features/support_assistant/services/support_workspace_settings_codec.dart';
 import 'package:glaze_flutter/features/support_assistant/services/support_workspace_store.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_workspace_provider.dart';
+import 'package:glaze_flutter/features/support_assistant/state/support_model_provider.dart';
 import 'helpers/support_native_fixture.dart';
 import 'helpers/support_native_widget_fixture.dart';
 import 'support_app_domain_loop_fixture.dart';
@@ -274,13 +275,19 @@ void main() {
         find.byType(TextField).first,
         'Use the configured global Astoria profile.',
       );
+      await tester.pump();
+      final originalBridge = core.container.read(supportModelUiBridgeProvider);
       await configurationAction(
         tester,
         () =>
             tester.tap(find.byKey(const ValueKey('support_composer_send_btn'))),
       );
       final rows = await f.screen.join(tester, original.$1);
-      await f.screen.terminal(tester);
+      await f.screen.terminal(tester, original: originalBridge);
+      expect(
+        originalBridge.view.runId,
+        rows.singleWhere((m) => m.role == 'assistant').runId,
+      );
       expect(
         rows.singleWhere((m) => m.role == 'assistant').body,
         'GLOBAL_PROFILE_ACTUAL_REPLY',
@@ -289,7 +296,7 @@ void main() {
       expect(core.wire.single['temperature'], 0.6);
       expect(core.wire.single['max_tokens'], 20000);
       expect(core.wire.single['reasoning_effort'], 'high');
-      expect((core.wire.single['tools'] as List), hasLength(56));
+      expect((core.wire.single['tools'] as List), hasLength(63));
       expect(
         (await configurationAction(
           tester,

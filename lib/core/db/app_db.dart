@@ -30,6 +30,7 @@ import 'tables.dart';
 
 part 'app_db.g.dart';
 part 'native_data_source_identity.dart';
+part 'native_commit_send_fence.dart';
 part 'migrations/database_integrity.dart';
 part 'migrations/studio_legacy.dart';
 part 'studio_preset_seed.dart';
@@ -121,13 +122,72 @@ class AppDatabase extends _$AppDatabase {
       AppDatabase._native(_AppDatabaseNativeFile(), fixedFile: file);
 
   AppDatabase._native(_AppDatabaseNativeFile native, {File? fixedFile})
+    : this._nativeFenced(
+        native,
+        _NativeCommitSendFence.background(),
+        fixedFile: fixedFile,
+      );
+
+  AppDatabase._nativeFenced(
+    _AppDatabaseNativeFile native,
+    _NativeCommitSendFence fence, {
+    File? fixedFile,
+  })
     : _nativeFile = native,
+      _commitSendFence = fence,
       _stockSingleConnectionExecutor = true,
-      super(_openConnection(native, fixedFile: fixedFile));
+      super(_openConnection(native, fence, fixedFile: fixedFile));
 
   AppDatabase.forTesting(super.e)
     : _nativeFile = null,
+      _commitSendFence = null,
       _stockSingleConnectionExecutor = false;
+
+  /// Original synthetic composition from first creation, not adoption of a
+  /// supplied executor. No FILE identity, native ROOT or snapshot authority.
+  AppDatabase.nativeMemoryForTesting({QueryInterceptor? interceptor})
+    : this._memoryNative(_NativeCommitSendFence.local(), interceptor);
+
+  AppDatabase._memoryNative(
+    _NativeCommitSendFence fence,
+    QueryInterceptor? observer,
+  ) : _nativeFile = null,
+      _commitSendFence = fence,
+      _stockSingleConnectionExecutor = false,
+      super(_nativeMemoryExecutor(fence, observer));
+
+  /// Retains THIS raw from initial fixture construction. An optional observer
+  /// is necessarily outside our original send fence. Subclasses can override
+  /// migrations without replacing the database/executor after native admission.
+  AppDatabase.openedNativeForTesting(
+    sqlite.Database connection, {
+    QueryInterceptor? interceptor,
+    bool closeUnderlyingOnClose = true,
+  }) : this._openedNativeTesting(
+         connection,
+         _AppDatabaseNativeFile.fromOpened(connection),
+         _NativeCommitSendFence.local(),
+         interceptor,
+         closeUnderlyingOnClose,
+       );
+
+  AppDatabase._openedNativeTesting(
+    sqlite.Database raw,
+    _AppDatabaseNativeFile native,
+    _NativeCommitSendFence fence,
+    QueryInterceptor? observer,
+    bool closeUnderlyingOnClose,
+  ) : _nativeFile = native,
+      _commitSendFence = fence,
+      _stockSingleConnectionExecutor = false,
+      super(
+        _retainedNativeExecutor(
+          raw,
+          fence,
+          closeUnderlyingOnClose: closeUnderlyingOnClose,
+          observer: observer,
+        ),
+      );
 
   /// Native composition only: file identity comes from THIS opened SQLite
   /// connection, not from a separately supplied path. Memory/attached sources
@@ -139,7 +199,6 @@ class AppDatabase extends _$AppDatabase {
     AndroidSnapshotNamespace? androidSnapshotNamespace,
   }) {
     final native = _AppDatabaseNativeFile.fromOpened(connection);
-    NativeHistoryIndexWorker.install(connection);
     native.checkSnapshotSource = checkSnapshotSource;
     if (androidSnapshotNamespace != null) {
       final file = native.file;
@@ -157,19 +216,27 @@ class AppDatabase extends _$AppDatabase {
       );
       native.androidSnapshotNamespace = androidSnapshotNamespace;
     }
+    final fence = _NativeCommitSendFence.local();
     return AppDatabase._openedNative(
-      NativeDatabase.opened(
+      _retainedNativeExecutor(
         connection,
+        fence,
         closeUnderlyingOnClose: closeUnderlyingOnClose,
       ),
       native,
+      fence,
     );
   }
 
-  AppDatabase._openedNative(super.executor, this._nativeFile)
+  AppDatabase._openedNative(
+    super.executor,
+    this._nativeFile,
+    this._commitSendFence,
+  )
     : _stockSingleConnectionExecutor = false;
 
   final _AppDatabaseNativeFile? _nativeFile;
+  final _NativeCommitSendFence? _commitSendFence;
   final bool _stockSingleConnectionExecutor;
 
   /// Constructor attestation, not FILE identity or runtime read authority.
@@ -213,6 +280,7 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> _closeNative() {
     final native = _nativeFile;
+    _commitSendFence?.retire();
     native?.retire(); // Invalidate BEFORE the async executor close.
     if (native == null) return super.close();
     if (native._borrowed.isEmpty && native._unsettledSnapshots.isEmpty) {
@@ -288,7 +356,11 @@ class AppDatabase extends _$AppDatabase {
       _AppDatabaseStudioLegacyMigrations(this).purgeRetiredAgenticMicroMemory();
 }
 
-LazyDatabase _openConnection(_AppDatabaseNativeFile native, {File? fixedFile}) {
+LazyDatabase _openConnection(
+  _AppDatabaseNativeFile native,
+  _NativeCommitSendFence fence, {
+  File? fixedFile,
+}) {
   return LazyDatabase(() async {
     final dbFolder = fixedFile?.parent.path ?? await getAppDataDir();
     final dir = Directory(dbFolder);
@@ -311,13 +383,13 @@ LazyDatabase _openConnection(_AppDatabaseNativeFile native, {File? fixedFile}) {
           file.path,
           snapshotNamespace.workerStageRoot,
         ),
-      );
+      ).interceptWith(fence);
     }
     return NativeDatabase.createInBackground(
       file,
       readPool: 0,
       setup: NativeHistoryIndexWorker.install,
-    );
+    ).interceptWith(fence);
   });
 }
 

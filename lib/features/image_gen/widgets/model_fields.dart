@@ -25,6 +25,7 @@ typedef ShowOptionsCallback =
 /// Naistera model names.
 List<Widget> buildNaisteraModelFields(
   ImageGenSettings s, {
+  bool Function(String)? isPublicText,
   required bool isFetching,
   required VoidCallback onFetchModels,
   required ValueChanged<ImageGenSettings> onUpdate,
@@ -32,13 +33,28 @@ List<Widget> buildNaisteraModelFields(
 }) {
   // Settings written by older builds can still hold a retired model label
   // ('nano banana'), so the selector matches on the normalized id.
-  final catalog = s.naisteraModels.map((m) => m.id).toList();
+  bool public(String value) => isPublicText?.call(value) ?? true;
+  final catalog = s.naisteraModels
+      .where(
+        (m) =>
+            public(m.id) &&
+            public(m.name) &&
+            public(NaisteraConstants.normalizeModel(m.id)),
+      )
+      .map((m) => m.id)
+      .toList();
   final model = catalog.contains(s.naisteraModel)
       ? s.naisteraModel
       : NaisteraConstants.normalizeModel(s.naisteraModel);
   final items = catalog.isEmpty
       ? NaisteraConstants.models.map((e) => e.$1).toList()
       : catalog;
+  String publicLabel(String value) {
+    if (!public(value) || !public(NaisteraConstants.normalizeModel(value)))
+      return 'Model unavailable';
+    final label = s.naisteraModelLabel(value);
+    return public(label) ? label : 'Model unavailable';
+  }
 
   return [
     // MenuSelectorItem has no trailing slot, so the refresh button sits
@@ -48,13 +64,27 @@ List<Widget> buildNaisteraModelFields(
         Expanded(
           child: MenuSelectorItem(
             label: 'imggen_model'.tr(),
-            currentValue: s.naisteraModelLabel(model),
+            currentValue: s.naisteraModel.isNotEmpty && public(s.naisteraModel)
+                ? publicLabel(model)
+                : 'Model unavailable',
             onTap: () => showOptions<String>(
               title: 'imggen_model'.tr(),
-              items: items,
-              labelBuilder: s.naisteraModelLabel,
+              items: items
+                  .where(
+                    (id) =>
+                        public(id) &&
+                        public(NaisteraConstants.normalizeModel(id)) &&
+                        public(s.naisteraModelLabel(id)),
+                  )
+                  .toList(),
+              labelBuilder: publicLabel,
               isSelected: (v) => model == v,
-              onSelected: (v) => onUpdate(s.copyWith(naisteraModel: v)),
+              onSelected: (v) {
+                if (public(v) &&
+                    public(NaisteraConstants.normalizeModel(v)) &&
+                    public(s.naisteraModelLabel(v)))
+                  onUpdate(s.copyWith(naisteraModel: v));
+              },
             ),
           ),
         ),
@@ -119,7 +149,8 @@ List<Widget> buildRoutmyModelFields(
   final quality = s.routmyQuality;
   final catalog = s.routmyModels
       .where((m) => isPublicText(m.id) && isPublicText(m.name))
-      .map((m) => m.id).toList();
+      .map((m) => m.id)
+      .toList();
   final items = catalog.isEmpty
       ? RoutMyConstants.models.map((e) => e.$1).toList()
       : catalog;
@@ -157,8 +188,13 @@ List<Widget> buildRoutmyModelFields(
                   s.copyWith(
                     routmyModel: v,
                     routmyImageSize: seedreamSize,
-                    routmyModels: s.routmyModels.where((entry) =>
-                        isPublicText(entry.id) && isPublicText(entry.name)).toList(),
+                    routmyModels: s.routmyModels
+                        .where(
+                          (entry) =>
+                              isPublicText(entry.id) &&
+                              isPublicText(entry.name),
+                        )
+                        .toList(),
                   ),
                 );
               },

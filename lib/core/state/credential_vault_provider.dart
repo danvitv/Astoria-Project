@@ -55,6 +55,24 @@ class SecretRedactorNotifier extends Notifier<SecretRedactor> {
   }
 }
 
+/// Repaints retained native controls when the process-wide CURRENT sink changes,
+/// without adopting that sink or rebuilding any local credential owner.
+final errorRedactionPolicyRevisionProvider =
+    NotifierProvider.autoDispose<ErrorRedactionPolicyRevisionNotifier, int>(
+      ErrorRedactionPolicyRevisionNotifier.new,
+    );
+
+class ErrorRedactionPolicyRevisionNotifier extends Notifier<int> {
+  @override
+  int build() {
+    final subscription = errorRedactionPolicyChanges.listen((_) {
+      if (ref.mounted) state++;
+    });
+    ref.onDispose(subscription.cancel);
+    return 0;
+  }
+}
+
 final credentialStorageProvider = Provider<CredentialStorage>((ref) {
   return FlutterSecureCredentialStorage(
     const FlutterSecureStorage(),

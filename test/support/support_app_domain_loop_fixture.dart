@@ -15,6 +15,7 @@ import 'package:glaze_flutter/features/extensions/providers/extension_presets_pr
 import 'package:glaze_flutter/features/memory/state/memory_active_drafts_provider.dart';
 import 'package:glaze_flutter/features/memory/state/memory_book_revision_provider.dart';
 import 'package:glaze_flutter/features/memory/state/memory_native_entry_owner.dart';
+import 'package:glaze_flutter/features/card_rewrite/rewrite_native_owner.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_app_control_content_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_app_control_session_memory_provider.dart';
 import 'package:glaze_flutter/features/support_assistant/state/support_app_control_secondary_provider.dart';
@@ -37,8 +38,9 @@ export 'support_app_domain_loop_seed.dart';
 /// and pregraph file/socket/channel tripwires remain in effect through cleanup.
 void domainLoopTest(
   String name,
-  Future<void> Function(WidgetTester, DomainLoopFixture) body,
-) {
+  Future<void> Function(WidgetTester, DomainLoopFixture) body, {
+  bool nativeSourceFile = false,
+}) {
   toolLoopWidgetTest(name, (tester, screen) async {
     final f = DomainLoopFixture(screen);
     f.installFiniteGraph(); // BEFORE any new production domain provider is read.
@@ -65,7 +67,7 @@ void domainLoopTest(
         }
       });
     }
-  });
+  }, nativeSourceFile: nativeSourceFile);
 }
 
 final class DomainLoopFixture {
@@ -113,6 +115,7 @@ final class DomainLoopFixture {
     memoryActiveDraftsProvider,
     memoryBookRevisionProvider,
     memoryNativeEntryOwnerRegistryProvider,
+    rewriteNativeReviewOwnerRegistryProvider,
     llmRequestCaptureRepoProvider,
     characterRevisionRepoProvider,
     characterSessionBaselineRepoProvider,
@@ -156,7 +159,11 @@ final class DomainLoopFixture {
     };
   }
 
-  Future<void> start(WidgetTester tester, {bool confirmation = true}) async {
+  Future<void> start(
+    WidgetTester tester, {
+    bool confirmation = true,
+    String instruction = 'Выполни только точную показанную операцию Astoria.',
+  }) async {
     final old = await configurationAction(
       tester,
       () => screen.core.native.repo.getMessagesForSession(
@@ -187,10 +194,7 @@ final class DomainLoopFixture {
     );
     _settlement =
         boxed.$1; // Original real-async encrypted stream; not FakeAsync SQL.
-    await tester.enterText(
-      find.byType(TextField).first,
-      'Выполни только точную показанную операцию Astoria.',
-    );
+    await tester.enterText(find.byType(TextField).first, instruction);
     await tester.pump();
     final send = find.byKey(const ValueKey('support_composer_send_btn'));
     expect(send.hitTestable(), findsOneWidget);

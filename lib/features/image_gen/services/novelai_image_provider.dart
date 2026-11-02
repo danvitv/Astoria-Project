@@ -16,15 +16,20 @@ import 'image_gen_http.dart';
 /// models take the structured `v4_prompt` captions, while V3 keeps a plain
 /// `prompt` field. Character Reference (Director Tools) images are V4.5 only.
 class NovelAIImageProvider {
-  final ImageGenHttp _http = ImageGenHttp();
+  NovelAIImageProvider({ImageGenHttp? http, this.checkCurrent})
+    : _http = http ?? ImageGenHttp();
+  final ImageGenHttp _http;
+  final void Function()? checkCurrent;
 
   Future<Uint8List> generate({
     required NovelAIImageSettings settings,
     required String prompt,
+    required String apiKey,
     List<Map<String, String>>? references,
     String? instructionAspectRatio,
     CancelToken? cancelToken,
   }) async {
+    checkCurrent?.call();
     final model = NovelAIConstants.normalizeModel(settings.model);
     final isV4 = NovelAIConstants.isV4(model);
     final quality = settings.qualityToggle;
@@ -78,9 +83,10 @@ class NovelAIImageProvider {
     _attachReferences(parameters, model, references);
 
     final bytes = await _http.postForBytes(
-      url: '${NovelAIConstants.normalizeEndpoint(settings.endpoint)}'
+      url:
+          '${NovelAIConstants.normalizeEndpoint(settings.endpoint)}'
           '/ai/generate-image',
-      apiKey: settings.apiKey,
+      apiKey: apiKey,
       body: {
         'input': positive,
         'model': model,
@@ -89,8 +95,9 @@ class NovelAIImageProvider {
         'use_new_shared_trial': true,
       },
       cancelToken: cancelToken,
+      followRedirects: false,
     );
-
+    checkCurrent?.call();
     return _extractImage(bytes);
   }
 
@@ -201,9 +208,7 @@ class NovelAIImageProvider {
     try {
       final text = utf8.decode(bytes).trim();
       if (text.isNotEmpty && !text.contains(RegExp(r'\s'))) {
-        return ImageGenHttp.base64ToBytes(
-          ImageGenHttp.stripBase64Prefix(text),
-        );
+        return ImageGenHttp.base64ToBytes(ImageGenHttp.stripBase64Prefix(text));
       }
     } catch (_) {
       // Not text either — fall through to the error.

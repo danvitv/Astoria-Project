@@ -58,6 +58,43 @@ class InfoBlocksRepository extends DatabaseAccessor<AppDatabase>
     );
   }
 
+  /// Image-only completion. Check original custody after the actual transaction
+  /// queue/read, then serialize content and done together. A later denial does
+  /// not roll back an already committed row; it withholds the returned result.
+  Future<InfoBlock?> completeImageRender({
+    required InfoBlock target,
+    required String content,
+    required bool Function(String) isPublishable,
+  }) async {
+    if (!isPublishable(content)) return null;
+    final durable = await db.transaction(() async {
+      if (!isPublishable(content)) return null;
+      final query = select(infoBlocks)
+        ..where(
+          (t) =>
+              t.id.equals(target.id) &
+              t.sessionId.equals(target.sessionId) &
+              t.messageId.equals(target.messageId) &
+              t.swipeId.equals(target.swipeId) &
+              t.agentSwipeId.equals(target.agentSwipeId) &
+              t.blockId.equals(target.blockId),
+        );
+      final row = await query.getSingleOrNull();
+      if (row == null || !isPublishable(row.content) || !isPublishable(content))
+        return null;
+      await (update(infoBlocks)..where((t) => t.id.equals(row.id))).write(
+        InfoBlocksCompanion(
+          content: Value(content),
+          status: Value(BlockRunStatus.done.name),
+        ),
+      );
+      return _rowToModel(
+        row,
+      ).copyWith(content: content, status: BlockRunStatus.done);
+    });
+    return durable != null && isPublishable(durable.content) ? durable : null;
+  }
+
   Future<List<InfoBlock>> getBySessionId(String sessionId) async {
     final rows =
         await (select(infoBlocks)

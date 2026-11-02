@@ -23,6 +23,9 @@ part 'memory_book_repo.g.dart';
 part 'memory_book_setup_store.dart';
 part 'memory_book_setup_fence.dart';
 part 'memory_book_native_entry_store.dart';
+part 'memory_book_native_draft_store.dart';
+part 'memory_book_native_draft_span.dart';
+part 'memory_book_native_draft_removal_store.dart';
 
 /// Native-only exact row observation. Never serialize this into tool metadata.
 final class MemoryBookControlObservation {
@@ -33,6 +36,10 @@ final class MemoryBookControlObservation {
 
 final class _MemoryBookControlRetired implements Exception {
   const _MemoryBookControlRetired();
+}
+
+final class _MemoryBookCustomDraftRetired implements Exception {
+  const _MemoryBookCustomDraftRetired();
 }
 
 @DriftAccessor(tables: [MemoryBookRows])
@@ -297,8 +304,66 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
   Future<void> put(MemoryBook book) =>
       _trackSetupBookWrite(() => transaction(() => _put(book)));
 
-  Future<void> _put(MemoryBook book) async {
+  Future<void> _put(
+    MemoryBook book, {
+    ({
+      String draftId,
+      MemoryDraft Function(MemoryDraft) mutate,
+      bool Function() isCurrent,
+      MemoryDraft Function(MemoryDraft) sanitize,
+    })?
+    customDraftPublication,
+  }) async {
     final existing = await getBySessionId(book.sessionId);
+    if (customDraftPublication != null) {
+      final publication = customDraftPublication;
+      void check() {
+        if (!publication.isCurrent()) {
+          throw const _MemoryBookCustomDraftRetired();
+        }
+      }
+
+      // This is the final read, not the caller's earlier transaction snapshot.
+      // Preserve current book/history columns and every sibling draft's data.
+      check();
+      final index =
+          existing?.pendingDrafts.indexWhere(
+            (draft) => draft.id == publication.draftId,
+          ) ??
+          -1;
+      if (existing == null || index < 0) {
+        throw const _MemoryBookCustomDraftRetired();
+      }
+      final drafts = [...existing.pendingDrafts];
+      drafts[index] = publication.sanitize(publication.mutate(drafts[index]));
+      if (drafts[index].id != publication.draftId) {
+        throw const _MemoryBookCustomDraftRetired();
+      }
+      final submittedDraft = drafts[index];
+      final submittedDraftJson = jsonEncode(submittedDraft.toJson());
+      // No await between CURRENT + original sanitization and serialization.
+      check();
+      await (update(
+        memoryBookRows,
+      )..where((table) => table.sessionId.equals(book.sessionId))).write(
+        MemoryBookRowsCompanion(
+          pendingDraftsJson: Value(
+            jsonEncode(drafts.map((draft) => draft.toJson()).toList()),
+          ),
+          updatedAt: Value(currentTimestampSeconds()),
+        ),
+      );
+      // Ownership and redaction coverage are separate: registering a new alias
+      // does not retire the invocation. Reject its now-unsafe submitted value
+      // inside the transaction, without replaying the mutation or rewriting it.
+      check();
+      if (jsonEncode(publication.sanitize(submittedDraft).toJson()) !=
+          submittedDraftJson) {
+        throw const _MemoryBookCustomDraftRetired();
+      }
+      check();
+      return;
+    }
     final priorEntries = {
       for (final entry in existing?.entries ?? const <MemoryEntry>[])
         entry.id: entry,
@@ -502,22 +567,53 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
 
   /// Applies a narrow mutation to one draft using the latest durable book.
   /// Returns false when the book or draft was removed while work was in flight.
+  /// Custom publication alone supplies the original guard and final sanitizer;
+  /// ordinary callers retain their existing put/compatibility behavior.
   Future<bool> mutateDraft({
     required String sessionId,
     required String draftId,
     required MemoryDraft Function(MemoryDraft current) mutate,
+    bool Function()? customPublicationIsCurrent,
+    MemoryDraft Function(MemoryDraft)? sanitizeCustomPublication,
   }) => _trackSetupBookWrite(() async {
+    if ((customPublicationIsCurrent == null) !=
+        (sanitizeCustomPublication == null)) {
+      throw ArgumentError(
+        'Custom draft publication needs both guard and sanitizer.',
+      );
+    }
     var updated = false;
-    await transaction(() async {
-      final existing = await getBySessionId(sessionId);
-      if (existing == null) return;
-      final index = existing.pendingDrafts.indexWhere((d) => d.id == draftId);
-      if (index < 0) return;
-      final drafts = [...existing.pendingDrafts];
-      drafts[index] = mutate(drafts[index]);
-      await put(existing.copyWith(pendingDrafts: drafts));
-      updated = true;
-    });
+    try {
+      await transaction(() async {
+        if (customPublicationIsCurrent?.call() == false) return;
+        final existing = await getBySessionId(sessionId);
+        if (existing == null || customPublicationIsCurrent?.call() == false)
+          return;
+        final index = existing.pendingDrafts.indexWhere((d) => d.id == draftId);
+        if (index < 0) return;
+        if (customPublicationIsCurrent != null) {
+          await _put(
+            existing,
+            customDraftPublication: (
+              draftId: draftId,
+              mutate: mutate,
+              isCurrent: customPublicationIsCurrent,
+              sanitize: sanitizeCustomPublication!,
+            ),
+          );
+          if (!customPublicationIsCurrent()) {
+            throw const _MemoryBookCustomDraftRetired();
+          }
+        } else {
+          final drafts = [...existing.pendingDrafts];
+          drafts[index] = mutate(drafts[index]);
+          await put(existing.copyWith(pendingDrafts: drafts));
+        }
+        updated = true;
+      });
+    } on _MemoryBookCustomDraftRetired {
+      return false;
+    }
     return updated;
   });
 

@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/db/repositories/global_variables_repo.dart';
-import 'package:glaze_flutter/core/models/pipeline_settings.dart';
 import 'package:glaze_flutter/core/models/preset.dart';
 import 'package:glaze_flutter/core/models/studio_regex.dart';
 import 'package:glaze_flutter/core/preferences/saved_preferences_read_port.dart';
@@ -90,6 +89,208 @@ SavedPreferencesReadPort _port(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  for (final uncertain in [false, true]) {
+    test(
+      'unstarted conditional admission settles without receipt or quarantine change ($uncertain)',
+      () async {
+        await _backed((prefs, backing) async {
+          final tracked = prefs as TrackedSharedPreferences;
+          final owner = tracked.store.owner;
+          final original = owner.capture([
+            'memorySettings',
+          ], store: tracked.store);
+          final admission = owner.beginConditional(
+            original,
+            tracked.store,
+            'memorySettings',
+          )!;
+          if (uncertain)
+            owner.acknowledge(tracked.store, 'memorySettings', false);
+          expect(admission.finishUnstarted(), isNull);
+          expect(admission.current, isFalse);
+          expect(original.current, isFalse);
+          expect(admission.finishUnstarted(), isNull);
+          expect(admission.finish(true), isNull);
+          expect(
+            owner.capture(['memorySettings'], store: tracked.store).current,
+            !uncertain,
+          );
+          expect(backing.writes, isEmpty);
+          expect(backing.values['flutter.memorySettings'], '{}');
+        });
+      },
+    );
+  }
+  test(
+    'unstarted overlapping admission does not acknowledge the other writer',
+    () async {
+      await _backed((prefs, backing) async {
+        final tracked = prefs as TrackedSharedPreferences;
+        final owner = tracked.store.owner;
+        final admission = owner.beginConditional(
+          owner.capture(['memorySettings'], store: tracked.store),
+          tracked.store,
+          'memorySettings',
+        )!;
+        final competing = owner.begin(['memorySettings']);
+        try {
+          expect(admission.finishUnstarted(), isNull);
+          expect(
+            owner.capture(['memorySettings'], store: tracked.store).current,
+            isFalse,
+          );
+        } finally {
+          competing.settle();
+        }
+        expect(
+          owner.capture(['memorySettings'], store: tracked.store).current,
+          isTrue,
+        );
+        expect(backing.writes, isEmpty);
+      });
+    },
+  );
+  test(
+    'invoked failed conditional write still quarantines its saved observation',
+    () async {
+      await _backed((prefs, backing) async {
+        final tracked = prefs as TrackedSharedPreferences;
+        final owner = tracked.store.owner;
+        final admission = owner.beginConditional(
+          owner.capture(['memorySettings'], store: tracked.store),
+          tracked.store,
+          'memorySettings',
+        )!;
+        backing.rejected = 'flutter.memorySettings';
+        final accepted = await tracked.delegate.setString(
+          'memorySettings',
+          '{"changed":true}',
+        );
+        expect(accepted, isFalse);
+        expect(admission.finish(accepted), isNull);
+        expect(admission.finishUnstarted(), isNull);
+        expect(
+          owner.capture(['memorySettings'], store: tracked.store).current,
+          isFalse,
+        );
+        expect(backing.writes, ['flutter.memorySettings']);
+      });
+    },
+  );
+  for (final blockPipeline in [false, true]) {
+    for (final reload in [false, true]) {
+      test(
+        'seventh mixed-source tail reserves ${reload ? 'reload' : 'clear'} before a later ${blockPipeline ? 'Chub' : 'pipeline'} writer',
+        () async {
+          await _backed(
+            (prefs, backing) async {
+              final entered = Completer<void>(), release = Completer<void>();
+              Future<void> pause() async {
+                entered.complete();
+                await release.future;
+              }
+
+              final blocked = blockPipeline
+                  ? SavedPreferencesWrites.serializeMemoryCustomApi(pause)
+                  : SavedPreferencesWrites.serializeChub(pause);
+              await entered.future;
+              final older = reload
+                  ? prefs.reload()
+                  : prefs.clear().then<void>((saved) => expect(saved, true));
+              final key = blockPipeline
+                  ? 'gz_chub_api_key'
+                  : 'pipelineSettings';
+              const newest =
+                  '{"future":{"keep":true},"memoryBookApi":{"generationApiKey":"SYNTHETIC_LEGACY","generationModel":"new"}}';
+              final later = prefs.setString(key, newest);
+              try {
+                await Future<void>.delayed(Duration.zero);
+                expect(backing.writes, isEmpty);
+                expect(backing.values['flutter.$key'], 'original');
+              } finally {
+                release.complete();
+                await Future.wait<void>([
+                  blocked,
+                  older,
+                  later.then<void>((saved) => expect(saved, true)),
+                ]);
+              }
+              expect(backing.values['flutter.$key'], newest);
+              expect(prefs.getString(key), newest);
+              expect(SavedPreferencesKeys.families, hasLength(5));
+              expect(
+                SavedPreferencesKeys.families['savedPipelinePreferences'],
+                {'pipelineSettings'},
+              );
+            },
+            initial: {
+              'pipelineSettings': 'original',
+              'gz_chub_api_key': 'original',
+            },
+          );
+        },
+      );
+    }
+  }
+  for (final compete in [false, true]) {
+    test(
+      'pipeline CAS retains pre-queue admission ${compete ? 'and refuses a newer same-value writer' : 'without re-entering the mixed FIFO'}',
+      () async {
+        const before =
+            '{"memoryBookApi":{"generationApiKey":"SYNTHETIC_LEGACY","generationModel":"old"},"future":{"token":"INERT"}}';
+        const after =
+            '{"memoryBookApi":{"generationApiKey":"SYNTHETIC_LEGACY","generationModel":"new"},"future":{"token":"INERT"}}';
+        await _backed((prefs, backing) async {
+          final native = prefs as TrackedSharedPreferences;
+          final lease = native.store.owner.capture([
+            'pipelineSettings',
+          ], store: native.store);
+          final entered = Completer<void>(), release = Completer<void>();
+          final blocked = SavedPreferencesWrites.serializeMemoryCustomApi(
+            () async {
+              entered.complete();
+              await release.future;
+            },
+          );
+          await entered.future;
+          final pending = native.compareAndSetString(
+            key: 'pipelineSettings',
+            expectedRaw: before,
+            value: after,
+            expected: lease,
+            isCurrent: () => true,
+          );
+          final newer = compete
+              ? native.setString('pipelineSettings', before)
+              : null;
+          try {
+            expect(lease.current, false);
+            await Future<void>.delayed(Duration.zero);
+            expect(backing.writes, isEmpty);
+            expect(backing.values['flutter.pipelineSettings'], before);
+          } finally {
+            release.complete();
+            await Future.wait<void>([
+              blocked,
+              pending.then<void>((_) {}),
+              if (newer != null)
+                newer.then<void>((saved) => expect(saved, true)),
+            ]);
+          }
+          final result = await pending;
+          expect(result.started, !compete);
+          expect(result.accepted, !compete);
+          expect(result.receipt?.current, compete ? null : true);
+          expect(backing.writes, ['flutter.pipelineSettings']);
+          expect(
+            backing.values['flutter.pipelineSettings'],
+            compete ? before : after,
+          );
+          expect(prefs.getString('pipelineSettings'), compete ? before : after);
+        }, initial: {'pipelineSettings': before});
+      },
+    );
+  }
   for (final rawThemeReload in [false, true]) {
     test(
       'pre-existing setter cannot be certified by ${rawThemeReload ? 'raw theme' : 'tracked'} reload',
@@ -408,15 +609,23 @@ void main() {
           final a = container
               .read(memoryGlobalSettingsProvider.notifier)
               .save(const MemoryGlobalSettings(enabled: false));
+          final before = container.read(pipelineSettingsProvider);
+          final changed = before.copyWith(
+            memoryBookApi: before.memoryBookApi.copyWith(
+              generationMaxTokens: 1025,
+            ),
+          );
           final b = container
               .read(pipelineSettingsProvider.notifier)
-              .save(const PipelineSettings());
+              .save(changed);
           expect(memoryPort.isCurrent(memory), false);
           expect(pipelinePort.isCurrent(pipeline), false);
           expect(container.read(memoryGlobalSettingsProvider).enabled, false);
+          expect(container.read(pipelineSettingsProvider), before);
           expect(store.writes, isEmpty);
           delayed.complete(prefs);
           await Future.wait([a, b]);
+          expect(container.read(pipelineSettingsProvider), changed);
           expect(
             store.writes,
             containsAll(['flutter.memorySettings', 'flutter.pipelineSettings']),

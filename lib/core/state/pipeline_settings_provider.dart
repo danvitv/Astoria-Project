@@ -10,6 +10,9 @@ import '../models/memory_book_api_settings.dart';
 import '../models/memory_pipeline_settings.dart';
 import '../models/pipeline_settings.dart';
 import '../models/studio_agent_settings.dart';
+import '../credentials/memory_custom_api_legacy_source.dart';
+import 'credential_vault_provider.dart';
+import 'memory_custom_api_credentials_provider.dart';
 import 'shared_prefs_provider.dart';
 
 /// Global pipeline LLM settings, persisted in SharedPreferences under the
@@ -20,8 +23,8 @@ import 'shared_prefs_provider.dart';
 /// (fields grouped under `studioAgent`, `cleaner`, `ledger`, `memoryPipeline`,
 /// `memoryBookApi`, `cardRewriter` sub-objects). The [load] method handles both
 /// formats
-/// idempotently — flat JSON is migrated to nested on first load and persisted
-/// back so subsequent loads read the nested format directly.
+/// idempotently in memory. Loading never rewrites the mixed legacy document;
+/// ordinary native saves patch changed leaves under original conditional custody.
 final pipelineSettingsProvider =
     StateNotifierProvider<PipelineSettingsNotifier, PipelineSettings>(
       (ref) => PipelineSettingsNotifier(ref),
@@ -31,31 +34,66 @@ class PipelineSettingsNotifier extends StateNotifier<PipelineSettings> {
   final Ref _ref;
   PipelineSettingsNotifier(this._ref) : super(const PipelineSettings());
 
-  Future<void> load() =>
-      SavedPreferencesWrites.run(['pipelineSettings'], () async {
-        final prefs = await _ref.read(sharedPreferencesProvider.future);
-        final raw = prefs.getString('pipelineSettings');
-        if (raw != null) {
-          try {
-            final json = jsonDecode(raw) as Map<String, dynamic>;
-            state = _parseSettingsJson(json);
-            // Persist back if migration occurred (flat → nested).
-            final encoded = jsonEncode(state.toJson());
-            if (encoded != raw) {
-              await prefs.setString('pipelineSettings', encoded);
-            }
-          } catch (_) {}
-        }
-      });
+  Future<void> load() async {
+    final source = _ref.read(memoryCustomApiLegacySourceProvider);
+    final original = source.captureSettings();
+    final redaction = _ref.read(secretRedactionCoordinatorProvider);
+    try {
+      final prefs = await source.preferences(original, () => _ref.mounted);
+      final json = MemoryCustomApiLegacySource.decode(
+        prefs.get('pipelineSettings'),
+      );
+      source.registerAliases(json, redaction);
+      final parsed = _parseSettingsJson(json);
+      if (_ref.mounted && original.current) state = parsed;
+      // Read-only compatibility parsing; never rewrite a mixed raw document.
+    } catch (_) {}
+  }
 
-  Future<void> save(PipelineSettings settings) => SavedPreferencesWrites.run(
-    ['pipelineSettings'],
-    () async {
-      state = settings;
-      final prefs = await _ref.read(sharedPreferencesProvider.future);
-      await prefs.setString('pipelineSettings', jsonEncode(settings.toJson()));
-    },
-  );
+  Future<void> save(PipelineSettings settings) async {
+    if (settings.memoryBookApi.generationApiKey.isNotEmpty) {
+      throw const MemoryCustomApiWriteException(
+        MemoryCustomApiWriteStatus.denied,
+      );
+    }
+    // Generated toJson retains nested Freezed objects. Materialize JSON before
+    // diffing, otherwise a slot replacement would erase its private raw leaves.
+    final patch = _changedLeaves(
+      jsonDecode(jsonEncode(state.toJson())) as Map<String, dynamic>,
+      jsonDecode(jsonEncode(settings.toJson())) as Map<String, dynamic>,
+    );
+    if (patch.isEmpty) return;
+    final source = _ref.read(memoryCustomApiLegacySourceProvider);
+    final result = await source.savePipeline(
+      patch,
+      isCurrent: () => _ref.mounted,
+      hasNativeRecord: (current) => _ref
+          .read(memoryCustomApiCredentialOwnerProvider)
+          .hasNativeRecord(current),
+    );
+    if (result.status != MemoryCustomApiWriteStatus.verified) {
+      throw MemoryCustomApiWriteException(result.status);
+    }
+    if (!_ref.mounted || result.receipt?.current != true) return;
+    state = _parseSettingsJson(result.ordinary!);
+  }
+
+  static Map<String, dynamic> _changedLeaves(
+    Map<String, dynamic> before,
+    Map<String, dynamic> after,
+  ) => {
+    for (final entry in after.entries)
+      if (entry.key != 'generationApiKey' &&
+          jsonEncode(before[entry.key]) != jsonEncode(entry.value))
+        entry.key:
+            before[entry.key] is Map<String, dynamic> &&
+                entry.value is Map<String, dynamic>
+            ? _changedLeaves(
+                before[entry.key] as Map<String, dynamic>,
+                entry.value as Map<String, dynamic>,
+              )
+            : entry.value,
+  };
 
   /// The caller retains the original raw document privately and writes changed
   /// slot fields only. This publishes its acknowledged parse, not a writeback.
@@ -80,8 +118,9 @@ class PipelineSettingsNotifier extends StateNotifier<PipelineSettings> {
   /// values for the rest — extra keys are silently ignored. The legacy
   /// `sidecar*` → `aux*` rename is applied first.
   PipelineSettings _parseSettingsJson(Map<String, dynamic> json) {
+    json = MemoryCustomApiLegacySource.withoutSecret(json);
     // Already nested — parse directly.
-    if (json.containsKey('studioAgent')) {
+    if (MemoryCustomApiLegacySource.isNested(json)) {
       return PipelineSettings.fromJson(json);
     }
 

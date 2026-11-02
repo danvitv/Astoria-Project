@@ -39,6 +39,7 @@ abstract final class PrivatePreferenceKeys {
   static const imageRoutmyKeys = {
     'gz_imggen_settings',
     'gz_imggen_routmy_api_key',
+    'gz_imggen_naistera_api_key',
   };
   static const datacatAccountKeys = {
     'gz_dc_user_token',
@@ -184,6 +185,16 @@ final class SavedPreferencesConditionalWrite {
       owner._revisions[key] == _revision &&
       owner._pending[key] == 1;
 
+  /// Close an admission whose physical plugin setter was never invoked. This
+  /// retires the intent without inventing an acknowledgement or read receipt,
+  /// adding failure quarantine, or clearing any existing uncertainty.
+  SavedPreferencesLease? finishUnstarted() {
+    if (_closed) return null;
+    _closed = true;
+    _intent.settle();
+    return null;
+  }
+
   SavedPreferencesLease? finish(bool accepted) {
     if (_closed) return null;
     final retained = current;
@@ -291,6 +302,7 @@ abstract final class SavedPreferencesWrites {
   static Future<void> _datacatAnonymousTail = Future<void>.value();
   static Future<void> _imageRoutmyTail = Future<void>.value();
   static Future<void> _cloudOAuthTail = Future<void>.value();
+  static Future<void> _memoryCustomApiTail = Future<void>.value();
 
   /// The one private legacy key needs physical writer ordering as well as ABA
   /// revisions. An admitted remove/import cannot race a tracked backup setter.
@@ -334,7 +346,7 @@ abstract final class SavedPreferencesWrites {
     return result;
   }
 
-  /// Whole-store operations reserve ALL private tails at admission, not after
+  /// Whole-store operations reserve ALL protected source tails at admission, not after
   /// acquiring the first. A later family write cannot overtake an older clear
   /// blocked by Chub. The callback invokes the plugin directly, never re-enters
   /// an individual family FIFO. Failed operations do not poison the tails.
@@ -346,6 +358,7 @@ abstract final class SavedPreferencesWrites {
       _datacatAnonymousTail,
       _imageRoutmyTail,
       _cloudOAuthTail,
+      _memoryCustomApiTail,
     ]);
     final result = previous.then((_) => operation());
     final settled = result.then<void>(
@@ -358,6 +371,7 @@ abstract final class SavedPreferencesWrites {
     _datacatAnonymousTail = settled;
     _imageRoutmyTail = settled;
     _cloudOAuthTail = settled;
+    _memoryCustomApiTail = settled;
     return result;
   }
 
@@ -377,6 +391,18 @@ abstract final class SavedPreferencesWrites {
   static Future<T> serializeCloudOAuth<T>(Future<T> Function() operation) {
     final result = _cloudOAuthTail.then((_) => operation());
     _cloudOAuthTail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  /// The mixed pipeline document keeps its existing public read/CAS contract.
+  /// Native custom Memory custody and every physical pipeline writer share only
+  /// ordering here; this grants neither credential edits nor another read family.
+  static Future<T> serializeMemoryCustomApi<T>(Future<T> Function() operation) {
+    final result = _memoryCustomApiTail.then((_) => operation());
+    _memoryCustomApiTail = result.then<void>(
       (_) {},
       onError: (Object _, StackTrace _) {},
     );

@@ -3,11 +3,13 @@ import 'dart:convert';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 
+import '../../../core/state/credential_vault_provider.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/widgets/glaze_bottom_sheet.dart';
 import '../../../shared/widgets/glaze_spinner.dart';
 import '../../../shared/widgets/menu_group.dart';
 import '../image_gen_models.dart';
+import '../image_gen_provider.dart';
 
 /// Image-gen specific rows.
 ///
@@ -29,7 +31,50 @@ void showImageGenOptions<T>(
   required String Function(T) labelBuilder,
   required bool Function(T) isSelected,
   required void Function(T) onSelected,
+  bool Function(String)? isPublicText,
 }) {
+  if (isPublicText != null) {
+    // Protected labels are never materialized into a cached items list. The
+    // native sheet rebuilds its cards from CURRENT policy, using the original
+    // captured custody guard. All other dropdowns keep their existing path.
+    GlazeBottomSheet.show<void>(
+      context,
+      title: title,
+      cardsBuilder: (sheetContext, ref) {
+        ref.watch(errorRedactionPolicyRevisionProvider);
+        ref.watch(secretRedactorProvider);
+        ref.watch(imageRoutmyCredentialOwnerProvider);
+        ref.watch(imageOpenRouterCredentialOwnerProvider);
+        ref.watch(imageNovelAiCredentialOwnerProvider);
+        ref.watch(imageNaisteraCredentialOwnerProvider);
+        final route = ModalRoute.of(sheetContext);
+        final navigator = Navigator.of(sheetContext);
+        return BottomSheetCards(
+          items: [
+            for (final item in items)
+              if ((item is! String || isPublicText(item)) &&
+                  isPublicText(labelBuilder(item)))
+                BottomSheetCardItem(
+                  label: labelBuilder(item),
+                  icon: isSelected(item) ? Icons.check : null,
+                  isActive: isSelected(item),
+                  onTap: () {
+                    // Retained callbacks are checked too. Never pop a newer or
+                    // unrelated route that happens to be above this picker.
+                    if (route?.isCurrent != true ||
+                        (item is String && !isPublicText(item)) ||
+                        !isPublicText(labelBuilder(item)))
+                      return;
+                    navigator.pop();
+                    onSelected(item);
+                  },
+                ),
+          ],
+        );
+      },
+    );
+    return;
+  }
   GlazeBottomSheet.show<void>(
     context,
     title: title,
@@ -64,11 +109,7 @@ class ImageGenFetchButton extends StatelessWidget {
     if (isFetching) {
       return const Padding(
         padding: EdgeInsets.all(12),
-        child: SizedBox(
-          width: 18,
-          height: 18,
-          child: GlazeSpinner(),
-        ),
+        child: SizedBox(width: 18, height: 18, child: GlazeSpinner()),
       );
     }
     return IconButton(
@@ -136,9 +177,7 @@ class _ImageGenTextFieldItemState extends State<ImageGenTextFieldItem> {
   Widget _revealButton(BuildContext context) {
     return IconButton(
       icon: Icon(
-        _obscured
-            ? Icons.visibility_outlined
-            : Icons.visibility_off_outlined,
+        _obscured ? Icons.visibility_outlined : Icons.visibility_off_outlined,
         size: 20,
         color: context.cs.onSurfaceVariant,
       ),
@@ -235,7 +274,9 @@ class _ImageGenReferenceRowState extends State<ImageGenReferenceRow> {
           ? 'imggen_match_mode_always'.tr()
           : 'imggen_match_mode_match'.tr(),
       isSelected: (mode) =>
-          (widget.refItem.matchMode.isEmpty ? 'match' : widget.refItem.matchMode) ==
+          (widget.refItem.matchMode.isEmpty
+              ? 'match'
+              : widget.refItem.matchMode) ==
           mode,
       onSelected: widget.onMatchModeChanged,
     );

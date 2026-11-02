@@ -1,6 +1,10 @@
 import 'package:drift/drift.dart';
 
+import '../../credentials/credential_vault.dart';
+import '../../credentials/memory_custom_api_credential_owner.dart';
+import '../../credentials/secret_redactor.dart';
 import '../app_db.dart';
+import '../database_transaction_guard.dart';
 import '../tables.dart';
 import '../../utils/time_helpers.dart';
 
@@ -64,6 +68,57 @@ class SummaryRepo extends DatabaseAccessor<AppDatabase>
     );
   }
 
+  /// Only generated custom summaries use this transaction. The original custom
+  /// custody is never refreshed from a matching row or a replacement owner.
+  /// Ordinary/manual writes and their public signatures remain unchanged.
+  Future<String> putGeneratedCustomSummary({
+    required String sessionId,
+    required String content,
+    required int messageCount,
+    String? prompt,
+    required MemoryCustomApiInvocation original,
+    required SecretRedactor originalRedactor,
+    required bool Function() isCurrent,
+  }) async {
+    final guard = _CustomSummaryWriteGuard(
+      original,
+      originalRedactor,
+      content,
+      isCurrent,
+    );
+    original.requireCurrent();
+    final durable = await outsideDatabaseTransaction(
+      attachedDatabase,
+      () => attachedDatabase.runWithInterceptor(
+        () => attachedDatabase.transaction(() async {
+          original.requireCurrent();
+          final existing = await get(sessionId);
+          original.requireCurrent();
+          // The read may have introduced a new CURRENT alias. Produce the
+          // write's content only now; the SQL/commit guard rejects any later
+          // policy change that would make this content unsafe, rolling back.
+          final safe = guard.prepareContent();
+          await into(chatSummaries).insertOnConflictUpdate(
+            ChatSummariesCompanion.insert(
+              sessionId: sessionId,
+              content: safe,
+              enabled: Value(existing?.enabled ?? true),
+              messageCount: Value(messageCount),
+              prompt: Value(prompt ?? existing?.prompt),
+              updatedAt: Value(currentTimestampSeconds()),
+            ),
+          );
+          guard.requireSafe();
+          return safe;
+        }),
+        interceptor: guard,
+      ),
+      onRejected: () => const CredentialVaultAdmissionDenied(),
+    );
+    guard.requireSafe();
+    return durable;
+  }
+
   /// Writes only the summarization template, leaving the content and the
   /// message count alone. A settings screen that edits the prompt must not
   /// stamp a new message count — that silently restarts the auto-summary
@@ -123,5 +178,79 @@ class SummaryRepo extends DatabaseAccessor<AppDatabase>
       enabled: source.enabled,
       prompt: source.prompt,
     );
+  }
+}
+
+/// A finite fence for the single summary SELECT/upsert/commit above, not an
+/// ordinary mutation framework. Redaction changes after dispatch deny the
+/// transaction rather than issuing a second write under new authority.
+final class _CustomSummaryWriteGuard extends QueryInterceptor {
+  _CustomSummaryWriteGuard(
+    this.original,
+    this.snapshot,
+    this.content,
+    this.isCurrent,
+  );
+  final MemoryCustomApiInvocation original;
+  final SecretRedactor snapshot;
+  final String content;
+  final bool Function() isCurrent;
+  String? _written;
+
+  String prepareContent() {
+    requireSafe();
+    return _written = original.redact(content, snapshot).trim();
+  }
+
+  void requireSafe() {
+    if (!isCurrent()) throw const CredentialVaultAdmissionDenied();
+    original.requireCurrent();
+    if (_written != null &&
+        original.redact(content, snapshot).trim() != _written) {
+      throw const CredentialVaultAdmissionDenied();
+    }
+  }
+
+  @override
+  Future<bool> ensureOpen(
+    QueryExecutor executor,
+    QueryExecutorUser user,
+  ) async {
+    requireSafe();
+    final opened = await super.ensureOpen(executor, user);
+    requireSafe();
+    return opened;
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) async {
+    requireSafe();
+    final rows = await super.runSelect(executor, statement, args);
+    requireSafe();
+    return rows;
+  }
+
+  @override
+  Future<int> runInsert(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) async {
+    requireSafe();
+    final changed = await super.runInsert(executor, statement, args);
+    requireSafe();
+    return changed;
+  }
+
+  @override
+  Future<void> commitTransaction(TransactionExecutor inner) async {
+    requireSafe();
+    await super.commitTransaction(inner);
+    // Settled-commit publication is checked AFTER the transaction future above.
+    // Do not report an already-committed transaction to Drift as commit failure.
   }
 }

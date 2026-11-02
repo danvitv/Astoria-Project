@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:drift/drift.dart';
-import 'package:drift/native.dart';
+import 'package:sqlite3/sqlite3.dart' as sqlite;
 import 'package:glaze_flutter/core/credentials/connection_revision_registry.dart';
 import 'package:glaze_flutter/core/credentials/credential_vault.dart';
 import 'package:glaze_flutter/core/credentials/credential_slot.dart';
@@ -42,8 +42,11 @@ import 'helpers/support_native_input_fixture.dart'
 /// AEAD and private H/T/S. Only the last HTTP delegate and storage are fake.
 /// Never constructs an app/provider graph, OS vault, production DB or socket.
 final class SupportProviderModelFixture {
-  SupportProviderModelFixture._() {
-    db = _ProviderModelDatabase(NativeDatabase.memory().interceptWith(sql));
+  SupportProviderModelFixture._({sqlite.Database? originalNativeConnection}) {
+    // Select the original executor before repositories, ROOT or providers.
+    db = originalNativeConnection == null
+        ? _ProviderModelDatabase(sql)
+        : _ProviderModelDatabase.opened(originalNativeConnection, sql);
     vault = CredentialVault(storage: storage, buildChannel: 'dev');
     cipher = SupportPayloadCipher(vault: vault, cipher: primitive);
     repo = SupportRepo(db, cipher);
@@ -145,8 +148,11 @@ final class SupportProviderModelFixture {
     bool prepared = false,
     String? storedNativeRecord,
     Set<NativeProviderPurpose> purposes = const {NativeProviderPurpose.astoria},
+    sqlite.Database? originalNativeConnection,
   }) async {
-    final f = SupportProviderModelFixture._();
+    final f = SupportProviderModelFixture._(
+      originalNativeConnection: originalNativeConnection,
+    );
     try {
       await f.db.customSelect('SELECT 1').getSingle();
       await f.db.customStatement('PRAGMA busy_timeout = 0');
@@ -377,8 +383,19 @@ final class SupportProviderModelFixture {
 }
 
 final class _ProviderModelDatabase extends AppDatabase {
-  _ProviderModelDatabase(super.e) : super.forTesting();
+  _ProviderModelDatabase(NativeInputSql interceptor)
+    : super.nativeMemoryForTesting(interceptor: interceptor);
+  _ProviderModelDatabase.opened(
+    sqlite.Database connection,
+    NativeInputSql interceptor,
+  ) : super.openedNativeForTesting(
+        connection,
+        interceptor: interceptor,
+        closeUnderlyingOnClose: false,
+      );
   @override
-  MigrationStrategy get migration =>
-      MigrationStrategy(onCreate: (m) => m.createAll());
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (m) => m.createAll(),
+    beforeOpen: super.migration.beforeOpen,
+  );
 }

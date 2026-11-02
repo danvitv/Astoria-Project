@@ -140,8 +140,8 @@ final class SupportNativeDefinitionSelection {
       'astoria_active_selection_undo',
     },
     'globalRegex': {
-      // Retained Undo discovers genuine receipts. Fresh disable has no supplied
-      // script-ID discovery path; never advertise it as a complete overflow task.
+      'astoria_global_regex_scripts_list',
+      'astoria_global_regex_disable',
       'astoria_global_regex_receipts',
       'astoria_global_regex_undo',
     },
@@ -152,6 +152,27 @@ final class SupportNativeDefinitionSelection {
       'astoria_memory_entry_text_revise',
       'astoria_memory_entry_text_receipts',
       'astoria_memory_entry_text_undo',
+    },
+    'memoryDraft': {
+      'astoria_session_integrity',
+      'astoria_roleplay_inspect',
+      'astoria_memory_inspect',
+      'astoria_memory_draft_text_edit',
+      'astoria_memory_draft_text_receipts',
+      'astoria_memory_draft_text_undo',
+    },
+    'memoryDraftRemoval': {
+      'astoria_session_integrity',
+      'astoria_roleplay_inspect',
+      'astoria_memory_inspect',
+      'astoria_memory_draft_delete',
+      'astoria_memory_draft_delete_receipts',
+      'astoria_memory_draft_delete_undo',
+    },
+    'rewriteDecision': {
+      'astoria_rewrite_review_receipts',
+      'astoria_rewrite_reject',
+      'astoria_rewrite_reject_undo',
     },
     'sessionRepair': {
       'astoria_roleplay_inspect',
@@ -195,11 +216,24 @@ final class SupportNativeDefinitionSelection {
       r'отмени активный выбор)',
     ),
     'globalRegex': _command(
-      r'(?:undo (?:the )?global regex disable|отмени отключение глобального regex)',
+      r'(?:(?:disable (?:the )?global regex|undo (?:the )?global regex disable)|'
+      r'отключи глобальный regex|отмени отключение глобального regex)',
     ),
     'memoryEntry': _command(
       r'(?:revise (?:the )?memory entry text|undo (?:the )?memory entry text revision|'
       r'измени текст записи memory|отмени изменение текста записи memory)',
+    ),
+    'memoryDraft': _command(
+      r'(?:edit (?:the )?memory draft text|undo (?:the )?memory draft text edit|'
+      r'измени текст черновика memory|отмени изменение текста черновика memory)',
+    ),
+    'memoryDraftRemoval': _command(
+      r'(?:delete (?:the )?memory draft|undo (?:the )?memory draft deletion|'
+      r'удали черновик memory|отмени удаление черновика memory)',
+    ),
+    'rewriteDecision': _command(
+      r'(?:reject (?:the )?rewrite operation|undo (?:the )?rewrite rejection|'
+      r'отклони операцию переписывания|отмени отклонение операции переписывания)',
     ),
     'sessionRepair': _command(
       r'(?:repair (?:the )?session|undo (?:the )?session repair|'

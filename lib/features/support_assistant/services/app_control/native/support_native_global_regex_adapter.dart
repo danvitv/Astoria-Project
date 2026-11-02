@@ -7,6 +7,7 @@ import '../support_app_repair_runtime.dart';
 import 'support_native_domain_sources.dart';
 
 part 'support_native_global_regex_execution.dart';
+part 'support_native_global_regex_discovery.dart';
 part 'support_native_global_regex_retention.dart';
 
 /// One existing GLOBAL script disable and genuine original retained Undo.
@@ -17,11 +18,13 @@ final class SupportNativeGlobalRegexAdapter implements SupportAppActionAdapter {
     required this.chats,
     required this.sources,
     required this.port,
+    required this.metadata,
   });
   final SupportRepo support;
   final ChatRepo chats;
   final SupportNativeDomainSources sources;
   final NativeGlobalRegexPort? port;
+  final SupportAppMetadataPolicy metadata;
   final _receipts = <String, _RetainedGlobalRegex>{};
   bool _disposed = false;
   bool get _current =>
@@ -39,6 +42,19 @@ final class SupportNativeGlobalRegexAdapter implements SupportAppActionAdapter {
 
   @override
   List<SupportAppActionDefinition> get definitions => [
+    SupportAppActionDefinition(
+      name: 'astoria_global_regex_scripts_list',
+      description:
+          'Read at most the first 32 already-loaded original GLOBAL scripts: '
+          'exact safe existing id, optional safe name and disabled state only. '
+          'Reports total, inspected, returned, omitted and unlisted counts. '
+          'Unsafe fields are omitted whole, never clipped or masked. No patterns, '
+          'replacements, bodies, raw JSON or preference reads. Unavailable until '
+          'the original same-origin owner is loaded. IDs are not grants: disable '
+          'still needs its separate exact native confirmation and original CAS. '
+          'Not a Source4 source grant; discovery never mutates or retires sources.',
+      risk: SupportAppActionRisk.metadata,
+    ),
     SupportAppActionDefinition(
       name: 'astoria_global_regex_disable',
       description:
@@ -93,6 +109,8 @@ final class SupportNativeGlobalRegexAdapter implements SupportAppActionAdapter {
   ) async {
     if (!_current || !context.current || context.domainRoot == null)
       return null;
+    if (action == 'astoria_global_regex_scripts_list')
+      return _scripts(context);
     if (action == 'astoria_global_regex_receipts')
       return _list(arguments, context);
     final undo = action == 'astoria_global_regex_undo';

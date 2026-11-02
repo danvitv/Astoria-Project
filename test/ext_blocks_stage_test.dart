@@ -6,6 +6,8 @@ import 'package:glaze_flutter/core/models/character.dart';
 import 'package:glaze_flutter/core/models/persona.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/llm/prompt/main_model_context_snapshot.dart';
+import 'package:glaze_flutter/core/state/db_provider.dart';
+import 'package:glaze_flutter/core/state/persona_resolution.dart';
 import 'package:glaze_flutter/features/chat/abort_handler.dart';
 import 'package:glaze_flutter/features/chat/chat_state.dart';
 import 'package:glaze_flutter/features/chat/services/stages/ext_blocks_stage.dart';
@@ -65,6 +67,9 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final container = ProviderContainer(
       overrides: [
+        // Status-only fixture: do not bootstrap the application's persona DB.
+        effectivePersonaForChatProvider((charId: 'c1', sessionId: 's1'))
+            .overrideWithValue(null),
         extensionPostGenServiceProvider.overrideWith(
           (ref) => _RecordingExtensionPostGenService(ref),
         ),
@@ -101,6 +106,7 @@ void main() {
         container.read(extensionPostGenServiceProvider)
             as _RecordingExtensionPostGenService;
     expect(service.processCalls, 1);
+    expect(container.exists(appDbProvider), isFalse);
     expect(
       container.read(postGenStatusProvider),
       isA<PostGenStatusState>()
@@ -113,6 +119,8 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final container = ProviderContainer(
       overrides: [
+        effectivePersonaForChatProvider((charId: 'c1', sessionId: 's1'))
+            .overrideWithValue(null),
         extensionPostGenServiceProvider.overrideWith(
           (ref) => _RecordingExtensionPostGenService(ref, didRun: true),
         ),
@@ -141,6 +149,7 @@ void main() {
           agentSwipeId: -1,
         );
 
+    expect(container.exists(appDbProvider), isFalse);
     expect(
       container.read(postGenStatusProvider),
       isA<PostGenStatusState>()

@@ -1,10 +1,18 @@
 # Astoria Assistant — active implementation plan
 
 Updated: 2026-11-02. This is the working plan, not a certificate of completion.
+Paused by user on 2026-11-02 for another agent's fixes; the local checkpoint is
+authorized to be committed, not pushed. Do not resume implementation or tests until asked.
 It supersedes the October plans and local phase journals. The user's latest
 instruction and project safety rules take precedence over this document.
 
-Execution continues on the user's instruction to finish without new builds.
+The latest instruction requests one release APK and continued implementation.
+This overrides the earlier no-build rule for that APK only; app launches, private
+data access, live calls, dependency changes and pushes remain outside the task.
+The assistant checkpoint is `d56d506a`; current HEAD `2670b845` retains the neighbor's
+canon changes. Custom Memory draft/Summary custody is verified; one-message visibility
+is blocked on bounded original cleanup/Undo, with zero new definitions. No accepted
+delivery is reopened merely by resumption.
 The latest 84.1s Windows release includes saved Studio block validation but
 predates topology and subsequent changes. Bounded read-only specialists now run
 in the original Send loop. Loaded-session title rename/Undo, Chub custody,
@@ -20,7 +28,26 @@ verified through native Send; Memory's pushed handoff preserves its original tab
 Rout.my image custody and downstream error-publication guards are verified synthetic
 slices. Desktop OAuth and bounded definition freezing are also verified. Twenty-eight
 affected catalog/wizard regressions pass; original source and confirmation guards remain.
-No launch or rebuild is part of this work.
+The requested dev-channel APK passed in 118.9s (159.6 MB), after custom Memory checks.
+OpenRouter and NovelAI image custody are verified through synthetic native consumers
+and publication checks; those later changes are not in that artifact. Other credential
+families and extended actions remain open. No additional APK build is authorized.
+No application launch is requested.
+
+Naistera's synthetic native slice is now verified: original public HTTP catalog ->
+queued physical preferences -> original picker/model selection and late-CURRENT denial
+pass. The blocker was unrelated auth-load summaries invalidating the selected provider's
+sheet epoch; listeners now invalidate only their active family. Original CAS, ownership
+and privacy guards remain. Local Rewrite Reject/Undo now has direct original-repository
+execution evidence: a genuine Reject/fresh Undo baseline and 12 delivery/rollback cases
+pass. Callback-only late authority retirement no longer issues a current successor.
+The authorized first UI diagnostic located the stalled original snapshot future.
+Keeping that exact future and waiting with the existing bounded join now reaches
+persisted Reject and HEADER Back into the same mounted review; original cleanup closes.
+Fresh Undo still does not render confirmation. The full path and 35 native scenarios
+remain unverified. Do not
+mark Rewrite or the full plan finished, restart the exhausted fixture loop, or replace
+the missing mounted path with repository evidence. See the current handoff.
 
 ## Authority and accepted work
 
@@ -177,15 +204,36 @@ the actual Memory -> Astoria -> Send -> rendered-header Back case pass. The orig
 mounted idle book/chat owners, same container, JSON/UTF-8 limits, encrypted journal
 and prospective Undo capacity are retained. Encoded previews keep the existing
 256-character metadata bound; no embedding or generation is implicit. This is not
-general Memory CRUD. Global regex disable/retained Undo passes 28 native/port cases;
-raw unknown JSON and original producer/graph lifetimes are preserved. Fresh disable
-still needs a known exact script ID; no private-ID reader was added.
+general Memory CRUD. Global regex now has bounded same-origin loaded-script discovery
+before exact disable/retained Undo: 26 native loop cases pass and seven port cases
+remain valid. Raw unknown JSON and original producer/graph lifetimes are preserved.
+Discovery returns at most 32 safe metadata entries, not patterns or replacements;
+it neither loads an owner nor expands Source4 or diagnostic permissions.
 
-The original connected definition objects are frozen once before preview/POST. Thirty-five
+One pending-approval draft now has exact text-only editing and fresh retained Undo
+through that original Memory tab. All 34 loop cases and two real Memory handoffs pass;
+raw content-token CAS preserves all other draft/book fields. Apply/Undo retain their
+own post-commit ticket, and a late ordinary writer prevents stale cache/Undo publication
+without denying a genuine persisted fact. Pre-effect receipt reservation, actual
+Cancel preservation, escaped/duplicate raw fields and byte/preview boundaries are
+covered. This does not approve/generate drafts, append entry history or run indexing.
+
+One such pending draft also supports exact removal and genuine freshly confirmed
+Undo. All 45 removal-loop cases and an additional actual Memory handoff pass. Removal
+touches only its original raw object/adjacent delimiter; Undo restores the retained
+raw array and order, not reconstructed journal/DTO data. Original-owner tickets,
+joint encrypted journal, pre-effect capacity and raw-array CAS remain mandatory.
+Raw changes after preview refuse; uncertain and delivered-retired facts stay distinct.
+No entry deletion, provider cancellation, approval, generation or indexing is implicit.
+
+The original connected definition objects are frozen once before preview/POST. Sixty-six
 pure/native cases pass with the existing limit of 64 unchanged. Complete known task
 families are selected only on overflow; missing prerequisites or ambiguous commands
 fall back to the complete actual Source4 set or refuse before POST. An omitted tool
 is unavailable in that run, not proof that the app lacks it or consent was denied.
+The ordinary base is now 63; seven actual profile/compatibility cases pass. Optional
+sources/backups can exceed the ceiling and
+therefore use complete family selection, never a truncated catalog.
 
 ### 3. Remaining credential-family migration
 
@@ -216,14 +264,25 @@ polling boundaries remain covered. No real identify/link request, device creatio
 invalid-ID regeneration, binding adoption or cleanup was performed.
 
 Rout.my image custody is verified in the selected connection, lifecycle and model-UI
-cases; other image providers remain unmigrated. Desktop Dropbox/Google Drive OAuth
+cases; OpenRouter, NovelAI and Naistera also have verified synthetic native slices.
+Remaining image families are still open. Desktop Dropbox/Google Drive OAuth
 pairs now use protected custody with 55 synthetic cases passing and 35 existing
 diagnostic/consistency regressions passing. Exact bearer generations, issued own-refresh,
 next-operation retirement and verified/unverified commit facts are covered. Native
 mobile Google SDK custody is not duplicated; metadata and remote-revocation warnings
-remain distinct. All six private physical FIFOs and 32 existing preferences regressions
-pass. Plaintext remains preserved. API/embedding, other images, custom Memory/parameters
-and remaining catalog/browser families still require original-owner slices.
+remain distinct. The six private family FIFOs and shared pipeline FIFO pass the
+24 preferences-owner and 18 scalar CAS cases. Plaintext remains preserved.
+
+Custom Memory draft/Summary key custody is verified through native key entry,
+secret-free settings, exact-destination guarded requests and final repository
+publication. Owner/transport/Summary/slot cases pass 16/11/18/6; manual jobs and
+automatic stages pass 15/7. Late policy-only aliases after SQL roll publication back
+without a false book revision; settled Summary commits are not falsely rolled back.
+Unstarted admissions create no acknowledgment and do not clear uncertainty. Native
+retry, key rotation and cancellation use synthetic transport; no live success or
+plaintext cleanup is claimed. API/embedding, other images, legacy custom Memory
+containers/executable parameters and remaining catalog/browser families still
+require original-owner slices.
 
 Keyless archive export now filters five exact historical Memory credential paths
 retained by v48, including endpoint authentication. Pure and synthetic DB-to-ZIP

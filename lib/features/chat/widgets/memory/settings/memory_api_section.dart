@@ -6,6 +6,7 @@ import '../../../../../core/models/memory_book_api_settings.dart';
 import '../../../../../shared/theme/app_colors.dart';
 import '../../../../../shared/widgets/menu_group.dart';
 import '../../../../settings/widgets/api_slot_group.dart';
+import 'native_memory_custom_api_settings.dart';
 
 /// The API block of the memory settings sheet: the connection drafts are
 /// written on, the model they are written with, and the two request limits
@@ -43,6 +44,7 @@ class MemoryApiSections {
 
   List<Widget> build(BuildContext context) {
     return [
+      NativeMemoryCustomApiSettings(api: api, onChanged: onChanged),
       ApiSlotGroup(
         header: 'tab_api'.tr(),
         description: 'memory_books_slot_desc'.tr(),
@@ -59,9 +61,8 @@ class MemoryApiSections {
         modelRows: [
           ApiSlotModelRow(
             value: api.generationModel,
-            onChanged: (value) => onChanged(
-              api.copyWith(generationModel: value),
-            ),
+            onChanged: (value) =>
+                onChanged(api.copyWith(generationModel: value)),
           ),
         ],
         trailingItems: [
@@ -85,15 +86,13 @@ class MemoryApiSections {
                     : null,
               ),
             ),
-            onChanged: (value) => onChanged(
-              api.copyWith(generationMaxTokens: value.round()),
-            ),
+            onChanged: (value) =>
+                onChanged(api.copyWith(generationMaxTokens: value.round())),
           ),
           MenuRangeItem(
             label: 'memory_books_generation_temperature'.tr(),
             description: 'memory_books_generation_temperature_desc'.tr(),
-            value:
-                api.generationTemperature ?? kMemoryDraftDefaultTemperature,
+            value: api.generationTemperature ?? kMemoryDraftDefaultTemperature,
             min: 0,
             max: 2,
             divisions: 200,
@@ -107,9 +106,8 @@ class MemoryApiSections {
                     : null,
               ),
             ),
-            onChanged: (value) => onChanged(
-              api.copyWith(generationTemperature: value),
-            ),
+            onChanged: (value) =>
+                onChanged(api.copyWith(generationTemperature: value)),
           ),
           MenuItem(
             icon: Icons.hub_outlined,

@@ -9,13 +9,15 @@ class ImageGenHttp {
   final Dio _dio;
 
   ImageGenHttp({Dio? dio, bool followRedirects = true})
-    : _dio = dio ?? Dio(
-        BaseOptions(
-          connectTimeout: const Duration(seconds: 60),
-          receiveTimeout: const Duration(seconds: 300),
-          followRedirects: followRedirects,
-        ),
-      );
+    : _dio =
+          dio ??
+          Dio(
+            BaseOptions(
+              connectTimeout: const Duration(seconds: 60),
+              receiveTimeout: const Duration(seconds: 300),
+              followRedirects: followRedirects,
+            ),
+          );
 
   Future<Map<String, dynamic>> post({
     required String url,
@@ -23,6 +25,7 @@ class ImageGenHttp {
     String? apiKey,
     Map<String, String>? extraHeaders,
     CancelToken? cancelToken,
+    bool? followRedirects,
   }) async {
     final headers = <String, String>{
       'Content-Type': 'application/json',
@@ -34,7 +37,7 @@ class ImageGenHttp {
       final response = await _dio.post<Map<String, dynamic>>(
         url,
         data: body,
-        options: Options(headers: headers),
+        options: Options(headers: headers, followRedirects: followRedirects),
         cancelToken: cancelToken,
       );
       return response.data ?? {};
@@ -91,6 +94,7 @@ class ImageGenHttp {
     String? apiKey,
     Map<String, String>? extraHeaders,
     CancelToken? cancelToken,
+    bool? followRedirects,
   }) async {
     final headers = <String, String>{
       'Content-Type': 'application/json',
@@ -102,7 +106,11 @@ class ImageGenHttp {
       final response = await _dio.post<List<int>>(
         url,
         data: body,
-        options: Options(headers: headers, responseType: ResponseType.bytes),
+        options: Options(
+          headers: headers,
+          responseType: ResponseType.bytes,
+          followRedirects: followRedirects,
+        ),
         cancelToken: cancelToken,
       );
       return Uint8List.fromList(response.data ?? const []);
@@ -119,6 +127,7 @@ class ImageGenHttp {
     String? apiKey,
     Map<String, String>? extraHeaders,
     CancelToken? cancelToken,
+    bool? followRedirects,
   }) async {
     final headers = <String, String>{
       'Accept': 'application/json',
@@ -128,7 +137,7 @@ class ImageGenHttp {
     };
     final response = await _dio.get<Map<String, dynamic>>(
       url,
-      options: Options(headers: headers),
+      options: Options(headers: headers, followRedirects: followRedirects),
       cancelToken: cancelToken,
     );
     return response.data ?? {};
@@ -175,12 +184,14 @@ class ImageGenHttp {
     String url, {
     CancelToken? cancelToken,
     Map<String, String>? extraHeaders,
+    bool? followRedirects,
   }) async {
     return _dio.get<Uint8List>(
       url,
       options: Options(
         responseType: ResponseType.bytes,
         headers: {...?extraHeaders},
+        followRedirects: followRedirects,
       ),
       cancelToken: cancelToken,
     );

@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import '../../models/block_config.dart';
 import '../../models/extension_preset.dart';
 import '../../models/info_block.dart';
+import 'block_image_renderer.dart';
 
 typedef BlockRunner =
     Future<InfoBlock?> Function({
@@ -57,7 +58,10 @@ class BlockProcessor {
           if (cancelToken.isCancelled) return null;
           return runBlock(
             blockConfig: blockConfig,
-            previousOutput: prev?.content,
+            previousOutput:
+                prev != null && BlockImageRenderer.canPublishResult(prev)
+                ? prev.content
+                : null,
           );
         });
       } else {
@@ -70,7 +74,9 @@ class BlockProcessor {
 
       if (blockConfig.dependsOnPrevious) {
         final result = await blockFuture;
-        if (result != null) {
+        if (result != null &&
+            !cancelToken.isCancelled &&
+            BlockImageRenderer.canPublishResult(result)) {
           previousOutput = result.content;
           onBlockComplete(result);
         }
@@ -80,7 +86,9 @@ class BlockProcessor {
         inFlight.add(blockFuture);
         unawaited(
           blockFuture.then((result) {
-            if (result != null) {
+            if (result != null &&
+                !cancelToken.isCancelled &&
+                BlockImageRenderer.canPublishResult(result)) {
               onBlockComplete(result);
             }
           }),

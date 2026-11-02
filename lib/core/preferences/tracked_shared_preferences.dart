@@ -57,6 +57,8 @@ final class TrackedSharedPreferences implements SharedPreferences {
           ? SavedPreferencesWrites.serializeImageRoutmy(perform)
           : key == PrivatePreferenceKeys.cloudOAuthDocument
           ? SavedPreferencesWrites.serializeCloudOAuth(perform)
+          : key == 'pipelineSettings'
+          ? SavedPreferencesWrites.serializeMemoryCustomApi(perform)
           : perform(),
     );
   }
@@ -88,22 +90,31 @@ final class TrackedSharedPreferences implements SharedPreferences {
     if (admission == null) {
       return (started: false, accepted: false, receipt: null);
     }
-    var accepted = false, started = false;
-    SavedPreferencesLease? receipt;
-    try {
-      if (isCurrent() && admission.current && getString(key) == expectedRaw) {
-        started = true;
-        accepted = value == null
-            ? await delegate.remove(key)
-            : await delegate.setString(key, value);
+    Future<({bool started, bool accepted, SavedPreferencesLease? receipt})>
+    perform() async {
+      var accepted = false, started = false;
+      SavedPreferencesLease? receipt;
+      try {
+        if (isCurrent() && admission.current && getString(key) == expectedRaw) {
+          started = true;
+          accepted = value == null
+              ? await delegate.remove(key)
+              : await delegate.setString(key, value);
+        }
+      } catch (_) {
+        // Keep the original producer's ambiguous outcome; never expose exception.
+      } finally {
+        receipt = admission.finish(accepted);
       }
-    } catch (_) {
-      // Keep the original producer's ambiguous outcome; never expose exception.
-    } finally {
-      receipt = admission.finish(accepted);
+      if (!started) return (started: false, accepted: false, receipt: null);
+      return (started: true, accepted: accepted, receipt: receipt);
     }
-    if (!started) return (started: false, accepted: false, receipt: null);
-    return (started: true, accepted: accepted, receipt: receipt);
+
+    // Retain the ORIGINAL synchronous CAS admission while waiting in the mixed
+    // document's physical FIFO. Do not reacquire a lease or re-enter the facade.
+    return key == 'pipelineSettings'
+        ? SavedPreferencesWrites.serializeMemoryCustomApi(perform)
+        : perform();
   }
 
   /// Native, exact retirement of ONLY the Chub legacy key. Caller must retain

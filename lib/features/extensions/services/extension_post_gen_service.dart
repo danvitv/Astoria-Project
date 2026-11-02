@@ -7,6 +7,8 @@ import '../../../core/models/character.dart';
 import '../../../core/models/persona.dart';
 import '../../../core/llm/prompt/main_model_context_snapshot.dart';
 import '../../../core/state/db_provider.dart';
+import '../../image_gen/image_gen_provider.dart';
+import '../../image_gen/image_gen_models.dart';
 import '../models/block_config.dart';
 import '../models/extension_preset.dart';
 import '../models/info_block.dart';
@@ -320,7 +322,10 @@ class ExtensionPostGenService {
         reuseBlockId: reuseBlockId,
       );
 
-      if (block != null) {
+      if (block != null &&
+          _ref.mounted &&
+          !cancelToken.isCancelled &&
+          BlockImageRenderer.canPublishResult(block)) {
         _ref.read(infoBlocksProvider(sessionId).notifier).addOrReplace(block);
       }
     } finally {
@@ -408,48 +413,96 @@ class ExtensionPostGenService {
     final blockConfig = preset.blocks.where((b) => b.id == blockId).firstOrNull;
     if (blockConfig == null) return;
 
-    final rows = await _repo.getByMessageId(
+    if (!_ref.mounted) return;
+    final originalRepo = _repo;
+    final imageSettings = _ref.read(imageGenSettingsProvider).value;
+    final originalRoutmy = _ref.read(imageRoutmyCredentialOwnerProvider);
+    final originalOpenRouter = _ref.read(
+      imageOpenRouterCredentialOwnerProvider,
+    );
+    final ownsRoutmy = originalRoutmy.captureGuard();
+    final ownsOpenRouter = originalOpenRouter.captureGuard();
+    final originalNovelAi = _ref.read(imageNovelAiCredentialOwnerProvider);
+    final ownsNovelAi = originalNovelAi.captureGuard();
+    final originalNaistera = _ref.read(imageNaisteraCredentialOwnerProvider);
+    final ownsNaistera = originalNaistera.captureGuard();
+    bool ownsOriginalRerun() =>
+        _ref.mounted &&
+        identical(_repo, originalRepo) &&
+        identical(_ref.read(imageGenSettingsProvider).value, imageSettings) &&
+        identical(
+          _ref.read(imageRoutmyCredentialOwnerProvider),
+          originalRoutmy,
+        ) &&
+        identical(
+          _ref.read(imageOpenRouterCredentialOwnerProvider),
+          originalOpenRouter,
+        ) &&
+        (imageSettings?.apiType != ImageGenApiType.routmy || ownsRoutmy()) &&
+        (imageSettings?.apiType != ImageGenApiType.openrouter ||
+            ownsOpenRouter()) &&
+        (imageSettings?.apiType != ImageGenApiType.novelai ||
+            (ownsNovelAi() &&
+                identical(
+                  _ref.read(imageNovelAiCredentialOwnerProvider),
+                  originalNovelAi,
+                ))) &&
+        (imageSettings?.apiType != ImageGenApiType.naistera ||
+            (ownsNaistera() &&
+                identical(
+                  _ref.read(imageNaisteraCredentialOwnerProvider),
+                  originalNaistera,
+                )));
+    if (!ownsOriginalRerun()) return;
+    final rows = await originalRepo.getByMessageId(
       sessionId,
       messageId,
       swipeId: swipeId,
       agentSwipeId: agentSwipeId,
     );
+    if (!ownsOriginalRerun()) return;
     final existing = rows.where((b) => b.blockId == blockId).firstOrNull;
     if (existing == null || existing.content.isEmpty) return;
 
     final cancelToken = _startBlockRun();
+    InfoBlock? rendered;
     try {
-      await BlockImageRenderer(
-        ref: _ref,
-        repo: _repo,
-        publishStreamingBlockContent: _publishStreamingBlockContent,
-      ).rerun(
-        context: BlockContext(
-          charId: charId,
-          sessionId: sessionId,
-          messageId: messageId,
-          swipeId: swipeId,
-          agentSwipeId: agentSwipeId,
-          messages: const [],
-          blockConfig: blockConfig,
-          preset: preset,
-          character: character,
-          persona: persona,
-          previousOutput: null,
-          cancelToken: cancelToken,
-          placeholderId: existing.id,
-          placeholder: existing,
-        ),
-      );
+      rendered =
+          await BlockImageRenderer(
+            ref: _ref,
+            repo: originalRepo,
+            publishStreamingBlockContent: _publishStreamingBlockContent,
+          ).rerun(
+            context: BlockContext(
+              charId: charId,
+              sessionId: sessionId,
+              messageId: messageId,
+              swipeId: swipeId,
+              agentSwipeId: agentSwipeId,
+              messages: const [],
+              blockConfig: blockConfig,
+              preset: preset,
+              character: character,
+              persona: persona,
+              previousOutput: null,
+              cancelToken: cancelToken,
+              placeholderId: existing.id,
+              placeholder: existing,
+            ),
+          );
     } finally {
       _finishBlockRun(cancelToken);
-      _refreshPanelForMessage(
-        charId,
-        sessionId,
-        messageId,
-        swipeId,
-        agentSwipeId,
-      );
+      if (ownsOriginalRerun() &&
+          rendered != null &&
+          BlockImageRenderer.canPublishResult(rendered)) {
+        _refreshPanelForMessage(
+          charId,
+          sessionId,
+          messageId,
+          swipeId,
+          agentSwipeId,
+        );
+      }
     }
   }
 
@@ -493,6 +546,10 @@ class ExtensionPostGenService {
         );
       },
       onBlockComplete: (result) {
+        if (!_ref.mounted ||
+            cancelToken.isCancelled ||
+            !BlockImageRenderer.canPublishResult(result))
+          return;
         _ref.read(infoBlocksProvider(sessionId).notifier).addOrReplace(result);
       },
     );

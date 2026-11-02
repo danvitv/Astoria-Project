@@ -6,9 +6,15 @@ import '../../services/card_rewriter/card_rewriter_contracts.dart';
 import '../../utils/id_generator.dart';
 import '../../utils/time_helpers.dart';
 import '../app_db.dart';
+import '../database_transaction_guard.dart';
+import '../../models/support_models.dart';
+import 'support_repo.dart';
 import 'character_repo.dart';
 import 'ledger_raw_tracker_state_reader.dart';
 import 'session_lorebook_evolution_repo.dart';
+
+part 'manual_rewrite_native_decision_fence.dart';
+part 'manual_rewrite_native_decision_store.dart';
 
 /// Caller-generated evidence payload persisted alongside one operation.
 final class ManualRewriteEvidenceDraft {
@@ -314,7 +320,7 @@ class ManualRewriteJobRepo {
   Future<RewriteJobTransitionOutcome> retry({
     required String jobId,
     required int expectedVersion,
-  }) async {
+  }) => _trackNativeReviewJobWrite(jobId, () async {
     final job = await (_db.select(
       _db.rewriteJobs,
     )..where((row) => row.id.equals(jobId))).getSingleOrNull();
@@ -334,7 +340,7 @@ class ManualRewriteJobRepo {
       toStatus: 'generating',
       clearStatusReason: true,
     );
-  }
+  });
 
   /// An explicit user definition correction may need its own apply job while a
   /// proposal is pending. Keep the one-active-job constraint intact: suspend
@@ -345,53 +351,56 @@ class ManualRewriteJobRepo {
     required String jobId,
     required int expectedVersion,
     required Future<T> Function() correction,
-  }) => _db.transaction(() async {
-    final table = _db.rewriteJobs;
-    final original = await (_db.select(
-      table,
-    )..where((row) => row.id.equals(jobId))).getSingleOrNull();
-    if (original == null ||
-        original.status != 'pending' ||
-        original.version != expectedVersion) {
-      throw StateError('Pending review changed before definition correction');
-    }
-    final reason = 'temporaryUserDefinitionCorrection:$jobId';
-    final suspended =
-        await (_db.update(table)..where(
-              (row) =>
-                  row.id.equals(jobId) &
-                  row.status.equals('pending') &
-                  row.version.equals(expectedVersion),
-            ))
-            .write(
-              RewriteJobsCompanion(
-                status: const Value('failed'),
-                statusReason: Value(reason),
-              ),
-            );
-    if (suspended != 1) {
-      throw StateError('Pending review suspension conflicted');
-    }
-    final result = await correction();
-    final resumed =
-        await (_db.update(table)..where(
-              (row) =>
-                  row.id.equals(jobId) &
-                  row.status.equals('failed') &
-                  row.version.equals(expectedVersion) &
-                  row.statusReason.equals(reason),
-            ))
-            .write(
-              RewriteJobsCompanion(
-                status: const Value('pending'),
-                statusReason: Value(original.statusReason),
-              ),
-            );
-    if (resumed != 1) {
-      throw StateError('Pending review changed during definition correction');
-    }
-    return result;
-  });
+  }) => _trackNativeReviewJobWrite(
+    jobId,
+    () => _db.transaction(() async {
+      final table = _db.rewriteJobs;
+      final original = await (_db.select(
+        table,
+      )..where((row) => row.id.equals(jobId))).getSingleOrNull();
+      if (original == null ||
+          original.status != 'pending' ||
+          original.version != expectedVersion) {
+        throw StateError('Pending review changed before definition correction');
+      }
+      final reason = 'temporaryUserDefinitionCorrection:$jobId';
+      final suspended =
+          await (_db.update(table)..where(
+                (row) =>
+                    row.id.equals(jobId) &
+                    row.status.equals('pending') &
+                    row.version.equals(expectedVersion),
+              ))
+              .write(
+                RewriteJobsCompanion(
+                  status: const Value('failed'),
+                  statusReason: Value(reason),
+                ),
+              );
+      if (suspended != 1) {
+        throw StateError('Pending review suspension conflicted');
+      }
+      final result = await correction();
+      final resumed =
+          await (_db.update(table)..where(
+                (row) =>
+                    row.id.equals(jobId) &
+                    row.status.equals('failed') &
+                    row.version.equals(expectedVersion) &
+                    row.statusReason.equals(reason),
+              ))
+              .write(
+                RewriteJobsCompanion(
+                  status: const Value('pending'),
+                  statusReason: Value(original.statusReason),
+                ),
+              );
+      if (resumed != 1) {
+        throw StateError('Pending review changed during definition correction');
+      }
+      return result;
+    }),
+  );
 
   /// Caller-owned transaction helper for automation. It creates the same
   /// pending/reviewable aggregate as manual generation without exposing any
@@ -407,7 +416,7 @@ class ManualRewriteJobRepo {
     required String canonStamp,
     required List<ManualRewriteOperationDraft> operations,
     required int now,
-  }) async {
+  }) => _trackNativeReviewJobWrite(jobId, () async {
     if (operations.isEmpty) {
       throw ArgumentError.value(operations, 'operations', 'must not be empty');
     }
@@ -471,7 +480,7 @@ class ManualRewriteJobRepo {
     return (_db.select(
       _db.rewriteJobs,
     )..where((row) => row.id.equals(jobId))).getSingle();
-  }
+  });
 
   Future<RewriteJobTransitionOutcome> _transition({
     required String jobId,
@@ -480,42 +489,45 @@ class ManualRewriteJobRepo {
     required String toStatus,
     String? statusReason,
     bool clearStatusReason = false,
-  }) => _db.transaction(() async {
-    final jobs = _db.rewriteJobs;
-    final changed =
-        await (_db.update(jobs)..where(
-              (t) =>
-                  t.id.equals(jobId) &
-                  t.version.equals(expectedVersion) &
-                  t.status.isIn(fromStatuses),
-            ))
-            .write(
-              RewriteJobsCompanion(
-                status: Value(toStatus),
-                statusReason: clearStatusReason
-                    ? const Value<String?>(null)
-                    : statusReason != null
-                    ? Value(statusReason)
-                    : const Value.absent(),
-                version: Value(expectedVersion + 1),
-                updatedAt: Value(currentTimestampSeconds()),
-              ),
-            );
-    if (changed == 1) {
+  }) => _trackNativeReviewJobWrite(
+    jobId,
+    () => _db.transaction(() async {
+      final jobs = _db.rewriteJobs;
+      final changed =
+          await (_db.update(jobs)..where(
+                (t) =>
+                    t.id.equals(jobId) &
+                    t.version.equals(expectedVersion) &
+                    t.status.isIn(fromStatuses),
+              ))
+              .write(
+                RewriteJobsCompanion(
+                  status: Value(toStatus),
+                  statusReason: clearStatusReason
+                      ? const Value<String?>(null)
+                      : statusReason != null
+                      ? Value(statusReason)
+                      : const Value.absent(),
+                  version: Value(expectedVersion + 1),
+                  updatedAt: Value(currentTimestampSeconds()),
+                ),
+              );
+      if (changed == 1) {
+        final job = await (_db.select(
+          jobs,
+        )..where((t) => t.id.equals(jobId))).getSingle();
+        return RewriteJobTransitionOutcome.updated(job);
+      }
       final job = await (_db.select(
         jobs,
-      )..where((t) => t.id.equals(jobId))).getSingle();
-      return RewriteJobTransitionOutcome.updated(job);
-    }
-    final job = await (_db.select(
-      jobs,
-    )..where((t) => t.id.equals(jobId))).getSingleOrNull();
-    if (job == null) return const RewriteJobTransitionOutcome.notFound();
-    if (job.version != expectedVersion) {
-      return RewriteJobTransitionOutcome.staleVersion(job);
-    }
-    return RewriteJobTransitionOutcome.invalidState(job);
-  });
+      )..where((t) => t.id.equals(jobId))).getSingleOrNull();
+      if (job == null) return const RewriteJobTransitionOutcome.notFound();
+      if (job.version != expectedVersion) {
+        return RewriteJobTransitionOutcome.staleVersion(job);
+      }
+      return RewriteJobTransitionOutcome.invalidState(job);
+    }),
+  );
 
   /// Interlocked generation persistence: the job CAS `generating → pending`
   /// runs first, so a concurrent cancel/fail leaves this a 0-row write and
@@ -526,84 +538,87 @@ class ManualRewriteJobRepo {
     String jobId, {
     required int expectedVersion,
     required List<ManualRewriteOperationDraft> operations,
-  }) => _db.transaction(() async {
-    final jobs = _db.rewriteJobs;
-    final changed =
-        await (_db.update(jobs)..where(
-              (t) =>
-                  t.id.equals(jobId) &
-                  t.version.equals(expectedVersion) &
-                  t.status.equals('generating'),
-            ))
-            .write(
-              RewriteJobsCompanion(
-                status: const Value('pending'),
-                version: Value(expectedVersion + 1),
-                updatedAt: Value(currentTimestampSeconds()),
-              ),
-            );
-    if (changed != 1) {
+  }) => _trackNativeReviewJobWrite(
+    jobId,
+    () => _db.transaction(() async {
+      final jobs = _db.rewriteJobs;
+      final changed =
+          await (_db.update(jobs)..where(
+                (t) =>
+                    t.id.equals(jobId) &
+                    t.version.equals(expectedVersion) &
+                    t.status.equals('generating'),
+              ))
+              .write(
+                RewriteJobsCompanion(
+                  status: const Value('pending'),
+                  version: Value(expectedVersion + 1),
+                  updatedAt: Value(currentTimestampSeconds()),
+                ),
+              );
+      if (changed != 1) {
+        final job = await (_db.select(
+          jobs,
+        )..where((t) => t.id.equals(jobId))).getSingleOrNull();
+        if (job == null) return const PersistGenerationOutcome.notFound();
+        if (job.version != expectedVersion) {
+          return PersistGenerationOutcome.staleVersion(job);
+        }
+        return switch (job.status) {
+          'cancelled' => PersistGenerationOutcome.cancelled(job),
+          'failed' => PersistGenerationOutcome.failed(job),
+          _ => PersistGenerationOutcome.notGenerating(job),
+        };
+      }
       final job = await (_db.select(
         jobs,
-      )..where((t) => t.id.equals(jobId))).getSingleOrNull();
-      if (job == null) return const PersistGenerationOutcome.notFound();
-      if (job.version != expectedVersion) {
-        return PersistGenerationOutcome.staleVersion(job);
-      }
-      return switch (job.status) {
-        'cancelled' => PersistGenerationOutcome.cancelled(job),
-        'failed' => PersistGenerationOutcome.failed(job),
-        _ => PersistGenerationOutcome.notGenerating(job),
-      };
-    }
-    final job = await (_db.select(
-      jobs,
-    )..where((t) => t.id.equals(jobId))).getSingle();
-    final now = currentTimestampSeconds();
-    final ids = <String>[];
-    for (final draft in operations) {
-      final validation = await _validateAdvisory(job, draft.snapshotJson);
-      await _db
-          .into(_db.rewriteOperations)
-          .insert(
-            RewriteOperationsCompanion.insert(
-              id: draft.id,
-              rewriteJobId: jobId,
-              chatSessionId: job.chatSessionId,
-              operationJson: Value(draft.snapshotJson),
-              status: const Value('reviewable'),
-              currentRevision: const Value(1),
-              validationStatus: Value(validation),
-              createdAt: Value(now),
-              updatedAt: Value(now),
-            ),
-          );
-      await _db
-          .into(_db.rewriteOperationRevisions)
-          .insert(
-            RewriteOperationRevisionsCompanion.insert(
-              rewriteOperationId: draft.id,
-              revision: 1,
-              snapshotJson: draft.snapshotJson,
-              createdAt: Value(now),
-            ),
-          );
-      for (final item in draft.evidence) {
+      )..where((t) => t.id.equals(jobId))).getSingle();
+      final now = currentTimestampSeconds();
+      final ids = <String>[];
+      for (final draft in operations) {
+        final validation = await _validateAdvisory(job, draft.snapshotJson);
         await _db
-            .into(_db.rewriteEvidenceRows)
+            .into(_db.rewriteOperations)
             .insert(
-              RewriteEvidenceRowsCompanion.insert(
-                id: item.id,
+              RewriteOperationsCompanion.insert(
+                id: draft.id,
+                rewriteJobId: jobId,
+                chatSessionId: job.chatSessionId,
+                operationJson: Value(draft.snapshotJson),
+                status: const Value('reviewable'),
+                currentRevision: const Value(1),
+                validationStatus: Value(validation),
+                createdAt: Value(now),
+                updatedAt: Value(now),
+              ),
+            );
+        await _db
+            .into(_db.rewriteOperationRevisions)
+            .insert(
+              RewriteOperationRevisionsCompanion.insert(
                 rewriteOperationId: draft.id,
-                evidenceJson: item.evidenceJson,
+                revision: 1,
+                snapshotJson: draft.snapshotJson,
                 createdAt: Value(now),
               ),
             );
+        for (final item in draft.evidence) {
+          await _db
+              .into(_db.rewriteEvidenceRows)
+              .insert(
+                RewriteEvidenceRowsCompanion.insert(
+                  id: item.id,
+                  rewriteOperationId: draft.id,
+                  evidenceJson: item.evidenceJson,
+                  createdAt: Value(now),
+                ),
+              );
+        }
+        ids.add(draft.id);
       }
-      ids.add(draft.id);
-    }
-    return PersistGenerationOutcome.persisted(job, ids);
-  });
+      return PersistGenerationOutcome.persisted(job, ids);
+    }),
+  );
 
   /// Strict reviewer-decision CAS: id + current revision + expected decision
   /// + `status='reviewable'` + unapplied. Both approve and reject bind the
@@ -621,39 +636,42 @@ class ManualRewriteJobRepo {
         'must be approved or rejected',
       );
     }
-    return _db.transaction(() async {
-      final ops = _db.rewriteOperations;
-      final changed =
-          await (_db.update(ops)..where(
-                (t) =>
-                    t.id.equals(operationId) &
-                    t.currentRevision.equals(expectedCurrentRevision) &
-                    t.decision.equals(expectedDecision) &
-                    t.status.equals('reviewable') &
-                    t.appliedCharacterRevision.equals(0),
-              ))
-              .write(
-                RewriteOperationsCompanion(
-                  decision: Value(decision),
-                  // The decision binds the revision it reviewed; the CAS
-                  // above guarantees that is still [expectedCurrentRevision].
-                  decisionRevision: Value(expectedCurrentRevision),
-                  updatedAt: Value(currentTimestampSeconds()),
-                ),
-              );
-      if (changed == 1) {
-        final op = await (_db.select(
-          ops,
-        )..where((t) => t.id.equals(operationId))).getSingle();
-        await _bumpJobVersion(op.rewriteJobId);
-        return RewriteOperationMutationOutcome.updated(op);
-      }
-      return _diagnoseOperation(
-        operationId,
-        expectedCurrentRevision,
-        expectedDecision,
-      );
-    });
+    return _trackNativeReviewOperationWrite(
+      operationId,
+      () => _db.transaction(() async {
+        final ops = _db.rewriteOperations;
+        final changed =
+            await (_db.update(ops)..where(
+                  (t) =>
+                      t.id.equals(operationId) &
+                      t.currentRevision.equals(expectedCurrentRevision) &
+                      t.decision.equals(expectedDecision) &
+                      t.status.equals('reviewable') &
+                      t.appliedCharacterRevision.equals(0),
+                ))
+                .write(
+                  RewriteOperationsCompanion(
+                    decision: Value(decision),
+                    // The decision binds the revision it reviewed; the CAS
+                    // above guarantees that is still [expectedCurrentRevision].
+                    decisionRevision: Value(expectedCurrentRevision),
+                    updatedAt: Value(currentTimestampSeconds()),
+                  ),
+                );
+        if (changed == 1) {
+          final op = await (_db.select(
+            ops,
+          )..where((t) => t.id.equals(operationId))).getSingle();
+          await _bumpJobVersion(op.rewriteJobId);
+          return RewriteOperationMutationOutcome.updated(op);
+        }
+        return _diagnoseOperation(
+          operationId,
+          expectedCurrentRevision,
+          expectedDecision,
+        );
+      }),
+    );
   }
 
   /// Reviewer edit: appends immutable revision `current+1` (old revisions are
@@ -665,90 +683,95 @@ class ManualRewriteJobRepo {
     required int expectedCurrentRevision,
     required String newSnapshotJson,
     List<ManualRewriteEvidenceDraft> evidence = const [],
-  }) => _db.transaction(() async {
-    final ops = _db.rewriteOperations;
-    final op = await (_db.select(
-      ops,
-    )..where((t) => t.id.equals(operationId))).getSingleOrNull();
-    if (op == null) return const RewriteOperationMutationOutcome.notFound();
-    if (op.currentRevision != expectedCurrentRevision) {
-      return RewriteOperationMutationOutcome.staleRevision(op);
-    }
-    if (op.status != 'reviewable' || op.appliedCharacterRevision != 0) {
-      return RewriteOperationMutationOutcome.notReviewable(op);
-    }
-    final newRevision = expectedCurrentRevision + 1;
-    final now = currentTimestampSeconds();
-    await _db
-        .into(_db.rewriteOperationRevisions)
-        .insert(
-          RewriteOperationRevisionsCompanion.insert(
-            rewriteOperationId: operationId,
-            revision: newRevision,
-            snapshotJson: newSnapshotJson,
-            createdAt: Value(now),
-          ),
-        );
-    final changed =
-        await (_db.update(ops)..where(
-              (t) =>
-                  t.id.equals(operationId) &
-                  t.currentRevision.equals(expectedCurrentRevision) &
-                  t.status.equals('reviewable') &
-                  t.appliedCharacterRevision.equals(0),
-            ))
-            .write(
-              RewriteOperationsCompanion(
-                operationJson: Value(newSnapshotJson),
-                currentRevision: Value(newRevision),
-                decision: const Value('pending'),
-                decisionRevision: const Value(0),
-                validationStatus: const Value('pending'),
-                updatedAt: Value(now),
-              ),
-            );
-    if (changed != 1) {
-      // The pre-check and this CAS share one transaction, so a 0-row write
-      // is an impossible internal race; rolling back also discards the new
-      // revision row above.
-      throw StateError('Operation CAS changed inside edit transaction.');
-    }
-    for (final item in evidence) {
+  }) => _trackNativeReviewOperationWrite(
+    operationId,
+    () => _db.transaction(() async {
+      final ops = _db.rewriteOperations;
+      final op = await (_db.select(
+        ops,
+      )..where((t) => t.id.equals(operationId))).getSingleOrNull();
+      if (op == null) return const RewriteOperationMutationOutcome.notFound();
+      if (op.currentRevision != expectedCurrentRevision) {
+        return RewriteOperationMutationOutcome.staleRevision(op);
+      }
+      if (op.status != 'reviewable' || op.appliedCharacterRevision != 0) {
+        return RewriteOperationMutationOutcome.notReviewable(op);
+      }
+      final newRevision = expectedCurrentRevision + 1;
+      final now = currentTimestampSeconds();
       await _db
-          .into(_db.rewriteEvidenceRows)
+          .into(_db.rewriteOperationRevisions)
           .insert(
-            RewriteEvidenceRowsCompanion.insert(
-              id: item.id,
+            RewriteOperationRevisionsCompanion.insert(
               rewriteOperationId: operationId,
-              evidenceJson: item.evidenceJson,
+              revision: newRevision,
+              snapshotJson: newSnapshotJson,
               createdAt: Value(now),
             ),
           );
-    }
-    final job = await (_db.select(
-      _db.rewriteJobs,
-    )..where((t) => t.id.equals(op.rewriteJobId))).getSingle();
-    final validation = await _validateAdvisory(job, newSnapshotJson);
-    final validated =
-        await (_db.update(ops)..where(
-              (t) =>
-                  t.id.equals(operationId) &
-                  t.currentRevision.equals(newRevision) &
-                  t.decision.equals('pending') &
-                  t.validationStatus.equals('pending'),
-            ))
-            .write(
-              RewriteOperationsCompanion(validationStatus: Value(validation)),
+      final changed =
+          await (_db.update(ops)..where(
+                (t) =>
+                    t.id.equals(operationId) &
+                    t.currentRevision.equals(expectedCurrentRevision) &
+                    t.status.equals('reviewable') &
+                    t.appliedCharacterRevision.equals(0),
+              ))
+              .write(
+                RewriteOperationsCompanion(
+                  operationJson: Value(newSnapshotJson),
+                  currentRevision: Value(newRevision),
+                  decision: const Value('pending'),
+                  decisionRevision: const Value(0),
+                  validationStatus: const Value('pending'),
+                  updatedAt: Value(now),
+                ),
+              );
+      if (changed != 1) {
+        // The pre-check and this CAS share one transaction, so a 0-row write
+        // is an impossible internal race; rolling back also discards the new
+        // revision row above.
+        throw StateError('Operation CAS changed inside edit transaction.');
+      }
+      for (final item in evidence) {
+        await _db
+            .into(_db.rewriteEvidenceRows)
+            .insert(
+              RewriteEvidenceRowsCompanion.insert(
+                id: item.id,
+                rewriteOperationId: operationId,
+                evidenceJson: item.evidenceJson,
+                createdAt: Value(now),
+              ),
             );
-    if (validated != 1) {
-      throw StateError('Revalidation target changed inside edit transaction.');
-    }
-    await _bumpJobVersion(op.rewriteJobId);
-    final updated = await (_db.select(
-      ops,
-    )..where((t) => t.id.equals(operationId))).getSingle();
-    return RewriteOperationMutationOutcome.updated(updated);
-  });
+      }
+      final job = await (_db.select(
+        _db.rewriteJobs,
+      )..where((t) => t.id.equals(op.rewriteJobId))).getSingle();
+      final validation = await _validateAdvisory(job, newSnapshotJson);
+      final validated =
+          await (_db.update(ops)..where(
+                (t) =>
+                    t.id.equals(operationId) &
+                    t.currentRevision.equals(newRevision) &
+                    t.decision.equals('pending') &
+                    t.validationStatus.equals('pending'),
+              ))
+              .write(
+                RewriteOperationsCompanion(validationStatus: Value(validation)),
+              );
+      if (validated != 1) {
+        throw StateError(
+          'Revalidation target changed inside edit transaction.',
+        );
+      }
+      await _bumpJobVersion(op.rewriteJobId);
+      final updated = await (_db.select(
+        ops,
+      )..where((t) => t.id.equals(operationId))).getSingle();
+      return RewriteOperationMutationOutcome.updated(updated);
+    }),
+  );
 
   Future<RewriteOperationMutationOutcome> _diagnoseOperation(
     String operationId,

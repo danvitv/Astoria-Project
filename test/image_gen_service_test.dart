@@ -574,33 +574,35 @@ void main() {
     });
   });
 
-  group('generation order', () {
-    // Answers 404 after a short delay and records how many requests were being
-    // served at the same moment.
-    Future<(HttpServer, int Function())> startProbeServer() async {
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      var inFlight = 0;
-      var maxInFlight = 0;
-      server.listen((request) async {
-        inFlight++;
-        if (inFlight > maxInFlight) maxInFlight = inFlight;
-        await request.drain<void>();
-        await Future<void>.delayed(const Duration(milliseconds: 120));
-        request.response.statusCode = HttpStatus.notFound;
-        await request.response.close();
-        inFlight--;
-      });
-      return (server, () => maxInFlight);
-    }
+  // Answers 404 after a short delay and records concurrent requests. Both the
+  // ordering and markup-flow fixtures use this local-only original transport;
+  // a DTO rout.my key cannot grant the native credential owner authority.
+  Future<(HttpServer, int Function())> startProbeServer() async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    var inFlight = 0;
+    var maxInFlight = 0;
+    server.listen((request) async {
+      inFlight++;
+      if (inFlight > maxInFlight) maxInFlight = inFlight;
+      await request.drain<void>();
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      request.response.statusCode = HttpStatus.notFound;
+      await request.response.close();
+      inFlight--;
+    });
+    return (server, () => maxInFlight);
+  }
 
-    ImageGenSettings settingsFor(HttpServer server, {required bool parallel}) =>
-        ImageGenSettings(
-          enabled: true,
-          concurrentGeneration: parallel,
-          useSameEndpoint: false,
-          customEndpoint: 'http://${server.address.address}:${server.port}',
-          customApiKey: 'test-key',
-        );
+  ImageGenSettings settingsFor(HttpServer server, {required bool parallel}) =>
+      ImageGenSettings(
+        enabled: true,
+        concurrentGeneration: parallel,
+        useSameEndpoint: false,
+        customEndpoint: 'http://${server.address.address}:${server.port}',
+        customApiKey: 'test-key',
+      );
+
+  group('generation order', () {
 
     const threeTags =
         '[IMG:GEN:{"prompt":"one"}] '
@@ -742,39 +744,37 @@ void main() {
     test(
       'enabled check: processMessageImages processes when enabled (will fail API but test flow)',
       () async {
+        final (server, maxInFlight) = await startProbeServer();
+        addTearDown(() => server.close(force: true));
         const html =
             """<img data-iig-instruction='{"prompt":"test"}' src="[IMG:GEN]">""";
         final result = await service.processMessageImages(
           text: html,
-          settings: const ImageGenSettings(
-            enabled: true,
-            apiType: ImageGenApiType.routmy,
-            routmyApiKey: 'fake-key',
-          ),
+          settings: settingsFor(server, parallel: false),
           llmEndpoint: '',
           llmApiKey: '',
           llmModel: '',
         );
         // Should have attempted generation and replaced with error
+        expect(maxInFlight(), 1);
         expect(result, isNot(equals(html)));
         expect(result, contains('[IMG:ERROR:'));
       },
     );
 
     test('multiple failed image tags all settle without leaving GEN', () async {
+      final (server, maxInFlight) = await startProbeServer();
+      addTearDown(() => server.close(force: true));
       const text = '[IMG:GEN:{"prompt":"first"}] [IMG:GEN:{"prompt":"second"}]';
       final result = await service.processMessageImages(
         text: text,
-        settings: const ImageGenSettings(
-          enabled: true,
-          apiType: ImageGenApiType.routmy,
-          routmyApiKey: 'fake-key',
-        ),
+        settings: settingsFor(server, parallel: false),
         llmEndpoint: '',
         llmApiKey: '',
         llmModel: '',
       );
 
+      expect(maxInFlight(), 1);
       expect(ImageTagMarkup.hasImageGenTags(result), isFalse);
       expect('[IMG:ERROR:'.allMatches(result), hasLength(2));
     });

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -36,21 +38,74 @@ final class _CaptureProducerObserver extends ProviderObserver {
 
 void main() {
   domainLoopTest(
-    'MODEL disable GLOBAL preserves complete raw JSON and fresh Undo restores exact bytes',
+    'MODEL discovers exact GLOBAL IDs then confirms disable and fresh genuine Undo',
     (tester, f) async {
       final core = f.screen.core;
       final original = await loadedGlobalRegex(tester, f);
+      await configurationAction(tester, () {
+        core.native.redaction.registerSecret(DomainLoopFixture.private);
+      });
+      final source = core.container.read(chatSourceMutationRegistryProvider);
+      final checkpoint = source.sessionCheckpoint(DomainLoopFixture.session);
+      final revision = original.prefs.store.owner.capture([
+        NativeGlobalRegexPort.key,
+      ], store: original.prefs.store).revisions[NativeGlobalRegexPort.key];
       final after = original.raw.replaceFirst(
         '"disabled":false',
         '"disabled":true',
       );
       expect(NativeGlobalRegexJson.read(original.raw)!.disabled(0), after);
       f.script(
-        core.call('astoria_global_regex_disable', {
-          'id': syntheticGlobalRegexId,
-        }),
+        core.call('astoria_global_regex_scripts_list', {}, id: 'discover_regex'),
+        next: (_) {
+          final messages = core.wire.last['messages'] as List;
+          final result = messages.cast<Map>().lastWhere(
+            (m) => m['role'] == 'tool',
+          );
+          expect(result['tool_call_id'], 'discover_regex');
+          final discovery = f.lastResult();
+          expect(discovery['code'], 'completed');
+          expect(discovery['effect'], 'none');
+          final data = discovery['data'] as Map;
+          expect(data['records'], [
+            {'id': syntheticGlobalRegexId, 'disabled': false},
+            {'id': 'other-global', 'disabled': true},
+          ]);
+          expect(data['count'], 2);
+          expect(data['returnedCount'], 2);
+          expect(data['omittedCount'], 0);
+          expect(data['omittedNameCount'], 2);
+          expect(data['unlistedCount'], 0);
+          expect(data['truncated'], false);
+          expect(data['bodyAccess'], 'notGranted');
+          expect(
+            original.prefs.getString(NativeGlobalRegexPort.key),
+            original.raw,
+          );
+          expect(
+            source.sessionCheckpoint(DomainLoopFixture.session),
+            same(checkpoint),
+          );
+          return core.call('astoria_global_regex_disable', {
+            'id': ((data['records'] as List).first as Map)['id'],
+          }, id: 'disable_discovered_regex');
+        },
       );
       await f.start(tester);
+      expect(core.wire, hasLength(2));
+      expect(
+        original.prefs.store.owner.capture([
+          NativeGlobalRegexPort.key,
+        ], store: original.prefs.store).revisions[NativeGlobalRegexPort.key],
+        revision,
+      );
+      expect(
+        await configurationAction(
+          tester,
+          () => core.native.repo.getMutationsForSession(core.native.session),
+        ),
+        isEmpty,
+      );
       final preview = find.byKey(
         const ValueKey('support_tool_confirmation_preview'),
       );
@@ -90,7 +145,7 @@ void main() {
       );
       expect(
         core.wire,
-        hasLength(1),
+        hasLength(2),
       ); // ROOT retired; no effect-fed continuation.
       final journal = await configurationAction(
         tester,
@@ -128,8 +183,147 @@ void main() {
         )).single.status,
         'undone',
       );
-      expect(core.wire, hasLength(3));
+      expect(core.wire, hasLength(4));
       f.noEgress('${applied.body}${undone.body}');
+    },
+  );
+
+  domainLoopTest(
+    'MODEL GLOBAL discovery is bounded, whole-field redacted and has zero effects',
+    (tester, f) async {
+      final core = f.screen.core;
+      final original = await loadedGlobalRegex(tester, f);
+      const secret = 'SYNTHETIC_REGEX_METADATA_SECRET';
+      final longId = List.filled(129, 'a').join();
+      final longName = '${List.filled(256, 'a').join()}$secret';
+      await configurationAction(tester, () {
+        core.native.redaction.registerSecret(secret);
+        original.controller.state = AsyncData([
+          for (var i = 0; i < 35; i++)
+            syntheticGlobalRegex.copyWith(
+              id: switch (i) {
+                0 => 'prefix-$secret-suffix',
+                1 => 'unsafe/id',
+                2 => longId,
+                _ => 'safe-global-$i',
+              },
+              name: switch (i) {
+                3 => 'Whole prefix $secret suffix',
+                4 => longName,
+                5 => 'unsafe\nname',
+                _ => 'Global script $i',
+              },
+              disabled: i.isOdd,
+            ),
+        ]);
+      });
+      final source = core.container.read(chatSourceMutationRegistryProvider);
+      final checkpoint = source.sessionCheckpoint(DomainLoopFixture.session);
+      final preferencesBefore = await configurationAction(
+        tester,
+        () => core.native.permissions.readForNative(core.native.session),
+      );
+      final savedRevision = original.prefs.store.owner.capture([
+        NativeGlobalRegexPort.key,
+      ], store: original.prefs.store).revisions[NativeGlobalRegexPort.key];
+      // Loaded metadata intentionally differs from saved JSON. Discovery must
+      // not observe raw JSON, normalize it or claim these IDs grant mutation.
+      f.script(
+        core.call('astoria_global_regex_scripts_list', {}, id: 'bounded_regex'),
+        next: (round) {
+          final result = f.lastResult();
+          expect(result['code'], 'completed');
+          expect(result['effect'], 'none');
+          final data = result['data'] as Map;
+          if (round == 3) {
+            final messages = core.wire.last['messages'] as List;
+            final tool = messages.cast<Map>().lastWhere(
+              (m) => m['role'] == 'tool',
+            );
+            expect(tool['tool_call_id'], 'bounded_regex_again');
+            if (core.native.settings.dcpCompressionEnabled) {
+              expect(data, {'exactDuplicateOfCallId': 'bounded_regex'});
+            } else {
+              expect(data['returnedCount'], 29);
+            }
+            return core.answer('Only loaded native metadata was discovered.');
+          }
+          expect(data['count'], 35);
+          expect(data['inspectedCount'], 32);
+          expect(data['returnedCount'], 29);
+          expect(data['omittedCount'], 3);
+          expect(data['omittedNameCount'], 3);
+          expect(data['unlistedCount'], 3);
+          expect(data['truncated'], true);
+          expect(data['visibility'], 'originalLoadedOwnerOnly');
+          final records = (data['records'] as List).cast<Map>();
+          expect(records.first, {'id': 'safe-global-3', 'disabled': true});
+          expect(records.elementAt(1).containsKey('name'), false);
+          expect(records.elementAt(2).containsKey('name'), false);
+          expect(records.elementAt(3), {
+            'id': 'safe-global-6',
+            'name': 'Global script 6',
+            'disabled': false,
+          });
+          expect(records.last['id'], 'safe-global-31');
+          for (final record in records) {
+            expect(
+              record.keys.toSet().difference({'id', 'name', 'disabled'}),
+              isEmpty,
+            );
+          }
+          final outward = jsonEncode(data);
+          for (final excluded in [
+            secret,
+            'prefix-',
+            '-suffix',
+            'Whole prefix',
+            longId,
+            'unsafe/id',
+            'safe-global-32',
+            'privateUnknown',
+            'replacement',
+            DomainLoopFixture.private,
+          ]) {
+            expect(outward, isNot(contains(excluded)));
+          }
+          return core.call(
+            'astoria_global_regex_scripts_list',
+            {},
+            id: 'bounded_regex_again',
+          );
+        },
+      );
+      await f.start(tester, confirmation: false);
+      final reply = await f.finish(tester);
+      expect(core.wire, hasLength(3));
+      expect(original.prefs.getString(NativeGlobalRegexPort.key), original.raw);
+      expect(
+        original.prefs.store.owner.capture([
+          NativeGlobalRegexPort.key,
+        ], store: original.prefs.store).revisions[NativeGlobalRegexPort.key],
+        savedRevision,
+      );
+      expect(
+        source.sessionCheckpoint(DomainLoopFixture.session),
+        same(checkpoint),
+      );
+      final preferencesAfter = await configurationAction(
+        tester,
+        () => core.native.permissions.readForNative(core.native.session),
+      );
+      expect(
+        preferencesAfter.preferences!.grants,
+        preferencesBefore.preferences!.grants,
+      );
+      expect(
+        await configurationAction(
+          tester,
+          () => core.native.repo.getMutationsForSession(core.native.session),
+        ),
+        isEmpty,
+      );
+      f.noEgress(reply.body);
     },
   );
 
@@ -172,8 +366,103 @@ void main() {
     );
   }
 
+  for (final retirement in ['invalidated', 'loading', 'error', 'native ROOT']) {
+    domainLoopTest(
+      'MODEL GLOBAL discovery refuses $retirement before metadata without load or write',
+      (tester, f) async {
+        final core = f.screen.core;
+        final original = await loadedGlobalRegex(tester, f);
+        final retained = original.controller.captureNativePort(
+          original.prefs,
+          () => core.native.native.isCurrent,
+        )!;
+        final buildRevision = retained.revision();
+        final savedRevision = original.prefs.store.owner.capture([
+          NativeGlobalRegexPort.key,
+        ], store: original.prefs.store).revisions[NativeGlobalRegexPort.key];
+        final observer = _CaptureProducerObserver();
+        final producer = core.container
+            .allProviders()
+            .singleWhere((p) => p.provider == sharedPreferencesProvider)
+            .container;
+        producer.observers.add(observer);
+        var retired = false;
+        try {
+          f.script(
+            core.call(
+              'astoria_global_regex_scripts_list',
+              {},
+              id: 'retired_regex',
+            ),
+            next: (_) {
+              expect(f.lastResult()['code'], 'unavailable');
+              expect(f.results.last['effect'], 'none');
+              expect(f.results.last['data'], isEmpty);
+              return core.answer('No current original native metadata.');
+            },
+          );
+          final next = core.atFetch!;
+          core.atFetch = (round) async {
+            await next(round);
+            if (round != 1) return;
+            retired = true;
+            // Retire the real owner while delivering the original first tool
+            // call. No replacement graph, manufactured handle or ROOT waiver.
+            if (retirement == 'native ROOT') {
+              core.native.rootCurrent = false;
+            } else if (retirement == 'invalidated') {
+              core.container.invalidate(globalRegexProvider);
+            } else {
+              original.controller.state = retirement == 'loading'
+                  ? const AsyncLoading()
+                  : AsyncError(
+                      StateError('Synthetic original metadata owner failed.'),
+                      StackTrace.current,
+                    );
+            }
+          };
+          await f.start(tester, confirmation: false);
+          final reply = await f.finish(tester);
+          expect(retired, true);
+          expect(observer.preferenceLoads, 0);
+          expect(retained.revision(), buildRevision);
+          expect(retained.current, false);
+          expect(
+            original.prefs.store.owner.capture([
+              NativeGlobalRegexPort.key,
+            ], store: original.prefs.store).revisions[NativeGlobalRegexPort.key],
+            savedRevision,
+          );
+          expect(
+            original.prefs.getString(NativeGlobalRegexPort.key),
+            original.raw,
+          );
+          expect(
+            await configurationAction(
+              tester,
+              () => core.native.repo.getMutationsForSession(core.native.session),
+            ),
+            isEmpty,
+          );
+          if (retirement == 'native ROOT') {
+            // The ORIGINAL per-tool ROOT refuses before the registry can read
+            // metadata. The first paid POST has already delivered this call.
+            expect(core.wire, hasLength(1));
+            expect(f.results, isEmpty);
+          } else {
+            expect(core.wire, hasLength(2));
+          }
+          f.noEgress(reply.body);
+        } finally {
+          producer.observers.remove(observer);
+          retained.dispose();
+        }
+      },
+    );
+  }
+
   domainLoopTest(
-    'NATIVE real child GLOBAL override belongs only to its originating graph, not root or sibling',
+    'NATIVE child GLOBAL override belongs only to its origin; MODEL cannot discover foreign IDs',
     (tester, f) async {
       final core = f.screen.core;
       ({ProviderContainer container, NativeGlobalRegexPort? port}) capture(
@@ -313,7 +602,36 @@ void main() {
           original.prefs.getString(NativeGlobalRegexPort.key),
           original.raw,
         );
-        f.noEgress();
+        f.script(
+          core.call('astoria_global_regex_scripts_list', {}, id: 'foreign_regex'),
+          next: (_) {
+            expect(f.lastResult()['code'], 'unavailable');
+            expect(f.results.last['effect'], 'none');
+            expect(f.results.last['data'], isEmpty);
+            return core.answer('No original same-origin loaded owner.');
+          },
+        );
+        await f.start(tester, confirmation: false);
+        final reply = await f.finish(tester);
+        expect(core.container.exists(globalRegexProvider), false);
+        expect(siblingB.exists(globalRegexProvider), false);
+        expect(observer.preferenceLoads, 0);
+        expect(retained.revision(), buildRevision);
+        expect(
+          original.prefs.store.owner.capture([
+            NativeGlobalRegexPort.key,
+          ], store: original.prefs.store).revisions[NativeGlobalRegexPort.key],
+          savedRevision,
+        );
+        expect(original.prefs.getString(NativeGlobalRegexPort.key), original.raw);
+        expect(
+          await configurationAction(
+            tester,
+            () => core.native.repo.getMutationsForSession(core.native.session),
+          ),
+          isEmpty,
+        );
+        f.noEgress(reply.body);
       } finally {
         preferenceContainer?.observers.remove(observer);
         originalPort?.dispose();
@@ -461,11 +779,16 @@ void main() {
       final core = f.screen.core;
       expect(core.container.exists(globalRegexProvider), false);
       f.script(
-        core.call('astoria_global_regex_disable', {
-          'id': syntheticGlobalRegexId,
-        }),
-        next: (_) {
+        core.call('astoria_global_regex_scripts_list', {}, id: 'absent_regex'),
+        next: (round) {
           expect(f.lastResult()['code'], 'unavailable');
+          expect(f.results.last['effect'], 'none');
+          expect(f.results.last['data'], isEmpty);
+          if (round == 2) {
+            return core.call('astoria_global_regex_disable', {
+              'id': syntheticGlobalRegexId,
+            }, id: 'absent_regex_disable');
+          }
           return core.answer('No original loaded controller.');
         },
       );
@@ -473,6 +796,13 @@ void main() {
       final reply = await f.finish(tester);
       expect(core.container.exists(globalRegexProvider), false);
       expect(core.prefs.containsKey(NativeGlobalRegexPort.key), false);
+      expect(
+        await configurationAction(
+          tester,
+          () => core.native.repo.getMutationsForSession(core.native.session),
+        ),
+        isEmpty,
+      );
       f.noEgress(reply.body);
     },
   );

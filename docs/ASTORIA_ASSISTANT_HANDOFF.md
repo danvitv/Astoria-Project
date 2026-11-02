@@ -1,10 +1,11 @@
 # Astoria assistant — current handoff
 
 Date: 2026-11-02. Branch: `feat/astoria-assistant`.
-Checkpoint: `6f4dd35a`, committed after `e5fd03d8`. It includes the verified wizard,
-documentation cleanup and first diagnostic implementation. The root continuation
-then verified the first diagnostic UI path, linked recorded failures and current
-saved Studio block validation. Follow-up code/tests/evidence are uncommitted.
+Latest assistant checkpoint: `d56d506a`, containing the verified bounded deliveries
+recorded below. Current HEAD is `2670b845`, the neighbor's canon/Ledger fix; those
+changes are retained. The earlier `6f4dd35a` checkpoint contained the wizard,
+documentation cleanup and first diagnostics. After the requested pause/local commit,
+the user explicitly resumed work. New custom Memory work remains uncommitted.
 The latest requested Windows release build passed in **84.1s**, including Studio
 validation. The user explicitly resumed coding after the pause; the active slice
 delivered saved Studio agent topology/declared requirements through native sources.
@@ -12,9 +13,242 @@ That build predates the topology changes. No application process was
 stopped or launched; the ambiguous launch request resulted only in read-only checks.
 No push, live calls or application/device launch was performed.
 
-## Current no-build continuation
+## Current continuation and requested release APK
 
-The user's instruction is to continue to the end without new builds. Twenty-three
+The latest user instruction is “собери мне апк --release, и продолжай работу”.
+One release APK is authorized; other build/app/live/private/public actions are not
+added. `flutter build apk --release --no-pub` passed in **118.9s**: dev-channel
+`build/app/outputs/flutter-apk/app-release.apk`, 167381582 bytes (159.6 MB as
+reported by Flutter). It includes the verified custom Memory and regex discovery
+changes below; subsequent OpenRouter-image custody work is not in that artifact.
+The APK was not installed or launched. The neighboring canon checkpoint remains
+untouched. Kotlin-plugin warnings concern future Flutter compatibility, not a failed
+build; no dependency or Gradle migration was introduced.
+
+Native custom Memory API custody is verified: explicit key Set/Clear, secret-free
+settings, exact destination binding, guarded draft requests and custom Summaries.
+Sixteen owner, eleven native transport, eighteen custom Summary and six existing
+Summary-slot cases pass. Fifteen manual-job and seven automatic-stage cases pass;
+the five error, two concurrency, three shared-transport and seven saved-connection
+compatibility cases also pass. Native 408 retry and cancellation are covered by
+synthetic adapters, not live provider success.
+
+The three initial draft findings and the post-SQL alias finding are corrected:
+guard/sanitizer runs after the actual dependent read and again after SQL before
+commit; refused publication does not advance book-change metadata. Cached errors
+are fully CURRENT-redacted after adapter close, before clipping. Blank Set performs
+no effect; Clear is explicit. Summary writes use the original database transaction
+owner and check cancellation/current policy through commit; a settled commit is
+not falsely rolled back when return publication retires. Legacy plaintext remains.
+
+The seventh physical FIFO preserves the five saved-data families and existing CAS
+authority. All 24 preferences-owner cases pass, including six new queue/CAS and four
+unstarted-admission cases; 18 existing scalar CAS cases were refreshed. Regex discovery
+passes 26 native-loop cases (five new), with seven unchanged port cases reused.
+Frozen-definition readiness now passes 66 cases, including complete draft-text and
+draft-removal families with their discovery/Undo prerequisites. The ordinary base is 63; optional sources
+and backups can exceed 64, so the unchanged ceiling is enforced through complete
+task-family selection or complete Source4 fallback, never truncation. Seven existing global-profile/compatibility
+cases pass; tests retain the actual pre-Send bridge, not a retired fixture bridge.
+Scoped analysis has no errors/warnings after targeted test-type/import corrections;
+informational style hints remain. The requested APK build passed as recorded above.
+OpenRouter IMAGE custody is now verified separately from LLM keys. Fifty exact-recipient
+connection cases, 54 lifecycle cases and nine native model/picker UI cases pass. Seven
+block-repository, two extension-stage and 22 codec/Rout.my provider regressions pass;
+50 default/known-only matcher cases also pass. These are distinct scopes, not a
+cumulative plan-completion count. Normal proxy endpoints, modalities/reference inputs
+and signed CDN query bytes are preserved; CDN GETs carry no account Authorization and
+do not follow redirects. Native Set/Clear uses a dedicated protected record/tombstone;
+ordinary patches are detached before queue admission and preserve unknown/private leaves.
+Invoked unverified and verified-but-retired writes remain distinct from pre-start denial.
+
+The original/current policy is checked on whole values and decoded HTML attributes,
+without applying HTTP syntax rules to local paths, instruction JSON or complete markup.
+Disabled paths, final results and enabled intermediate callbacks check all carried
+message/swipe/agent/stored-metadata variants. Six actual service onUpdate cases prove
+that an unselected private archive is not re-published; denied output is ephemeral UI
+only, with no cache/database replacement. Typed block completion likewise cannot save
+that display projection. Open native pickers react to global policy changes without
+adopting a replacement credential owner. All bounded source-review findings are
+resolved by the recorded native cases; no additional review phase was introduced.
+Scoped analysis of 31 changed files has no errors/warnings after five-file type/no-op
+corrections; informational style hints remain. Legacy plaintext is intentionally
+preserved. No live provider/native-device success, full image-family migration or
+retroactive data scrub is claimed. The delivered APK excludes this later slice.
+
+One already-loaded idle, non-vector pending-approval Memory draft now supports exact
+text editing and freshly confirmed retained Undo. All 34 draft-loop cases and two
+actual Memory -> Astoria -> rendered Back handoffs pass. Its original 51 readiness
+cases and seven base-60 compatibility cases remain accepted; the current catalog and
+refreshed base-63 evidence are recorded above.
+The original raw JSON content token is the only modified field; escaped/non-first
+targets, decoded duplicate keys/IDs and inclusive/overflow byte/preview limits are
+covered. Apply and Undo publish only while their own completed admission ticket is
+current. A real commit retired by a later ordinary writer retains its persisted fact
+and pending refresh, with no stale cache publication or usable old Undo authority.
+Receipt slots are reserved synchronously before effect IO and released in finally;
+pruning removes only retired genuine authority. Actual Cancel preserves the live Undo
+and leaves row/cache/journal unchanged. Every new secret, even unrelated, retires the
+original Send policy snapshot and its in-flight transaction. Scoped analysis has no
+errors/warnings; informational style hints remain. Initial review and its bounded
+rereview are closed. No approval, generation, entry history, indexing or embeddings
+are implicit; no native-device/live-model or cross-process raw-writer proof is claimed.
+The 64-live-receipt saturation case is not forged: this original DB admission retires
+earlier receipts on a new write. This slice is not in the delivered APK.
+
+One already-loaded idle, non-vector pending-approval draft can also be deleted with
+native confirmation and freshly confirmed retained Undo. All 45 removal-loop cases
+and one additional real Memory -> Astoria -> rendered Back -> Undo handoff pass.
+The 66 readiness cases and seven actual global-profile/compatibility cases pass at
+ordinary base 63. Only the exact raw draft element and its adjacent delimiter are
+removed; genuine Undo restores the retained original array, including order, unknown
+private fields and raw numeric/escaped spellings. Neither a DTO nor imported journal
+data supplies Undo authority. Encrypted journal and draft mutation settle together;
+their own completed tickets gate cache publication. Delivered-retired commits retain
+the saved fact/pending refresh without a usable stale Undo; unknown completion stays
+uncertain. Physical raw-array changes after preview refuse rather than overwrite.
+First/middle/last/sole positions, cancellation, original-owner/generation/source ABA,
+late writers, exact/overflow evidence and source bounds are covered. No approval,
+entry deletion, provider cancellation, generation or indexing is implied. Initial
+source review is closed with no material finding; scoped analysis has no errors or
+warnings after two test-only corrections, with informational style hints remaining.
+These later changes are absent from the delivered APK; full Memory CRUD and
+cross-process raw-writer coverage are not claimed.
+
+NovelAI IMAGE custody is verified through 41 connection, 36 NovelAI lifecycle and
+five native model/UI cases; 22 provider/extraction cases also pass. The affected shared
+corpora pass 91 lifecycle, 56 service and 12 codec cases. Those scopes overlap, and
+repeated runs are not additional evidence or a whole-plan completion count.
+
+The dedicated protected record/tombstone preserves exact normalized generation/check
+recipients and model binding, including custom endpoints; ordinary public settings are
+keyless and replacement inputs are blank. Imports retain the original mixed-document
+producer, existing image FIFO and native intent fences; legacy plaintext is preserved.
+Unverified and verified-but-retired writes remain distinct from pre-start denial.
+
+Bounded review findings are corrected and exercised: scalar changes save only actual
+leaf intent rather than blank display projections; hidden model/sampler/negative text
+and private unknown leaves survive a real Steps edit. Partly encoded model text is
+checked before secret consumption and each HTTP/completion boundary, with ORIGINAL
+policy coverage captured before unresolved preferences and CURRENT coverage retained.
+Whole error cards and their decoded instructions/variants are checked before clipping
+or normalization; denied projections cannot become database/cache or completed block
+output. Existing genuine callback, queued write and post-commit guards remain required.
+Scoped analysis has no errors or warnings after three redundant-null-assertion removals;
+informational style hints remain. No live provider/device success, plaintext cleanup,
+cross-process raw-writer proof or APK inclusion is claimed.
+
+### Naistera IMAGE — synthetic native slice verified
+
+Native custody is implemented with the original mixed-document/standalone precedence
+and standalone-key tracking in the existing image FIFO. Twenty-six connection and
+26 protocol cases pass. Blank replacement/Set/Clear and two actual scalar-gesture UI
+cases pass: hidden model/catalog/private leaves survive the public toggle. The late
+CURRENT-policy catalog denial case also passes. Legacy plaintext is preserved; no
+live provider/device success or real private preferences/key access is claimed.
+
+Raw keys/string leaves are inspected before whole-document encoding, and the original
+policy is captured before reference collection. The message guard explicitly converts
+only declared AgentSwipe/TriggeredEntry DTO members into native-tree views; arbitrary
+metadata retains structural/raw-leaf admission. Public typed members and prose survive
+projection, while private trigger fields remain display-only. The affected 141-case
+lifecycle corpus, 18 character/catalog-description cases and 24 preferences-owner
+cases all pass. These scopes overlap earlier evidence and are not extra phase totals.
+
+The catalog blocker is closed by a product correction, not another fixture repair.
+Pending auth loads of unrelated image families can be retired by the original mixed
+document CAS and publish `unavailable` without changing Naistera auth. Their listeners
+previously invalidated its sheet epoch and refused the queued write. Each auth listener
+now invalidates only its currently selected family; active auth, provider switches,
+original owner/lifetime and whole-value privacy guards remain unchanged. Independent
+ownership review found no material blocker.
+
+A direct original HTTP -> settings provider -> queued physical CAS case passes. The
+two existing original widget catalog cases now also pass: successful persistence,
+picker and saved model selection, plus late-CURRENT denial. Both affected Naistera
+scalar sheet cases pass. A combined scalar regression invocation subsequently stalled
+at the old NovelAI fixture and was stopped at the existing timeout; no timeout increase
+or repeated repair loop was attempted. Earlier accepted NovelAI evidence is not replaced
+by that stalled run. Two-file scoped analysis has no errors/warnings (style infos remain).
+Naistera is accepted as synthetic native integration, not live/device quality, and is
+not in the delivered APK. Other credential families and the full plan remain open.
+
+### Local Rewrite Reject/Undo — repository verified; native UI blocked
+
+The confirmed-version/decision-reset, genuine receipt, mounted-review ownership and
+conditional definition availability are implemented; the mounted UI slice is not accepted. The three
+tools are advertised only for an original mounted review owner; a catalog captured
+before mounting cannot grow later. The accepted ordinary base remains 63, with the
+unchanged 64-definition ceiling and genuine Source4/complete-family overflow rules.
+Seventy-seven pure readiness cases pass. Thirteen ordinary repository cases passed
+before the subsequent original-executor changes; they do not certify the new fence.
+
+The original DB now owns the native commit-send fence beneath outer observers. It
+distinguishes delivery from pre-send refusal and requires actual rollback evidence,
+including SQLite's commit-hook error plus autocommit for local automatic rollback.
+The direct execution evidence below now proves this repository boundary, not its mounted UI.
+A synthetic original-file fixture
+is constructed before the DB/ROOT graph; its exact owned path is the only file allowed
+through the existing tripwires. Cleanup/path-normalization defects were fixed without
+adopting another DB or forging source identity. After explicit continuation, one bounded
+stage diagnostic located the stall at `rewriteJobSnapshotProvider.future` after route
+push, before Reject or cleanup. The exact original future now uses the existing bounded
+join, which pumps original Riverpod/fake-clock continuations without adopting another
+provider. Original close is issued once in real async and joined by that same helper.
+Native Russian decision captions replace missing-key fallback text in the existing
+synthetic translation stub; viewport and overflow assertions stay intact. The test now
+reaches persisted Reject and HEADER Back into the SAME mounted review, and cleanup
+finishes. Fresh Undo has no confirmation; the old helper's one-reply `.single` diagnostic
+then throws on two legitimate replies. Read-only source diagnosis found no proven
+product defect that necessarily loses the receipt. Missing evidence is the fresh native
+receipt-discovery result's finite `code` and `data.count`, plus Undo `code` only if it
+was dispatched; absence of a handle in a retired original model result is not receipt
+loss. Temporary stage/error prints were removed at pause. The whole mounted path and
+all 35 cases remain unaccepted; no loop or
+timeout increase, guard weakening, app launch or live evidence is implied.
+
+Paused by the user's 2026-11-02 instruction to allow another agent's fixes. A local WIP
+checkpoint commit is authorized; no new tests, implementation, build, launch or push.
+All read-only child lanes have finished. Resume only when explicitly requested.
+
+The existing NativeInputFixture now optionally retains an original synthetic in-memory
+connection from first construction; its default native-memory DB remains unchanged.
+Real SQLite, the original inner fence, genuine observations/receipts, SupportRepo and
+XChaCha AEAD execute in `test/support/support_native_rewrite_commit_test.dart`. One
+genuine Reject -> fresh observation -> Undo baseline passes, restoring the original
+pending decision and decisionRevision. Twelve fault cases pass: six each for Reject
+and Undo, covering confirmed rollback refusal, undelivered rollback uncertainty,
+execution-time SQLite commit-hook automatic rollback, delivered COMMIT with epoch
+retirement, delivered COMMIT with callback-only retirement, and delivered COMMIT with
+outer-delivery error. The same retained rollback is explicitly joined before cleanup
+or root reads; this later cleanup is not evidence returned by the failed operation.
+Actual original SQLite error/autocommit, exact raw payload/ciphertext/collateral rows,
+encrypted applied/undone journal and lack of stale successor/renewed Undo are asserted.
+
+Independent review found callback-only retirement could issue a current successor even
+after the original mounted/selection/source authority had retired without an epoch
+change. Reject/Undo completion now calls admission finish with that same original
+`isCurrent` callback as the retention condition. The delivered fact remains returned;
+no fresh authority is adopted and a retired result has no ticket. Follow-up review
+closed this finding. Four-file analysis has no errors/warnings; informational style
+and synthetic cleanup deprecation hints remain. The initial fault test run failed
+only its exact SQL-table matcher (Drift quotes identifiers); after that one fixture
+correction only the 12 affected cases were rerun. The happy baseline was reused.
+
+Scoped analysis of 25 current image/core/fixture files has no errors or warnings after
+one redundant assertion and one unused test import were removed; informational style
+hints remain. That earlier analysis alone does not close the Rewrite runtime blocker.
+No further build, launch,
+private-data access, cleanup, commit or push was performed.
+
+One-message visibility/conditional Undo remains
+blocked on the original cleanup contract: ordinary hiding can delete Collector history
+and reconcile canon, while whole-message serialization loses unknown raw fields. No
+adapter or definition was added. A bounded collateral-free native contract is still required;
+raw flag writes and partial Undo are not substituted for the original semantics.
+
+The earlier continuation excluded builds; the latest instruction authorizes the APK
+above without reopening accepted evidence. Twenty-three
 focused specialist/presentation cases and seven native/UI cases pass: narrowed trusted profiles
 use the original Send run and one shared budget; a provider snapshot request is
 refused before native file selection. Unexpected effects retain factual settlement

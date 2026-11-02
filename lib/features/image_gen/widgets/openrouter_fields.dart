@@ -17,17 +17,22 @@ List<Widget> buildOpenRouterModelFields(
   required VoidCallback onFetchModels,
   required ValueChanged<ImageGenSettings> onUpdate,
   required ShowOptionsCallback showOptions,
+  bool Function(String)? isPublicText,
 }) {
   final config = s.openrouter;
-  final caps = openRouterCapabilities(config.model);
+  final model = (isPublicText?.call(config.model) ?? true) ? config.model : '';
+  final caps = openRouterCapabilities(model);
 
   return [
     rows.ImageGenTextFieldItem(
       label: 'Model',
-      value: config.model,
+      value: model,
       hint: 'google/gemini-2.5-flash-image',
-      onChanged: (v) =>
-          onUpdate(s.copyWith(openrouter: config.copyWith(model: v))),
+      onChanged: (v) {
+        if (isPublicText?.call(v) ?? true) {
+          onUpdate(s.copyWith(openrouter: config.copyWith(model: v)));
+        }
+      },
       suffix: rows.ImageGenFetchButton(
         isFetching: isFetching,
         onPressed: onFetchModels,

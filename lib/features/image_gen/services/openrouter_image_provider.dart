@@ -2,8 +2,10 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 
+import '../../../core/credentials/image_openrouter_destinations.dart';
+import '../../../core/credentials/secret_redactor.dart';
+
 import '../image_gen_capabilities.dart';
-import '../image_gen_constants.dart';
 import 'image_gen_http.dart';
 import 'image_prompt_builder.dart';
 
@@ -16,7 +18,16 @@ import 'image_prompt_builder.dart';
 /// carries the aspect ratio (plus image size for the Gemini models that take
 /// one).
 class OpenRouterImageProvider {
-  final ImageGenHttp _http = ImageGenHttp();
+  OpenRouterImageProvider({
+    ImageGenHttp? http,
+    ImageGenHttp? downloadHttp,
+    this.checkCurrent,
+    this.isPublicUrl,
+  }) : _http = http ?? ImageGenHttp(followRedirects: false),
+       _downloadHttp = downloadHttp ?? ImageGenHttp(followRedirects: false);
+  final ImageGenHttp _http, _downloadHttp;
+  final void Function()? checkCurrent;
+  final bool Function(String)? isPublicUrl;
 
   Future<Uint8List> generate({
     required String apiKey,
@@ -28,14 +39,15 @@ class OpenRouterImageProvider {
     List<Map<String, String>>? references,
     CancelToken? cancelToken,
   }) async {
-    final base =
-        (endpoint.trim().isEmpty
-                ? OpenRouterConstants.defaultEndpoint
-                : endpoint.trim())
-            .replaceFirst(RegExp(r'/+$'), '');
-    final url = base.endsWith('/chat/completions')
-        ? base
-        : '$base/chat/completions';
+    final url = ImageOpenRouterDestinations(endpoint).generation;
+    final local = SecretRedactor(
+      knownSecrets: [apiKey],
+      maxInputLength: 33554432,
+      maxOutputLength: 33554432,
+    );
+    bool publicUrl(String value) =>
+        ImageOpenRouterDestinations.knownSecretFreeValue(local, value) &&
+        (isPublicUrl?.call(value) ?? true);
 
     final caps = openRouterCapabilities(model);
     final refs = (references ?? const <Map<String, String>>[])
@@ -60,6 +72,7 @@ class OpenRouterImageProvider {
       content = parts;
     }
 
+    checkCurrent?.call();
     final json = await _http.post(
       url: url,
       apiKey: apiKey,
@@ -82,18 +95,32 @@ class OpenRouterImageProvider {
         },
       },
       cancelToken: cancelToken,
+      followRedirects: false,
     );
 
+    checkCurrent?.call();
     final imageUrl = _extractImageUrl(json);
     if (imageUrl == null || imageUrl.isEmpty) {
       throw Exception('No image in OpenRouter response');
     }
+    if (!publicUrl(imageUrl)) throw StateError('Image URL unavailable');
     if (imageUrl.startsWith('data:')) {
       return ImageGenHttp.base64ToBytes(
         ImageGenHttp.stripBase64Prefix(imageUrl),
       );
     }
-    return ImageGenHttp.downloadImage(imageUrl, cancelToken: cancelToken);
+    ImageOpenRouterDestinations.validateDownload(imageUrl);
+    checkCurrent?.call();
+    // Separate HTTP client: no inherited Authorization. No redirect can introduce
+    // an unchecked CDN recipient. Check original custody after download too.
+    final response = await _downloadHttp.getRaw(
+      imageUrl,
+      cancelToken: cancelToken,
+      followRedirects: false,
+    );
+    checkCurrent?.call();
+    if (!publicUrl(imageUrl)) throw StateError('Image URL unavailable');
+    return response.data ?? Uint8List(0);
   }
 
   /// Handles the shapes seen in the wild: `images[].image_url.url`,

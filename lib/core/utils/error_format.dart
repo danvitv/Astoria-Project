@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -9,7 +10,26 @@ final SecretRedactor _defaultErrorRedactor = SecretRedactor();
 
 /// Optional secret redactor configured by trusted composition. When null,
 /// [formatError] falls back to a default pattern-based [SecretRedactor].
-SecretRedactor? activeErrorRedactor;
+SecretRedactor? _activeErrorRedactor;
+SecretRedactor? get activeErrorRedactor => _activeErrorRedactor;
+set activeErrorRedactor(SecretRedactor? value) {
+  if (identical(value, _activeErrorRedactor)) return;
+  _activeErrorRedactor = value;
+  if (_policyChangeScheduled) return;
+  _policyChangeScheduled = true;
+  // Assignment still changes diagnostic/publication policy synchronously. UI
+  // gets one nonsecret invalidation after composition/build has unwound.
+  scheduleMicrotask(() {
+    _policyChangeScheduled = false;
+    _errorPolicyChanges.add(null);
+  });
+}
+
+bool _policyChangeScheduled = false;
+final _errorPolicyChanges = StreamController<void>.broadcast(sync: true);
+
+/// Nonsecret invalidation only: no snapshots, values, or publication grants.
+Stream<void> get errorRedactionPolicyChanges => _errorPolicyChanges.stream;
 
 SecretRedactor get _errorRedactor =>
     activeErrorRedactor ?? _defaultErrorRedactor;
@@ -384,7 +404,8 @@ String _clamp(String message) {
   if (redacted == SecretRedactor.limited) {
     return SecretRedactor.limited;
   }
-  if (redacted.length <= _maxApiMessageChars && raw.length <= _maxApiMessageChars) {
+  if (redacted.length <= _maxApiMessageChars &&
+      raw.length <= _maxApiMessageChars) {
     return redacted;
   }
   final prefix = redacted.length <= _maxApiMessageChars

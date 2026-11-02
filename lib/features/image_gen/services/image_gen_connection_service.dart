@@ -3,26 +3,44 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 
 import '../../../core/credentials/image_routmy_credential_owner.dart';
+import '../../../core/credentials/image_openrouter_credential_owner.dart';
+import '../../../core/credentials/image_openrouter_destinations.dart';
+import '../../../core/credentials/image_novelai_credential_owner.dart';
+import '../../../core/credentials/image_novelai_destinations.dart';
+import '../../../core/credentials/image_naistera_credential_owner.dart';
 import '../../../core/llm/transport/endpoint_normalizer.dart';
 import '../image_gen_models.dart';
 import 'comfyui_image_provider.dart';
+import 'image_gen_http.dart';
+import 'naistera_image_provider.dart';
 
 /// Lightweight connectivity and model-discovery requests for the image-gen
 /// settings sheet. Generation itself remains in the provider-specific clients.
 class ImageGenConnectionService {
   final Dio _dio;
   final ImageRoutmyCredentialOwner? _routmy;
+  final ImageOpenRouterCredentialOwner? _openrouter;
+  final ImageNovelAiCredentialOwner? _novelai;
+  final ImageNaisteraCredentialOwner? _naistera;
 
-  ImageGenConnectionService({Dio? dio, ImageRoutmyCredentialOwner? routmyCredentials})
-    : _routmy = routmyCredentials,
-      _dio =
-          dio ??
-          Dio(
-            BaseOptions(
-              connectTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 10),
-            ),
-          );
+  ImageGenConnectionService({
+    Dio? dio,
+    ImageRoutmyCredentialOwner? routmyCredentials,
+    ImageOpenRouterCredentialOwner? openrouterCredentials,
+    ImageNovelAiCredentialOwner? novelaiCredentials,
+    ImageNaisteraCredentialOwner? naisteraCredentials,
+  }) : _routmy = routmyCredentials,
+       _openrouter = openrouterCredentials,
+       _novelai = novelaiCredentials,
+       _naistera = naisteraCredentials,
+       _dio =
+           dio ??
+           Dio(
+             BaseOptions(
+               connectTimeout: const Duration(seconds: 10),
+               receiveTimeout: const Duration(seconds: 10),
+             ),
+           );
 
   Future<void> checkConnection({
     required ImageGenSettings settings,
@@ -53,12 +71,17 @@ class ImageGenConnectionService {
           settings.xai.apiKey,
         );
       case ImageGenApiType.naistera:
-        if (settings.naisteraApiKey.trim().isEmpty) {
-          throw StateError('Naistera API key not configured');
-        }
-        await _get(
-          '${NaisteraConstants.baseUrl}/api/models',
-          settings.naisteraApiKey,
+        final owner = _naistera;
+        if (owner == null)
+          throw StateError('Native Naistera credential owner unavailable');
+        await owner.withApiKey<void>(
+          destinations: owner.destinations,
+          model: settings.naisteraModel,
+          consume: (key, check) async {
+            check();
+            await _get(owner.destinations.check, key, followRedirects: false);
+            check();
+          },
         );
       case ImageGenApiType.routmy:
         // `/v1/models` is a public catalog and answers 200 for any key, so a
@@ -69,12 +92,19 @@ class ImageGenConnectionService {
           checkCurrent();
         });
       case ImageGenApiType.openrouter:
-        if (settings.openrouter.apiKey.trim().isEmpty) {
-          throw StateError('OpenRouter API key not configured');
-        }
-        await _get(
-          '${_openRouterBase(settings)}/models',
-          settings.openrouter.apiKey,
+        final destinations = ImageOpenRouterDestinations(
+          settings.openrouter.endpoint,
+        );
+        final owner = _openrouter;
+        if (owner == null)
+          throw StateError('Native OpenRouter credential owner unavailable');
+        await owner.withApiKey<void>(
+          destinations: destinations,
+          consume: (key, check) async {
+            check();
+            await _get(destinations.models, key, followRedirects: false);
+            check();
+          },
         );
       case ImageGenApiType.electronhub:
         if (settings.electronhub.apiKey.trim().isEmpty) {
@@ -92,15 +122,25 @@ class ImageGenConnectionService {
           extraHeaders: _a1111AuthHeaders(settings.a1111.apiKey),
         );
       case ImageGenApiType.novelai:
-        if (settings.novelai.apiKey.trim().isEmpty) {
-          throw StateError('NovelAI API key not configured');
-        }
-        // Tag suggestions is a cheap authenticated GET on the image host.
-        await _get(
-          '${_novelAiBase(settings)}/ai/generate-image/suggest-tags'
-          '?model=${Uri.encodeQueryComponent(settings.novelai.model)}'
-          '&prompt=a',
-          settings.novelai.apiKey,
+        final destinations = ImageNovelAiDestinations(
+          settings.novelai.endpoint,
+          settings.novelai.model,
+        );
+        final owner = _novelai;
+        if (owner == null)
+          throw StateError('Native NovelAI credential owner unavailable');
+        await owner.withApiKey<void>(
+          destinations: destinations,
+          consume: (key, check) async {
+            check();
+            await _get(
+              destinations.check,
+              key,
+              followRedirects: false,
+              receiveTimeout: const Duration(seconds: 10),
+            );
+            check();
+          },
         );
       case ImageGenApiType.comfyui:
         // /system_stats is the cheapest route that proves the server is up.
@@ -128,6 +168,33 @@ class ImageGenConnectionService {
         .toList();
   }
 
+  Future<List<NaisteraModelInfo>> fetchNaisteraModels(
+    ImageGenSettings settings,
+  ) async {
+    final owner = _naistera;
+    if (owner == null)
+      throw StateError('Native Naistera credential owner unavailable');
+    final public = owner.capturePublicTextGuard();
+    final catalog = await owner.withApiKey<List<NaisteraModelInfo>>(
+      destinations: owner.destinations,
+      model: settings.naisteraModel,
+      consume: (key, check) => NaisteraImageProvider(
+        baseUrl: owner.destinations.base,
+        http: ImageGenHttp(dio: _dio),
+        checkCurrent: check,
+        isPublicValue: public,
+      ).fetchModels(apiKey: key),
+    );
+    return catalog
+        .where(
+          (model) =>
+              public(model.id) &&
+              public(model.name) &&
+              public(NaisteraConstants.normalizeModel(model.id)),
+        )
+        .toList();
+  }
+
   /// Image models exposed by rout.my (`GET /v1/models`). Each entry keeps the
   /// `/images/edits` capability the catalog advertises, which decides whether
   /// references can be routed for that model. Entries without an `endpoints`
@@ -136,7 +203,10 @@ class ImageGenConnectionService {
     ImageGenSettings settings,
   ) async {
     final publicText = _routmy?.capturePublicTextGuard() ?? (String _) => false;
-    final result = await _withRoutmy<List<RoutmyModelInfo>>(settings, (key, checkCurrent) async {
+    final result = await _withRoutmy<List<RoutmyModelInfo>>(settings, (
+      key,
+      checkCurrent,
+    ) async {
       checkCurrent();
       final data = await _get(
         '${settings.routmyMirror.baseUrl}/v1/models',
@@ -150,8 +220,12 @@ class ImageGenConnectionService {
       for (final raw in models.whereType<Map<Object?, Object?>>()) {
         final id = raw['id'];
         final name = raw['name'] ?? '';
-        if (id is! String || name is! String || id.isEmpty ||
-            !publicText(id) || !publicText(name)) continue;
+        if (id is! String ||
+            name is! String ||
+            id.isEmpty ||
+            !publicText(id) ||
+            !publicText(name))
+          continue;
         final endpoints = raw['endpoints'];
         final endpointList = endpoints is List
             ? endpoints.map((endpoint) => endpoint.toString()).toList()
@@ -174,7 +248,9 @@ class ImageGenConnectionService {
     });
     // Native custody adds awaits after response extraction. Recheck the actual
     // current sink at the successful return boundary, not just while decoding.
-    return result.where((model) => publicText(model.id) && publicText(model.name)).toList();
+    return result
+        .where((model) => publicText(model.id) && publicText(model.name))
+        .toList();
   }
 
   Future<T> _withRoutmy<T>(
@@ -182,24 +258,48 @@ class ImageGenConnectionService {
     Future<T> Function(String, void Function()) consume,
   ) {
     final owner = _routmy;
-    if (owner == null) throw StateError('Native rout.my credential owner unavailable');
-    return owner.withApiKey(origin: settings.routmyMirror.baseUrl, consume: consume);
+    if (owner == null)
+      throw StateError('Native rout.my credential owner unavailable');
+    return owner.withApiKey(
+      origin: settings.routmyMirror.baseUrl,
+      consume: consume,
+    );
   }
 
   /// Image models exposed by OpenRouter (`output_modalities=image`).
   Future<List<String>> fetchOpenRouterModels(ImageGenSettings settings) async {
-    final data = await _get(
-      '${_openRouterBase(settings)}/models'
-      '?input_modalities=image%2Ctext&output_modalities=image',
-      settings.openrouter.apiKey,
+    final destinations = ImageOpenRouterDestinations(
+      settings.openrouter.endpoint,
     );
-    final models = data is Map ? data['data'] : null;
-    if (models is! List) return const [];
-    return models
-        .whereType<Map<Object?, Object?>>()
-        .map((model) => model['id']?.toString() ?? '')
-        .where((id) => id.isNotEmpty)
-        .toList();
+    final owner = _openrouter;
+    if (owner == null)
+      throw StateError('Native OpenRouter credential owner unavailable');
+    final publicText = owner.capturePublicTextGuard();
+    final result = await owner.withApiKey<List<String>>(
+      destinations: destinations,
+      consume: (key, check) async {
+        check();
+        final data = await _get(
+          destinations.imageModels,
+          key,
+          followRedirects: false,
+        );
+        check();
+        final models = data is Map ? data['data'] : null;
+        if (models is! List) return const [];
+        return [
+          for (final model in models.whereType<Map<Object?, Object?>>())
+            if (model['id'] case final String id)
+              if (id.isNotEmpty &&
+                  publicText(id) &&
+                  (model['name'] == null ||
+                      (model['name'] is String &&
+                          publicText(model['name'] as String))))
+                id,
+        ];
+      },
+    );
+    return result.where(publicText).toList();
   }
 
   /// Electron Hub tags each model with the endpoints it serves; image models
@@ -251,20 +351,11 @@ class ImageGenConnectionService {
   Future<List<String>> fetchComfyUiModels(ImageGenSettings settings) =>
       ComfyUiImageProvider().fetchModels(settings.comfyui);
 
-  static String _openRouterBase(ImageGenSettings settings) {
-    final endpoint = settings.openrouter.endpoint.trim();
-    return (endpoint.isEmpty ? OpenRouterConstants.defaultEndpoint : endpoint)
-        .replaceFirst(RegExp(r'/+$'), '');
-  }
-
   static String _electronHubBase(ImageGenSettings settings) {
     final endpoint = settings.electronhub.endpoint.trim();
     return (endpoint.isEmpty ? ElectronHubConstants.defaultEndpoint : endpoint)
         .replaceFirst(RegExp(r'/+$'), '');
   }
-
-  static String _novelAiBase(ImageGenSettings settings) =>
-      NovelAIConstants.normalizeEndpoint(settings.novelai.endpoint);
 
   static String _a1111Base(ImageGenSettings settings) {
     final endpoint = settings.a1111.endpoint.trim();
@@ -368,6 +459,7 @@ class ImageGenConnectionService {
     String? apiKey, {
     Map<String, String> extraHeaders = const {},
     bool followRedirects = true,
+    Duration? receiveTimeout,
   }) async {
     final response = await _dio.get<dynamic>(
       url,
@@ -379,6 +471,7 @@ class ImageGenConnectionService {
         },
         validateStatus: (_) => true,
         followRedirects: followRedirects,
+        receiveTimeout: receiveTimeout,
       ),
     );
     final status = response.statusCode ?? 0;

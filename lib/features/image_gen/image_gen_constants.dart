@@ -7,6 +7,8 @@
 /// https://github.com/0xl0cal/sillyimages (`src/providers.js`, `src/settings.js`).
 library;
 
+import '../../core/credentials/image_naistera_destinations.dart';
+
 const routmyMaxInjectedReferenceImages = 10;
 
 /// Upper bound on how many reference images any provider is asked to accept in
@@ -123,27 +125,7 @@ class NaisteraConstants {
   /// must survive this, and rewriting it to `grok` would silently generate
   /// with the wrong model.
   static String normalizeModel(String? model) {
-    final trimmed = (model ?? '').trim();
-    if (trimmed.isEmpty) return 'grok';
-    switch (trimmed.toLowerCase()) {
-      case 'grok pro':
-      case 'grok-pro':
-      case 'grok-imagine-pro':
-      case 'imagine-pro':
-        return 'grok-pro';
-      case 'nano-banana':
-      case 'nano banana':
-      case 'nano banana pro':
-      case 'nano-banana-pro':
-      case 'nano-banana-2':
-      case 'nano banana 2':
-        return 'nano banana 2';
-      case 'novel ai':
-      case 'novelai':
-        return 'novelai';
-    }
-    // Case is preserved — a catalog id may well be case-sensitive.
-    return trimmed;
+    return ImageNaisteraDestinations.normalizeModel(model);
   }
 
   static bool supportsReferences(String? model) =>

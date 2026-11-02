@@ -1,4 +1,5 @@
 import '../credentials/native_provider_credentials.dart';
+import '../credentials/memory_custom_api_credential_owner.dart';
 import '../models/api_config.dart';
 import '../models/memory_book_api_settings.dart';
 import 'aux_llm_client.dart';
@@ -22,10 +23,12 @@ final class MemoryDraftApiSourceResolver {
     required MemoryBookApiSettings settings,
     required NativeConnectionStamp? originalStamp,
     required bool Function() isCurrent,
+    MemoryCustomApiInvocation? originalCustomApi,
   }) async {
     void requireCurrent() {
       if (!isCurrent() ||
-          (sources != null &&
+          (settings.generationSource != 'custom' &&
+              sources != null &&
               (originalStamp == null ||
                   !sources!.isOriginalCurrent(originalStamp, isCurrent)))) {
         throw const NativeProviderException(NativeProviderFailure.stale);
@@ -34,9 +37,16 @@ final class MemoryDraftApiSourceResolver {
 
     requireCurrent();
     if (settings.generationSource == 'custom') {
+      originalCustomApi?.requireCurrent();
+      if (originalCustomApi == null ||
+          settings.generationApiKey.isNotEmpty ||
+          originalCustomApi.settings != settings) {
+        throw const NativeProviderException(NativeProviderFailure.denied);
+      }
       final config = AuxApiConfig(
         endpoint: settings.generationEndpoint,
-        apiKey: settings.generationApiKey,
+        apiKey: '',
+        memoryCustomApi: originalCustomApi,
         model: settings.generationModel,
         protocol: LlmProtocol.customChatCompletion,
       );

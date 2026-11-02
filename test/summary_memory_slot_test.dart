@@ -13,9 +13,12 @@ import 'package:glaze_flutter/core/models/api_config.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/memory_book_api_settings.dart';
 import 'package:glaze_flutter/core/state/db_provider.dart';
+import 'package:glaze_flutter/core/state/credential_vault_provider.dart';
 import 'package:glaze_flutter/core/state/summary_providers.dart';
 import 'package:glaze_flutter/features/chat/services/summary_generation_service.dart';
 import 'package:glaze_flutter/features/settings/api_list_provider.dart';
+
+import 'credentials/fake_credential_storage.dart';
 
 /// Summarizing runs on the Memory slot — the connection memory drafts use —
 /// rather than on whatever connection the chat happens to be pointed at.
@@ -76,6 +79,7 @@ Future<_Harness> _harness({MemoryBookApiSettings? slot}) async {
   final container = ProviderContainer(
     overrides: [
       appDbProvider.overrideWithValue(db),
+      credentialStorageProvider.overrideWithValue(FakeCredentialStorage()),
       summaryServiceProvider.overrideWith(
         (ref) => SummaryService(ref.watch(summaryRepoProvider), llm: llm),
       ),
@@ -188,7 +192,7 @@ void main() {
       slot: const MemoryBookApiSettings(
         generationSource: 'custom',
         generationEndpoint: 'https://proxy.example.com/v1',
-        generationApiKey: 'proxy-key',
+        generationApiKey: '',
         generationModel: 'proxy-model',
       ),
     );
@@ -198,5 +202,8 @@ void main() {
     expect(h.llm.config?.endpoint, 'https://proxy.example.com/v1');
     expect(h.llm.config?.model, 'proxy-model');
     expect(h.llm.config?.protocol, LlmProtocol.customChatCompletion);
+    expect(h.llm.config?.apiKey, '');
+    expect(h.llm.config?.savedConnectionId, isNull);
+    expect(h.llm.config?.memoryCustomApi, isNotNull);
   });
 }

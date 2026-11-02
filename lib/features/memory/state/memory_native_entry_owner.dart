@@ -5,6 +5,9 @@ import '../../../core/db/repositories/support_repo.dart';
 import '../../../core/models/memory_book.dart';
 import '../controllers/memory_book_write_queue.dart';
 
+part 'memory_native_draft_owner.dart';
+part 'memory_native_draft_removal_owner.dart';
+
 /// The ORIGINAL controller pins its actual container synchronously before load,
 /// then registers this owner after its ordinary load. Lookup cannot load a book,
 /// create a widget/controller or dispatch embeddings.
@@ -19,6 +22,8 @@ final class MemoryNativeEntryOwner {
     required this.isNativeCurrent,
     required this.captureNativeGuard,
     required this.publish,
+    required this.publishDraft,
+    this.publishDraftList,
   });
   final String sessionId, characterId;
   final ProviderContainer originContainer;
@@ -28,6 +33,8 @@ final class MemoryNativeEntryOwner {
   final bool Function() isNativeCurrent;
   final bool Function() Function() captureNativeGuard;
   final void Function(MemoryEntry) publish;
+  final void Function(MemoryDraft) publishDraft;
+  final void Function(List<MemoryDraft>)? publishDraftList;
   bool _retired = false;
   bool get current {
     if (_retired) return false;

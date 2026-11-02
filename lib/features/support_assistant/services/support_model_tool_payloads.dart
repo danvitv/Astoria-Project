@@ -28,7 +28,11 @@ final class SupportModelToolPayloads {
     'astoria_session_title_receipts',
     'astoria_active_selection_receipts',
     'astoria_global_regex_receipts',
+    'astoria_global_regex_scripts_list',
     'astoria_memory_entry_text_receipts',
+    'astoria_memory_draft_text_receipts',
+    'astoria_memory_draft_delete_receipts',
+    'astoria_rewrite_review_receipts',
   };
 
   static bool isRead(String action) => _reads.contains(action);

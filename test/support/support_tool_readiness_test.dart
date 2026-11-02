@@ -42,6 +42,22 @@ const _titleFamily = {
   'astoria_session_title_receipts',
   'astoria_session_rename_undo',
 };
+const _draftFamily = {
+  'astoria_session_integrity',
+  'astoria_roleplay_inspect',
+  'astoria_memory_inspect',
+  'astoria_memory_draft_text_edit',
+  'astoria_memory_draft_text_receipts',
+  'astoria_memory_draft_text_undo',
+};
+const _draftRemovalFamily = {
+  'astoria_session_integrity',
+  'astoria_roleplay_inspect',
+  'astoria_memory_inspect',
+  'astoria_memory_draft_delete',
+  'astoria_memory_draft_delete_receipts',
+  'astoria_memory_draft_delete_undo',
+};
 
 /// Bounded synthetic catalog padding only. It must never be prepared; the
 /// actual theme adapter and original FILE-backed native fixture own execution.
@@ -70,7 +86,7 @@ final class _OverflowPadding implements SupportAppActionAdapter {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  for (final count in [56, 63, 64]) {
+  for (final count in [56, 57, 60, 63, 64]) {
     test('ordinary $count definitions remain entire, identical and frozen', () {
       final supplied = [
         for (var i = 0; i < count; i++) _definition('fixture_original_$i'),
@@ -224,7 +240,7 @@ void main() {
   });
 
   test(
-    'selection, retained regex Undo and Memory text keep actual discovery and receipts',
+    'selection, global regex and Memory text keep actual discovery and receipts',
     () {
       final names = {
         ...SupportSourceToolNames.all,
@@ -233,6 +249,8 @@ void main() {
         'astoria_active_preset_set',
         'astoria_active_selection_receipts',
         'astoria_active_selection_undo',
+        'astoria_global_regex_scripts_list',
+        'astoria_global_regex_disable',
         'astoria_global_regex_receipts',
         'astoria_global_regex_undo',
         'astoria_session_integrity',
@@ -298,7 +316,7 @@ void main() {
     'Отключи глобальный regex',
     'Set the theme to light and disable the global regex',
   ]) {
-    test('fresh regex command has no demonstrated script discovery: $text', () {
+    test('missing native regex discovery drops the WHOLE union: $text', () {
       final selection = SupportNativeDefinitionSelection.capture(
         connected: _overflow({
           ...SupportSourceToolNames.all,
@@ -322,6 +340,252 @@ void main() {
   }
 
   for (final text in [
+    'Disable the global regex',
+    'Отключи глобальный regex',
+    'Set the theme to light and disable the global regex',
+  ]) {
+    test('actual native regex discovery completes overflow task: $text', () {
+      final names = {
+        ...SupportSourceToolNames.all,
+        if (text.contains('theme')) ..._themeFamily,
+        'astoria_global_regex_scripts_list',
+        'astoria_global_regex_disable',
+        'astoria_global_regex_receipts',
+        'astoria_global_regex_undo',
+      };
+      final connected = _overflow(names);
+      final selection = SupportNativeDefinitionSelection.capture(
+        connected: connected,
+        currentUserText: text,
+      );
+      expect(selection.sourceOnly, isFalse);
+      expect(selection.definitions.map((d) => d.name).toSet(), names);
+      for (final definition in selection.definitions) {
+        expect(
+          definition,
+          same(connected.singleWhere((d) => d.name == definition.name)),
+        );
+      }
+    });
+  }
+
+  for (final text in [
+    'Edit the memory draft text',
+    'Undo the memory draft text edit',
+    'Измени текст черновика Memory',
+    'Отмени изменение текста черновика Memory',
+    'Edit the memory draft text and set the theme to light',
+  ]) {
+    test('draft text overflow retains original discovery and Undo: $text', () {
+      final names = {
+        ...SupportSourceToolNames.all,
+        ..._draftFamily,
+        if (text.contains('theme')) ..._themeFamily,
+      };
+      final connected = _overflow(names);
+      final selection = SupportNativeDefinitionSelection.capture(
+        connected: connected,
+        currentUserText: text,
+      );
+      expect(selection.sourceOnly, isFalse);
+      expect(selection.definitions.map((d) => d.name).toSet(), names);
+      expect(
+        selection.definitions.length,
+        lessThanOrEqualTo(NativeToolLimits.definitions),
+      );
+      for (final definition in selection.definitions) {
+        expect(
+          definition,
+          same(connected.singleWhere((d) => d.name == definition.name)),
+        );
+      }
+    });
+  }
+  for (final missing in [
+    'astoria_session_integrity',
+    'astoria_memory_inspect',
+    'astoria_memory_draft_text_receipts',
+  ]) {
+    test('missing draft prerequisite $missing refuses WHOLE union', () {
+      final selection = SupportNativeDefinitionSelection.capture(
+        connected: _overflow({
+          ...SupportSourceToolNames.all,
+          ..._themeFamily,
+          ..._draftFamily.where((name) => name != missing),
+        }),
+        currentUserText:
+            'Edit the memory draft text and set the theme to light',
+      );
+      expect(selection.sourceOnly, isTrue);
+      expect(
+        selection.definitions.map((d) => d.name).toSet(),
+        SupportSourceToolNames.all,
+      );
+      expect(
+        () => selection.requirePosted('astoria_memory_draft_text_edit'),
+        throwsA(isA<NativeToolException>()),
+      );
+    });
+  }
+
+  for (final text in [
+    'Delete the memory draft',
+    'Undo the memory draft deletion',
+    'Удали черновик Memory',
+    'Отмени удаление черновика Memory',
+    'Delete the memory draft and set the theme to light',
+    'Delete the memory draft and edit the memory draft text',
+  ]) {
+    test('draft deletion overflow retains whole original family: $text', () {
+      final names = {
+        ...SupportSourceToolNames.all,
+        ..._draftRemovalFamily,
+        if (text.contains('theme')) ..._themeFamily,
+        if (text.contains('edit')) ..._draftFamily,
+      };
+      final connected = _overflow(names);
+      final selection = SupportNativeDefinitionSelection.capture(
+        connected: connected,
+        currentUserText: text,
+      );
+      expect(selection.sourceOnly, isFalse);
+      expect(selection.definitions.map((d) => d.name).toSet(), names);
+      expect(
+        selection.definitions.length,
+        lessThanOrEqualTo(NativeToolLimits.definitions),
+      );
+      for (final definition in selection.definitions) {
+        expect(
+          definition,
+          same(connected.singleWhere((d) => d.name == definition.name)),
+        );
+      }
+    });
+  }
+  for (final missing in _draftRemovalFamily) {
+    test(
+      'missing draft deletion prerequisite $missing refuses WHOLE union',
+      () {
+        final selection = SupportNativeDefinitionSelection.capture(
+          connected: _overflow({
+            ...SupportSourceToolNames.all,
+            ..._themeFamily,
+            ..._draftRemovalFamily.where((name) => name != missing),
+          }),
+          currentUserText: 'Delete the memory draft and set the theme to light',
+        );
+        expect(selection.sourceOnly, isTrue);
+        expect(
+          selection.definitions.map((d) => d.name).toSet(),
+          SupportSourceToolNames.all,
+        );
+        expect(
+          () => selection.requirePosted('astoria_memory_draft_delete'),
+          throwsA(isA<NativeToolException>()),
+        );
+      },
+    );
+  }
+
+  const rewriteFamily = {
+    'astoria_rewrite_reject',
+    'astoria_rewrite_review_receipts',
+    'astoria_rewrite_reject_undo',
+  };
+  for (final text in [
+    'Reject the rewrite operation',
+    'Undo the rewrite rejection',
+    'Отклони операцию переписывания',
+    'Отмени отклонение операции переписывания',
+    'Reject the rewrite operation and set the theme to light',
+  ]) {
+    test(
+      'rewrite rejection overflow retains original discovery and Undo: $text',
+      () {
+        final names = {
+          ...SupportSourceToolNames.all,
+          ...rewriteFamily,
+          if (text.contains('theme')) ..._themeFamily,
+        };
+        final connected = _overflow(names);
+        final selection = SupportNativeDefinitionSelection.capture(
+          connected: connected,
+          currentUserText: text,
+        );
+        expect(selection.sourceOnly, isFalse);
+        expect(selection.definitions.map((d) => d.name).toSet(), names);
+        expect(
+          selection.definitions.length,
+          lessThanOrEqualTo(NativeToolLimits.definitions),
+        );
+        for (final definition in selection.definitions) {
+          expect(
+            definition,
+            same(connected.singleWhere((d) => d.name == definition.name)),
+          );
+        }
+      },
+    );
+  }
+  for (final missing in rewriteFamily) {
+    test(
+      'missing rewrite rejection prerequisite $missing refuses WHOLE union',
+      () {
+        final selection = SupportNativeDefinitionSelection.capture(
+          connected: _overflow({
+            ...SupportSourceToolNames.all,
+            ..._themeFamily,
+            ...rewriteFamily.where((name) => name != missing),
+          }),
+          currentUserText:
+              'Reject the rewrite operation and set the theme to light',
+        );
+        expect(selection.sourceOnly, isTrue);
+        expect(
+          selection.definitions.map((d) => d.name).toSet(),
+          SupportSourceToolNames.all,
+        );
+        expect(
+          () => selection.requirePosted('astoria_rewrite_reject'),
+          throwsA(isA<NativeToolException>()),
+        );
+      },
+    );
+  }
+
+  for (final text in [
+    'Do not reject the rewrite operation',
+    '"Reject the rewrite operation"',
+    'Reject the rewrite operation and change nothing',
+  ]) {
+    test('ambiguous rewrite rejection retains only Source4: $text', () {
+      final selection = SupportNativeDefinitionSelection.capture(
+        connected: _overflow({
+          ...SupportSourceToolNames.all,
+          ...rewriteFamily,
+          ..._themeFamily,
+        }),
+        currentUserText: text,
+      );
+      expect(selection.sourceOnly, isTrue);
+      expect(
+        selection.definitions.map((d) => d.name).toSet(),
+        SupportSourceToolNames.all,
+      );
+      expect(
+        () => selection.requirePosted('astoria_rewrite_reject'),
+        throwsA(isA<NativeToolException>()),
+      );
+    });
+  }
+
+  for (final text in [
+    'Do not delete the memory draft',
+    '"Delete the memory draft"',
+    'Delete the memory draft and change nothing',
+    'Do not edit the memory draft text',
+    '"Edit the memory draft text"',
+    'Edit the memory draft text and change nothing',
     'An unknown request about preferences and themes',
     'astoria_theme_mode_set',
     'Change nothing about the theme',

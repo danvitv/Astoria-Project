@@ -1,9 +1,13 @@
 import 'package:flutter/foundation.dart';
 
 import '../../../../core/llm/memory_draft_planner.dart';
+import '../../../../core/llm/memory_custom_api_publication.dart';
 import '../../../../core/models/chat_message.dart';
 import '../../../../core/models/memory_book.dart';
 import '../../../../core/models/pipeline_settings.dart';
+import '../../../../core/credentials/memory_custom_api_credential_owner.dart';
+import '../../../../core/state/memory_custom_api_credentials_provider.dart';
+import '../../../../core/utils/error_format.dart';
 import '../../../../core/state/db_provider.dart';
 import '../../../../core/state/memory_settings_provider.dart';
 import '../../../memory/state/memory_active_drafts_provider.dart';
@@ -20,6 +24,7 @@ typedef GenerateMemoryDraft =
       required String charId,
       required String sessionId,
       required Map<String, String> sessionVars,
+      MemoryCustomApiInvocation? originalCustomApi,
     });
 
 /// Stage 9 / 6: Auto-create memory drafts and optionally fill them with the
@@ -39,6 +44,7 @@ class MemoryDraftStage {
             required charId,
             required sessionId,
             required sessionVars,
+            originalCustomApi,
           }) => MemoryDraftGenerator(ctx.ref).generate(
             draft: draft,
             settings: settings,
@@ -47,6 +53,7 @@ class MemoryDraftStage {
             charId: charId,
             sessionId: sessionId,
             sessionVars: sessionVars,
+            originalCustomApi: originalCustomApi,
           ));
 
   MemoryDraftLease? reserveAutoGeneration(ChatSession? session) {
@@ -66,13 +73,29 @@ class MemoryDraftStage {
     ChatSession? session, {
     MemoryDraftLease? generationLease,
   }) async {
+    final pipeline = ctx.ref.mounted
+        ? ctx.ref.read(pipelineSettingsProvider)
+        : null;
+    final custom = pipeline?.memoryBookApi.generationSource == 'custom'
+        ? ctx.ref
+              .read(memoryCustomApiCredentialOwnerProvider)
+              .capture(
+                pipeline!.memoryBookApi,
+                isCurrent: () => ctx.ref.mounted,
+              )
+        : null;
+    final redactor = custom?.captureRedactor();
+    bool current() => ctx.ref.mounted && custom?.isCurrent() != false;
+    String safeError(Object error) => formatError(
+      custom == null ? error : custom.redact(error.toString(), redactor!),
+    );
     try {
       if (!ctx.ref.mounted || session == null) return;
       final settings = ctx.ref.read(memoryGlobalSettingsProvider);
       if (!settings.enabled || !settings.autoCreateEnabled) return;
       final repo = ctx.ref.read(memoryBookRepoProvider);
       final book = await repo.ensureForSession(session.id);
-      if (!ctx.ref.mounted) return;
+      if (!current()) return;
       final plan = MemoryDraftPlanner.plan(
         book: book,
         messages: session.messages,
@@ -84,6 +107,7 @@ class MemoryDraftStage {
       if (plan.drafts.isEmpty) return;
 
       await repo.appendDrafts(session.id, plan.drafts);
+      if (!current()) return;
       // An open memory sheet holds the book it read when it opened, so it has
       // to be told the durable one moved under it — otherwise these drafts
       // stay invisible until it is closed and reopened, and its next save
@@ -91,9 +115,8 @@ class MemoryDraftStage {
       _publishBookChange();
       if (!settings.autoGenerateEnabled || generationLease == null) return;
 
-      final pipeline = ctx.ref.read(pipelineSettingsProvider);
       for (final draft in plan.drafts.take(settings.batchSize)) {
-        if (!ctx.ref.mounted) return;
+        if (!current()) return;
         final draftMessages = session.messages
             .where((message) => draft.messageIds.contains(message.id))
             .toList();
@@ -102,45 +125,67 @@ class MemoryDraftStage {
           final generated = await _generate(
             draft: draft,
             settings: book.settings,
-            pipeline: pipeline,
+            pipeline: pipeline!,
             messages: draftMessages,
             charId: ctx.charId,
             sessionId: session.id,
             sessionVars: session.sessionVars,
+            originalCustomApi: custom,
           );
-          if (!ctx.ref.mounted) return;
-          await repo.mutateDraft(
+          if (!current()) return;
+          final published = await repo.mutateDraft(
             sessionId: session.id,
             draftId: draft.id,
-            mutate: (current) => current.copyWith(
-              content: generated.content,
-              keys: generated.keys,
-              keyParagraphs: generated.keyParagraphs,
-              ledgerRange: generated.ledgerRange,
-              sourceManifest: generated.sourceManifest,
-              status: 'pending_approval',
-              generatedAt: generated.generatedAt,
-              updatedAt: generated.updatedAt,
-              error: null,
-            ),
+            customPublicationIsCurrent: custom == null ? null : current,
+            sanitizeCustomPublication: custom == null
+                ? null
+                : (draft) => sanitizeCustomMemoryDraft(draft, custom, redactor),
+            mutate: (draft) {
+              if (!current()) return draft;
+              final safe = sanitizeCustomMemoryDraft(
+                generated,
+                custom,
+                redactor,
+              );
+              return draft.copyWith(
+                content: safe.content,
+                keys: safe.keys,
+                keyParagraphs: safe.keyParagraphs,
+                ledgerRange: safe.ledgerRange,
+                sourceManifest: safe.sourceManifest,
+                status: 'pending_approval',
+                generatedAt: generated.generatedAt,
+                updatedAt: generated.updatedAt,
+                error: null,
+              );
+            },
           );
+          if (!current() || custom != null && !published) return;
           _publishBookChange();
         } catch (e) {
-          if (!ctx.ref.mounted) return;
-          await repo.mutateDraft(
+          if (!current()) return;
+          final published = await repo.mutateDraft(
             sessionId: session.id,
             draftId: draft.id,
-            mutate: (current) => current.copyWith(
-              status: 'needs_regeneration',
-              error: e.toString(),
-              updatedAt: DateTime.now().millisecondsSinceEpoch,
-            ),
+            customPublicationIsCurrent: custom == null ? null : current,
+            sanitizeCustomPublication: custom == null
+                ? null
+                : (draft) => sanitizeCustomMemoryDraft(draft, custom, redactor),
+            mutate: (draft) => !current()
+                ? draft
+                : draft.copyWith(
+                    status: 'needs_regeneration',
+                    error: safeError(e),
+                    updatedAt: DateTime.now().millisecondsSinceEpoch,
+                  ),
           );
+          if (!current() || custom != null && !published) return;
           _publishBookChange();
         }
       }
     } catch (e) {
-      debugPrint('[MemoryDraftStage] auto-create failed: $e');
+      if (current())
+        debugPrint('[MemoryDraftStage] auto-create failed: ${safeError(e)}');
     } finally {
       generationLease?.release();
     }

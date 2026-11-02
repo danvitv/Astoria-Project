@@ -5,6 +5,8 @@ import '../../../shared/widgets/menu_group.dart';
 import '../image_gen_models.dart';
 import 'rows.dart' as rows;
 import 'image_routmy_key_field.dart';
+import 'image_openrouter_key_field.dart';
+import 'image_naistera_key_field.dart';
 
 /// Connection-field rows for the Naistera image-gen API.
 ///
@@ -14,15 +16,10 @@ import 'image_routmy_key_field.dart';
 List<Widget> buildNaisteraConnectionFields(
   ImageGenSettings s,
   ValueChanged<ImageGenSettings> onUpdate,
+  VoidCallback onAuthAdmission,
 ) {
   return [
-    rows.ImageGenTextFieldItem(
-      label: 'imggen_api_key'.tr(),
-      value: s.naisteraApiKey,
-      obscure: true,
-      hint: 'sk-...',
-      onChanged: (v) => onUpdate(s.copyWith(naisteraApiKey: v)),
-    ),
+    ImageNaisteraKeyField(onAdmission: onAuthAdmission),
     InkWell(
       onTap: () {},
       child: Container(
@@ -85,16 +82,10 @@ List<Widget> buildRoutmyConnectionFields(
 List<Widget> buildOpenRouterConnectionFields(
   ImageGenSettings s,
   ValueChanged<ImageGenSettings> onUpdate,
+  VoidCallback onAuthAdmission,
 ) {
   return [
-    rows.ImageGenTextFieldItem(
-      label: 'imggen_api_key'.tr(),
-      value: s.openrouter.apiKey,
-      obscure: true,
-      hint: 'sk-or-...',
-      onChanged: (v) =>
-          onUpdate(s.copyWith(openrouter: s.openrouter.copyWith(apiKey: v))),
-    ),
+    ImageOpenRouterKeyField(endpoint: s.openrouter.endpoint, onAdmission: onAuthAdmission),
     rows.ImageGenTextFieldItem(
       label: 'imggen_endpoint'.tr(),
       value: s.openrouter.endpoint,

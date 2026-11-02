@@ -138,7 +138,18 @@ final class ImageRoutmyLegacySource {
     Map<String, dynamic> ordinary, {
     required bool Function() isCurrent,
   }) {
-    if (ordinary.keys.any(credentialFields.contains)) {
+    late final Map<String, dynamic> admitted;
+    try {
+      admitted = jsonDecode(jsonEncode(ordinary)) as Map<String, dynamic>;
+    } catch (_) {
+      throw const CredentialVaultAdmissionDenied();
+    }
+    // OpenRouter and NovelAI have exact destination/credential admission. Even a
+    // trusted direct caller cannot bypass it through this older native helper.
+    if (admitted.keys.any(credentialFields.contains) ||
+        admitted.containsKey('naisteraApiKey') ||
+        admitted.containsKey('openrouter') ||
+        admitted.containsKey('novelai')) {
       throw const CredentialVaultAdmissionDenied();
     }
     final lease = captureSettings(); // Original revisions before queue/await.
@@ -146,7 +157,7 @@ final class ImageRoutmyLegacySource {
       final prefs = await preferences(lease, isCurrent);
       final raw = prefs.get(settingsKey);
       final preserved = decode(raw) ?? <String, dynamic>{};
-      final value = jsonEncode(_merge(preserved, ordinary));
+      final value = jsonEncode(_merge(preserved, admitted));
       _check(lease, isCurrent);
       final admission = prefs.store.owner.beginConditional(
         lease!,
@@ -157,7 +168,9 @@ final class ImageRoutmyLegacySource {
       var accepted = false;
       SavedPreferencesLease? receipt;
       try {
-        if (!isCurrent() || !admission.current || prefs.get(settingsKey) != raw) {
+        if (!isCurrent() ||
+            !admission.current ||
+            prefs.get(settingsKey) != raw) {
           throw const CredentialVaultAdmissionDenied();
         }
         // Already inside the original physical FIFO. Reentering facade setters
@@ -183,7 +196,8 @@ final class ImageRoutmyLegacySource {
   ) => {
     ...original,
     for (final entry in updates.entries)
-      entry.key: original[entry.key] is Map<String, dynamic> &&
+      entry.key:
+          original[entry.key] is Map<String, dynamic> &&
               entry.value is Map<String, dynamic>
           ? _merge(
               original[entry.key] as Map<String, dynamic>,

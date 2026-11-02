@@ -1,8 +1,69 @@
 # Astoria Assistant — implementation status
 
+Paused by user on 2026-11-02; this local checkpoint is committed as work in progress,
+not a finished plan or passing Rewrite UI delivery. No push is authorized.
+
 Updated: 2026-11-02. Active plan: [ASTORIA_ASSISTANT_PLAN.md](ASTORIA_ASSISTANT_PLAN.md).
 
-Current no-build continuation: bounded read-only specialists are connected and
+Resumed after the requested pause/local checkpoint `d56d506a`. Current HEAD is
+`2670b845`; the neighbor's canon changes are preserved. Custom Memory API custody
+is verified for draft generation and Summaries, with exact native destination binding,
+keyless public settings, synthetic retry/cancellation and final publication guards.
+Legacy plaintext remains. One-message visibility/Undo is blocked on cleanup/raw
+preservation and contributes no definitions. The seventh pipeline FIFO passes all
+24 preferences-owner cases; 18 scalar CAS regressions also pass.
+The latest request authorizes one release APK, then continued coding. That dev build
+passed in 118.9s (159.6 MB); it was not installed or launched. OpenRouter-image custody
+now passes 50 connection, 54 lifecycle and nine native model-UI cases, with bounded
+review findings resolved and affected block/codec/matcher regressions passing. It
+preserves custom proxies/signed assets and original/current publication guards; legacy
+plaintext remains. These later changes are not in the APK. Native regex discovery passes
+five new cases (26 loop cases total);
+seven existing port cases are reused. Frozen-definition readiness now passes 66 cases
+at ordinary base 63, with complete overflow families under the unchanged ceiling.
+One idle non-vector pending-approval draft supports text-only edit/fresh retained Undo:
+34 loop cases, two actual Memory handoffs and seven refreshed global-profile/compatibility
+cases pass. Its own post-commit tickets prevent stale cache/Undo publication; actual
+Cancel retains live Undo, and raw-token/byte/preview boundaries pass. No approval or
+generation is implicit. Exact removal/fresh retained Undo of one such draft also passes
+45 loop cases and one additional actual Memory handoff; seven actual base-63 profile/
+compatibility cases pass. Raw element/delimiter deletion and original-array restoration
+preserve unknown fields and order, while raw changes after preview refuse. Joint journal,
+own commit tickets and distinct uncertain/retired facts remain required. No entry deletion
+or provider cancellation is implicit. Both later draft slices are absent from the APK.
+NovelAI IMAGE custody now passes 41 connection, 36 NovelAI lifecycle and five native
+model/UI cases, plus 22 provider/extraction cases. The affected shared lifecycle/service/
+codec corpora pass with original/current error-instruction and publication guards.
+Actual scalar edits preserve hidden/private saved leaves; encoded model checks capture
+the original policy before awaiting preferences. Legacy plaintext remains, and the
+delivered APK excludes this later slice. Other credential families remain unfinished.
+
+Naistera's synthetic native slice is verified: 26 connection and 26 protocol cases,
+three key/scalar UI cases and the late-policy catalog-denial case. The affected 141
+lifecycle, 18 character/catalog-description and 24 preferences-owner cases pass.
+Original HTTP -> queued physical catalog persistence -> picker/model selection now
+passes, as does late-CURRENT refusal. Unrelated auth-load summaries no longer invalidate
+the selected family's sheet epoch; original ownership/CAS/privacy guards remain, with
+independent review closed. Direct queued CAS and both affected Naistera scalar cases
+pass; a combined run later stalled in the old NovelAI fixture and was not repeated.
+This is synthetic native integration, not live/device quality. Plaintext/APK unchanged.
+
+Local Rewrite Reject/Undo has verified direct original-repository execution, not UI delivery.
+Seventy-seven pure readiness cases pass; accepted ordinary runtime base remains 63.
+The first authorized UI diagnostic located an original snapshot-future scheduling
+stall. Existing bounded join now reaches persisted Reject and same-owner HEADER Back;
+cleanup closes. Fresh Undo has no confirmation, so the full UI path and 35 cases are
+not accepted. Existing NativeInputFixture proves
+a genuine Reject -> fresh Undo baseline plus 12 fault cases: delivered rollback refusal,
+undelivered rollback uncertainty, SQLite commit-hook automatic rollback, retained
+delivered facts without stale successor, and delivered COMMIT/outer-error uncertainty.
+Both epoch and callback-only late retirement are covered. The latter had issued a
+current successor; original captured authority now gates issuance, with review closed.
+No replacement owner, guard waiver, new harness or widget success is inferred.
+Scoped current analysis is error/warning-free with style hints, not runtime acceptance.
+Full plan completion remains open; see the handoff's concrete blockers.
+
+Current continuation: bounded read-only specialists are connected and
 verified in the original Send cycle, without extra sessions or effect authority.
 The historical Memory keyless-export credential gap is fixed and verified through
 synthetic DB-to-ZIP export; this is not migration or plaintext cleanup. Loaded-title
@@ -25,8 +86,8 @@ connection, lifecycle and model-UI cases, with codec/provider regressions passin
 Other image providers and live generation are not claimed. Definition freezing passes
 35 pure/native cases; its native limit remains 64. Six private FIFO preferences
 regressions pass 32 cases; scoped changed-source analysis has no errors/warnings.
-No new release build,
-live call, private data access or push occurred.
+Only the requested APK was built; no other rebuild, live call, private data
+access, application launch or push occurred.
 Read-access redesign commit: `d73093fb` on
 `feat/astoria-assistant` (original baseline `4f1f9d58`). Subsequent bounded UI
 verification fixes are complete for the named Send/settings debts and recorded

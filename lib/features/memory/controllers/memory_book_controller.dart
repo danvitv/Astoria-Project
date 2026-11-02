@@ -14,6 +14,7 @@ import '../../../core/state/db_provider.dart';
 import '../../chat/chat_provider.dart';
 import '../../settings/api_list_provider.dart';
 import '../state/memory_draft_jobs_provider.dart';
+import '../state/memory_active_drafts_provider.dart';
 import '../state/memory_native_entry_owner.dart';
 import 'memory_book_write_queue.dart';
 import 'memory_settings_mapper.dart';
@@ -98,21 +99,43 @@ class MemoryBookController {
                 !_loading &&
                 !_isReindexing &&
                 !isGenerating &&
+                !_ref.read(memoryActiveDraftsProvider).contains(_sessionId) &&
                 !globalSettings.vectorSearchEnabled &&
                 identical(_ref.read(memoryBookRepoProvider), repo),
             captureNativeGuard: () {
               final settings = globalSettings,
                   jobs = _jobs,
+                  activeDrafts = _ref.read(memoryActiveDraftsProvider),
                   epoch = _nativeEpoch;
               return () =>
                   !_disposed &&
                   _ref.context.mounted &&
                   epoch == _nativeEpoch &&
                   identical(globalSettings, settings) &&
+                  identical(
+                    _ref.read(memoryActiveDraftsProvider),
+                    activeDrafts,
+                  ) &&
                   identical(_jobs, jobs);
             },
             publish: (entry) {
               _publishRevision(entry);
+              _nativeChanged?.call();
+            },
+            publishDraft: (draft) {
+              final latest = _book;
+              if (latest == null) return;
+              _book = latest.copyWith(
+                pendingDrafts: latest.pendingDrafts
+                    .map((d) => d.id == draft.id ? draft : d)
+                    .toList(),
+              );
+              _nativeChanged?.call();
+            },
+            publishDraftList: (drafts) {
+              final latest = _book;
+              if (latest == null) return;
+              _book = latest.copyWith(pendingDrafts: drafts);
               _nativeChanged?.call();
             },
           ),

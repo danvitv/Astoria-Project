@@ -43,11 +43,33 @@ class ImageGenProcessor {
     // It is not reconstructed from JSON, an LLM key or a late provider lookup.
     final imageOwner = _ref.read(imageRoutmyCredentialOwnerProvider);
     final ownsImage = imageOwner.captureGuard();
-    final errors = ImageGenErrorSanitizer(routmyCredentials: imageOwner);
+    final openRouterOwner = _ref.read(imageOpenRouterCredentialOwnerProvider);
+    final ownsOpenRouter = openRouterOwner.captureGuard();
+    final novelAiOwner = _ref.read(imageNovelAiCredentialOwnerProvider);
+    final ownsNovelAi = novelAiOwner.captureGuard();
+    final naisteraOwner = _ref.read(imageNaisteraCredentialOwnerProvider);
+    final ownsNaistera = naisteraOwner.captureGuard();
+    ImageGenApiType? protectedProvider;
+    final errors = ImageGenErrorSanitizer(
+      routmyCredentials: imageOwner,
+      openrouterCredentials: openRouterOwner,
+      novelaiCredentials: novelAiOwner,
+      naisteraCredentials: naisteraOwner,
+      checkResults: () =>
+          protectedProvider == ImageGenApiType.openrouter ||
+          protectedProvider == ImageGenApiType.novelai ||
+          protectedProvider == ImageGenApiType.naistera,
+      checkNaisteraResults: () => protectedProvider == ImageGenApiType.naistera,
+    );
     final imgGenSettings = await _ref.read(imageGenSettingsProvider.future);
+    protectedProvider = imgGenSettings.apiType;
     bool ownsPublication() =>
         _ownsOperation &&
-        (imgGenSettings.apiType != ImageGenApiType.routmy || ownsImage());
+        (imgGenSettings.apiType != ImageGenApiType.routmy || ownsImage()) &&
+        (imgGenSettings.apiType != ImageGenApiType.openrouter ||
+            ownsOpenRouter()) &&
+        (imgGenSettings.apiType != ImageGenApiType.novelai || ownsNovelAi()) &&
+        (imgGenSettings.apiType != ImageGenApiType.naistera || ownsNaistera());
     if (!ownsPublication()) return;
 
     final targetIdx = targetMessageId == null
@@ -78,6 +100,20 @@ class ImageGenProcessor {
         targetAgentSwipeId,
         errors.sanitizeMessageErrors(disabledContent),
       );
+      if (!_messageErrorsAreCurrent(
+        latestSession,
+        stableTargetMessageId,
+        errors,
+      )) {
+        if (_ownsOperation) {
+          _onStateUpdate(
+            currentState.copyWith(
+              session: _deniedDisplayProjection(session, errors),
+            ),
+          );
+        }
+        return; // Display-only denial: no repository or cache publication.
+      }
       _onStateUpdate(currentState.copyWith(session: latestSession));
       final durable = await _persistMessageContent(
         session.id,
@@ -139,9 +175,20 @@ class ImageGenProcessor {
 
     debugPrint('[IMGGEN] → setting isGeneratingImage=true');
     _onStateUpdate(
-      currentState.copyWith(session: latestSession, isGeneratingImage: true),
+      currentState.copyWith(
+        session:
+            _messageErrorsAreCurrent(
+              latestSession,
+              stableTargetMessageId,
+              errors,
+            )
+            ? latestSession
+            : _deniedDisplayProjection(session, errors),
+        isGeneratingImage: true,
+      ),
     );
 
+    var publicationDenied = false;
     try {
       final updatedContent = await service.processMessageImages(
         text: targetMsg.content,
@@ -153,18 +200,40 @@ class ImageGenProcessor {
         persona: persona,
         recentImageContexts: recentContexts,
         cancelToken: _cancelToken,
+        onPublicationDenied: () => publicationDenied = true,
         onUpdate: (updatedText) {
           // A cancellation may race an image provider's progress callback.
           // Ownership checks at the caller prevent callbacks from an old
           // operation from reaching a replacement generation.
-          if (!ownsPublication()) return;
-          latestSession = _replaceMessage(
+          if (!ownsPublication() || publicationDenied) return;
+          if (!errors.messageErrorsAreCurrent(
+            errors.sanitizeMessageErrors(updatedText),
+          ))
+            return;
+          final updatedSession = _replaceMessage(
             latestSession,
             stableTargetMessageId,
             targetSwipeId,
             targetAgentSwipeId,
             errors.sanitizeMessageErrors(updatedText),
           );
+          // Progress carries the entire target message, not just selected text.
+          // An archived variant can become private without retiring ownership.
+          if (!_messageErrorsAreCurrent(
+            updatedSession,
+            stableTargetMessageId,
+            errors,
+          )) {
+            publicationDenied = true;
+            _onStateUpdate(
+              currentState.copyWith(
+                session: _deniedDisplayProjection(session, errors),
+                isGeneratingImage: true,
+              ),
+            );
+            return;
+          }
+          latestSession = updatedSession;
           _onStateUpdate(
             currentState.copyWith(
               session: latestSession,
@@ -183,7 +252,12 @@ class ImageGenProcessor {
         },
       );
 
-      if (!ownsPublication()) return;
+      if (!ownsPublication() || publicationDenied) return;
+
+      if (!errors.messageErrorsAreCurrent(
+        errors.sanitizeMessageErrors(updatedContent),
+      ))
+        return;
 
       if (_cancelToken?.isCancelled == true) {
         var cancelContent = updatedContent;
@@ -258,10 +332,10 @@ class ImageGenProcessor {
                   errors,
                 )
             ? latestSession
-            : _errorDisplayProjection(session, errors);
+            : _deniedDisplayProjection(session, errors);
         _onStateUpdate(
           currentState.copyWith(
-            // This error-only projection clears the transient flag. It is NOT
+            // This denial-safe projection clears the transient flag. It is NOT
             // a repository write/cache update or a claim of durable replacement.
             session: visibleSession,
             isGeneratingImage: false,
@@ -271,43 +345,69 @@ class ImageGenProcessor {
     }
   }
 
-  ChatSession _errorDisplayProjection(
+  ChatSession _deniedDisplayProjection(
     ChatSession original,
     ImageGenErrorSanitizer errors,
   ) => original.copyWith(
     messages: [
       for (final message in original.messages)
-        message.copyWith(
-          content: errors.sanitizeMessageErrors(message.content),
-          swipes: message.swipes.map(errors.sanitizeMessageErrors).toList(),
-          agentSwipes: [
-            for (final swipe in message.agentSwipes)
-              swipe.copyWith(
-                content: errors.sanitizeMessageErrors(swipe.content),
-              ),
-          ],
-          swipesMeta: [
-            for (final meta in message.swipesMeta)
-              {
-                ...meta,
-                if (meta['agentSwipes'] case final List stored)
-                  'agentSwipes': [
-                    for (final swipe in stored)
-                      if (swipe is Map && swipe['content'] is String)
-                        {
-                          ...swipe,
-                          'content': errors.sanitizeMessageErrors(
-                            swipe['content'] as String,
-                          ),
-                        }
-                      else
-                        swipe,
-                  ],
-              },
-          ],
+        _projectStoredMessage(
+          message.copyWith(
+            content: errors.displayProjection(message.content),
+            swipes: message.swipes.map(errors.displayProjection).toList(),
+            agentSwipes: [
+              for (final swipe in message.agentSwipes)
+                swipe.copyWith(
+                  content: errors.displayProjection(swipe.content),
+                ),
+            ],
+            swipesMeta: [
+              for (final meta in message.swipesMeta)
+                {
+                  ...meta,
+                  if (meta['agentSwipes'] case final List<Object?> stored)
+                    'agentSwipes': [
+                      for (final swipe in stored)
+                        if (swipe is Map && swipe['content'] is String)
+                          {
+                            ...swipe,
+                            'content': errors.displayProjection(
+                              swipe['content'] as String,
+                            ),
+                          }
+                        else
+                          swipe,
+                    ],
+                },
+            ],
+          ),
+          errors,
         ),
     ],
   );
+
+  /// Generated ChatMessage.toJson leaves these known DTO members as objects.
+  /// Convert only those declared members; arbitrary metadata remains untouched
+  /// and must independently pass the raw-key/leaf native-tree admission.
+  Map<String, dynamic> _nativeMessageTree(ChatMessage message) => {
+    ...message.toJson(),
+    'agentSwipes': [for (final swipe in message.agentSwipes) swipe.toJson()],
+    'triggeredLorebooks': [
+      for (final entry in message.triggeredLorebooks) entry.toJson(),
+    ],
+    'triggeredMemories': [
+      for (final entry in message.triggeredMemories) entry.toJson(),
+    ],
+  };
+
+  ChatMessage _projectStoredMessage(
+    ChatMessage projected,
+    ImageGenErrorSanitizer errors,
+  ) => errors.checksNaisteraResults
+      ? ChatMessage.fromJson(
+          errors.displayStoredMessage(_nativeMessageTree(projected)),
+        )
+      : projected;
 
   static ChatState? mergeOwnedStateUpdate({
     required ChatState? liveState,
@@ -386,14 +486,20 @@ class ImageGenProcessor {
           updatedAt: currentTimestampSeconds(),
           // This callback runs after the original repo's transaction/read
           // queue. Guard here, not just before enqueueing the mutation.
-          mutate: (message) => !ownsPublication()
-              ? null
-              : replaceImageContentAt(
-                  message,
-                  errors.sanitizeMessageErrors(content),
-                  swipeId: swipeId,
-                  agentSwipeId: agentSwipeId,
-                ),
+          mutate: (message) {
+            if (!ownsPublication()) return null;
+            final candidate = replaceImageContentAt(
+              message,
+              errors.sanitizeMessageErrors(content),
+              swipeId: swipeId,
+              agentSwipeId: agentSwipeId,
+            );
+            // The latest row includes every archived variant. Check the whole
+            // proposed message inside the original queued transaction as well.
+            return _messageContentsAreCurrent(candidate, errors)
+                ? candidate
+                : null;
+          },
         );
     // The transaction itself has awaited after mutate. Do not cache/publish an
     // error that became private meanwhile, or invent a non-durable replacement.
@@ -413,16 +519,24 @@ class ImageGenProcessor {
         .where((value) => value.id == messageId)
         .firstOrNull;
     if (message == null) return true;
+    return _messageContentsAreCurrent(message, errors);
+  }
+
+  bool _messageContentsAreCurrent(
+    ChatMessage message,
+    ImageGenErrorSanitizer errors,
+  ) {
     final contents = [
       message.content,
       ...message.swipes,
       ...message.agentSwipes.map((swipe) => swipe.content),
       for (final meta in message.swipesMeta)
-        if (meta['agentSwipes'] case final List stored)
-          for (final swipe in stored.whereType<Map>())
+        if (meta['agentSwipes'] case final List<Object?> stored)
+          for (final swipe in stored.whereType<Map<Object?, Object?>>())
             if (swipe['content'] case final String content) content,
     ];
-    return contents.every(errors.messageErrorsAreCurrent);
+    return errors.storedMessageIsCurrent(_nativeMessageTree(message)) &&
+        contents.every(errors.messageErrorsAreCurrent);
   }
 
   /// Rewrites the image blocks of the swipe the user is looking at.

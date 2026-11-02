@@ -137,16 +137,20 @@ class GeneratedBlockHandler implements BlockHandler {
     }
     // Pictures, if the content asks for any. A block with no image tag never
     // touches the image pipeline, so this costs an ordinary infoblock nothing.
-    content = await BlockImageRenderer(
+    final rendered = await BlockImageRenderer(
       ref: ref,
       repo: repo,
       publishStreamingBlockContent: publishStreamingBlockContent,
     ).render(context: context, sourceContent: content);
 
-    if (context.cancelToken.isCancelled) return _stopped(context);
+    final imageContent = rendered.content;
+    if (imageContent == null || !rendered.isPublishable(imageContent))
+      return null;
+    content = imageContent;
 
     if (blockConfig.render == BlockRender.panel) {
-      final opened = await _openPanel(context, content);
+      final opened = await _openPanel(context, content, rendered.isPublishable);
+      if (opened == null || !rendered.isPublishable(content)) return null;
       if (!opened) {
         return markBlockError(
           context: context,
@@ -156,7 +160,7 @@ class GeneratedBlockHandler implements BlockHandler {
       }
     }
 
-    return _finish(context, content);
+    return _finish(context, content, rendered.isPublishable);
   }
 
   /// Hands the block's markup to the sandboxed iframe host.
@@ -164,7 +168,11 @@ class GeneratedBlockHandler implements BlockHandler {
   /// Macros are expanded here rather than at render time: the panel's HTML
   /// goes straight into the iframe and never passes the panel builder, so
   /// `{{char}}` inside it used to reach the reader literally.
-  Future<bool> _openPanel(BlockContext context, String html) async {
+  Future<bool?> _openPanel(
+    BlockContext context,
+    String html,
+    bool Function(String) isPublishable,
+  ) async {
     final expanded = expand(
       html,
       MacroContext(
@@ -173,6 +181,7 @@ class GeneratedBlockHandler implements BlockHandler {
         personaDescription: context.persona?.prompt,
       ),
     );
+    if (!isPublishable(expanded)) return null;
     final opened = await ref
         .read(panelHostServiceProvider)
         .openPanel(
@@ -184,6 +193,7 @@ class GeneratedBlockHandler implements BlockHandler {
             'minHeight': context.blockConfig.panelMinHeight,
           },
         );
+    if (!isPublishable(expanded)) return null;
     return opened != null;
   }
 
@@ -198,16 +208,20 @@ class GeneratedBlockHandler implements BlockHandler {
     );
   }
 
-  Future<InfoBlock> _finish(BlockContext context, String content) async {
-    await repo.updateContent(context.placeholderId, content);
-    await repo.updateStatus(context.placeholderId, BlockRunStatus.done);
-    return _settle(
-      context,
-      context.placeholder.copyWith(
-        content: content,
-        status: BlockRunStatus.done,
-      ),
+  Future<InfoBlock?> _finish(
+    BlockContext context,
+    String content,
+    bool Function(String) isPublishable,
+  ) async {
+    if (!isPublishable(content)) return null;
+    final done = await repo.completeImageRender(
+      target: context.placeholder,
+      content: content,
+      isPublishable: isPublishable,
     );
+    if (done == null || !isPublishable(done.content)) return null;
+    BlockImageRenderer.retainResultPublication(done, isPublishable);
+    return _settle(context, done);
   }
 
   Future<InfoBlock> _finishEmpty(BlockContext context) async {
@@ -227,9 +241,11 @@ class GeneratedBlockHandler implements BlockHandler {
   }
 
   Future<InfoBlock> _settle(BlockContext context, InfoBlock block) async {
+    if (!BlockImageRenderer.canPublishResult(block)) return block;
     ref
         .read(infoBlocksProvider(context.sessionId).notifier)
         .addOrReplace(block);
+    if (!BlockImageRenderer.canPublishResult(block)) return block;
     refreshPanelForMessage(
       context.charId,
       context.sessionId,

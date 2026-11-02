@@ -36,7 +36,7 @@ void main() {
       expect(f.screen.core.wire, hasLength(2));
       // This memory fixture has no original native source identity, so source
       // tools are unavailable even when the global source capability is on.
-      expect(f.screen.core.wire.first['tools'], hasLength(56));
+      expect(f.screen.core.wire.first['tools'], hasLength(63));
       final messages = (f.screen.core.wire.first['messages'] as List)
           .cast<Map<String, dynamic>>();
       expect(
@@ -69,11 +69,15 @@ void main() {
     'MODEL consecutive current-chat users coalesce after deleting an actual native reply',
     (tester, f) async {
       f.script(f.screen.core.answer('SYNTHETIC_NATIVE_REPLY_TO_DELETE'));
+      final originalBridge = f.screen.core.container.read(
+        supportModelUiBridgeProvider,
+      );
       await f.start(tester, confirmation: false);
       final removed = await f.finish(tester);
       // `drained` is disposal-only. Observe the original completed Send view;
       // the live screen intentionally stays mounted for the second request.
-      await f.screen.terminal(tester);
+      await f.screen.terminal(tester, original: originalBridge);
+      expect(originalBridge.view.runId, removed.runId);
       final before = await configurationAction(tester, () async {
         final core = f.screen.core;
         final workspace = core.container.read(

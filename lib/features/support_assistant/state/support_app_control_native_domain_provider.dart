@@ -5,16 +5,22 @@ import '../../../core/state/chat_source_mutation_provider.dart';
 import '../../../core/state/character_folder_provider.dart';
 import '../../../core/state/preset_folder_provider.dart';
 import '../../../core/state/db_provider.dart';
+import '../../../core/state/credential_vault_provider.dart';
 import '../../chat/state/chat_native_owner_registry.dart';
 import '../../memory/state/memory_native_entry_owner.dart';
+import '../../card_rewrite/rewrite_native_owner.dart';
 import '../models/support_app_action.dart';
 import '../services/app_control/native/support_native_domain_adapter.dart';
 import '../services/app_control/native/support_native_domain_sources.dart';
 import '../services/app_control/native/support_native_repair_discovery.dart';
 import '../services/app_control/native/support_native_session_title_adapter.dart';
 import '../services/app_control/native/support_native_memory_entry_adapter.dart';
+import '../services/app_control/native/support_native_memory_draft_adapter.dart';
+import '../services/app_control/native/support_native_memory_draft_removal_adapter.dart';
 import '../services/app_control/native/support_native_active_selection_adapter.dart';
 import '../services/app_control/native/support_native_global_regex_adapter.dart';
+import '../services/app_control/native/support_native_rewrite_reject_adapter.dart';
+import '../services/app_control/support_app_metadata_policy.dart';
 import 'support_app_control_native_global_regex_owner.dart';
 import 'support_app_control_native_selection_owner.dart';
 import 'support_app_control_content_provider.dart';
@@ -55,6 +61,50 @@ final supportAppNativeDomainAdaptersProvider =
         owners: ref.watch(memoryNativeEntryOwnerRegistryProvider),
       );
       ref.onDispose(memoryEntries.dispose);
+      final memoryDrafts = SupportNativeMemoryDraftAdapter(
+        originContainer: ref.container,
+        support: ref.watch(supportRepoProvider),
+        sources: sources,
+        owners: ref.watch(memoryNativeEntryOwnerRegistryProvider),
+        metadata: SupportAppRedactedMetadataPolicy(
+          currentRedactor: () => ref.read(secretRedactorProvider),
+        ),
+      );
+      ref.onDispose(memoryDrafts.dispose);
+      final draftRemovals = SupportNativeMemoryDraftRemovalAdapter(
+        originContainer: ref.container,
+        support: ref.watch(supportRepoProvider),
+        sources: sources,
+        owners: ref.watch(memoryNativeEntryOwnerRegistryProvider),
+        metadata: SupportAppRedactedMetadataPolicy(
+          currentRedactor: () => ref.read(secretRedactorProvider),
+        ),
+        captureMetadataGuard: () {
+          final originalPolicy = ref.read(secretRedactorProvider);
+          return () =>
+              ref.mounted &&
+              native.isCurrent &&
+              identical(ref.read(secretRedactorProvider), originalPolicy);
+        },
+      );
+      ref.onDispose(draftRemovals.dispose);
+      final rewriteReject = SupportNativeRewriteRejectAdapter(
+        originContainer: ref.container,
+        support: ref.watch(supportRepoProvider),
+        sources: sources,
+        owners: ref.watch(rewriteNativeReviewOwnerRegistryProvider),
+        metadata: SupportAppRedactedMetadataPolicy(
+          currentRedactor: () => ref.read(secretRedactorProvider),
+        ),
+        captureMetadataGuard: () {
+          final original = ref.read(secretRedactorProvider);
+          return () =>
+              ref.mounted &&
+              native.isCurrent &&
+              identical(ref.read(secretRedactorProvider), original);
+        },
+      );
+      ref.onDispose(rewriteReject.dispose);
       final selections = SupportNativeActiveSelectionAdapter(
         support: ref.watch(supportRepoProvider),
         personas: ref.watch(personaRepoProvider),
@@ -71,6 +121,9 @@ final supportAppNativeDomainAdaptersProvider =
         support: ref.watch(supportRepoProvider),
         chats: chats,
         sources: sources,
+        metadata: SupportAppRedactedMetadataPolicy(
+          currentRedactor: () => ref.read(secretRedactorProvider),
+        ),
         port: captureSupportNativeGlobalRegex(
           ref,
           () => ref.mounted && native.isCurrent,
@@ -135,6 +188,9 @@ final supportAppNativeDomainAdaptersProvider =
         for (final adapter in [
           titles,
           memoryEntries,
+          memoryDrafts,
+          draftRemovals,
+          rewriteReject,
           selections,
           regex,
           ...ref.watch(supportAppControlContentAdaptersProvider),

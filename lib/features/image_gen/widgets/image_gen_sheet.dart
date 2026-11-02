@@ -5,8 +5,10 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/dio.dart';
 
 import '../../../core/models/api_config.dart';
+import '../../../core/state/credential_vault_provider.dart';
 import '../../../core/utils/platform_paths.dart';
 import '../../character_gallery/gallery_image_picker.dart';
 import '../../settings/api_list_provider.dart';
@@ -21,7 +23,6 @@ import '../image_gen_models.dart';
 import '../image_gen_provider.dart';
 import '../services/image_gen_connection_service.dart';
 import '../services/image_gen_service.dart' show ImageGenErrorSanitizer;
-import '../services/naistera_image_provider.dart';
 import 'a1111_fields.dart';
 import 'comfyui_fields.dart';
 import 'comfyui_workflow_sheet.dart';
@@ -35,9 +36,12 @@ import 'style_library_sheet.dart';
 import 'xai_fields.dart';
 
 class ImageGenSheet extends ConsumerStatefulWidget {
-  const ImageGenSheet({super.key, this.charId});
+  const ImageGenSheet({super.key, this.charId, this.connectionDio});
 
   final String? charId;
+
+  /// Trusted HTTP fixture only; native owners/recipients are still composed here.
+  final Dio? connectionDio;
 
   @override
   ConsumerState<ImageGenSheet> createState() => _ImageGenSheetState();
@@ -48,6 +52,9 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
   bool _isFetchingModels = false;
   late final ImageGenConnectionService _connectionService;
   late final bool Function(String) _publicRoutmyText;
+  late final bool Function(String) _publicOpenRouterText;
+  late final bool Function(String) _publicNovelAiValue;
+  late final bool Function(String) _publicNaisteraValue;
   late final ImageGenErrorSanitizer _errors;
   final ScrollController _scrollController = ScrollController();
   int _connectionEpoch = 0;
@@ -63,16 +70,35 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
         .capturePublicTextGuard();
     _errors = ImageGenErrorSanitizer(
       routmyCredentials: ref.read(imageRoutmyCredentialOwnerProvider),
+      openrouterCredentials: ref.read(imageOpenRouterCredentialOwnerProvider),
+      novelaiCredentials: ref.read(imageNovelAiCredentialOwnerProvider),
+      naisteraCredentials: ref.read(imageNaisteraCredentialOwnerProvider),
     );
     _connectionService = ImageGenConnectionService(
+      dio: widget.connectionDio,
       routmyCredentials: ref.read(imageRoutmyCredentialOwnerProvider),
+      openrouterCredentials: ref.read(imageOpenRouterCredentialOwnerProvider),
+      novelaiCredentials: ref.read(imageNovelAiCredentialOwnerProvider),
+      naisteraCredentials: ref.read(imageNaisteraCredentialOwnerProvider),
     );
+    _publicOpenRouterText = ref
+        .read(imageOpenRouterCredentialOwnerProvider)
+        .capturePublicTextGuard();
     _settings =
+        // Original captured owner remains in the sheet and open pickers.
         ref.read(imageGenSettingsProvider).value ?? const ImageGenSettings();
+    _publicNovelAiValue = ref
+        .read(imageNovelAiCredentialOwnerProvider)
+        .capturePublicTextGuard(url: true);
+    _publicNaisteraValue = ref
+        .read(imageNaisteraCredentialOwnerProvider)
+        .capturePublicTextGuard();
   }
 
-  void _update(ImageGenSettings s) {
-    if (!_publicRoutmyText(s.routmyModel) ||
+  void _update(ImageGenSettings s, {bool Function()? ownsNaisteraCatalog}) {
+    if (!_publicNovelAiValue(s.novelai.model) ||
+        !_publicOpenRouterText(s.openrouter.model) ||
+        !_publicRoutmyText(s.routmyModel) ||
         !s.routmyModels.every(
           (model) =>
               _publicRoutmyText(model.id) && _publicRoutmyText(model.name),
@@ -81,13 +107,28 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
         setState(() => _connectionError = 'Image model selection unavailable');
       return;
     }
+    final displayedNovelAiBefore = _displayNovelAi(_settings.novelai);
+    final displayedNaisteraModelBefore = _displayNaistera(
+      _settings,
+    ).naisteraModel;
     final connectionChanged = _hasConnectionChanged(_settings, s);
+    s = _displayNaistera(s);
     _settings = s;
-    ref.read(imageGenSettingsProvider.notifier).save(s).catchError((Object _) {
-      if (mounted) {
-        setState(() => _connectionError = 'Image settings could not be saved');
-      }
-    });
+    ref
+        .read(imageGenSettingsProvider.notifier)
+        .save(
+          s,
+          displayedNovelAiBefore: displayedNovelAiBefore,
+          displayedNaisteraModelBefore: displayedNaisteraModelBefore,
+          ownsNaisteraCatalog: ownsNaisteraCatalog,
+        )
+        .catchError((Object _) {
+          if (mounted) {
+            setState(
+              () => _connectionError = 'Image settings could not be saved',
+            );
+          }
+        });
     // Nothing is probed automatically — but a verdict about the old endpoint
     // must not linger once the connection settings change under it.
     if (!s.enabled || connectionChanged) {
@@ -97,6 +138,41 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
     }
     if (mounted) setState(() {});
   }
+
+  NovelAIImageSettings _displayNovelAi(
+    NovelAIImageSettings settings,
+  ) => settings.copyWith(
+    apiKey: '',
+    model: _publicNovelAiValue(settings.model) ? settings.model : '',
+    endpoint: _publicNovelAiValue(settings.endpoint) ? settings.endpoint : '',
+    negativePrompt: _publicNovelAiValue(settings.negativePrompt)
+        ? settings.negativePrompt
+        : '',
+    sampler: _publicNovelAiValue(settings.sampler) ? settings.sampler : '',
+    noiseSchedule: _publicNovelAiValue(settings.noiseSchedule)
+        ? settings.noiseSchedule
+        : '',
+    ucPreset: _publicNovelAiValue(settings.ucPreset) ? settings.ucPreset : '',
+  );
+
+  ImageGenSettings _displayNaistera(ImageGenSettings s) => s.copyWith(
+    naisteraApiKey: '',
+    naisteraModel:
+        _publicNaisteraValue(s.naisteraModel) &&
+            _publicNaisteraValue(
+              NaisteraConstants.normalizeModel(s.naisteraModel),
+            )
+        ? s.naisteraModel
+        : '',
+    naisteraModels: s.naisteraModels
+        .where(
+          (m) =>
+              _publicNaisteraValue(m.id) &&
+              _publicNaisteraValue(m.name) &&
+              _publicNaisteraValue(NaisteraConstants.normalizeModel(m.id)),
+        )
+        .toList(),
+  );
 
   @override
   void dispose() {
@@ -110,7 +186,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       before.useSameEndpoint != after.useSameEndpoint ||
       before.customEndpoint != after.customEndpoint ||
       before.customApiKey != after.customApiKey ||
-      before.naisteraApiKey != after.naisteraApiKey ||
+      before.naisteraModel != after.naisteraModel ||
       before.xai.apiKey != after.xai.apiKey ||
       before.xai.endpoint != after.xai.endpoint ||
       before.routmyMirror != after.routmyMirror ||
@@ -122,6 +198,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       before.a1111.apiKey != after.a1111.apiKey ||
       before.novelai.endpoint != after.novelai.endpoint ||
       before.novelai.apiKey != after.novelai.apiKey ||
+      before.novelai.model != after.novelai.model ||
       before.comfyui.endpoint != after.comfyui.endpoint ||
       before.comfyui.apiKey != after.comfyui.apiKey;
 
@@ -140,6 +217,12 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
     if (!settings.enabled) return;
     final ownsAuth = settings.apiType == ImageGenApiType.routmy
         ? ref.read(imageRoutmyCredentialOwnerProvider).captureGuard()
+        : settings.apiType == ImageGenApiType.openrouter
+        ? ref.read(imageOpenRouterCredentialOwnerProvider).captureGuard()
+        : settings.apiType == ImageGenApiType.novelai
+        ? ref.read(imageNovelAiCredentialOwnerProvider).captureGuard()
+        : settings.apiType == ImageGenApiType.naistera
+        ? ref.read(imageNaisteraCredentialOwnerProvider).captureGuard()
         : () => true;
     final epoch = ++_connectionEpoch;
     setState(() {
@@ -172,6 +255,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
     required String Function(T) labelBuilder,
     required bool Function(T) isSelected,
     required void Function(T) onSelected,
+    bool Function(String)? isPublicText,
   }) {
     rows.showImageGenOptions<T>(
       context,
@@ -180,6 +264,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       labelBuilder: labelBuilder,
       isSelected: isSelected,
       onSelected: onSelected,
+      isPublicText: isPublicText,
     );
   }
 
@@ -195,13 +280,39 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(imageRoutmyAuthProvider, (previous, next) {
-      if (previous?.value?.revision != next.value?.revision ||
-          previous?.value?.unavailable != next.value?.unavailable) {
+    ref.watch(errorRedactionPolicyRevisionProvider);
+    ref.watch(secretRedactorProvider);
+    // A mixed-document write can retire another family's pending auth load.
+    // Its unavailable summary is not a change to this provider's connection.
+    ref.listen(imageNaisteraAuthProvider, (previous, next) {
+      if (_settings.apiType == ImageGenApiType.naistera &&
+          (previous?.value?.revision != next.value?.revision ||
+              previous?.value?.unavailable != next.value?.unavailable))
+        _invalidateRoutmyAuth();
+    });
+    ref.listen(imageNovelAiAuthProvider, (previous, next) {
+      if (_settings.apiType == ImageGenApiType.novelai &&
+          (previous?.value?.revision != next.value?.revision ||
+              previous?.value?.unavailable != next.value?.unavailable))
+        _invalidateRoutmyAuth();
+    });
+    ref.listen(imageOpenRouterAuthProvider, (previous, next) {
+      if (_settings.apiType == ImageGenApiType.openrouter &&
+          (previous?.value?.revision != next.value?.revision ||
+              previous?.value?.unavailable != next.value?.unavailable)) {
         _invalidateRoutmyAuth();
       }
     });
-    final s = _settings;
+    ref.listen(imageRoutmyAuthProvider, (previous, next) {
+      if (_settings.apiType == ImageGenApiType.routmy &&
+          (previous?.value?.revision != next.value?.revision ||
+              previous?.value?.unavailable != next.value?.unavailable)) {
+        _invalidateRoutmyAuth();
+      }
+    });
+    final s = _displayNaistera(
+      _settings,
+    ).copyWith(novelai: _displayNovelAi(_settings.novelai));
 
     return SheetView(
       titleWidget: Row(
@@ -268,7 +379,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
               child: ConnectionStatus(
                 status: _connectionStatus,
-                errorMessage: _connectionError,
+                errorMessage: _errors.sanitize(_connectionError),
                 onRetry: _checkConnection,
                 child: _buildPresetSelector(s.apiType),
               ),
@@ -282,7 +393,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
                 child: Text(
-                  _modelFetchError,
+                  _errors.sanitize(_modelFetchError),
                   style: const TextStyle(color: Colors.red, fontSize: 12),
                 ),
               ),
@@ -427,7 +538,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
   List<Widget> _buildConnectionFields(ImageGenSettings s) {
     switch (s.apiType) {
       case ImageGenApiType.naistera:
-        return buildNaisteraConnectionFields(s, _update);
+        return buildNaisteraConnectionFields(s, _update, _invalidateRoutmyAuth);
       case ImageGenApiType.routmy:
         return buildRoutmyConnectionFields(
           s,
@@ -438,13 +549,17 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       case ImageGenApiType.xai:
         return buildXaiConnectionFields(s, _update);
       case ImageGenApiType.openrouter:
-        return buildOpenRouterConnectionFields(s, _update);
+        return buildOpenRouterConnectionFields(
+          s,
+          _update,
+          _invalidateRoutmyAuth,
+        );
       case ImageGenApiType.electronhub:
         return buildElectronHubConnectionFields(s, _update);
       case ImageGenApiType.a1111:
         return buildA1111ConnectionFields(s, _update);
       case ImageGenApiType.novelai:
-        return buildNovelAiConnectionFields(s, _update);
+        return buildNovelAiConnectionFields(s, _update, _invalidateRoutmyAuth);
       case ImageGenApiType.comfyui:
         return buildComfyUiConnectionFields(s, _update);
       case ImageGenApiType.openai:
@@ -482,6 +597,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       case ImageGenApiType.naistera:
         return buildNaisteraModelFields(
           s,
+          isPublicText: _publicNaisteraValue,
           isFetching: _isFetchingModels,
           onFetchModels: _onFetchModels,
           onUpdate: _update,
@@ -517,6 +633,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       case ImageGenApiType.openrouter:
         return buildOpenRouterModelFields(
           s,
+          isPublicText: _publicOpenRouterText,
           isFetching: _isFetchingModels,
           onFetchModels: _onFetchModels,
           onUpdate: _update,
@@ -541,6 +658,7 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
       case ImageGenApiType.novelai:
         return buildNovelAiModelFields(
           s,
+          isPublicText: _publicNovelAiValue,
           isFetching: _isFetchingModels,
           onFetchModels: _onFetchModels,
           onUpdate: _update,
@@ -559,6 +677,18 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
   }
 
   ShowOptionsCallback _showOptionsCallback() {
+    final originalType = _settings.apiType;
+    final originalNaistera = originalType == ImageGenApiType.naistera
+        ? ref.read(imageNaisteraCredentialOwnerProvider)
+        : null;
+    final ownsNaistera = originalNaistera?.captureGuard();
+    final publicText = switch (_settings.apiType) {
+      ImageGenApiType.routmy => _publicRoutmyText,
+      ImageGenApiType.openrouter => _publicOpenRouterText,
+      ImageGenApiType.novelai => _publicNovelAiValue,
+      ImageGenApiType.naistera => _publicNaisteraValue,
+      _ => null,
+    };
     return <T>({
       required String title,
       required List<T> items,
@@ -572,6 +702,17 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
         labelBuilder: labelBuilder,
         isSelected: isSelected,
         onSelected: onSelected,
+        isPublicText: originalNaistera == null
+            ? publicText
+            : (value) =>
+                  mounted &&
+                  _settings.apiType == originalType &&
+                  ownsNaistera!() &&
+                  identical(
+                    ref.read(imageNaisteraCredentialOwnerProvider),
+                    originalNaistera,
+                  ) &&
+                  publicText!(value),
       );
     };
   }
@@ -613,12 +754,53 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
   /// Loads the Naistera catalog and stores it in the settings, so reference
   /// support and the model labels follow the API instead of the shipped list.
   Future<List<String>> _fetchNaisteraModels() async {
-    final catalog = await NaisteraImageProvider().fetchModels(
-      apiKey: _settings.naisteraApiKey,
+    final settings = _settings;
+    final epoch = _connectionEpoch;
+    final owner = ref.read(imageNaisteraCredentialOwnerProvider);
+    final custody = owner.captureGuard();
+    final lifetime = owner.captureAuthPublicationGuard();
+    bool current() =>
+        mounted &&
+        lifetime() &&
+        epoch == _connectionEpoch &&
+        _settings.apiType == ImageGenApiType.naistera &&
+        identical(ref.read(imageNaisteraCredentialOwnerProvider), owner);
+    final catalog = await _connectionService.fetchNaisteraModels(settings);
+    if (!current() || !custody()) return const [];
+    final publicCatalog = catalog
+        .where(
+          (m) =>
+              _publicNaisteraValue(m.id) &&
+              _publicNaisteraValue(m.name) &&
+              _publicNaisteraValue(NaisteraConstants.normalizeModel(m.id)),
+        )
+        .toList();
+    if (publicCatalog.isEmpty) return const [];
+    // Guard precedes the original queued write, not merely the outer picker.
+    final next = _displayNaistera(
+      _settings.copyWith(naisteraModels: publicCatalog),
     );
-    if (catalog.isEmpty) return const [];
-    _update(_settings.copyWith(naisteraModels: catalog));
-    return catalog.map((model) => model.id).toList();
+    await ref
+        .read(imageGenSettingsProvider.notifier)
+        .save(
+          next,
+          displayedNovelAiBefore: _displayNovelAi(_settings.novelai),
+          displayedNaisteraModelBefore: _displayNaistera(
+            _settings,
+          ).naisteraModel,
+          ownsNaisteraCatalog: current,
+        );
+    if (!current()) return const [];
+    _settings = _displayNaistera(next);
+    return publicCatalog
+        .where(
+          (m) =>
+              current() &&
+              _publicNaisteraValue(m.id) &&
+              _publicNaisteraValue(m.name),
+        )
+        .map((m) => m.id)
+        .toList();
   }
 
   /// Loads the rout.my catalog and stores it with the `/images/edits`
@@ -691,33 +873,79 @@ class _ImageGenSheetState extends ConsumerState<ImageGenSheet> {
   }
 
   Future<void> _onFetchModels() async {
+    final provider = _settings.apiType;
     final routmy = _settings.apiType == ImageGenApiType.routmy;
+    final openrouter = _settings.apiType == ImageGenApiType.openrouter;
+    final novelai = _settings.apiType == ImageGenApiType.novelai;
+    final naistera = _settings.apiType == ImageGenApiType.naistera;
+    final originalNaistera = naistera
+        ? ref.read(imageNaisteraCredentialOwnerProvider)
+        : null;
+    final publicText = routmy
+        ? _publicRoutmyText
+        : openrouter
+        ? _publicOpenRouterText
+        : novelai
+        ? _publicNovelAiValue
+        : naistera
+        ? _publicNaisteraValue
+        : null;
     final epoch = _connectionEpoch;
     final ownsRoutmy = routmy
         ? ref.read(imageRoutmyCredentialOwnerProvider).captureGuard()
+        : openrouter
+        ? ref.read(imageOpenRouterCredentialOwnerProvider).captureGuard()
+        : novelai
+        ? ref.read(imageNovelAiCredentialOwnerProvider).captureGuard()
+        : naistera
+        ? ref
+              .read(imageNaisteraCredentialOwnerProvider)
+              .captureAuthPublicationGuard()
         : () => true;
     bool current() =>
-        mounted && ownsRoutmy() && (!routmy || epoch == _connectionEpoch);
+        mounted &&
+        ownsRoutmy() &&
+        (!(routmy || openrouter || novelai || naistera) ||
+            epoch == _connectionEpoch);
     setState(() => _isFetchingModels = true);
     final apiConfig = ref.read(activeApiConfigProvider);
     try {
-      final models = await _fetchModelsForProvider(apiConfig);
+      final fetched = await _fetchModelsForProvider(apiConfig);
+      final models = openrouter
+          ? fetched.where(_publicOpenRouterText).toList()
+          : novelai
+          ? fetched.where(_publicNovelAiValue).toList()
+          : fetched;
       if (!current()) return;
       if (models.isEmpty) {
         setState(() => _modelFetchError = 'imggen_no_models'.tr());
         return;
       }
       setState(() => _modelFetchError = '');
+      final catalogOwner = originalNaistera?.captureGuard();
+      bool publicSelection(String value) =>
+          (publicText?.call(value) ?? true) &&
+          (!naistera ||
+              current() &&
+                  catalogOwner!() &&
+                  identical(
+                    ref.read(imageNaisteraCredentialOwnerProvider),
+                    originalNaistera,
+                  ));
       _showOptions<String>(
         title: 'Image models',
         items: models,
         labelBuilder: (model) =>
-            _settings.apiType != ImageGenApiType.routmy ||
-                _publicRoutmyText(model)
-            ? model
-            : 'Model unavailable',
+            publicSelection(model) ? model : 'Model unavailable',
         isSelected: _isSelectedModel,
-        onSelected: _applyModel,
+        onSelected: (model) {
+          if (!current() ||
+              _settings.apiType != provider ||
+              !publicSelection(model))
+            return;
+          _applyModel(model);
+        },
+        isPublicText: naistera ? publicSelection : publicText,
       );
     } catch (error) {
       if (!current()) return;

@@ -51,9 +51,8 @@ class ImageBlockPayload {
   static const String _pendingMarker = '@';
 
   /// The image on screen, or empty when the block has none yet.
-  String get activePath => paths.isEmpty
-      ? ''
-      : paths[activeIndex.clamp(0, paths.length - 1)];
+  String get activePath =>
+      paths.isEmpty ? '' : paths[activeIndex.clamp(0, paths.length - 1)];
 
   bool get hasVariants => paths.length > 1;
 
@@ -460,6 +459,13 @@ class ImageTagMarkup {
         .replaceAll('&amp;', '&');
   }
 
+  /// Whole decoded attribute values, before trimming, path-list splitting or
+  /// active-variant selection. Publication guards inspect the original element
+  /// first, then these same values the native result codec reads.
+  static Map<String, String> decodedImageElementAttributes(String element) => {
+    for (final entry in ImgGenPatterns.imgAttributes(element).entries)
+      entry.key: _unescapeAttribute(entry.value),
+  };
 
   /// How many image tags of [text] are still waiting for their image.
   static int pendingImageGenTagCount(String text) =>
@@ -484,9 +490,9 @@ class ImageTagMarkup {
     final tag = tags[index];
     final instruction = _decodeInstruction(tag);
     final instrJson = instruction.isNotEmpty ? jsonEncode(instruction) : '';
-    final payload = ImageBlockPayload.parsePending(tag.payload)
-        .withInstruction(instrJson)
-        .withNewImage(imagePath);
+    final payload = ImageBlockPayload.parsePending(
+      tag.payload,
+    ).withInstruction(instrJson).withNewImage(imagePath);
     return text.replaceRange(tag.start, tag.end, encodeResultElement(payload));
   }
 
@@ -497,7 +503,9 @@ class ImageTagMarkup {
     final instructionJson = jsonEncode(_decodeInstruction(tag));
     // The path list rides along as a plain string: the error payload is JSON,
     // and a JSON array would close the tag on its own `]`.
-    final carried = ImageBlockPayload.parsePending(tag.payload).encodePathList();
+    final carried = ImageBlockPayload.parsePending(
+      tag.payload,
+    ).encodePathList();
     final encoded = jsonEncode({
       'error': error,
       if (instructionJson.isNotEmpty) 'instruction': instructionJson,
@@ -565,8 +573,7 @@ class ImageTagMarkup {
   /// coming back from a tap addresses exactly one image of the message.
   static List<ImageBlock> scanImageBlocks(String text) {
     final blocks = <ImageBlock>[
-      for (final tag in scanPendingTags(text))
-        _pendingBlock(tag),
+      for (final tag in scanPendingTags(text)) _pendingBlock(tag),
     ];
 
     // A resolved token can never sit inside a block already collected; the
@@ -813,7 +820,9 @@ class ImageTagMarkup {
         ImageBlockPayload.parseResult(match.group(1) ?? ''),
         resolve,
       );
-      return rewritten == null ? '' : '[IMG:RESULT:${rewritten.encodeResult()}]';
+      return rewritten == null
+          ? ''
+          : '[IMG:RESULT:${rewritten.encodeResult()}]';
     });
     // Scanned after the tag pass, so the spans are the ones of `result`, and
     // walked right to left so replacing one element leaves the rest in place.

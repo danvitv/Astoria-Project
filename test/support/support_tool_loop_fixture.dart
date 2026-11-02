@@ -7,6 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqlite3/sqlite3.dart' as sqlite;
 import 'package:glaze_flutter/core/models/support_models.dart';
 import 'package:glaze_flutter/core/state/credential_vault_provider.dart';
 import 'package:glaze_flutter/core/state/connection_revision_provider.dart';
@@ -103,8 +104,11 @@ final class ToolLoopFixture {
   static Future<ToolLoopFixture> create(
     ModelProviderIsolation isolation, {
     bool screen = false,
+    sqlite.Database? originalNativeConnection,
   }) async {
-    final native = await SupportProviderModelFixture.create();
+    final native = await SupportProviderModelFixture.create(
+      originalNativeConnection: originalNativeConnection,
+    );
     native.service.dispose();
     final f = ToolLoopFixture(native, isolation);
     SharedPreferences.setMockInitialValues({

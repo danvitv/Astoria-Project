@@ -14,6 +14,7 @@ import '../../core/services/card_rewriter/effective_canon_read_repository.dart';
 import '../../core/state/card_rewriter_providers.dart';
 import '../../core/state/db_provider.dart';
 import '../../core/state/lorebook_embedding_provider.dart';
+import 'rewrite_native_owner.dart';
 
 /// Durable review aggregate for one job: job row + operations joined with
 /// their current immutable revision snapshots and evidence counts.
@@ -203,12 +204,30 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
   RewriteReviewController(this.jobId);
 
   final String jobId;
+  RewriteNativeReviewOwner? nativeOwner;
+  bool get nativeControllerCurrent => ref.mounted;
+  late final writeQueue = RewriteReviewWriteQueue((busy) {
+    if (ref.mounted) state = state.copyWith(busy: busy);
+  });
+
+  Future<T> _ordinary<T>(Future<T> Function() effect) {
+    nativeOwner?.ordinaryAccepted(); // BEFORE queue/validation/provider awaits.
+    return writeQueue.ordinary(effect);
+  }
 
   @override
-  RewriteReviewUiState build() => const RewriteReviewUiState();
+  RewriteReviewUiState build() {
+    // A provider rebuild is not adoption of the original mounted review owner.
+    // Riverpod may reuse this notifier instance, so identity alone is insufficient.
+    nativeOwner?.retire();
+    nativeOwner = null;
+    return const RewriteReviewUiState();
+  }
 
-  void selectOperation(String? id) =>
-      state = state.copyWith(selectedOperationId: () => id);
+  void selectOperation(String? id) {
+    nativeOwner?.selectionChanged();
+    state = state.copyWith(selectedOperationId: () => id);
+  }
 
   void markStaleCanon() =>
       state = state.copyWith(freshness: RewriteCanonFreshness.stale);
@@ -261,7 +280,10 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
   }
 
   /// Returns the typed conflict kind (`updated`, `staleRevision`, …).
-  Future<String> decide(
+  Future<String> decide(ManualRewriteOperationView view, String decision) =>
+      _ordinary(() => _decide(view, decision));
+
+  Future<String> _decide(
     ManualRewriteOperationView view,
     String decision,
   ) async {
@@ -339,6 +361,11 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
   Future<String> saveEdit(
     ManualRewriteOperationView view,
     List<String> newValues,
+  ) => _ordinary(() => _saveEdit(view, newValues));
+
+  Future<String> _saveEdit(
+    ManualRewriteOperationView view,
+    List<String> newValues,
   ) async {
     final snapshot = decodeOperationSnapshot(view.currentSnapshotJson);
     if (snapshot == null || snapshot.patches.length != newValues.length) {
@@ -370,7 +397,10 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
 
   /// Removes one bad patch while preserving the operation's other patches.
   /// This is stored as a new immutable operation revision and revalidated.
-  Future<String> deletePatch(
+  Future<String> deletePatch(ManualRewriteOperationView view, int patchIndex) =>
+      _ordinary(() => _deletePatch(view, patchIndex));
+
+  Future<String> _deletePatch(
     ManualRewriteOperationView view,
     int patchIndex,
   ) async {
@@ -402,50 +432,54 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
   /// Atomic apply of all approved operations. The expected canon stamp is re-
   /// derived from a FRESH read-side assembly right before the call (Oracle
   /// contract), never reused from the stored job stamp.
-  Future<ManualRewriteApplyOutcome> apply(ManualRewriteJobSnapshot snap) async {
-    if (state.busy) {
-      return const ManualRewriteApplyOutcome.blocked('uiBusy');
+  Future<ManualRewriteApplyOutcome> apply(ManualRewriteJobSnapshot snap) {
+    if (!writeQueue.idle) {
+      return Future.value(const ManualRewriteApplyOutcome.blocked('uiBusy'));
     }
+    return _ordinary(() => _apply(snap));
+  }
+
+  Future<ManualRewriteApplyOutcome> _apply(
+    ManualRewriteJobSnapshot snap,
+  ) async {
     final character = await ref
         .read(characterRepoProvider)
         .getById(snap.job.characterId);
     if (character == null) {
       return const ManualRewriteApplyOutcome.blocked('characterNotFound');
     }
-    state = state.copyWith(busy: true);
-    try {
-      final stamp = await computeFreshCanonIdentity(
-        sessionId: snap.job.chatSessionId,
-        character: character,
-        stableStamp: isAutomatedEvolutionJob(snap.job),
-      );
-      if (stamp == null) {
-        return const ManualRewriteApplyOutcome.blocked('invalidCanonContext');
-      }
-      final outcome = await ref
-          .read(manualRewriteApplyRepoProvider)
-          .applyApproved(
-            jobId: snap.job.id,
-            expectedCanonStamp: stamp,
-            expectedJobVersion: snap.job.version,
-          );
-      if (outcome.isApplied) {
-        unawaited(ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
-      }
-      return outcome;
-    } finally {
-      state = state.copyWith(busy: false);
+    final stamp = await computeFreshCanonIdentity(
+      sessionId: snap.job.chatSessionId,
+      character: character,
+      stableStamp: isAutomatedEvolutionJob(snap.job),
+    );
+    if (stamp == null) {
+      return const ManualRewriteApplyOutcome.blocked('invalidCanonContext');
     }
+    final outcome = await ref
+        .read(manualRewriteApplyRepoProvider)
+        .applyApproved(
+          jobId: snap.job.id,
+          expectedCanonStamp: stamp,
+          expectedJobVersion: snap.job.version,
+        );
+    if (outcome.isApplied) {
+      unawaited(ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
+    }
+    return outcome;
   }
 
-  Future<void> cancelJob(String jobId) async {
+  Future<void> cancelJob(String jobId) => _ordinary(() async {
     await ref.read(manualRewriteServiceProvider).cancelJob(jobId);
-  }
+  });
 
   /// Re-attaches a stranded `generating` manual job after process restart.
   /// The service's request-key idempotency guarantees this joins a live run or
   /// adopts the durable row without creating another job.
-  Future<String> resumeGenerating(RewriteJobRow job) async {
+  Future<String> resumeGenerating(RewriteJobRow job) =>
+      _ordinary(() => _resumeGenerating(job));
+
+  Future<String> _resumeGenerating(RewriteJobRow job) async {
     if (job.status != 'generating' || isAutomatedEvolutionJob(job)) {
       return 'invalidState';
     }
@@ -470,45 +504,41 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
 
   Future<CardEvolutionDeleteOutcome> deleteAutomatedProposal(
     RewriteJobRow job,
+  ) => _ordinary(() => _deleteAutomatedProposal(job));
+
+  Future<CardEvolutionDeleteOutcome> _deleteAutomatedProposal(
+    RewriteJobRow job,
   ) async {
-    if (state.busy) return const CardEvolutionDeleteOutcome('uiBusy');
-    state = state.copyWith(busy: true);
-    try {
-      return await ref
-          .read(cardEvolutionRepoProvider)
-          .deleteReplaceableProposal(job.id);
-    } finally {
-      state = state.copyWith(busy: false);
-    }
+    return await ref
+        .read(cardEvolutionRepoProvider)
+        .deleteReplaceableProposal(job.id);
   }
 
   Future<CardEvolutionFinalizeOutcome> regenerateAutomatedProposal(
     RewriteJobRow job,
+  ) => _ordinary(() => _regenerateAutomatedProposal(job));
+
+  Future<CardEvolutionFinalizeOutcome> _regenerateAutomatedProposal(
+    RewriteJobRow job,
   ) async {
-    if (state.busy) {
-      return const CardEvolutionFinalizeOutcome('uiBusy');
+    // Capture dependencies before deleting the watched job. Its removal can
+    // unmount the review body and dispose this family controller mid-await.
+    final evolutionRepo = ref.read(cardEvolutionRepoProvider);
+    final evolutionService = ref.read(automatedCardEvolutionServiceProvider);
+    final deleted = await evolutionRepo.deleteReplaceableProposal(job.id);
+    if (!deleted.isDeleted) {
+      return CardEvolutionFinalizeOutcome(deleted.kind);
     }
-    state = state.copyWith(busy: true);
-    try {
-      // Capture dependencies before deleting the watched job. Its removal can
-      // unmount the review body and dispose this family controller mid-await.
-      final evolutionRepo = ref.read(cardEvolutionRepoProvider);
-      final evolutionService = ref.read(automatedCardEvolutionServiceProvider);
-      final deleted = await evolutionRepo.deleteReplaceableProposal(job.id);
-      if (!deleted.isDeleted) {
-        return CardEvolutionFinalizeOutcome(deleted.kind);
-      }
-      return await evolutionService.runOneBatch(job.chatSessionId);
-    } finally {
-      if (ref.mounted) state = state.copyWith(busy: false);
-    }
+    return await evolutionService.runOneBatch(job.chatSessionId);
   }
 
   /// `failed → generating` retry, then re-attaches the writer lane using the
   /// job's original durable request. Returns a typed kind; `retryUnavailable`
   /// when the job lacks the data needed to re-attach (legacy keyless job or
   /// an unreadable request payload).
-  Future<String> retry(RewriteJobRow job) async {
+  Future<String> retry(RewriteJobRow job) => _ordinary(() => _retry(job));
+
+  Future<String> _retry(RewriteJobRow job) async {
     final request = parseRewriteJobRequest(job.requestJson);
     final requestKey = job.requestKey;
     if (request == null || requestKey == null || requestKey.isEmpty) {

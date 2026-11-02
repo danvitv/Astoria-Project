@@ -7,6 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/models/chat_message.dart';
 import '../../../core/models/memory_book.dart';
 import '../../../core/models/pipeline_settings.dart';
+import '../../../core/credentials/memory_custom_api_credential_owner.dart';
+import '../../../core/state/memory_custom_api_credentials_provider.dart';
+import '../../../core/llm/memory_custom_api_publication.dart';
 import '../../../core/services/generation_notification_service.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../core/state/memory_settings_provider.dart';
@@ -29,6 +32,7 @@ typedef GenerateMemoryDraft =
       required String sessionId,
       required Map<String, String> sessionVars,
       CancelToken? cancelToken,
+      MemoryCustomApiInvocation? originalCustomApi,
     });
 
 final memoryDraftGeneratorProvider = Provider<GenerateMemoryDraft>((ref) {
@@ -41,6 +45,7 @@ final memoryDraftGeneratorProvider = Provider<GenerateMemoryDraft>((ref) {
     required sessionId,
     required sessionVars,
     cancelToken,
+    originalCustomApi,
   }) => MemoryDraftGenerator(ref).generate(
     draft: draft,
     settings: settings,
@@ -50,6 +55,7 @@ final memoryDraftGeneratorProvider = Provider<GenerateMemoryDraft>((ref) {
     sessionId: sessionId,
     sessionVars: sessionVars,
     cancelToken: cancelToken,
+    originalCustomApi: originalCustomApi,
   );
 });
 
@@ -165,8 +171,18 @@ class MemoryDraftJobsNotifier extends Notifier<MemoryDraftJobsState> {
     final jobKey = MemoryDraftJobsState.key(sessionId, draftId);
     if (_tokens.containsKey(jobKey)) return;
 
+    final pipeline = ref.read(pipelineSettingsProvider);
+    final custom = pipeline.memoryBookApi.generationSource == 'custom'
+        ? ref
+              .read(memoryCustomApiCredentialOwnerProvider)
+              .capture(pipeline.memoryBookApi, isCurrent: () => ref.mounted)
+        : null;
+    final redactor = custom?.captureRedactor();
+    bool originalCurrent() => ref.mounted && custom?.isCurrent() != false;
+
     final repo = ref.read(memoryBookRepoProvider);
     final book = await repo.getBySessionId(sessionId);
+    if (!originalCurrent()) return;
     if (book == null) return;
     final draftIndex = book.pendingDrafts.indexWhere((d) => d.id == draftId);
     if (draftIndex < 0) return;
@@ -192,6 +208,7 @@ class MemoryDraftJobsNotifier extends Notifier<MemoryDraftJobsState> {
     if (_tokens.containsKey(jobKey)) return;
 
     final token = CancelToken();
+    bool owns() => originalCurrent() && _owns(jobKey, token);
     _tokens[jobKey] = token;
     _leases[jobKey] = ref
         .read(memoryActiveDraftsProvider.notifier)
@@ -211,6 +228,7 @@ class MemoryDraftJobsNotifier extends Notifier<MemoryDraftJobsState> {
     try {
       foregroundHold = await GenerationNotificationService.instance
           .acquireWorkHold(title: 'Astoria', text: 'Generating memory...');
+      if (!owns()) return;
       final generated = await ref.read(memoryDraftGeneratorProvider)(
         draft: draft,
         // The global settings, not the book's snapshot: this is the manual
@@ -218,62 +236,78 @@ class MemoryDraftJobsNotifier extends Notifier<MemoryDraftJobsState> {
         settings: const MemorySettingsMapper().globalToBook(
           ref.read(memoryGlobalSettingsProvider),
         ),
-        pipeline: ref.read(pipelineSettingsProvider),
+        pipeline: pipeline,
         messages: draftMessages,
         charId: charId,
         sessionId: sessionId,
         sessionVars: session.sessionVars,
         cancelToken: token,
+        originalCustomApi: custom,
       );
-      if (!_owns(jobKey, token)) return;
-      await repo.mutateDraft(
+      if (!owns()) return;
+      final published = await repo.mutateDraft(
         sessionId: sessionId,
         draftId: draftId,
+        customPublicationIsCurrent: custom == null ? null : owns,
+        sanitizeCustomPublication: custom == null
+            ? null
+            : (draft) => sanitizeCustomMemoryDraft(draft, custom, redactor),
         // The ownership check is inside the transaction as well: a cancel
         // landing while the write is in flight must not publish the result.
-        mutate: (current) => _owns(jobKey, token)
-            ? current.copyWith(
-                content: generated.content,
-                keys: generated.keys,
-                keyParagraphs: generated.keyParagraphs,
-                ledgerRange: generated.ledgerRange,
-                sourceManifest: generated.sourceManifest,
-                status: 'pending_approval',
-                generatedAt: generated.generatedAt,
-                updatedAt: generated.updatedAt,
-                error: null,
-              )
-            : current,
+        mutate: (current) {
+          if (!owns()) return current;
+          final safe = sanitizeCustomMemoryDraft(generated, custom, redactor);
+          return current.copyWith(
+            content: safe.content,
+            keys: safe.keys,
+            keyParagraphs: safe.keyParagraphs,
+            ledgerRange: safe.ledgerRange,
+            sourceManifest: safe.sourceManifest,
+            status: 'pending_approval',
+            generatedAt: generated.generatedAt,
+            updatedAt: generated.updatedAt,
+            error: null,
+          );
+        },
       );
-      if (!_owns(jobKey, token)) return;
+      if (!owns() || custom != null && !published) return;
       _bumpBookRevision();
     } catch (e) {
-      if (!_owns(jobKey, token)) return;
+      if (!owns()) return;
       // Normalized here, once, because both surfaces show the same string: the
       // toast, and the draft card, which keeps it until the draft is generated
       // again. `e.toString()` on a provider rejection is Dio's own explanation
       // of what a DioException is, which buries the provider's reason.
-      final message = formatError(e);
+      final message = formatError(
+        custom == null ? e : custom.redact(e.toString(), redactor!),
+      );
       // Keep the previous content and keys on failure. If even persisting the
       // error state fails, still settle and report the generation error.
       try {
-        await repo.mutateDraft(
+        final published = await repo.mutateDraft(
           sessionId: sessionId,
           draftId: draftId,
-          mutate: (current) => _owns(jobKey, token)
+          customPublicationIsCurrent: custom == null ? null : owns,
+          sanitizeCustomPublication: custom == null
+              ? null
+              : (draft) => sanitizeCustomMemoryDraft(draft, custom, redactor),
+          mutate: (current) => owns()
               ? current.copyWith(
                   status: 'needs_regeneration',
-                  error: message,
+                  error: custom == null
+                      ? message
+                      : custom.redact(message, redactor!),
                   updatedAt: DateTime.now().millisecondsSinceEpoch,
                 )
               : current,
         );
+        if (custom != null && !published) return;
       } catch (_) {}
-      if (!_owns(jobKey, token)) return;
+      if (!owns()) return;
       _recordFailure(
         sessionId: sessionId,
         draftId: draftId,
-        message: message,
+        message: custom == null ? message : custom.redact(message, redactor!),
         wasRegeneration: draft.content.isNotEmpty,
       );
       _bumpBookRevision();

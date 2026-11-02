@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:drift/drift.dart';
-import 'package:drift/native.dart';
+import 'package:sqlite3/sqlite3.dart' as sqlite;
 import 'package:glaze_flutter/core/credentials/credential_vault.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/support_repo.dart';
@@ -14,8 +14,10 @@ import '../../credentials/fake_credential_storage.dart';
 /// Declared-schema-only memory SQLite, real XChaCha AEAD, one fake vault owner.
 /// No App, production seeds/migrations, provider, environment, file or network.
 final class NativeInputFixture {
-  NativeInputFixture() {
-    db = _NativeInputDatabase(NativeDatabase.memory().interceptWith(sql));
+  NativeInputFixture({sqlite.Database? originalNativeConnection}) {
+    db = originalNativeConnection == null
+        ? _NativeInputDatabase(sql)
+        : _NativeInputDatabase.opened(originalNativeConnection, sql);
     cipher = SupportPayloadCipher(
       vault: CredentialVault(storage: storage, buildChannel: 'synthetic_input'),
       cipher: primitive,
@@ -158,6 +160,7 @@ final class NativeInputFixture {
   void observe() {
     sql.observations.clear();
     sql.writes.clear();
+    sql.outerSendErrors.clear();
     primitive.decryptAads.clear();
     primitive.encryptAads.clear();
     storage.operations.clear();
@@ -176,7 +179,18 @@ final class NativeInputFixture {
 }
 
 final class _NativeInputDatabase extends AppDatabase {
-  _NativeInputDatabase(super.e) : super.forTesting();
+  _NativeInputDatabase(QueryInterceptor observer)
+    : super.nativeMemoryForTesting(interceptor: observer);
+  // The caller retains ownership of this synthetic raw connection. Its previous
+  // commit hook must be installed before construction, never over our fence.
+  _NativeInputDatabase.opened(
+    sqlite.Database connection,
+    QueryInterceptor observer,
+  ) : super.openedNativeForTesting(
+        connection,
+        interceptor: observer,
+        closeUnderlyingOnClose: false,
+      );
   @override
   MigrationStrategy get migration =>
       MigrationStrategy(onCreate: (m) => m.createAll());
@@ -244,9 +258,16 @@ typedef NativeInputObservation = ({
 final class NativeInputSql extends QueryInterceptor {
   final observations = <NativeInputObservation>[];
   final writes = <String>[];
+  // Only errors from the original send, not our before/after fault callbacks.
+  final outerSendErrors = <Object>[];
   Future<void> Function(String statement, List<Object?> args)? afterSelect;
   Future<void> Function(String statement)? afterWrite;
   Future<void> Function()? beforeOuterSend, afterOuterSend;
+
+  /// A fault may retain this SAME original rollback for explicit later cleanup.
+  /// Returning/throwing without delegating is not a rollback acknowledgement.
+  Future<void> Function(Future<void> Function() originalRollback)?
+  beforeRollback;
   final _outer = <TransactionExecutor, bool>{};
   @override
   TransactionExecutor beginTransaction(QueryExecutor parent) {
@@ -259,8 +280,23 @@ final class NativeInputSql extends QueryInterceptor {
   Future<void> commitTransaction(TransactionExecutor inner) async {
     final outer = _outer.remove(inner) == true;
     if (outer) await beforeOuterSend?.call();
-    await super.commitTransaction(inner);
+    try {
+      await super.commitTransaction(inner);
+    } catch (error) {
+      if (outer) outerSendErrors.add(error);
+      rethrow;
+    }
     if (outer) await afterOuterSend?.call();
+  }
+
+  @override
+  Future<void> rollbackTransaction(TransactionExecutor inner) {
+    _outer.remove(inner);
+    Future<void>? delegated;
+    Future<void> originalRollback() =>
+        delegated ??= super.rollbackTransaction(inner);
+    final hook = beforeRollback;
+    return hook == null ? originalRollback() : hook(originalRollback);
   }
 
   @override

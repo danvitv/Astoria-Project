@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../shared/widgets/menu_group.dart';
 import '../image_gen_models.dart';
 import 'model_fields.dart';
+import 'image_novelai_key_field.dart';
 import 'rows.dart' as rows;
 
 /// Model-field rows for NovelAI Image Generation.
@@ -13,14 +14,24 @@ List<Widget> buildNovelAiModelFields(
   required VoidCallback onFetchModels,
   required ValueChanged<ImageGenSettings> onUpdate,
   required ShowOptionsCallback showOptions,
+  bool Function(String)? isPublicText,
 }) {
   final config = s.novelai;
+  bool public(String value) => isPublicText?.call(value) ?? true;
+  String modelLabel(String id) {
+    final label = NovelAIConstants.models
+        .firstWhere((model) => model.$1 == id, orElse: () => (id, id))
+        .$2;
+    return public(id) && public(label) ? label : 'Model unavailable';
+  }
+
   void update(NovelAIImageSettings next) => onUpdate(s.copyWith(novelai: next));
 
   final resolutionLabel = NovelAIConstants.resolutionPresets
       .firstWhere(
         (preset) => preset.$2 == config.width && preset.$3 == config.height,
-        orElse: () => ('${config.width}x${config.height}', config.width, config.height),
+        orElse: () =>
+            ('${config.width}x${config.height}', config.width, config.height),
       )
       .$1;
   final samplerLabel = NovelAIConstants.samplers
@@ -37,20 +48,22 @@ List<Widget> buildNovelAiModelFields(
         Expanded(
           child: MenuSelectorItem(
             label: 'imggen_model'.tr(),
-            currentValue: NovelAIConstants.models
-                .firstWhere(
-                  (model) => model.$1 == config.model,
-                  orElse: () => (config.model, config.model),
-                )
-                .$2,
+            currentValue: modelLabel(config.model),
             onTap: () => showOptions<String>(
               title: 'imggen_model'.tr(),
-              items: NovelAIConstants.models.map((model) => model.$1).toList(),
-              labelBuilder: (id) => NovelAIConstants.models
-                  .firstWhere((model) => model.$1 == id)
-                  .$2,
+              items: NovelAIConstants.models
+                  .where((model) => public(model.$1) && public(model.$2))
+                  .map((model) => model.$1)
+                  .toList(),
+              labelBuilder: modelLabel,
               isSelected: (id) => config.model == id,
-              onSelected: (id) => update(config.copyWith(model: id)),
+              onSelected: (id) {
+                final label = NovelAIConstants.models
+                    .firstWhere((model) => model.$1 == id)
+                    .$2;
+                if (public(id) && public(label))
+                  update(config.copyWith(model: id));
+              },
             ),
           ),
         ),
@@ -170,16 +183,14 @@ List<Widget> buildNovelAiModelFields(
 /// Connection-field rows for NovelAI Image Generation.
 List<Widget> buildNovelAiConnectionFields(
   ImageGenSettings s,
-  ValueChanged<ImageGenSettings> onUpdate,
-) {
+  ValueChanged<ImageGenSettings> onUpdate, [
+  VoidCallback? onAdmission,
+]) {
   return [
-    rows.ImageGenTextFieldItem(
-      label: 'imggen_api_key'.tr(),
-      value: s.novelai.apiKey,
-      obscure: true,
-      hint: 'pst-...',
-      onChanged: (v) =>
-          onUpdate(s.copyWith(novelai: s.novelai.copyWith(apiKey: v))),
+    ImageNovelAiKeyField(
+      endpoint: s.novelai.endpoint,
+      model: s.novelai.model,
+      onAdmission: onAdmission ?? () {},
     ),
     rows.ImageGenTextFieldItem(
       label: 'imggen_endpoint'.tr(),

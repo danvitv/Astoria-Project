@@ -106,6 +106,16 @@ final class SecretRedactor {
     return _redactPlain(text);
   }
 
+  /// Native-only whole-value check against this policy's known literal secrets.
+  /// Not diagnostic redaction: unknown token-shaped values and signed URL fields
+  /// are not classified here. Callers must independently validate their syntax
+  /// and destination, and must never expose this matcher as a model tool.
+  /// Exhausted policies and oversized inputs fail closed; no secret is returned.
+  bool isKnownSecretFree(String value) =>
+      !_closed &&
+      value.length <= maxInputLength &&
+      _patterns.replaceKnown(value) == value;
+
   String _redactPlain(String text) {
     if (_closed || text.length > maxInputLength) return limited;
     // One scan of original text. No pass ever scans an inserted marker.

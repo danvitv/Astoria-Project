@@ -20,10 +20,12 @@ import '../../shared/widgets/glaze_toast.dart';
 import 'rewrite_review_provider.dart';
 import 'widgets/rewrite_operation_card.dart';
 import 'widgets/rewrite_anchored_diff_pane.dart';
+import 'rewrite_native_owner.dart';
+import '../support_assistant/support_assistant_screen.dart';
 
 /// Durable review route. It deliberately reads the job aggregate again instead
 /// of receiving editor state, so a link/restart always shows the saved review.
-class RewriteReviewScreen extends ConsumerWidget {
+class RewriteReviewScreen extends ConsumerStatefulWidget {
   const RewriteReviewScreen({
     super.key,
     required this.charId,
@@ -34,8 +36,127 @@ class RewriteReviewScreen extends ConsumerWidget {
   final String jobId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<RewriteReviewScreen> createState() =>
+      _RewriteReviewScreenState();
+}
+
+class _RewriteReviewScreenState extends ConsumerState<RewriteReviewScreen> {
+  ProviderContainer? _container;
+  ManualRewriteJobSnapshot? _loaded;
+  RewriteReviewController? _controller;
+  RewriteNativeReviewOwner? _owner;
+  void Function()? _release;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final container = ProviderScope.containerOf(context, listen: false);
+    if (_container != null && !identical(container, _container)) _retireOwner();
+    _container = container;
+  }
+
+  void _retireOwner() {
+    _release?.call();
+    if (identical(_controller?.nativeOwner, _owner))
+      _controller?.nativeOwner = null;
+    _release = null;
+    _owner = null;
+    _controller = null;
+    _loaded = null;
+  }
+
+  void _bindLoaded(ManualRewriteJobSnapshot? snapshot) {
+    _loaded = snapshot;
+    if (snapshot == null) {
+      _retireOwner();
+      return;
+    }
+    final controller = ref.read(rewriteReviewUiProvider(widget.jobId).notifier);
+    final repo = ref.read(manualRewriteJobRepoProvider);
+    if (_owner != null &&
+        (!identical(_controller, controller) ||
+            !identical(_owner!.repo, repo) ||
+            !_owner!.current)) {
+      _retireOwner();
+      _loaded = snapshot;
+    }
+    if (_owner != null) return;
+    final container = _container!;
+    final jobId = widget.jobId;
+    final owner = RewriteNativeReviewOwner(
+      originContainer: container,
+      jobId: jobId,
+      repo: repo,
+      queue: controller.writeQueue,
+      readLoaded: () => _loaded,
+      readSelectedId: () => mounted && controller.nativeControllerCurrent
+          ? ref.read(rewriteReviewUiProvider(jobId)).selectedOperationId
+          : null,
+      isOriginalMounted: () =>
+          mounted &&
+          controller.nativeControllerCurrent &&
+          widget.jobId == jobId &&
+          identical(_container, container) &&
+          _loaded?.job.id == jobId &&
+          identical(_controller, controller) &&
+          identical(
+            ref.read(rewriteReviewUiProvider(jobId).notifier),
+            controller,
+          ) &&
+          identical(ref.read(manualRewriteJobRepoProvider), repo),
+    );
+    _controller = controller;
+    _owner = owner;
+    controller.nativeOwner = owner;
+    _release = ref
+        .read(rewriteNativeReviewOwnerRegistryProvider)
+        .register(owner);
+  }
+
+  @override
+  void didUpdateWidget(covariant RewriteReviewScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.jobId != widget.jobId || oldWidget.charId != widget.charId)
+      _retireOwner();
+  }
+
+  @override
+  void dispose() {
+    _retireOwner();
+    super.dispose();
+  }
+
+  @override
+  void deactivate() {
+    _retireOwner();
+    super.deactivate();
+  }
+
+  void _openAstoria() {
+    final owner = _owner;
+    if (owner == null ||
+        !owner.current ||
+        !owner.queue.idle ||
+        owner.selected() == null)
+      return;
+    // Explicit root push retains this SAME mounted review route/controller.
+    // No selected ID is passed as model authority and no sibling route is adopted.
+    Navigator.of(context, rootNavigator: true).push<void>(
+      MaterialPageRoute(
+        builder: (_) =>
+            const SupportAssistantScreen(returnToPreviousRoute: true),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final jobId = widget.jobId, charId = widget.charId;
     final snapshot = ref.watch(rewriteJobSnapshotProvider(jobId));
+    _bindLoaded(
+      snapshot.isLoading || snapshot.hasError ? null : snapshot.asData?.value,
+    );
+    final ui = ref.watch(rewriteReviewUiProvider(jobId));
     final job = snapshot.whenOrNull(data: (value) => value)?.job;
     final sessionIndex = job == null
         ? null
@@ -48,6 +169,16 @@ class RewriteReviewScreen extends ConsumerWidget {
     return GlazeScaffold(
       title: 'rewrite_title'.tr(),
       onBack: () => context.go(backLocation),
+      actions: [
+        IconButton(
+          key: const Key('rewrite-open-astoria'),
+          tooltip: 'Astoria Assistant',
+          icon: const Icon(Icons.support_agent_rounded),
+          onPressed: _owner?.selected() != null && !ui.busy
+              ? _openAstoria
+              : null,
+        ),
+      ],
       body: snapshot.when(
         loading: () => const Center(child: GlazeSpinner()),
         error: (_, _) => _MessageState(
@@ -126,6 +257,7 @@ class _ReviewBody extends ConsumerWidget {
               view.operation.status == 'reviewable' &&
               lockOverlap(operation, lockedNames).isNotEmpty;
           return RewriteOperationRailTile(
+            key: Key('rewrite-select-${view.operation.id}'),
             index: i,
             view: view,
             scopeKey: scopeKey,

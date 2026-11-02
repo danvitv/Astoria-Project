@@ -155,6 +155,7 @@ void main() {
           required sessionId,
           required sessionVars,
           cancelToken,
+          originalCustomApi,
         }) {
           memoryCalls++;
           if (!memoryStarted.isCompleted) memoryStarted.complete();

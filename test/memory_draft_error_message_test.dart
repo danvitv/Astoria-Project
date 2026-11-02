@@ -45,6 +45,7 @@ void main() {
             required sessionId,
             required sessionVars,
             cancelToken,
+            originalCustomApi,
           }) => Future<MemoryDraft>.error(error),
         ),
       ],
