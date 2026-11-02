@@ -1384,17 +1384,26 @@ class SyncEngine {
   }
 
   Future<void> _pushEntry(SyncManifestEntry entry) async {
+    final checkActive = _captureActiveGuard();
+    checkActive();
     final reconciliation = _reconciliationStateStore;
     if (entry.type == 'reconciliation_state' &&
         reconciliation is SyncPagedReconciliationStateStore) {
       await ReconciliationPageTransport(
-        checkActive: _captureActiveGuard(),
+        checkActive: checkActive,
       ).upload(_adapter, entry, reconciliation);
       return;
     }
     final data = await _readLocalEntity(entry.type, entry.id);
+    checkActive();
     if (data == null) return;
-    await SyncPayloadTransport.upload(_adapter, entry, data);
+    await SyncPayloadTransport.upload(
+      _adapter,
+      entry,
+      data,
+      checkActive: checkActive,
+    );
+    checkActive();
 
     if (entry.type == 'character') {
       await _binarySyncer.pushCharacterAvatar(entry.id);
@@ -1423,7 +1432,11 @@ class SyncEngine {
       return;
     }
 
-    final cloudData = await SyncSerialization.readCloudEntity(_adapter, entry);
+    // A missing or corrupt chat part must fail the task, not silently accept
+    // its manifest hash while leaving the previous local conversation intact.
+    final cloudData = entry.type == 'chat'
+        ? await SyncSerialization.readRequiredCloudEntity(_adapter, entry)
+        : await SyncSerialization.readCloudEntity(_adapter, entry);
     _checkCurrent();
     if (cloudData == null) return;
 

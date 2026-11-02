@@ -16,19 +16,24 @@ class SyncPayloadTransport {
   static const _compressionThreshold = 512 * 1024;
   static const _chunkBytes = 768 * 1024;
   static const _maxDecodedBytes = 128 * 1024 * 1024;
+  static const _maxCompressedBytes = _maxDecodedBytes + _chunkBytes;
   static const _maxChunks = 256;
   static final _hashPattern = RegExp(r'^[a-f0-9]{64}$');
 
-  static int _jsonLimit(SyncManifestEntry entry) =>
-      entry.type == 'reconciliation_state'
-      ? _maxDecodedBytes
-      : maxSyncPayloadBytes;
+  static bool _allowsChunked(SyncManifestEntry entry) =>
+      entry.type == 'reconciliation_state' || entry.type == 'chat';
 
+  static int _jsonLimit(SyncManifestEntry entry) =>
+      _allowsChunked(entry) ? _maxDecodedBytes : maxSyncPayloadBytes;
+
+  /// [checkActive] may throw when the caller no longer owns this sync run.
   static Future<void> upload(
     CloudAdapter adapter,
     SyncManifestEntry entry,
-    Map<String, dynamic> data,
-  ) async {
+    Map<String, dynamic> data, {
+    void Function()? checkActive,
+  }) async {
+    checkActive?.call();
     final json = jsonEncode(data);
     final bytes = utf8.encode(json);
     if (bytes.length > _jsonLimit(entry)) {
@@ -38,16 +43,21 @@ class SyncPayloadTransport {
         sha256.convert(bytes).toString() != entry.hash) {
       throw StateError('Reconciliation changed during sync; retry the push');
     }
-    if (entry.type != 'reconciliation_state' ||
-        bytes.length < _compressionThreshold) {
+    if (!_allowsChunked(entry) || bytes.length < _compressionThreshold) {
       await adapter.upload(entry.path, json);
+      checkActive?.call();
       return;
     }
 
     // Large gzip work must not block Flutter's UI isolate.
     final compressed = await compress(bytes);
+    checkActive?.call();
+    if (compressed.isEmpty ||
+        compressed.length > _maxCompressedBytes ||
+        (compressed.length + _chunkBytes - 1) ~/ _chunkBytes > _maxChunks) {
+      throw StateError('Compressed payload exceeds limit for ${entry.key}');
+    }
     final chunks = <Map<String, dynamic>>[];
-    await adapter.ensureFolder('${entry.path}.parts');
     for (var offset = 0; offset < compressed.length; offset += _chunkBytes) {
       final part = Uint8List.sublistView(
         compressed,
@@ -55,25 +65,41 @@ class SyncPayloadTransport {
         min(offset + _chunkBytes, compressed.length),
       );
       final hash = sha256.convert(part).toString();
-      await adapter.upload(_partPath(entry, hash), base64Encode(part));
       chunks.add({'hash': hash, 'bytes': part.length});
+    }
+    final root = jsonEncode({
+      '__syncPayload': true,
+      'version': 1,
+      'encoding': 'gzip+base64-chunks',
+      'type': entry.type,
+      'id': entry.id,
+      'jsonBytes': bytes.length,
+      'compressedBytes': compressed.length,
+      'payloadHash': sha256.convert(bytes).toString(),
+      'chunks': chunks,
+    });
+    if (utf8.encode(root).length > maxSyncPayloadBytes) {
+      throw StateError('Payload index exceeds limit for ${entry.key}');
+    }
+    await adapter.ensureFolder('${entry.path}.parts');
+    checkActive?.call();
+    for (var index = 0; index < chunks.length; index++) {
+      final offset = index * _chunkBytes;
+      final part = Uint8List.sublistView(
+        compressed,
+        offset,
+        min(offset + _chunkBytes, compressed.length),
+      );
+      await adapter.upload(
+        _partPath(entry, chunks[index]['hash'] as String),
+        base64Encode(part),
+      );
+      checkActive?.call();
     }
     // Do not delete old parts here: another device may still be reading an old
     // root, and concurrent writers may be preparing their own immutable parts.
-    await adapter.upload(
-      entry.path,
-      jsonEncode({
-        '__syncPayload': true,
-        'version': 1,
-        'encoding': 'gzip+base64-chunks',
-        'type': entry.type,
-        'id': entry.id,
-        'jsonBytes': bytes.length,
-        'compressedBytes': compressed.length,
-        'payloadHash': sha256.convert(bytes).toString(),
-        'chunks': chunks,
-      }),
-    );
+    await adapter.upload(entry.path, root);
+    checkActive?.call();
   }
 
   static Future<Map<String, dynamic>> download(
@@ -84,7 +110,7 @@ class SyncPayloadTransport {
     final raw = rawPayload ?? await adapter.download(entry.path);
     if (raw.isEmpty) throw StateError('Empty cloud entity: ${entry.key}');
     // The aggregate budget does not relax the limit on any physical file,
-    // including a legacy uncompressed reconciliation document.
+    // including legacy uncompressed chat and reconciliation documents.
     if (raw.length > maxSyncPayloadBytes ||
         utf8.encode(raw).length > maxSyncPayloadBytes) {
       throw FormatException('Cloud payload exceeds limit for ${entry.key}');
@@ -106,7 +132,7 @@ class SyncPayloadTransport {
     final compressedBytes = root['compressedBytes'];
     final payloadHash = root['payloadHash'];
     final descriptors = root['chunks'];
-    if (entry.type != 'reconciliation_state' ||
+    if (!_allowsChunked(entry) ||
         root['__syncPayload'] != true ||
         root['version'] != 1 ||
         root['encoding'] != 'gzip+base64-chunks' ||
@@ -117,7 +143,7 @@ class SyncPayloadTransport {
         jsonBytes > _maxDecodedBytes ||
         compressedBytes is! int ||
         compressedBytes <= 0 ||
-        compressedBytes > _maxDecodedBytes + _chunkBytes ||
+        compressedBytes > _maxCompressedBytes ||
         payloadHash is! String ||
         !_hashPattern.hasMatch(payloadHash) ||
         descriptors is! List ||

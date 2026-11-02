@@ -7,7 +7,12 @@ uncompressed schema-2 JSON, encoded incrementally in the original key/row order.
 
 ## File and memory budgets
 
-- Every ordinary JSON file retains the **30 MiB UTF-8** physical-file limit.
+- Every physical JSON file retains the **30 MiB UTF-8** physical-file limit.
+- Chats below 512 KiB retain plain JSON. Larger chats use `__syncPayload`
+  version 1 / `gzip+base64-chunks`, with a **128 MiB** decoded JSON budget.
+  Gzip compression runs off the UI isolate. Each compressed part is at most **768 KiB**
+  (at most **1 MiB** base64), with at most 256 parts. All original messages,
+  reasoning, Studio outputs and swipe variants survive the transport round trip.
 - Reconciliation journals below 512 KiB retain their plain JSON wire format.
 - Larger journals use `__syncPayload` version 2 / `gzip+base64-pages`.
   Each independently compressed page decodes to at most **512 KiB**; its base64
@@ -25,9 +30,10 @@ uncompressed schema-2 JSON, encoded incrementally in the original key/row order.
 
 The aim is reconciliation provenance for long chats (including 10k-message
 histories), not a guarantee of unrestricted message/record size. Individual
-effect validation still parses its full before/after snapshots. Chat rendering,
-generation and ordinary chat transport retain their existing representations
-and limits; those are not made universally 10k-capable by journal paging.
+effect validation still parses its full before/after snapshots. Chat rendering
+and generation retain their existing representations. Compressed chat transport
+still assembles the whole bounded chat JSON; it is not message-level delta sync
+or a guarantee of unrestricted 10k-message chat size.
 
 ## Export and import
 
@@ -59,15 +65,18 @@ a different task fails. Temporary artifacts are disposed on success and error.
 
 Old pages are retained during ordinary pushes because concurrent readers may
 hold older indexes. An owning reconciliation tombstone or full cloud wipe removes
-its pages. Safe garbage collection of superseded versions is not implemented.
+its pages. An owning chat tombstone removes its `.parts` directory. Safe garbage
+collection of superseded versions is not implemented.
 
 ## Compatibility and deployment
 
 Updated readers accept existing plain JSON and the new staged page encoding.
-The bounded-map transport also accepts version-1 gzip/chunk envelopes for
-compatibility adapters. No database schema migration or history replay is needed.
-**Update both phone and PC before syncing large paged journals**: old app builds
-cannot decode them. Small journals retain their old wire format.
+The bounded-map transport also accepts version-1 gzip/chunk envelopes for chats
+and reconciliation compatibility adapters. No database schema migration or
+history replay is needed. **Update both phone and PC before syncing compressed
+chats or large paged journals**: old app builds cannot decode them. Small chats
+and journals retain their old wire format. Failed/corrupt chat downloads do not
+write a conversation or accept its cloud manifest entry.
 
 For a phone whose push stopped at the old payload limit, install updated builds,
 push from the phone owning the latest history, then pull on PC. Do not overwrite

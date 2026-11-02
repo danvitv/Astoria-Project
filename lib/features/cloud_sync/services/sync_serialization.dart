@@ -230,10 +230,13 @@ class SyncSerialization {
     try {
       await adapter.deleteFile(entry.path);
     } catch (_) {}
-    if (entry.type == 'reconciliation_state') {
+    if (entry.type == 'reconciliation_state' || entry.type == 'chat') {
       // Only the owning entity's explicit tombstone deletes history parts.
       // Ordinary updates retain parts so concurrent older readers stay valid.
-      for (final suffix in ['.pages', '.parts']) {
+      for (final suffix in [
+        if (entry.type == 'reconciliation_state') '.pages',
+        '.parts',
+      ]) {
         try {
           await adapter.deleteFolder('${entry.path}$suffix');
         } catch (_) {}

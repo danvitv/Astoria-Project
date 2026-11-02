@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/features/cloud_sync/services/sync_payload_transport.dart';
 import 'package:glaze_flutter/features/cloud_sync/services/sync_serialization.dart';
 import 'package:glaze_flutter/features/cloud_sync/services/sync_engine.dart'
@@ -17,13 +18,21 @@ import 'sync_lifecycle_test.dart'
 
 const _chunkBytes = 768 * 1024;
 const _compressionThreshold = 512 * 1024;
-const _maxReconciliationBytes = 128 * 1024 * 1024;
+const _maxDecodedBytes = 128 * 1024 * 1024;
 const _sessionId = 'transport-session';
 
 class _RecordingCloudAdapter extends FakeCloudAdapter {
   final uploadCalls = <String>[];
   int partUploadCount = 0;
   int? failPartUploadNumber;
+  void Function()? afterEnsureFolder;
+  void Function(String path)? afterUpload;
+
+  @override
+  Future<void> ensureFolder(String path) async {
+    await super.ensureFolder(path);
+    afterEnsureFolder?.call();
+  }
 
   @override
   Future<void> upload(String path, String data) async {
@@ -35,6 +44,7 @@ class _RecordingCloudAdapter extends FakeCloudAdapter {
       }
     }
     await super.upload(path, data);
+    afterUpload?.call(path);
   }
 }
 
@@ -58,6 +68,55 @@ Map<String, dynamic> _state(String text) => {
     {'id': 'collector', 'response': text},
   ],
 };
+
+ChatSession _chat(String text) => ChatSession(
+  id: _sessionId,
+  characterId: 'transport-character',
+  sessionIndex: 7,
+  updatedAt: 1000,
+  messages: [
+    const ChatMessage(
+      id: 'earlier-hidden-message',
+      role: 'user',
+      content: 'Earlier history must survive Ж 🐈',
+      isHidden: true,
+    ),
+    ChatMessage(
+      id: 'assistant',
+      role: 'assistant',
+      content: text,
+      reasoning: 'Private reasoning Ж 🐈',
+      swipes: const ['Previous variation', 'Alternate variation'],
+      swipeId: 1,
+      swipesMeta: const [
+        {'reasoning': 'Previous reasoning', 'tokens': 19},
+        {'reasoning': 'Alternate reasoning', 'tokens': 23},
+      ],
+      agentSwipes: const [
+        AgentSwipe(
+          content: 'Cleaned variation',
+          kind: 'cleaned',
+          reasoning: 'Cleaner reasoning',
+          parentSwipeId: 1,
+        ),
+      ],
+      studioOutputs: const [
+        {'tracker': 'state', 'response': 'Unmodified output'},
+      ],
+      imagePath: 'images/original.png',
+      extraImagePaths: const ['images/second.png'],
+      imageHidden: true,
+      memoryCoverage: const {
+        'book': <String>['fact'],
+      },
+    ),
+  ],
+  sessionVars: const {'historyAnchor': 'earlier-hidden-message'},
+  authorsNote: const AuthorsNote(content: 'Author Ж'),
+  summary: const ChatSummary(content: 'Summary 🐈'),
+  draft: 'Unsent draft',
+  lastScrollAnchor: const {'messageId': 'assistant', 'offset': 12},
+);
 
 SyncManifestEntry _entry(
   Map<String, dynamic> data, {
@@ -89,16 +148,29 @@ void main() {
   late final noise = _noise();
   late final mediumPayload = _state(noise);
   late final mediumEntry = _entry(mediumPayload);
+  late final mediumChatPayload = _chat(noise).toJson();
+  late final mediumChatEntry = _entry(mediumChatPayload, type: 'chat');
   late Map<String, String> chunkedFiles;
+  late Map<String, String> chatFiles;
 
   FakeCloudAdapter chunkedCloud() =>
       FakeCloudAdapter()..files.addAll(chunkedFiles);
+
+  FakeCloudAdapter chatCloud() => FakeCloudAdapter()..files.addAll(chatFiles);
 
   setUpAll(() async {
     final cloud = FakeCloudAdapter();
     await SyncPayloadTransport.upload(cloud, mediumEntry, mediumPayload);
     chunkedFiles = Map.of(cloud.files);
     expect(_chunks(_root(cloud, mediumEntry)).length, greaterThan(1));
+    final chats = FakeCloudAdapter();
+    await SyncPayloadTransport.upload(
+      chats,
+      mediumChatEntry,
+      mediumChatPayload,
+    );
+    chatFiles = Map.of(chats.files);
+    expect(_chunks(_root(chats, mediumChatEntry)).length, greaterThan(1));
   });
 
   setUp(() {
@@ -118,10 +190,352 @@ void main() {
     expect(cloud.downloadCalls, [entry.path]);
   });
 
-  test('large non-reconciliation entity stays ordinary JSON', () async {
+  group('chat payload transport', () {
+    test('small real chat stays plain with no extra cloud calls', () async {
+      final cloud = _RecordingCloudAdapter();
+      final data = _chat('Small Ж 🐈 reply').toJson();
+      final entry = _entry(data, type: 'chat');
+      final json = jsonEncode(data);
+
+      await SyncPayloadTransport.upload(cloud, entry, data);
+
+      expect(cloud.files, {entry.path: json});
+      expect(cloud.uploadCalls, [entry.path]);
+      expect(cloud.ensuredFolders, isEmpty);
+      expect(cloud.downloadCalls, isEmpty);
+      expect(cloud.listFolderCalls, isEmpty);
+      final downloaded = await SyncPayloadTransport.download(cloud, entry);
+      expect(jsonEncode(downloaded), json);
+      expect(jsonEncode(ChatSession.fromJson(downloaded).toJson()), json);
+      expect(cloud.downloadCalls, [entry.path]);
+    });
+
+    test('legacy large plain chat remains readable without parts', () async {
+      final cloud = FakeCloudAdapter();
+      final data = _chat('Legacy Ж 🐈 reply. ' * 50000).toJson();
+      final entry = _entry(data, type: 'chat');
+      final json = jsonEncode(data);
+      expect(utf8.encode(json).length, greaterThan(_compressionThreshold));
+      expect(utf8.encode(json).length, lessThan(maxSyncPayloadBytes));
+      cloud.files[entry.path] = json;
+
+      final downloaded = await SyncPayloadTransport.download(cloud, entry);
+
+      expect(jsonEncode(ChatSession.fromJson(downloaded).toJson()), json);
+      expect(cloud.downloadCalls, [entry.path]);
+      cloud.downloadCalls.clear();
+      expect(
+        jsonEncode(
+          await SyncPayloadTransport.download(cloud, entry, rawPayload: json),
+        ),
+        json,
+      );
+      expect(cloud.downloadCalls, isEmpty);
+    });
+
+    test(
+      'real chat over 30 MiB roundtrips all history reasoning and swipes',
+      () async {
+        final cloud = _RecordingCloudAdapter()
+          ..requireEnsuredParentForUpload = true;
+        await cloud.ensureFolder('$cloudBase/chats');
+        final original = _chat('Reply Ж 🐈');
+        final content = 'c' * (1024 * 1024);
+        final reasoning = 'r' * (1024 * 1024);
+        final alternative = 'a' * (1024 * 1024);
+        final session = original.copyWith(
+          messages: [
+            original.messages.first,
+            for (var i = 0; i < 5; i++)
+              original.messages.last.copyWith(
+                id: 'assistant-$i',
+                content: content,
+                reasoning: reasoning,
+                swipes: [content, alternative],
+                swipesMeta: [
+                  {'reasoning': reasoning, 'tokens': 111, 'time': 'original'},
+                  {'reasoning': 'Alternate reasoning Ж', 'tokens': 222},
+                ],
+                agentSwipes: [
+                  AgentSwipe(
+                    content: content,
+                    kind: 'cleaned',
+                    reasoning: reasoning,
+                    parentSwipeId: 1,
+                  ),
+                ],
+                studioOutputs: [
+                  {'tracker': 'state', 'response': i == 0 ? noise : 'State Ж'},
+                ],
+              ),
+          ],
+        );
+        final data = session.toJson();
+        final json = jsonEncode(data);
+        final jsonBytes = utf8.encode(json);
+        final entry = _entry(data, type: 'chat');
+        expect(jsonBytes.length, greaterThan(maxSyncPayloadBytes));
+
+        await SyncPayloadTransport.upload(cloud, entry, data);
+
+        final root = _root(cloud, entry);
+        final chunks = _chunks(root);
+        expect(root['type'], 'chat');
+        expect(root['id'], session.id);
+        expect(root['jsonBytes'], jsonBytes.length);
+        expect(root['payloadHash'], sha256.convert(jsonBytes).toString());
+        expect(chunks.length, inInclusiveRange(2, 256));
+        expect(cloud.uploadCalls, [
+          for (final chunk in chunks) _partPath(entry, chunk),
+          entry.path,
+        ]);
+        expect(cloud.downloadCalls, isEmpty);
+        for (final file in cloud.files.values) {
+          expect(
+            utf8.encode(file).length,
+            lessThanOrEqualTo(maxSyncPayloadBytes),
+          );
+        }
+        for (final chunk in chunks) {
+          expect(chunk['bytes'], inInclusiveRange(1, _chunkBytes));
+        }
+        final downloaded = await SyncPayloadTransport.download(cloud, entry);
+        expect(jsonEncode(downloaded), json);
+        final restored = ChatSession.fromJson(downloaded);
+        expect(jsonEncode(restored.toJson()), json);
+        expect(restored.messages, hasLength(session.messages.length));
+        expect(restored.messages.first.isHidden, isTrue);
+        expect(restored.messages.last.reasoning, reasoning);
+        expect(restored.messages.last.swipes, [content, alternative]);
+        expect(restored.messages.last.swipesMeta.first['reasoning'], reasoning);
+        expect(restored.messages.last.agentSwipes.single.reasoning, reasoning);
+        expect(restored.sessionVars, session.sessionVars);
+      },
+    );
+
+    test('chat aggregate over 128 MiB rejects before cloud requests', () async {
+      final cloud = _RecordingCloudAdapter();
+      // UTF8, not Dart character count, governs the logical aggregate budget.
+      final data = {'text': '界' * (_maxDecodedBytes ~/ 3)};
+
+      await expectLater(
+        SyncPayloadTransport.upload(cloud, mediumChatEntry, data),
+        throwsA(anything),
+      );
+
+      expect(cloud.uploadCalls, isEmpty);
+      expect(cloud.downloadCalls, isEmpty);
+      expect(cloud.ensuredFolders, isEmpty);
+    });
+
+    test('legacy plain chat over 30 MiB still rejects on read', () async {
+      final cloud = FakeCloudAdapter();
+      final json = jsonEncode({'text': '界' * (maxSyncPayloadBytes ~/ 3)});
+      expect(json.length, lessThan(maxSyncPayloadBytes));
+      cloud.files[mediumChatEntry.path] = json;
+
+      await expectLater(
+        SyncPayloadTransport.download(cloud, mediumChatEntry),
+        throwsA(anything),
+      );
+      expect(cloud.downloadCalls, [mediumChatEntry.path]);
+    });
+
+    test(
+      'chat index identity and bounds reject before any part requests',
+      () async {
+        final mutations = <void Function(Map<String, dynamic>)>[
+          (root) => root['__syncPayload'] = false,
+          (root) => root['version'] = 2,
+          (root) => root['encoding'] = 'base64',
+          (root) => root['type'] = 'reconciliation_state',
+          (root) => root['id'] = 'another-session',
+          (root) => root['jsonBytes'] = _maxDecodedBytes + 1,
+          (root) => root['jsonBytes'] = 0,
+          (root) => root['jsonBytes'] = '1024',
+          (root) =>
+              root['compressedBytes'] = _maxDecodedBytes + _chunkBytes + 1,
+          (root) => root['compressedBytes'] = 0,
+          (root) =>
+              root['compressedBytes'] = (root['compressedBytes'] as int) + 1,
+          (root) => root['chunks'] = <dynamic>[],
+          (root) => root['chunks'] = List.generate(
+            257,
+            (_) => Map<String, dynamic>.from(_chunks(root).first),
+          ),
+          (root) => _chunks(root).last['bytes'] = _chunkBytes + 1,
+          (root) => _chunks(root).last['bytes'] = 0,
+          (root) => _chunks(root).last['bytes'] = -1,
+          (root) => _chunks(root).last['bytes'] = '768',
+          (root) => _chunks(root).last['hash'] = '../outside',
+          (root) => root['payloadHash'] = 'not a hash',
+        ];
+        for (var i = 0; i < mutations.length; i++) {
+          final cloud = chatCloud();
+          final root = _root(cloud, mediumChatEntry);
+          mutations[i](root);
+
+          await expectLater(
+            SyncPayloadTransport.download(
+              cloud,
+              mediumChatEntry,
+              rawPayload: jsonEncode(root),
+            ),
+            throwsA(anything),
+            reason: 'Invalid chat index case $i',
+          );
+          expect(cloud.downloadCalls, isEmpty);
+        }
+      },
+    );
+
+    test(
+      'other entity envelopes remain rejected before part requests',
+      () async {
+        for (final type in [
+          'character',
+          'persona',
+          'rewrite_job_history',
+          'local_storage',
+        ]) {
+          final cloud = chatCloud();
+          final root = _root(cloud, mediumChatEntry)..['type'] = type;
+          final entry = mediumChatEntry.copyWith(type: type);
+
+          await expectLater(
+            SyncPayloadTransport.download(
+              cloud,
+              entry,
+              rawPayload: jsonEncode(root),
+            ),
+            throwsA(anything),
+            reason: 'Unsupported envelope type: $type',
+          );
+          expect(cloud.downloadCalls, isEmpty);
+        }
+      },
+    );
+
+    test(
+      'missing corrupt and invalid chat parts never return partial data',
+      () async {
+        for (final damage in [
+          'missing',
+          'corrupt',
+          'base64',
+          'reordered',
+          'hash',
+          'expansion',
+        ]) {
+          final cloud = chatCloud();
+          final root = _root(cloud, mediumChatEntry);
+          final path = _partPath(mediumChatEntry, _chunks(root).last);
+          switch (damage) {
+            case 'missing':
+              cloud.files.remove(path);
+            case 'corrupt':
+              final bytes = base64Decode(cloud.files[path]!);
+              bytes[bytes.length ~/ 2] ^= 1;
+              cloud.files[path] = base64Encode(bytes);
+            case 'base64':
+              cloud.files[path] = '!' * cloud.files[path]!.length;
+            case 'reordered':
+              root['chunks'] = _chunks(root).reversed.toList();
+            case 'hash':
+              root['payloadHash'] = '0' * 64;
+            case 'expansion':
+              root['jsonBytes'] = _compressionThreshold;
+          }
+          cloud.files[mediumChatEntry.path] = jsonEncode(root);
+
+          await expectLater(
+            SyncPayloadTransport.download(cloud, mediumChatEntry),
+            throwsA(anything),
+            reason: 'Chat damage: $damage',
+          );
+        }
+      },
+    );
+
+    test(
+      'interrupted chat replacement preserves old root and full chat',
+      () async {
+        final cloud = _RecordingCloudAdapter()..files.addAll(chatFiles);
+        final oldRoot = cloud.files[mediumChatEntry.path];
+        final replacement = _chat(_noise(seed: 99)).toJson();
+        cloud.failPartUploadNumber = 2;
+
+        await expectLater(
+          SyncPayloadTransport.upload(
+            cloud,
+            _entry(replacement, type: 'chat'),
+            replacement,
+          ),
+          throwsA(anything),
+        );
+
+        expect(cloud.partUploadCount, 2);
+        expect(cloud.uploadCalls, isNot(contains(mediumChatEntry.path)));
+        expect(cloud.files[mediumChatEntry.path], oldRoot);
+        for (final file in chatFiles.entries) {
+          expect(cloud.files[file.key], file.value);
+        }
+        expect(
+          jsonEncode(
+            await SyncPayloadTransport.download(cloud, mediumChatEntry),
+          ),
+          jsonEncode(mediumChatPayload),
+        );
+      },
+    );
+
+    test(
+      'ownership loss stops upload after compression folder or part await',
+      () async {
+        for (final checkpoint in ['compression', 'folder', 'part']) {
+          final cloud = _RecordingCloudAdapter()..files.addAll(chatFiles);
+          final oldRoot = cloud.files[mediumChatEntry.path];
+          var active = true;
+          var checks = 0;
+          cloud.afterEnsureFolder = () {
+            if (checkpoint == 'folder') active = false;
+          };
+          cloud.afterUpload = (path) {
+            if (checkpoint == 'part' && path.contains('.parts/')) {
+              active = false;
+            }
+          };
+
+          await expectLater(
+            SyncPayloadTransport.upload(
+              cloud,
+              mediumChatEntry,
+              mediumChatPayload,
+              checkActive: () {
+                checks++;
+                if (checkpoint == 'compression' && checks == 2) active = false;
+                if (!active) throw StateError('Sync run superseded');
+              },
+            ),
+            throwsA(isA<StateError>()),
+            reason: 'Ownership lost at $checkpoint',
+          );
+
+          expect(cloud.files[mediumChatEntry.path], oldRoot);
+          expect(cloud.uploadCalls, isNot(contains(mediumChatEntry.path)));
+          expect(cloud.partUploadCount, checkpoint == 'part' ? 1 : 0);
+          if (checkpoint == 'compression') {
+            expect(cloud.ensuredFolders, isEmpty);
+          }
+        }
+      },
+    );
+  });
+
+  test('other entity types retain ordinary JSON above threshold', () async {
     final cloud = _RecordingCloudAdapter();
     final data = {'text': 'x' * (_compressionThreshold + 1)};
-    final entry = _entry(data, type: 'chat');
+    final entry = _entry(data, type: 'character');
 
     await SyncPayloadTransport.upload(cloud, entry, data);
 
@@ -133,23 +547,28 @@ void main() {
   test(
     'compression threshold is inclusive and measured in UTF8 bytes',
     () async {
-      for (final bytes in [_compressionThreshold - 1, _compressionThreshold]) {
-        final cloud = FakeCloudAdapter();
-        final data = _payloadWithUtf8Size(bytes);
-        final entry = _entry(data);
-        final json = jsonEncode(data);
-        expect(utf8.encode(json), hasLength(bytes));
-        expect(json.length, lessThan(_compressionThreshold));
+      for (final type in ['reconciliation_state', 'chat']) {
+        for (final bytes in [
+          _compressionThreshold - 1,
+          _compressionThreshold,
+        ]) {
+          final cloud = FakeCloudAdapter();
+          final data = _payloadWithUtf8Size(bytes);
+          final entry = _entry(data, type: type);
+          final json = jsonEncode(data);
+          expect(utf8.encode(json), hasLength(bytes));
+          expect(json.length, lessThan(_compressionThreshold));
 
-        await SyncPayloadTransport.upload(cloud, entry, data);
+          await SyncPayloadTransport.upload(cloud, entry, data);
 
-        if (bytes < _compressionThreshold) {
-          expect(cloud.files, {entry.path: json});
-        } else {
-          expect(_root(cloud, entry)['__syncPayload'], isTrue);
-          expect(_root(cloud, entry)['jsonBytes'], bytes);
+          if (bytes < _compressionThreshold) {
+            expect(cloud.files, {entry.path: json});
+          } else {
+            expect(_root(cloud, entry)['__syncPayload'], isTrue);
+            expect(_root(cloud, entry)['jsonBytes'], bytes);
+          }
+          expect(await SyncPayloadTransport.download(cloud, entry), data);
         }
-        expect(await SyncPayloadTransport.download(cloud, entry), data);
       }
     },
   );
@@ -159,7 +578,7 @@ void main() {
     () async {
       final cloud = FakeCloudAdapter();
       final data = {'text': '界' * (maxSyncPayloadBytes ~/ 3)};
-      final entry = _entry(data, type: 'chat');
+      final entry = _entry(data, type: 'character');
       final json = jsonEncode(data);
       expect(json.length, lessThan(maxSyncPayloadBytes));
       expect(utf8.encode(json).length, greaterThan(maxSyncPayloadBytes));
@@ -478,7 +897,7 @@ void main() {
           257,
           (_) => Map<String, dynamic>.from(_chunks(root).first),
         ),
-        (root) => root['jsonBytes'] = _maxReconciliationBytes + 1,
+        (root) => root['jsonBytes'] = _maxDecodedBytes + 1,
         (root) => root['jsonBytes'] = 0,
         (root) => root['compressedBytes'] = 256 * _chunkBytes + 1,
         (root) => root['compressedBytes'] = -1,
