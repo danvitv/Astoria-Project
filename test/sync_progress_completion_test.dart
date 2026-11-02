@@ -133,6 +133,114 @@ void main() {
       expect(completed, hasLength(1));
       expect(completed.single.current, completed.single.total);
       expect(await receiver.characters.getById('character'), isNotNull);
+      expect(progress.last.message, 'Saving local sync manifest...');
     },
   );
+
+  test('pull labels the local rebuild after the final applied task', () async {
+    final sender = fixtures.SyncWorld();
+    await sender.characters.put(fixtures.makeChar('character'));
+    await sender.engine.pushEntities(onProgress: (_) {});
+    final receiver = fixtures.SyncWorld();
+    receiver.cloud.files.addAll(sender.cloud.files);
+    final started = Completer<void>();
+    final resume = Completer<void>();
+    receiver.manifestProvider.beforeBuild = (applyAcceptedHashes) async {
+      if (applyAcceptedHashes) return;
+      started.complete();
+      await resume.future;
+    };
+    final progress = <SyncProgress>[];
+    final pending = receiver.engine.pullEntities(
+      onProgress: progress.add,
+      onConflict: (_) {},
+    );
+    try {
+      await started.future.timeout(const Duration(seconds: 10));
+      expect(await receiver.characters.getById('character'), isNotNull);
+      expect(progress.last.message, 'Rebuilding local sync manifest...');
+      expect(progress.last.current, progress.last.total);
+      expect(
+        (await receiver.manifestProvider.readLocalManifest()).entries
+            .containsKey('character:character'),
+        isFalse,
+      );
+      expect(
+        progress.any(
+          (event) => event.message == 'Saving local sync manifest...',
+        ),
+        isFalse,
+      );
+    } finally {
+      resume.complete();
+    }
+    await pending;
+    expect(
+      progress
+          .skipWhile(
+            (event) => event.message != 'Rebuilding local sync manifest...',
+          )
+          .map((event) => event.message),
+      [
+        'Rebuilding local sync manifest...',
+        'Verifying sync anchors...',
+        'Saving local sync manifest...',
+      ],
+    );
+    expect(
+      (await receiver.manifestProvider.readLocalManifest()).entries.containsKey(
+        'character:character',
+      ),
+      isTrue,
+    );
+  });
+
+  test('failed local rebuild never reports or writes acceptance', () async {
+    final sender = fixtures.SyncWorld();
+    await sender.characters.put(fixtures.makeChar('character'));
+    await sender.engine.pushEntities(onProgress: (_) {});
+    final receiver = fixtures.SyncWorld();
+    receiver.cloud.files.addAll(sender.cloud.files);
+    receiver.manifestProvider.beforeBuild = (applyAcceptedHashes) async {
+      if (!applyAcceptedHashes) throw StateError('Synthetic rebuild failure');
+    };
+    final progress = <SyncProgress>[];
+    await expectLater(
+      receiver.engine.pullEntities(
+        onProgress: progress.add,
+        onConflict: (_) {},
+      ),
+      throwsA(isA<StateError>()),
+    );
+    expect(progress.last.message, 'Rebuilding local sync manifest...');
+    expect(
+      (await receiver.manifestProvider.readLocalManifest()).entries.containsKey(
+        'character:character',
+      ),
+      isFalse,
+    );
+  });
+
+  for (final pending in [false, true]) {
+    test('empty pull still labels finalization (pending=$pending)', () async {
+      final world = fixtures.SyncWorld();
+      await world.engine.pushEntities(onProgress: (_) {});
+      final progress = <SyncProgress>[];
+      if (pending) {
+        await world.engine.applyPendingPull(onProgress: progress.add);
+      } else {
+        await world.engine.pullEntities(
+          onProgress: progress.add,
+          onConflict: (_) {},
+        );
+      }
+      expect(
+        progress.any((event) => event.message == 'Nothing to pull'),
+        isTrue,
+      );
+      expect(progress.last.message, 'Saving local sync manifest...');
+      expect(progress.last.current, 0);
+      expect(progress.last.total, 0);
+    });
+  }
 }

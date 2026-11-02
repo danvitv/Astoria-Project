@@ -139,17 +139,29 @@ final class ReconciliationStateSnapshot {
   const ReconciliationStateSnapshot({
     required this.ledgerJson,
     required this.knowledgeJson,
-  });
+  }) : _canonicalHash = null;
+
+  // Both row lists must have passed canonical validation. Their exact JSON can
+  // be framed in the same sorted key order without decoding/encoding it again.
+  ReconciliationStateSnapshot._canonical({
+    required this.ledgerJson,
+    required this.knowledgeJson,
+  }) : _canonicalHash = computeHash(
+         '{"knowledge":$knowledgeJson,"ledger":$ledgerJson}',
+       );
 
   final String ledgerJson;
   final String knowledgeJson;
+  final String? _canonicalHash;
 
-  String get hash => computeHash(
-    _canonicalJson({
-      'ledger': jsonDecode(ledgerJson),
-      'knowledge': jsonDecode(knowledgeJson),
-    }),
-  );
+  String get hash =>
+      _canonicalHash ??
+      computeHash(
+        _canonicalJson({
+          'ledger': jsonDecode(ledgerJson),
+          'knowledge': jsonDecode(knowledgeJson),
+        }),
+      );
 }
 
 sealed class ReconciliationEffectValidation {
@@ -987,23 +999,27 @@ class LedgerReconciliationRunRepo {
       );
     }
     try {
-      final before = ReconciliationStateSnapshot(
-        ledgerJson: _validateCanonicalRowList(effect.beforeLedgerJson),
-        knowledgeJson: _validateCanonicalRowList(effect.beforeKnowledgeJson),
+      final beforeLedger = _decodeCanonicalRowList(effect.beforeLedgerJson);
+      final beforeKnowledge = _decodeCanonicalRowList(effect.beforeKnowledgeJson);
+      final afterLedger = _decodeCanonicalRowList(effect.afterLedgerJson);
+      final afterKnowledge = _decodeCanonicalRowList(effect.afterKnowledgeJson);
+      final before = ReconciliationStateSnapshot._canonical(
+        ledgerJson: effect.beforeLedgerJson,
+        knowledgeJson: effect.beforeKnowledgeJson,
       );
-      final after = ReconciliationStateSnapshot(
-        ledgerJson: _validateCanonicalRowList(effect.afterLedgerJson),
-        knowledgeJson: _validateCanonicalRowList(effect.afterKnowledgeJson),
+      final after = ReconciliationStateSnapshot._canonical(
+        ledgerJson: effect.afterLedgerJson,
+        knowledgeJson: effect.afterKnowledgeJson,
       );
       final expectedEffects = _canonicalJson({
         'ledger': _diffRows(
-          jsonDecode(before.ledgerJson) as List,
-          jsonDecode(after.ledgerJson) as List,
+          beforeLedger,
+          afterLedger,
           identityKey: 'name',
         ),
         'knowledge': _diffRows(
-          jsonDecode(before.knowledgeJson) as List,
-          jsonDecode(after.knowledgeJson) as List,
+          beforeKnowledge,
+          afterKnowledge,
           identityKey: 'id',
         ),
       });
@@ -1827,7 +1843,7 @@ Map<String, dynamic> _diffRows(
   return {'added': added, 'removed': removed, 'changed': changed};
 }
 
-String _validateCanonicalRowList(String text) {
+List<dynamic> _decodeCanonicalRowList(String text) {
   final decoded = jsonDecode(text);
   if (decoded is! List ||
       decoded.any((row) => row is! Map<Object?, Object?>) ||
@@ -1838,7 +1854,7 @@ String _validateCanonicalRowList(String text) {
   if (canonical != text) {
     throw const FormatException('State snapshot is not canonical');
   }
-  return canonical;
+  return decoded;
 }
 
 String _canonicalJson(Object? value) => jsonEncode(_canonical(value));

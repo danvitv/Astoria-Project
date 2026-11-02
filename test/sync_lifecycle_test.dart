@@ -659,6 +659,7 @@ class InMemoryManifestProvider implements SyncManifestProvider {
   final SyncManifestBuilder _builder;
   SyncManifest _cached = const SyncManifest(deviceId: '', createdAt: 0);
   final Map<String, String> _storage = {};
+  Future<void> Function(bool applyAcceptedHashes)? beforeBuild;
 
   InMemoryManifestProvider({
     required SyncCharacterStore characterRepo,
@@ -709,6 +710,7 @@ class InMemoryManifestProvider implements SyncManifestProvider {
     SyncManifest? cloudManifest,
     bool applyAcceptedHashes = true,
   }) async {
+    await beforeBuild?.call(applyAcceptedHashes);
     // Sync in-memory storage → SharedPreferences so the builder's
     // readLocalManifest() sees the same manifest the tests wrote.
     final raw = _storage['manifest'];

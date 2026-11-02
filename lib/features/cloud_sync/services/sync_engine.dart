@@ -796,6 +796,9 @@ class SyncEngine {
         localManifest,
         cloudManifest,
         acceptedCloudEntries: acceptedCloudEntries,
+        onPhase: (message) => onProgress(
+          SyncProgress(current: 0, total: 0, message: message),
+        ),
       );
     } else {
       await _saveCloudManifestForPendingPull(cloudManifest);
@@ -914,6 +917,9 @@ class SyncEngine {
         localManifest,
         cloudManifest,
         acceptedCloudEntries: acceptedCloudEntries,
+        onPhase: (message) => onProgress(
+          SyncProgress(current: 0, total: 0, message: message),
+        ),
       );
     }
 
@@ -1091,6 +1097,13 @@ class SyncEngine {
         localManifest,
         cloudManifest,
         acceptedCloudEntries: [...acceptedCloudEntries, ...appliedEntries],
+        onPhase: (message) => onProgress(
+          SyncProgress(
+            current: processed,
+            total: pullEntries.length,
+            message: message,
+          ),
+        ),
       );
 
       if (taskErrors.isNotEmpty) {
@@ -1103,14 +1116,17 @@ class SyncEngine {
     SyncManifest localManifest,
     SyncManifest cloudManifest, {
     List<SyncManifestEntry> acceptedCloudEntries = const [],
+    void Function(String)? onPhase,
   }) async {
     _checkCurrent();
+    onPhase?.call('Rebuilding local sync manifest...');
     final rebuilt = await _read(
       () => _manifestBuilder.buildLocalManifest(
         cloudManifest: cloudManifest,
         applyAcceptedHashes: false,
       ),
     );
+    onPhase?.call('Verifying sync anchors...');
     await _unorderedBridge.verifyAnchors(localManifest);
     final entries = Map<String, SyncManifestEntry>.from(rebuilt.entries);
     final acceptedLocalHashes = <String, String>{};
@@ -1153,6 +1169,7 @@ class SyncEngine {
         acceptedLocalHashes[entry.key] = rebuiltEntry?.hash ?? '';
       }
     }
+    onPhase?.call('Saving local sync manifest...');
     await _commit(
       () => _manifestBuilder.writeLocalManifest(
         rebuilt.copyWith(

@@ -44,7 +44,11 @@ private local staging, never during cloud requests. An export whose fingerprint
 changed since manifest building cannot publish under the older manifest hash.
 
 Local export validates each effect from the same row it exports, without a
-second effect query. The downstream codec still enforces exact record/metadata
+second effect query. Effect validation decodes and canonical-checks each of the
+four state row lists once, reusing the decoded rows for the exact diff. Hashes
+frame the already-validated canonical lists in the original sorted key order,
+without another parse/encode of the complete states. All integrity checks remain.
+The downstream codec still enforces exact record/metadata
 budgets; redundant outer row encoding is omitted. Private NDJSON staging batches
 small rows in at most 64 KiB per section (nine sections), while large rows bypass
 those buffers. All pending tails flush before the snapshot becomes usable.
@@ -58,6 +62,11 @@ Progress counts completed entity tasks, not tasks started or retry attempts.
 Journal pushes distinguish local preparation, completed pages (and actual page
 uploads), and root publication. Overall manifest publication has its own phase
 label; a full entity counter does not mean that final publication has finished.
+Pull finalization likewise labels rebuilding the local manifest, verifying
+anchors and saving the accepted manifest. Rebuilding still fingerprints all
+local journals; this optimization does not add a cross-sync fingerprint cache
+or incremental change tracking. The full entity counter counts applied tasks,
+not completion of this final local pass.
 
 On pull, the reader validates all descriptors before any page request, downloads
 and decompresses one bounded page at a time to private temporary files, then
