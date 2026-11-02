@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:glaze_flutter/core/llm/prompt/recalled_message_chunk.dart';
 import 'package:glaze_flutter/core/llm/prompt/recalled_messages_resolver.dart';
+import 'package:glaze_flutter/core/llm/tokenizer.dart';
 
 void main() {
   const resolver = RecalledMessagesResolver();
@@ -94,5 +95,141 @@ void main() {
     );
 
     expect(content, isNot(contains('legacy')));
+  });
+
+  test('5000-token budget counts the complete block, not character length', () {
+    expect(RecalledMessagesResolver.defaultMaxTokens, 5000);
+    final longButCheap = RecalledMessageChunk(
+      entryId: 'cheap',
+      text: 'cheap ' * 2000,
+      score: .9,
+    );
+    const shortButExpensive = RecalledMessageChunk(
+      entryId: 'expensive',
+      text: 'expensive',
+      score: 1,
+    );
+    final original = longButCheap.text;
+    final result = resolver.resolveWithDiagnostics(
+      chunks: [shortButExpensive, longButCheap],
+      visibleMessageIds: const {},
+      tokenCounter: (block) {
+        expect(block, startsWith('<recalled_messages>'));
+        expect(block, endsWith('</recalled_messages>'));
+        // A deterministic tokenizer fixture: 200 envelope tokens, cheap text
+        // 4800 tokens; the shorter expensive text exceeds the total budget.
+        return 200 + (block.contains('expensive') ? 5000 : 4800);
+      },
+    );
+    expect(result.diagnostics['estimatedTokens'], 5000);
+    expect(result.diagnostics['budgetRejected'], 1);
+    expect(result.content, contains(original.trim()));
+    expect(result.content!.length, greaterThan(6000));
+    expect(result.content, isNot(contains('expensive')));
+    expect(longButCheap.text, original);
+  });
+
+  test('excludes visible sources before top-K, budget and group diversity', () {
+    final result = resolver.resolveWithDiagnostics(
+      chunks: [
+        for (var i = 0; i < 10; i++)
+          RecalledMessageChunk(
+            entryId: 'visible$i',
+            messageIds: ['visible$i', 'boundary'],
+            score: 1,
+            text: 'visible $i',
+          ),
+        for (var i = 0; i < 4; i++)
+          RecalledMessageChunk(
+            entryId: 'old$i',
+            messageIds: ['old$i'],
+            score: .9,
+            text: 'old evidence $i',
+          ),
+      ],
+      visibleMessageIds: const {'boundary'},
+      topK: 3,
+      tokenCounter: (block) =>
+          100 + 1000 * 'old evidence'.allMatches(block).length,
+    );
+    expect(result.diagnostics['visibleRejected'], 10);
+    expect(result.diagnostics['estimatedTokens'], 3100);
+    expect(result.diagnostics['selected'], hasLength(3));
+    expect(result.content, isNot(contains('visible')));
+    expect(result.content, contains('old evidence 2'));
+  });
+
+  test('diverse groups, exact-text deduplication, at most two per group', () {
+    final result = resolver.resolveWithDiagnostics(
+      chunks: const [
+        RecalledMessageChunk(
+          entryId: 'a',
+          chunkIndex: 0,
+          text: 'first',
+          score: 1,
+        ),
+        RecalledMessageChunk(
+          entryId: 'a',
+          chunkIndex: 1,
+          text: 'second',
+          score: .99,
+        ),
+        RecalledMessageChunk(
+          entryId: 'a',
+          chunkIndex: 2,
+          text: 'third',
+          score: .98,
+        ),
+        RecalledMessageChunk(entryId: 'b', text: 'independent', score: .97),
+        RecalledMessageChunk(entryId: 'c', text: ' first ', score: .96),
+      ],
+      visibleMessageIds: const {},
+    );
+    expect(
+      (result.diagnostics['selected'] as List).map((item) => item['entryId']),
+      ['a', 'b', 'a'],
+    );
+    expect(result.diagnostics['duplicates'], 1);
+    expect(result.content, isNot(contains('third')));
+    expect(
+      result.diagnostics['estimatedTokens'],
+      estimateTokens(result.content!),
+    );
+  });
+
+  test('legacy fallback and invalid budgets cannot bypass the token cap', () {
+    expect(
+      resolver.resolve(
+        chunks: const [],
+        visibleMessageIds: const {},
+        fallbackContent: 'old evidence',
+        maxTokens: 1,
+      ),
+      isNull,
+    );
+    expect(
+      resolver.resolve(
+        chunks: const [RecalledMessageChunk(text: 'old evidence')],
+        visibleMessageIds: const {},
+        maxTokens: 0,
+      ),
+      isNull,
+    );
+  });
+
+  test('rank and raw-text metadata survive worker serialization', () {
+    const source = RecalledMessageChunk(
+      entryId: 'group',
+      chunkIndex: 3,
+      text: '[Verified source]\noriginal text',
+      rawText: 'original text',
+      messageIds: ['a', 'b'],
+      ledgerRange: '1..2',
+      score: .87,
+    );
+    expect(
+      RecalledMessageChunk.fromJson(source.toJson()).toJson(),
+      source.toJson(),
+    );
   });
 }

@@ -409,6 +409,10 @@ class PromptPayloadBuilder {
               (m) => RecalledMessageChunk(
                 text: m.text,
                 messageIds: m.messageIds,
+                entryId: m.entryId,
+                chunkIndex: m.chunkIndex,
+                score: m.score,
+                rawText: m.rawText,
                 ledgerRange: MemoryDraftTranscriptBuilder.ledgerRange(
                   session!.messages
                       .where((message) => m.messageIds.contains(message.id))

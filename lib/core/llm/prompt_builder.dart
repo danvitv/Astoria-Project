@@ -865,13 +865,15 @@ PromptResult _assembleMessages({
       payload.sourceWindowVisibleMessageIds.isNotEmpty
       ? payload.sourceWindowVisibleMessageIds
       : breakdown.visibleMessageIds;
-  final recalledMessagesContent = const RecalledMessagesResolver().resolve(
-    chunks: payload.recalledMessageChunks,
-    visibleMessageIds: recallVisibleMessageIds,
-    fallbackContent: payload.recalledMessagesContent,
-    disableSourceWindowExclusion: payload.disableSourceWindowExclusion,
-    gameTime: requestClock,
-  );
+  final recallResolution = const RecalledMessagesResolver()
+      .resolveWithDiagnostics(
+        chunks: payload.recalledMessageChunks,
+        visibleMessageIds: recallVisibleMessageIds,
+        fallbackContent: payload.recalledMessagesContent,
+        disableSourceWindowExclusion: payload.disableSourceWindowExclusion,
+        gameTime: requestClock,
+      );
+  final recalledMessagesContent = recallResolution.content;
   if (recalledMessagesContent != null && recalledMessagesContent.isNotEmpty) {
     injectRecalledMessagesBlock(
       messages,
@@ -964,7 +966,7 @@ PromptResult _assembleMessages({
   );
 
   final finalMemoryCoverage = finalizeMemoryCoverage(
-    payload.memoryCoverage,
+    recallResolution.withCoverage(payload.memoryCoverage),
     finalMemorySelection,
     finalExcerptSelection,
     memoryMacroMissing: memoryMacroMissing,

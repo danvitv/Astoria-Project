@@ -206,7 +206,7 @@ final class StudioContextPreparer {
         )
         .toList(growable: false);
     final history = HistoryAssembler(macroContext).assemble(visibleHistory);
-    final recalled = const RecalledMessagesResolver().resolve(
+    final recalled = const RecalledMessagesResolver().resolveWithDiagnostics(
       chunks: inputs.recalledMessageChunks,
       visibleMessageIds: visibleMessageIds,
       fallbackContent: inputs.recalledMessagesContent,
@@ -276,7 +276,7 @@ final class StudioContextPreparer {
     slots[StudioContextSlot.loreBefore]!.addAll(lore.loreBefore);
     slots[StudioContextSlot.loreAfter]!.addAll(lore.loreAfter);
     add(StudioContextSlot.loreMacro, loreMacroContent);
-    add(StudioContextSlot.recalledMessages, recalled);
+    add(StudioContextSlot.recalledMessages, recalled.content);
     add(StudioContextSlot.characterKnowledge, characterKnowledge);
     add(StudioContextSlot.studioSessionState, studioSessionState);
     final authoritativeClock = gameTimeState.format();
@@ -331,7 +331,9 @@ Do not reapply an older timeskip or treat future plans as elapsed time.
         triggeredMemories: List<TriggeredEntry>.unmodifiable(
           memory?.triggeredEntries ?? inputs.triggeredMemories,
         ),
-        memoryCoverage: Map<String, dynamic>.unmodifiable(memoryCoverage),
+        memoryCoverage: Map<String, dynamic>.unmodifiable(
+          recalled.withCoverage(memoryCoverage),
+        ),
         vectorLoreTokens: lore.vectorLoreTokens,
         visibleMessageIds: Set<String>.unmodifiable(visibleMessageIds),
         ledgerProjectionDiagnostics: ledger?.diagnostics ?? const [],

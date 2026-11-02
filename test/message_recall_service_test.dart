@@ -224,9 +224,8 @@ void main() {
         expect(result.query, contains('report beside the coffee'));
         expect(result.query, isNot(contains('all women')));
         expect(result.toJson()['reason'], 'success');
-        expect((result.toJson()['selected'] as List).single['sourceIds'], [
-          'old',
-        ]);
+        expect(result.toJson()['candidateCount'], 1);
+        expect(result.toJson()['stage'], 'retrieval_candidates');
       },
     );
 
@@ -348,7 +347,7 @@ void main() {
       expect(result.counters['invalidText'], 1);
     });
 
-    test('oversized first candidate does not hide smaller evidence', () async {
+    test('retrieval does not pre-spend the final consumer budget', () async {
       await putChunk(
         entryId: 'large',
         messageIds: ['large'],
@@ -366,9 +365,9 @@ void main() {
         currentText: 'query',
         config: const EmbeddingConfig(endpoint: 'test'),
       );
-      expect(result.matches.single.entryId, 'small');
-      expect(result.counters['oversized'], 1);
-      expect(result.counters['selectedChars'], lessThanOrEqualTo(6000));
+      expect(result.matches.map((match) => match.entryId), ['large', 'small']);
+      expect(result.matches.first.rawText!.length, 7000);
+      expect(result.counters['ranked'], 2);
     });
 
     test(

@@ -84,6 +84,27 @@ void main() {
               ],
             },
           );
+      // More visible candidates than the old early top-K limit. All must
+      // survive retrieval so the consumer can refill from the older evidence.
+      for (var i = 0; i < 10; i++) {
+        await container
+            .read(embeddingRepoProvider)
+            .putEmbeddingVector(
+              entryId: 'a-visible$i',
+              sourceType: 'chat_message',
+              sourceId: 's',
+              vectors: const [
+                [1, 0],
+              ],
+              textHash: computeHash('user: visible evidence $i'),
+              retrievalMetadata: {
+                'messageIds': ['visible$i'],
+                'chunks': [
+                  {'index': 0, 'text': 'visible evidence $i'},
+                ],
+              },
+            );
+      }
       final provider = Provider((ref) {
         Future<void> initialize() async {}
         Future<List<ChatMessage>> inject({
@@ -114,11 +135,17 @@ void main() {
         );
       });
       final builder = container.read(provider);
-      const session = ChatSession(
+      final session = ChatSession(
         id: 's',
         characterId: 'c',
         sessionIndex: 0,
         messages: [
+          for (var i = 0; i < 10; i++)
+            ChatMessage(
+              id: 'visible$i',
+              role: 'user',
+              content: 'visible evidence $i',
+            ),
           ChatMessage(
             id: 'old',
             role: 'user',
@@ -170,13 +197,27 @@ void main() {
         expect(buildPrompt(payload).memoryCoverage['rawRecall'], diagnostics);
         final studio = const StudioContextPreparer().prepare(
           inputs: inputs,
-          visibleMessageIds: const {'latest'},
+          visibleMessageIds: {
+            'latest',
+            for (var i = 0; i < 10; i++) 'visible$i',
+          },
         );
-        expect(studio.diagnostics.memoryCoverage['rawRecall'], diagnostics);
+        final finalDiagnostics = Map<String, dynamic>.from(
+          studio.diagnostics.memoryCoverage['rawRecall'] as Map,
+        );
+        final packing =
+            finalDiagnostics.remove('finalPacking') as Map<String, dynamic>;
+        expect(finalDiagnostics, diagnostics);
+        expect(packing['budgetTokens'], 5000);
+        expect(packing['estimatedTokens'], lessThanOrEqualTo(5000));
         final recalled = studio.join(StudioContextSlot.recalledMessages);
         if (expected == 'success') {
+          expect(inputs.recalledMessageChunks, hasLength(11));
+          expect(packing['visibleRejected'], 10);
+          expect(packing['selected'], hasLength(1));
           expect(recalled, contains('report was disputed.'));
           expect(recalled, contains('Verified raw source: user message=old'));
+          expect(recalled, isNot(contains('visible evidence')));
         } else {
           expect(recalled, anyOf(isNull, isEmpty));
         }
@@ -185,7 +226,7 @@ void main() {
             ...studio.diagnostics.memoryCoverage,
             'diagnostics': {'ephemeral': true},
           })['rawRecall'],
-          diagnostics,
+          studio.diagnostics.memoryCoverage['rawRecall'],
         );
       }
     },

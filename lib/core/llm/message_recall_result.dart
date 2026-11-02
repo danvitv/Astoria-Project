@@ -81,6 +81,8 @@ class MessageRecallMatch {
 }
 
 class MessageRecallResult {
+  /// All ranked candidates, not an already budget-limited prompt selection.
+  /// The consumer must exclude its visible window before packing these.
   final List<MessageRecallMatch> matches;
   final MessageRecallReason reason;
 
@@ -98,11 +100,11 @@ class MessageRecallResult {
   bool get isEmpty => matches.isEmpty;
 
   Map<String, dynamic> toJson() => {
-    // Final prompt assembly may still exclude visible sources or trim context.
-    'stage': 'retrieval_selection',
+    'stage': 'retrieval_candidates',
     'reason': reason.name,
     'query': query,
     'counters': counters,
-    'selected': matches.map((match) => match.toJson()).toList(),
+    // Do not persist every raw candidate or claim they were all injected.
+    'candidateCount': matches.length,
   };
 }

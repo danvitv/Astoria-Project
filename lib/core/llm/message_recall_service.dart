@@ -16,14 +16,12 @@ export 'message_recall_result.dart';
 
 /// Best-effort recall of exact indexed chat excerpts. The query is a bounded
 /// recent-context projection; source evidence remains unchanged. Prompt assembly
-/// performs the final exclusion against its frozen visible history window.
+/// excludes visible sources and packs these candidates against its token budget.
 class MessageRecallService {
   final EmbeddingRepo _repo;
   final EmbeddingService _embeddingService;
 
   static const double defaultSimilarityThreshold = 0.25;
-  static const int defaultTopK = 8;
-  static const int defaultMaxChars = 6000;
 
   MessageRecallService(this._repo, this._embeddingService);
 
@@ -33,8 +31,6 @@ class MessageRecallService {
     required EmbeddingConfig config,
     List<ChatMessage> recentHistory = const [],
     double threshold = defaultSimilarityThreshold,
-    int topK = defaultTopK,
-    int maxChars = defaultMaxChars,
     Set<String> visibleMessageIds = const {},
     Set<String>? allowedSourceMessageIds,
     Map<String, ChatMessage>? sourceMessages,
@@ -56,9 +52,6 @@ class MessageRecallService {
       'candidates': 0,
       'dimensionMismatch': 0,
       'aboveThreshold': 0,
-      'duplicate': 0,
-      'oversized': 0,
-      'selectedChars': 0,
     };
     MessageRecallResult finish(
       MessageRecallReason reason, [
@@ -67,7 +60,7 @@ class MessageRecallService {
       matches: List.unmodifiable(matches),
       reason: reason,
       query: query,
-      counters: Map.unmodifiable({...counters, 'selected': matches.length}),
+      counters: Map.unmodifiable({...counters, 'ranked': matches.length}),
     );
     bool aborted() =>
         cancelToken?.isCancelled == true || shouldAbort?.call() == true;
@@ -78,7 +71,7 @@ class MessageRecallService {
         return finish(MessageRecallReason.endpointNotConfigured);
       }
       if (query.isEmpty) return finish(MessageRecallReason.emptyQuery);
-      if (topK <= 0 || maxChars <= 0 || !threshold.isFinite) {
+      if (!threshold.isFinite) {
         return finish(MessageRecallReason.invalidLimits);
       }
       final rows = await _repo.getBySource('chat_message', sessionId);
@@ -221,12 +214,10 @@ class MessageRecallService {
       if (queryChunks.any((chunk) => chunk.vector.length != queryDim)) {
         return finish(MessageRecallReason.dimensionMismatch);
       }
-      final matches = MessageRecallSelection.select(
+      final matches = MessageRecallSelection.rank(
         candidates: candidates,
         queryVectors: queryChunks.map((chunk) => chunk.vector).toList(),
         threshold: threshold,
-        topK: topK,
-        maxChars: maxChars,
         counters: counters,
       );
       if (aborted()) return finish(MessageRecallReason.cancelled);
@@ -236,11 +227,7 @@ class MessageRecallService {
       if (counters['dimensionMismatch'] == candidates.length) {
         return finish(MessageRecallReason.dimensionMismatch);
       }
-      return finish(
-        counters['aboveThreshold'] == 0
-            ? MessageRecallReason.belowThreshold
-            : MessageRecallReason.budgetExhausted,
-      );
+      return finish(MessageRecallReason.belowThreshold);
     } on TimeoutException {
       return finish(
         aborted() ? MessageRecallReason.cancelled : MessageRecallReason.timeout,

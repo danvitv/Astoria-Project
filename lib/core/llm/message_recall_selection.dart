@@ -22,16 +22,13 @@ class MessageRecallCandidate {
   });
 }
 
-/// Scores indexed substrings independently. One pass covers distinct groups;
-/// a second permits at most one additional excerpt per group, without changing
-/// similarity scores, thresholds, top-K or the prompt character budget.
+/// Scores indexed substrings independently, without spending the request budget.
+/// Packing belongs to the consumer, after its visible history window is frozen.
 abstract final class MessageRecallSelection {
-  static List<MessageRecallMatch> select({
+  static List<MessageRecallMatch> rank({
     required List<MessageRecallCandidate> candidates,
     required List<List<double>> queryVectors,
     required double threshold,
-    required int topK,
-    required int maxChars,
     required Map<String, int> counters,
   }) {
     final scored = <({MessageRecallCandidate candidate, double score})>[];
@@ -56,51 +53,18 @@ abstract final class MessageRecallSelection {
           ? byId
           : a.candidate.chunkIndex.compareTo(b.candidate.chunkIndex);
     });
-    final matches = <MessageRecallMatch>[];
-    final counts = <String, int>{};
-    final seenTexts = <String>{};
-    final processed = <MessageRecallCandidate>{};
-    var chars = 0;
-    for (var pass = 1; pass <= 2; pass++) {
-      for (final item in scored) {
-        final candidate = item.candidate;
-        if (processed.contains(candidate)) continue;
-        if ((counts[candidate.entryId] ?? 0) >= pass) continue;
-        processed.add(candidate);
-        final fingerprint = candidate.text
-            .replaceAll(RegExp(r'\s+'), ' ')
-            .trim();
-        if (seenTexts.contains(fingerprint)) {
-          counters['duplicate'] = counters['duplicate']! + 1;
-          continue;
-        }
-        final text = _attributedText(candidate);
-        if (chars + text.length > maxChars) {
-          counters['oversized'] = counters['oversized']! + 1;
-          continue;
-        }
-        seenTexts.add(fingerprint);
-        matches.add(
-          MessageRecallMatch(
-            entryId: candidate.entryId,
-            chunkIndex: candidate.chunkIndex,
-            text: text,
-            rawText: candidate.text,
-            score: item.score,
-            messageIds: candidate.messageIds,
-            sourceSpans: candidate.sourceSpans,
-          ),
-        );
-        counts[candidate.entryId] = (counts[candidate.entryId] ?? 0) + 1;
-        chars += text.length;
-        if (matches.length >= topK) {
-          counters['selectedChars'] = chars;
-          return matches;
-        }
-      }
-    }
-    counters['selectedChars'] = chars;
-    return matches;
+    return [
+      for (final item in scored)
+        MessageRecallMatch(
+          entryId: item.candidate.entryId,
+          chunkIndex: item.candidate.chunkIndex,
+          text: _attributedText(item.candidate),
+          rawText: item.candidate.text,
+          score: item.score,
+          messageIds: item.candidate.messageIds,
+          sourceSpans: item.candidate.sourceSpans,
+        ),
+    ];
   }
 
   static String _attributedText(MessageRecallCandidate candidate) {
