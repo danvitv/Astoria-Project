@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import '../../../core/application/sync_reconciliation_source.dart';
 import '../cloud_adapter.dart';
 import '../sync_models.dart';
+import 'reconciliation_page_cache.dart';
 import 'reconciliation_page_compression.dart';
 import 'reconciliation_staging.dart';
 import 'sync_payload_transport.dart';
@@ -18,6 +19,7 @@ class ReconciliationPageTransport {
     this.temporaryRoot,
     this.checkActive,
     this.onProgress,
+    this.pageCache,
   });
 
   static const pageBytes = 512 * 1024;
@@ -28,6 +30,7 @@ class ReconciliationPageTransport {
   final Directory? temporaryRoot;
   final void Function()? checkActive;
   final void Function(String)? onProgress;
+  final ReconciliationPageCache? pageCache;
 
   Future<void> upload(
     CloudAdapter adapter,
@@ -106,6 +109,8 @@ class ReconciliationPageTransport {
             checkActive?.call();
             uploadedPages++;
           }
+          await pageCache?.write(hash, compressed, checkActive: checkActive);
+          checkActive?.call();
           pages.add({
             'hash': hash,
             'bytes': page.length,
@@ -189,6 +194,11 @@ class ReconciliationPageTransport {
       (count, section) => count + (section['pages'] as List).length,
     );
     var downloadedPages = 0;
+    var cachedPages = 0;
+    var processedPages = 0;
+    String pageProgress() =>
+        'Pulling ${entry.key}: pages $processedPages/$totalPages'
+        '${pageCache == null ? '' : ' ($cachedPages cached, $downloadedPages downloaded)'}';
     final staging = await ReconciliationStaging.create(
       entry.id,
       decoded['schemaVersion'] as int,
@@ -204,35 +214,54 @@ class ReconciliationPageTransport {
         try {
           checkActive?.call();
           if ((descriptor['pages'] as List).isNotEmpty) {
-            onProgress?.call(
-              'Pulling ${entry.key}: pages $downloadedPages/$totalPages',
-            );
+            onProgress?.call(pageProgress());
           }
           for (final page in descriptor['pages'] as List) {
             checkActive?.call();
-            final encoded = await adapter.download(
-              _pagePath(entry, page['hash'] as String),
+            final hash = page['hash'] as String;
+            final compressedBytes = page['compressedBytes'] as int;
+            var compressed = await pageCache?.read(
+              hash,
+              compressedBytes,
+              checkActive: checkActive,
             );
             checkActive?.call();
-            final compressedBytes = page['compressedBytes'] as int;
-            if (encoded.length != ((compressedBytes + 2) ~/ 3) * 4) {
-              throw const FormatException('Reconciliation page size mismatch');
+            final fromCache = compressed != null;
+            if (compressed == null) {
+              final encoded = await adapter.download(_pagePath(entry, hash));
+              checkActive?.call();
+              if (encoded.length != ((compressedBytes + 2) ~/ 3) * 4) {
+                throw const FormatException(
+                  'Reconciliation page size mismatch',
+                );
+              }
+              compressed = base64Decode(encoded);
             }
-            final compressed = base64Decode(encoded);
             if (compressed.length != compressedBytes ||
-                sha256.convert(compressed).toString() != page['hash']) {
+                sha256.convert(compressed).toString() != hash) {
               throw const FormatException('Reconciliation page hash mismatch');
             }
             final bytes = SyncPayloadTransport.decompress(
               compressed,
               page['bytes'] as int,
             );
+            if (!fromCache) {
+              await pageCache?.write(
+                hash,
+                compressed,
+                checkActive: checkActive,
+              );
+              checkActive?.call();
+            }
             await output.writeFrom(bytes);
             checkActive?.call();
-            downloadedPages++;
-            onProgress?.call(
-              'Pulling ${entry.key}: pages $downloadedPages/$totalPages',
-            );
+            processedPages++;
+            if (fromCache) {
+              cachedPages++;
+            } else {
+              downloadedPages++;
+            }
+            onProgress?.call(pageProgress());
           }
         } finally {
           await output.close();

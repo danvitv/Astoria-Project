@@ -69,7 +69,7 @@ Progress counts completed entity tasks, not tasks started or retry attempts.
 Journal pushes distinguish local preparation, completed pages (and actual page
 uploads), and root publication. Overall manifest publication has its own phase
 label; a full entity counter does not mean that final publication has finished.
-Journal pulls show completed downloaded pages, section checks, full payload
+Journal pulls show completed pages (cached vs. downloaded), section checks, full payload
 verification and application separately. A downloaded page is counted only
 after size/hash/decompression checks and its private staging write complete;
 the journal task remains incomplete until the verified source is applied.
@@ -79,7 +79,7 @@ local journals; this optimization does not add a cross-sync fingerprint cache
 or incremental change tracking. The full entity counter counts applied tasks,
 not completion of this final local pass.
 
-On pull, the reader validates all descriptors before any page request, downloads
+On pull, the reader validates all descriptors before any page request, loads
 and decompresses one bounded page at a time to private temporary files, then
 checks section counts and the complete virtual JSON fingerprint. Only then may
 the store begin a **single transaction** replaying the complete staged source.
@@ -93,6 +93,40 @@ A missing/corrupt page cannot partially apply domain history. Failed page upload
 leave an old root readable. This is safety for one journal, **not** a transaction
 spanning every file in the entire sync; other successful uploads can remain after
 a different task fails. Temporary artifacts are disposed on success and error.
+
+### Verified local page cache
+
+The production reader retains compressed pages under the channel's private app
+data root, `cache/reconciliation-pages-v1`. It contains only SHA-256-named page
+bytes, not credentials, account metadata, manifests or accepted-state markers.
+Pages contain private journal evidence; gzip is compression, not encryption,
+and they have the same local filesystem privacy boundary as the database. This
+disposable directory is not part of the backup exporter or cloud upload.
+
+The cloud root is still fetched on every journal import. Each cached page must
+match that root's compressed length and SHA-256; bounded gzip decoding, section
+counts and the complete logical fingerprint remain mandatory before the single
+merge transaction. Cache contents never establish cloud ownership/acceptance and
+cannot cause an upload to be skipped. Identical hash-verified bytes may be reused
+within this app installation even after switching cloud providers/accounts;
+only the currently fetched and validated cloud index selects those bytes.
+
+Missing/damaged cache files are downloaded again. Cache IO failure falls back to
+the normal transport, but workflow/abort retirement still propagates. Verified
+pages from an interrupted pull survive for the retry without partially applying
+history. Upload also caches the exact new or reused compressed bytes, so a PC's
+morning push can prime the pages needed by its later pull from the phone.
+
+The cache is limited to **256 MiB / 2,048 pages** per production owner, with old
+managed pages evicted to make room; page reads and metadata inventory are bounded.
+Writes use a private temporary file plus atomic rename. Cache eviction/deletion
+never deletes database history or cloud pages. Interrupted-process temporary
+writes may leave a bounded pending artifact; cache failure is not a sync failure.
+The first pull after upgrading may still download every page: the old transport
+already deleted its temporary files. Later pulls download only cache misses or
+changed pages. There is no DB migration or wire format change, and this is still
+a full staged journal verification/merge, not per-record delta sync or a cached
+local manifest fingerprint.
 
 Old pages are retained during ordinary pushes because concurrent readers may
 hold older indexes. An owning reconciliation tombstone or full cloud wipe removes

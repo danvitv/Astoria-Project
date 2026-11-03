@@ -17,6 +17,7 @@ import 'sync_serialization.dart';
 import 'sync_tracker_snapshot_decoder.dart';
 import 'sync_payload_transport.dart';
 import 'reconciliation_page_transport.dart';
+import 'reconciliation_page_cache.dart';
 import 'sync_character_hash.dart';
 import 'sync_character_world_equivalence.dart';
 import 'sync_unordered_aggregate_bridge.dart';
@@ -94,6 +95,7 @@ class SyncEngine {
   late final SyncUnorderedAggregateBridge _unorderedBridge;
   bool _includeApiKeys = false;
   final void Function()? _checkOriginalWorkflow;
+  final ReconciliationPageCache? _reconciliationPageCache;
   int _committedLocalWrites = 0;
 
   void _checkCurrent() {
@@ -166,6 +168,7 @@ class SyncEngine {
     this._wipePollInterval = const Duration(seconds: 2),
     this._rewriteJobHistoryStore,
     this._checkOriginalWorkflow,
+    this._reconciliationPageCache,
   ]) {
     _binarySyncer = SyncBinaryAssetSyncer(
       _adapter,
@@ -1464,6 +1467,7 @@ class SyncEngine {
       await ReconciliationPageTransport(
         checkActive: checkActive,
         onProgress: onProgress,
+        pageCache: _reconciliationPageCache,
       ).upload(_adapter, entry, reconciliation);
       return;
     }
@@ -2667,6 +2671,7 @@ class SyncEngine {
       await ReconciliationPageTransport(
         checkActive: _captureActiveGuard(),
         onProgress: onProgress,
+        pageCache: _reconciliationPageCache,
       ).withDownloadedSource(
         _adapter,
         entry,

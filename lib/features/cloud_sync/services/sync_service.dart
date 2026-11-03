@@ -25,6 +25,7 @@ import 'sync_engine.dart';
 import 'sync_conflict_diagnostics.dart';
 import 'sync_conflict_diagnostics_download.dart';
 import 'sync_manifest.dart';
+import 'reconciliation_page_cache.dart';
 import '../cloud_adapter.dart';
 import '../sync_models.dart';
 
@@ -62,6 +63,7 @@ class SyncService {
   final Future<String> Function(String)? _diagnosticDownload;
   // Trusted constructor seam; production defaults to the actual provider below.
   final CloudAdapter Function(SyncProvider)? _selectAdapter;
+  final ReconciliationPageCache? _reconciliationPageCache;
 
   SyncProvider _provider = SyncProvider.dropbox;
   SyncStatus _status = SyncStatus.idle;
@@ -256,6 +258,7 @@ class SyncService {
     Future<void> Function(Set<String>)? reconcilePulledSessions,
     Future<String> Function(String)? diagnosticDownload,
     CloudAdapter Function(SyncProvider)? selectAdapter,
+    ReconciliationPageCache? reconciliationPageCache,
     DropboxAuth? dropboxAuth,
     GDriveAuth? gdriveAuth,
     Future<SharedPreferences>? originalPreferences,
@@ -266,6 +269,7 @@ class SyncService {
        _reconcilePulledSessions = reconcilePulledSessions,
        _diagnosticDownload = diagnosticDownload,
        _selectAdapter = selectAdapter,
+       _reconciliationPageCache = reconciliationPageCache,
        _dropboxAuth = dropboxAuth ?? DropboxAuth(),
        _gdriveAuth = gdriveAuth ?? GDriveAuth(),
        _originalPreferences = originalPreferences,
@@ -343,6 +347,7 @@ class SyncService {
     const Duration(seconds: 2),
     _rewriteJobHistoryStore,
     _checkWorkflow,
+    _reconciliationPageCache,
   );
 
   Future<void> init() async {

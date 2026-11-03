@@ -22,6 +22,7 @@ import 'adapters/ext_blocks_sync_stores.dart';
 import 'services/sync_conflict.dart';
 import 'services/sync_engine.dart';
 import 'services/sync_service.dart';
+import 'services/reconciliation_page_cache.dart';
 import 'sync_config.dart';
 import 'sync_models.dart';
 
@@ -70,6 +71,11 @@ final syncServiceProvider = FutureProvider<SyncService>((ref) async {
   if (disposed) throw StateError('Cloud sync owner retired');
 
   final service = SyncService(
+    // Lazy IO under the issuing workflow; the channel's private app data root
+    // already owns images and the database. No tokens/account metadata cached.
+    reconciliationPageCache: ReconciliationPageCache(
+      Directory('${imageStorage.baseDir}/cache/reconciliation-pages-v1'),
+    ),
     dropboxAuth: dropbox,
     gdriveAuth: gdrive,
     originalPreferences: originalPreferences,
