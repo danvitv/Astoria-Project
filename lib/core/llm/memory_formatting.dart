@@ -18,6 +18,14 @@ String formatMemoryItems(
     parts.add('Memory context:');
   }
   if (items.isNotEmpty) parts.add(historicalMemoryHeader(gameTime));
+  if (items.any((item) => item.excerpt)) {
+    parts.add(
+      'Memory Book excerpts are incomplete historical records. Omitted text '
+      'does not prove that an event never happened, a character did not know '
+      'something, or a promise remained unfulfilled. Treat missing outcomes '
+      'as unknown, not as current Ledger facts.',
+    );
+  }
   for (final item in items) {
     final title = item.entry.title.isNotEmpty
         ? item.entry.title

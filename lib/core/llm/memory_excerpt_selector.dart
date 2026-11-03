@@ -50,15 +50,19 @@ class MemoryExcerptSelection {
 class MemoryExcerptSelector {
   const MemoryExcerptSelector._();
 
-  static MemoryExcerptSelection fullEntries(MemorySelection selection) {
+  static MemoryExcerptSelection fullEntries(
+    MemorySelection selection, {
+    int Function(String text)? tokenCounter,
+  }) {
+    final tokenFn = tokenCounter ?? estimateTokens;
     final items = selection.entries
         .map(
           (entry) => MemoryInjectionItem(
             entry: entry,
             excerpt: false,
             text: entry.content.trim(),
-            tokenCost: estimateTokens(entry.content),
-            originalTokenCost: estimateTokens(entry.content),
+            tokenCost: tokenFn(entry.content.trim()),
+            originalTokenCost: tokenFn(entry.content),
           ),
         )
         .toList(growable: false);
@@ -81,7 +85,6 @@ class MemoryExcerptSelector {
     final tokenFn = tokenCounter ?? estimateTokens;
     final budget = selection.budgetTokens;
     final normalizedPackingMode = _normalizePackingMode(packingMode);
-    final selectedIds = selection.entries.map((entry) => entry.id).toSet();
     final selectedFullTokens = selection.entries.fold<int>(
       0,
       (sum, entry) => sum + tokenFn(entry.content),
@@ -108,7 +111,7 @@ class MemoryExcerptSelector {
             selectedFullTokens <= budget &&
             !selection.budgetTrimmed &&
             !hasScopedEntries)) {
-      return fullEntries(selection);
+      return fullEntries(selection, tokenCounter: tokenFn);
     }
 
     final cap = selection.entryCap > 0
@@ -137,7 +140,7 @@ class MemoryExcerptSelector {
             excerpt: false,
             text: fullText,
             tokenCost: fullTokens,
-            originalTokenCost: fullTokens,
+            originalTokenCost: tokenFn(entry.content),
           ),
         );
         usedTokens += fullTokens;
@@ -150,38 +153,23 @@ class MemoryExcerptSelector {
         continue;
       }
 
-      final perEntryBudget = packingBudget <= 0
-          ? 0
-          : items.isEmpty
-          ? maxExcerptTokensPerEntry.clamp(1, packingBudget)
-          : maxExcerptTokensPerEntry.clamp(1, remaining);
+      final perEntryBudget = maxExcerptTokensPerEntry > 0 && remaining > 0
+          ? maxExcerptTokensPerEntry.clamp(1, remaining)
+          : 0;
       final excerpt = _buildExcerpt(
         score,
         maxTokens: perEntryBudget,
+        chunkTokens: maxExcerptTokensPerEntry,
         maxChunks: maxExcerptChunksPerEntry,
         tokenCounter: tokenFn,
       );
 
       if (excerpt == null) {
-        if (items.isEmpty && selectedIds.contains(entry.id)) {
-          items.add(
-            MemoryInjectionItem(
-              entry: entry,
-              excerpt: false,
-              text: fullText,
-              tokenCost: fullTokens,
-              originalTokenCost: fullTokens,
-              reason: 'first_entry_fallback',
-            ),
-          );
-          usedTokens += fullTokens;
-        } else {
-          trimmed = true;
-        }
+        trimmed = true;
         continue;
       }
 
-      if (usedTokens + excerpt.tokenCost <= packingBudget || items.isEmpty) {
+      if (usedTokens + excerpt.tokenCost <= packingBudget) {
         items.add(excerpt);
         usedTokens += excerpt.tokenCost;
       } else {
@@ -196,8 +184,8 @@ class MemoryExcerptSelector {
     );
   }
 
-  /// Ranks every chunk from every candidate entry globally, then packs by
-  /// injected chunk token cost (not full-entry cost). One query embedding
+  /// Ranks anchors globally, then packs atomic forward-context windows by
+  /// their actual injected cost (not full-entry cost). One query embedding
   /// still compares against all stored chunk vectors upstream.
   static MemoryExcerptSelection selectChunkFirstGlobal(
     MemorySelection selection, {
@@ -209,65 +197,44 @@ class MemoryExcerptSelector {
   }) {
     final tokenFn = tokenCounter ?? estimateTokens;
     final budget = selection.budgetTokens;
-    final ranked = <GlobalChunkCandidate>[];
+    final ranked = <_WindowCandidate>[];
 
     for (final score in selection.allScores) {
       if (score.excludedBySourceWindow) continue;
       final fullText = score.entry.content.trim();
       if (fullText.isEmpty) continue;
 
-      final chunks = MemoryChunker.chunk(
-        fullText,
-        maxExcerptTokensPerChunk,
-        tokenFn,
-      );
-      final scopedParagraphs = _scopedParagraphs(score);
-      final terms = ExcerptScorer.termsFor(score);
-      for (final chunk in chunks) {
-        if (scopedParagraphs != null &&
-            !scopedParagraphs.contains(chunk.paragraphIndex)) {
-          continue;
-        }
-        ranked.add(
-          GlobalChunkCandidate(
-            entry: score.entry,
-            entryScore: score.score,
-            recencyScore: score.recencyScore,
-            vectorScore: score.vectorScore,
-            chunkIndex: chunk.index,
-            text: chunk.text,
-            tokenCost: chunk.tokenCost,
-            relevance: ExcerptScorer.chunkRelevance(chunk.text, score, terms),
-          ),
-        );
-      }
+      ranked.addAll(_rankWindows(score, maxExcerptTokensPerChunk, tokenFn));
     }
 
     ranked.sort((a, b) {
       final byRel = b.relevance.compareTo(a.relevance);
       if (byRel != 0) return byRel;
-      final byEntry = b.entryScore.compareTo(a.entryScore);
+      final byEntry = b.score.score.compareTo(a.score.score);
       if (byEntry != 0) return byEntry;
-      return a.chunkIndex.compareTo(b.chunkIndex);
+      return a.anchorIndex.compareTo(b.anchorIndex);
     });
 
-    final perEntry = <String, List<GlobalChunkCandidate>>{};
-    var usedTokens = 0;
-    var trimmed = false;
+    final packing = _WindowPacking(
+      maxWindowsPerEntry: maxExcerptChunksPerEntry,
+      maxWindowTokens: maxExcerptTokensPerChunk * 2,
+      budget: budget,
+      tokenCounter: tokenFn,
+    );
 
-    // Phase 1: top entries by entry score each get up to [topChunks] best chunks
+    // Phase 1: top entries each get up to [topChunks] best anchor windows
     // so recency / vector-implied relevance is not drowned out by keyword-heavy
     // older arcs.
-    final rankedByEntry = <String, List<GlobalChunkCandidate>>{};
+    final rankedByEntry = <String, List<_WindowCandidate>>{};
     for (final candidate in ranked) {
       rankedByEntry
-          .putIfAbsent(candidate.entry.id, () => <GlobalChunkCandidate>[])
+          .putIfAbsent(candidate.score.entry.id, () => <_WindowCandidate>[])
           .add(candidate);
     }
     final entryFloorCap = topEntries.clamp(0, 64);
     final chunksPerGuaranteedEntry = topChunks.clamp(
-      1,
-      maxExcerptChunksPerEntry,
+      0,
+      maxExcerptChunksPerEntry.clamp(0, 64),
     );
     if (entryFloorCap > 0) {
       var floorEntriesProcessed = 0;
@@ -281,70 +248,22 @@ class MemoryExcerptSelector {
         var addedForEntry = 0;
         for (final candidate in entryChunks) {
           if (addedForEntry >= chunksPerGuaranteedEntry) break;
-          if (_tryAddGlobalChunk(
-            candidate,
-            perEntry,
-            maxExcerptChunksPerEntry: maxExcerptChunksPerEntry,
-            budget: budget,
-            usedTokens: usedTokens,
-          )) {
-            usedTokens += candidate.tokenCost;
+          if (packing.tryAdd(candidate)) {
             addedForEntry++;
-          } else {
-            trimmed = true;
           }
         }
       }
     }
 
-    // Phase 2: fill remaining budget with globally ranked chunks.
+    // Phase 2: fill remaining budget with globally ranked anchor windows.
     for (final candidate in ranked) {
-      if (_tryAddGlobalChunk(
-        candidate,
-        perEntry,
-        maxExcerptChunksPerEntry: maxExcerptChunksPerEntry,
-        budget: budget,
-        usedTokens: usedTokens,
-      )) {
-        usedTokens += candidate.tokenCost;
-      } else if (perEntry[candidate.entry.id]?.any(
-            (c) => c.chunkIndex == candidate.chunkIndex,
-          ) !=
-          true) {
-        trimmed = true;
-      }
-    }
-
-    final items = <MemoryInjectionItem>[];
-    for (final entry in perEntry.entries) {
-      final chunks = entry.value
-        ..sort((a, b) => a.chunkIndex.compareTo(b.chunkIndex));
-      final score = selection.allScores.firstWhere(
-        (s) => s.entry.id == entry.key,
-      );
-      final text = chunks.map((c) => c.text).join('\n\n').trim();
-      if (text.isEmpty) continue;
-      final terms = ExcerptScorer.termsFor(score);
-      items.add(
-        MemoryInjectionItem(
-          entry: chunks.first.entry,
-          excerpt: true,
-          text: text,
-          tokenCost: tokenFn(text),
-          originalTokenCost: tokenFn(chunks.first.entry.content),
-          chunkIndexes: chunks.map((c) => c.chunkIndex).toList(growable: false),
-          matchedTerms: terms
-              .where((term) => text.toLowerCase().contains(term))
-              .toList(growable: false),
-          reason: 'chunk_first_global',
-        ),
-      );
+      packing.tryAdd(candidate);
     }
 
     return MemoryExcerptSelection(
-      items: _chronologicalItems(items),
-      totalTokens: usedTokens,
-      budgetTrimmed: trimmed,
+      items: _chronologicalItems(packing.items('chunk_first_global')),
+      totalTokens: packing.usedTokens,
+      budgetTrimmed: selection.budgetTrimmed || packing.trimmed,
     );
   }
 
@@ -386,88 +305,79 @@ class MemoryExcerptSelector {
   static MemoryInjectionItem? _buildExcerpt(
     MemoryCandidateScore score, {
     required int maxTokens,
+    required int chunkTokens,
     required int maxChunks,
     required int Function(String text) tokenCounter,
   }) {
     if (maxTokens <= 0 || maxChunks <= 0) return null;
-    var chunks = MemoryChunker.chunk(
-      score.entry.content,
-      maxTokens,
-      tokenCounter,
+    final ranked = _rankWindows(score, chunkTokens, tokenCounter)
+      ..sort((a, b) {
+        final byScore = b.relevance.compareTo(a.relevance);
+        return byScore != 0 ? byScore : a.anchorIndex.compareTo(b.anchorIndex);
+      });
+    final packing = _WindowPacking(
+      maxWindowsPerEntry: maxChunks,
+      maxWindowTokens: maxTokens,
+      budget: maxTokens,
+      tokenCounter: tokenCounter,
     );
-    final scopedParagraphs = _scopedParagraphs(score);
-    if (scopedParagraphs != null) {
-      chunks = chunks
-          .where((chunk) => scopedParagraphs.contains(chunk.paragraphIndex))
-          .toList(growable: false);
+    for (final candidate in ranked) {
+      packing.tryAdd(candidate);
     }
-    if (chunks.isEmpty) return null;
-    final terms = ExcerptScorer.termsFor(score);
-    final ranked =
-        chunks
-            .map(
-              (chunk) => ScoredChunk(
-                chunk,
-                ExcerptScorer.chunkRelevance(chunk.text, score, terms),
-              ),
-            )
-            .toList(growable: false)
-          ..sort((a, b) {
-            final byScore = b.score.compareTo(a.score);
-            if (byScore != 0) return byScore;
-            return a.chunk.index.compareTo(b.chunk.index);
-          });
-
-    final picked = <ExcerptChunk>[];
-    var used = 0;
-    for (final rankedChunk in ranked) {
-      if (picked.length >= maxChunks) break;
-      final chunk = rankedChunk.chunk;
-      if (used + chunk.tokenCost > maxTokens && picked.isNotEmpty) continue;
-      picked.add(chunk);
-      used += chunk.tokenCost;
-    }
-    if (picked.isEmpty) return null;
-    picked.sort((a, b) => a.index.compareTo(b.index));
-    final text = picked.map((chunk) => chunk.text).join('\n\n').trim();
-    if (text.isEmpty) return null;
-    final matched = terms
-        .where((term) => text.toLowerCase().contains(term))
-        .toList(growable: false);
-    return MemoryInjectionItem(
-      entry: score.entry,
-      excerpt: true,
-      text: text,
-      tokenCost: tokenCounter(text),
-      originalTokenCost: tokenCounter(score.entry.content),
-      chunkIndexes: picked.map((chunk) => chunk.index).toList(growable: false),
-      matchedTerms: matched,
-      reason: 'over_budget_excerpt',
-    );
+    final items = packing.items('over_budget_excerpt');
+    return items.isEmpty ? null : items.single;
   }
 
-  static bool _tryAddGlobalChunk(
-    GlobalChunkCandidate candidate,
-    Map<String, List<GlobalChunkCandidate>> perEntry, {
-    required int maxExcerptChunksPerEntry,
-    required int? budget,
-    required int usedTokens,
-  }) {
-    final chunksForEntry = perEntry.putIfAbsent(
-      candidate.entry.id,
-      () => <GlobalChunkCandidate>[],
-    );
-    if (chunksForEntry.any((c) => c.chunkIndex == candidate.chunkIndex)) {
-      return false;
+  /// One bounded chunk immediately after each anchor is context, even when
+  /// its relevance/key mapping is weaker. A split paragraph adds only its next
+  /// chunk, not its entire tail. Limits count anchor windows (at most twice as
+  /// many source chunks); overlapping windows are rendered once, in raw order.
+  /// Chunk boundaries use the configured limit, never the shrinking budget.
+  static List<_WindowCandidate> _rankWindows(
+    MemoryCandidateScore score,
+    int chunkTokens,
+    int Function(String) tokenCounter,
+  ) {
+    if (chunkTokens <= 0 || score.excludedBySourceWindow) return [];
+    final source = score.entry.content;
+    final chunks = MemoryChunker.chunk(source, chunkTokens, tokenCounter);
+    final spans = <(int, int)>[];
+    var cursor = 0;
+    for (final chunk in chunks) {
+      // The chunker normalizes whitespace when splitting long paragraphs.
+      // Locate those words back in the source rather than injecting rewritten
+      // text or artificial blank lines inside a paragraph.
+      final pattern = chunk.text
+          .split(RegExp(r'\s+'))
+          .map(RegExp.escape)
+          .join(r'\s+');
+      final match = RegExp(pattern).allMatches(source, cursor).firstOrNull;
+      // Fail closed if chunk/source alignment ever changes upstream.
+      if (match == null) return [];
+      spans.add((match.start, match.end));
+      cursor = match.end;
     }
-    if (chunksForEntry.length >= maxExcerptChunksPerEntry) return false;
-    if (budget != null &&
-        usedTokens + candidate.tokenCost > budget &&
-        perEntry.isNotEmpty) {
-      return false;
-    }
-    chunksForEntry.add(candidate);
-    return true;
+    final scoped = _scopedParagraphs(score);
+    final terms = ExcerptScorer.termsFor(score);
+    return [
+      for (var i = 0; i < chunks.length; i++)
+        if (scoped == null || scoped.contains(chunks[i].paragraphIndex))
+          _WindowCandidate(
+            score: score,
+            anchorIndex: chunks[i].index,
+            start: spans[i].$1,
+            end: spans[i + 1 < chunks.length ? i + 1 : i].$2,
+            chunkIndexes: [
+              chunks[i].index,
+              if (i + 1 < chunks.length) chunks[i + 1].index,
+            ],
+            relevance: ExcerptScorer.chunkRelevance(
+              chunks[i].text,
+              score,
+              terms,
+            ),
+          ),
+    ];
   }
 
   static Set<int>? _scopedParagraphs(MemoryCandidateScore score) {
@@ -487,5 +397,119 @@ class MemoryExcerptSelector {
     final paragraphCount = MemoryChunker.paragraphs(score.entry.content).length;
     resolved.removeWhere((index) => index < 0 || index >= paragraphCount);
     return resolved.isEmpty ? null : resolved;
+  }
+}
+
+class _WindowCandidate {
+  final MemoryCandidateScore score;
+  final int anchorIndex;
+  final int start;
+  final int end;
+  final List<int> chunkIndexes;
+  final double relevance;
+
+  const _WindowCandidate({
+    required this.score,
+    required this.anchorIndex,
+    required this.start,
+    required this.end,
+    required this.chunkIndexes,
+    required this.relevance,
+  });
+}
+
+/// Shared atomic admission for hybrid and global packing. Count the rendered
+/// union, including separators, rather than adding independent chunk counts.
+class _WindowPacking {
+  final int maxWindowsPerEntry;
+  final int maxWindowTokens;
+  final int? budget;
+  final int Function(String) tokenCounter;
+  final _picked = <String, List<_WindowCandidate>>{};
+  final _costs = <String, int>{};
+  var usedTokens = 0;
+  var trimmed = false;
+
+  _WindowPacking({
+    required int maxWindowsPerEntry,
+    required this.maxWindowTokens,
+    required this.budget,
+    required this.tokenCounter,
+  }) : maxWindowsPerEntry = maxWindowsPerEntry.clamp(0, 64);
+
+  bool tryAdd(_WindowCandidate candidate) {
+    final id = candidate.score.entry.id;
+    final picked = _picked[id] ?? const <_WindowCandidate>[];
+    if (picked.any(
+      (c) => c.start <= candidate.start && c.end >= candidate.end,
+    )) {
+      return false;
+    }
+    if (picked.length >= maxWindowsPerEntry) {
+      trimmed = true;
+      return false;
+    }
+    if (tokenCounter(
+          candidate.score.entry.content.substring(
+            candidate.start,
+            candidate.end,
+          ),
+        ) >
+        maxWindowTokens) {
+      trimmed = true;
+      return false;
+    }
+    final next = [...picked, candidate];
+    final cost = tokenCounter(_text(next));
+    final total = usedTokens - (_costs[id] ?? 0) + cost;
+    if (budget != null && total > budget!) {
+      trimmed = true;
+      return false;
+    }
+    _picked[id] = next;
+    _costs[id] = cost;
+    usedTokens = total;
+    return true;
+  }
+
+  List<MemoryInjectionItem> items(String reason) {
+    return _picked.values
+        .map((picked) {
+          final text = _text(picked);
+          return MemoryInjectionItem(
+            entry: picked.first.score.entry,
+            excerpt: true,
+            text: text,
+            tokenCost: _costs[picked.first.score.entry.id]!,
+            originalTokenCost: tokenCounter(picked.first.score.entry.content),
+            chunkIndexes: (picked.expand((c) => c.chunkIndexes).toSet().toList()
+              ..sort()),
+            matchedTerms: ExcerptScorer.termsFor(picked.first.score)
+                .where((term) => text.toLowerCase().contains(term))
+                .toList(growable: false),
+            reason: reason,
+          );
+        })
+        .toList(growable: false);
+  }
+
+  static String _text(List<_WindowCandidate> picked) {
+    final ordered = [...picked]..sort((a, b) => a.start.compareTo(b.start));
+    final source = ordered.first.score.entry.content;
+    final parts = <String>[];
+    var start = ordered.first.start;
+    var end = ordered.first.end;
+    for (final candidate in ordered.skip(1)) {
+      if (candidate.start <= end ||
+          source.substring(end, candidate.start).trim().isEmpty) {
+        if (candidate.end > end) end = candidate.end;
+      } else {
+        parts.add(source.substring(start, end));
+        start = candidate.start;
+        end = candidate.end;
+      }
+    }
+    parts.add(source.substring(start, end));
+    return parts.join('\n\n');
   }
 }

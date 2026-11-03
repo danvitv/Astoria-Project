@@ -23,7 +23,7 @@ MemoryEntry _entry({
 
 void main() {
   group('MemoryExcerptSelector', () {
-    test('limits hybrid excerpts to paragraphs mapped by matched keys', () {
+    test('limits hybrid anchors to paragraphs mapped by matched keys', () {
       final entry = _entry(
         id: 'scoped',
         title: 'Two scenes',
@@ -60,43 +60,40 @@ void main() {
       expect(result.items.single.text, isNot(contains('market')));
     });
 
-    test(
-      'limits chunk-first excerpts to paragraphs mapped by matched keys',
-      () {
-        final entry = _entry(
-          id: 'scoped',
-          title: 'Two scenes',
-          content: 'Market paragraph.\n\nThe chapel held the silver key.',
-          keys: const ['market', 'silver key'],
-          keyParagraphs: const {
-            'market': [0],
-            'silver key': [1],
-          },
-        );
-        final selection = MemorySelection(
-          entries: [entry],
-          allScores: [
-            MemoryCandidateScore(
-              entry: entry,
-              score: 10,
-              matchedKeys: const ['silver key'],
-            ),
-          ],
-          budgetTokens: 100,
-          entryCap: 1,
-        );
+    test('limits chunk-first anchors to paragraphs mapped by matched keys', () {
+      final entry = _entry(
+        id: 'scoped',
+        title: 'Two scenes',
+        content: 'Market paragraph.\n\nThe chapel held the silver key.',
+        keys: const ['market', 'silver key'],
+        keyParagraphs: const {
+          'market': [0],
+          'silver key': [1],
+        },
+      );
+      final selection = MemorySelection(
+        entries: [entry],
+        allScores: [
+          MemoryCandidateScore(
+            entry: entry,
+            score: 10,
+            matchedKeys: const ['silver key'],
+          ),
+        ],
+        budgetTokens: 100,
+        entryCap: 1,
+      );
 
-        final result = MemoryExcerptSelector.select(
-          selection,
-          packingMode: 'chunk_first',
-          maxExcerptTokensPerEntry: 20,
-          tokenCounter: (text) => text.split(RegExp(r'\s+')).length,
-        );
+      final result = MemoryExcerptSelector.select(
+        selection,
+        packingMode: 'chunk_first',
+        maxExcerptTokensPerEntry: 20,
+        tokenCounter: (text) => text.split(RegExp(r'\s+')).length,
+      );
 
-        expect(result.items.single.text, contains('silver key'));
-        expect(result.items.single.text, isNot(contains('Market')));
-      },
-    );
+      expect(result.items.single.text, contains('silver key'));
+      expect(result.items.single.text, isNot(contains('Market')));
+    });
 
     test('hard-split chunks preserve every word and paragraph index', () {
       const text = 'one two three four five six seven eight nine ten';
@@ -158,6 +155,10 @@ void main() {
               title: 'Bridge memory',
               content: relevant,
               keys: const ['ritual map', 'debt'],
+              keyParagraphs: const {
+                'ritual map': [1],
+                'debt': [1],
+              },
               createdAt: 2,
             ),
             _entry(
@@ -184,19 +185,19 @@ void main() {
 
       final excerpted = MemoryExcerptSelector.select(
         selection,
-        maxExcerptTokensPerEntry: 12,
+        maxExcerptTokensPerEntry: 24,
         maxExcerptChunksPerEntry: 1,
         tokenCounter: (text) => text.split(RegExp(r'\s+')).length,
       );
 
-      expect(excerpted.items, hasLength(2));
+      expect(excerpted.items, hasLength(1));
       expect(excerpted.items.first.excerpt, isTrue);
       expect(excerpted.items.first.text, contains('ritual map'));
       expect(excerpted.items.first.text, isNot(contains('catalog')));
       expect(excerpted.totalTokens, lessThanOrEqualTo(30));
     });
 
-    test('prefers vector-matched chunks and can include multiple chunks', () {
+    test('prefers complete vector-matched windows over unrelated setup', () {
       final content = [
         'A quiet setup paragraph about weather and tea.',
         'Ren hid the silver key beneath the chapel floor before sunrise.',
@@ -214,7 +215,9 @@ void main() {
               'Sable later found the chapel map and marked the hidden vault door.',
             ],
           },
-          maxInjectionTokens: 28,
+          // Both vector anchors plus their forward context cost 32 words.
+          // The complete entry still exceeds this budget (40 words).
+          maxInjectionTokens: 32,
           maxInjectedEntries: 1,
           keywordWeight: 0,
           recencyBoost: false,
@@ -226,19 +229,19 @@ void main() {
 
       final excerpted = MemoryExcerptSelector.select(
         selection,
-        maxExcerptTokensPerEntry: 28,
+        maxExcerptTokensPerEntry: 32,
         maxExcerptChunksPerEntry: 2,
         tokenCounter: (text) => text.split(RegExp(r'\s+')).length,
       );
 
       expect(excerpted.items.single.excerpt, isTrue);
-      expect(excerpted.items.single.text, contains('silver key'));
       expect(excerpted.items.single.text, contains('hidden vault'));
       expect(excerpted.items.single.text, isNot(contains('weather and tea')));
+      expect(excerpted.totalTokens, lessThanOrEqualTo(32));
     });
 
     test(
-      'uses remaining budget for excerpted entries trimmed by full-entry budget',
+      'omits atomic windows that cannot fit the remaining full-entry budget',
       () {
         final selection = MemorySelector.select(
           MemorySelectionInput(
@@ -262,6 +265,9 @@ void main() {
                   List.filled(20, 'tail').join(' '),
                 ].join('\n\n'),
                 keys: const ['needle'],
+                keyParagraphs: const {
+                  'needle': [1],
+                },
               ),
             ],
             keywordMatchedTerms: const {
@@ -288,9 +294,8 @@ void main() {
           tokenCounter: (text) => text.split(RegExp(r'\s+')).length,
         );
 
-        expect(excerpted.items.map((item) => item.entry.id), ['a', 'b', 'c']);
-        expect(excerpted.items.last.excerpt, isTrue);
-        expect(excerpted.items.last.text, contains('needle clue'));
+        expect(excerpted.items.map((item) => item.entry.id), ['a', 'b']);
+        expect(excerpted.items.every((item) => !item.excerpt), isTrue);
         expect(excerpted.totalTokens, lessThanOrEqualTo(90));
       },
     );
@@ -366,8 +371,7 @@ void main() {
           title: id,
           content: List.generate(
             6,
-            (i) =>
-                i == 2 ? '$needle clue chunk $id' : 'filler words $id line $i',
+            (i) => i == 2 ? '$needle $id' : 'filler$i $id',
           ).join('\n\n'),
           keys: const ['needle'],
           messageRange: MessageRange(start: start, end: start + 14),
@@ -411,7 +415,7 @@ void main() {
         expect(excerpted.items.length, greaterThan(3));
         expect(excerpted.totalTokens, lessThanOrEqualTo(20));
         expect(excerpted.items.every((item) => item.excerpt), isTrue);
-        expect(excerpted.items.every((item) => item.tokenCost <= 6), isTrue);
+        expect(excerpted.items.every((item) => item.tokenCost <= 12), isTrue);
       },
     );
 
@@ -478,7 +482,7 @@ void main() {
       },
     );
 
-    test('chunk-first floor injects up to N chunks per guaranteed entry', () {
+    test('chunk-first floor injects up to N anchor windows per entry', () {
       final lone = MemoryEntry(
         id: 'solo',
         title: 'solo',
@@ -523,8 +527,8 @@ void main() {
         topChunks: 2,
       );
 
-      expect(oneChunk.items.single.chunkIndexes, hasLength(1));
-      expect(twoChunks.items.single.chunkIndexes, hasLength(2));
+      expect(oneChunk.items.single.chunkIndexes, hasLength(2));
+      expect(twoChunks.items.single.chunkIndexes, hasLength(3));
     });
   });
 }

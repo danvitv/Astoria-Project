@@ -107,6 +107,16 @@ class StudioMessageBuilder {
         );
     final messages = <Map<String, dynamic>>[];
     var emittedRuntimeDynamic = false;
+    var emittedArcMacro = false;
+    final arcContent = context.macroContext.arcContent?.trim() ?? '';
+    final arcMacro = RegExp(r'\{\{\s*arc\s*\}\}', caseSensitive: false);
+    void recordArcMacro(String template, String emitted) {
+      if (arcContent.isNotEmpty &&
+          arcMacro.hasMatch(template) &&
+          emitted.contains(arcContent)) {
+        emittedArcMacro = true;
+      }
+    }
 
     // Continue mode: the instruction belongs to the final writer only. The
     // controller agents analyse the scene; they never extend the reply, so
@@ -122,6 +132,7 @@ class StudioMessageBuilder {
     // merged copy is identical to what a plain instruction block would have
     // emitted.
     final appendableEntries = <({String name, String content})>[];
+    final appendableArcContents = <String>[];
     for (final block in blocks) {
       if (block.type != StudioBlockType.instruction) continue;
       if (!block.appendToLastMessage) continue;
@@ -139,6 +150,11 @@ class StudioMessageBuilder {
         emittedLorebookClassifications,
       );
       appendableEntries.add((name: block.id, content: content));
+      if (arcContent.isNotEmpty &&
+          arcMacro.hasMatch(block.content) &&
+          content.contains(arcContent)) {
+        appendableArcContents.add(content);
+      }
     }
 
     // Emits one chat-history block: depth-anchored blocks interleaved in, the
@@ -149,6 +165,13 @@ class StudioMessageBuilder {
         history,
         appendableEntries,
       );
+      if (mergedHistory.any(
+        (message) =>
+            message.role == 'user' &&
+            appendableArcContents.any(message.content.contains),
+      )) {
+        emittedArcMacro = true;
+      }
       if (isFinalResponse &&
           !isThinkingPass &&
           (reasoningHistoryCount == -1 || reasoningHistoryCount > 0)) {
@@ -296,6 +319,7 @@ class StudioMessageBuilder {
                 emittedLorebookClassifications,
               );
               _addInstructionMessage(messages, block.role, content);
+              recordArcMacro(block.content, content);
             }
           }
         }
@@ -343,6 +367,7 @@ class StudioMessageBuilder {
             }
           }
           _addInstructionMessage(messages, block.role, control.toString());
+          recordArcMacro(block.content, control.toString());
           break;
         case 'pregenBrief':
           if (!isFinalResponse || hasExplicitBriefMacros) break;
@@ -394,6 +419,7 @@ class StudioMessageBuilder {
               );
             } else {
               _addFunctionPrefillTail(messages, block.id, prefill);
+              recordArcMacro(block.content, prefill);
             }
           }
           break;
@@ -409,6 +435,13 @@ class StudioMessageBuilder {
       messages.addAll(
         context
             .messagesFor(StudioContextSlot.runtimeDynamic)
+            // A successfully emitted authored {{arc}} block already carries
+            // this exact state. Keep clock/guidance and fallback for missing,
+            // disabled or non-emitting macro blocks; never dedupe history.
+            .where(
+              (message) =>
+                  !emittedArcMacro || message.content.trim() != arcContent,
+            )
             .map((message) => message.toApiMap()),
       );
     }

@@ -9,7 +9,9 @@ String historicalMemoryHeader(GameTimeState clock) =>
     'conditions remain unchanged now. Current Ledger canon and Character '
     'Knowledge take precedence; accepted historical evidence overrides a '
     'conflicting card baseline. Preserve who observed, believed, or learned '
-    'each claim; a recalled statement is not necessarily objective truth.';
+    'each claim; a recalled statement is not necessarily objective truth. '
+    'Access to this record does not give every NPC shared knowledge: require '
+    'evidence of that character observing, learning, or being told the fact.';
 
 String currentStoryPoint(GameTimeState clock) {
   final parts = <String>[
