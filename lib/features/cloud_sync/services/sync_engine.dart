@@ -1022,7 +1022,19 @@ class SyncEngine {
               // Only deleting the owning chat removes immutable job history.
               // A standalone cloud tombstone must not erase local records.
             } else {
-              await _pullEntry(entry);
+              await _pullEntry(
+                entry,
+                onProgress: (message) {
+                  _checkCurrent();
+                  onProgress(
+                    SyncProgress(
+                      current: processed,
+                      total: pullEntries.length,
+                      message: message,
+                    ),
+                  );
+                },
+              );
               _checkCurrent();
               appliedEntries.add(entry);
             }
@@ -1480,7 +1492,10 @@ class SyncEngine {
     }
   }
 
-  Future<void> _pullEntry(SyncManifestEntry entry) async {
+  Future<void> _pullEntry(
+    SyncManifestEntry entry, {
+    void Function(String)? onProgress,
+  }) async {
     _checkCurrent();
     if (entry.deleted) {
       await _deleteLocalEntity(entry.type, entry.id);
@@ -1489,7 +1504,7 @@ class SyncEngine {
 
     if (entry.type == 'reconciliation_state' &&
         _reconciliationStateStore is SyncPagedReconciliationStateStore) {
-      await _mergeReconciliationEntry(entry);
+      await _mergeReconciliationEntry(entry, onProgress: onProgress);
       return;
     }
 
@@ -2642,12 +2657,16 @@ class SyncEngine {
     return await _read(() async => store?.getBySessionId(sessionId)) != null;
   }
 
-  Future<void> _mergeReconciliationEntry(SyncManifestEntry entry) async {
+  Future<void> _mergeReconciliationEntry(
+    SyncManifestEntry entry, {
+    void Function(String)? onProgress,
+  }) async {
     final store = _reconciliationStateStore;
     if (store == null) return;
     if (store is SyncPagedReconciliationStateStore) {
       await ReconciliationPageTransport(
         checkActive: _captureActiveGuard(),
+        onProgress: onProgress,
       ).withDownloadedSource(
         _adapter,
         entry,

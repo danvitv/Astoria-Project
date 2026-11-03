@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import '../../../core/application/sync_reconciliation_source.dart';
 import '../cloud_adapter.dart';
 import '../sync_models.dart';
+import 'reconciliation_page_compression.dart';
 import 'reconciliation_staging.dart';
 import 'sync_payload_transport.dart';
 
@@ -58,6 +59,7 @@ class ReconciliationPageTransport {
         }
         checkActive?.call();
         onProgress?.call('Pushing ${entry.key}');
+        checkActive?.call();
         await adapter.upload(entry.path, utf8.decode(bytes.takeBytes()));
         return;
       }
@@ -91,7 +93,10 @@ class ReconciliationPageTransport {
               'Compressed reconciliation page too large',
             );
           }
-          final hash = sha256.convert(compressed).toString();
+          final hash = ReconciliationPageCompression.preparePage(
+            compressed,
+            existing,
+          );
           final name = '$hash.b64';
           if (existing.add(name)) {
             await adapter.upload(
@@ -134,6 +139,7 @@ class ReconciliationPageTransport {
       // All immutable pages exist first; never remove pages an old reader needs.
       checkActive?.call();
       onProgress?.call('Publishing ${entry.key} index');
+      checkActive?.call();
       await adapter.upload(entry.path, root);
     } finally {
       await staging.dispose();
@@ -145,6 +151,8 @@ class ReconciliationPageTransport {
     SyncManifestEntry entry,
     Future<T> Function(ReconciliationStateSource source) consume,
   ) async {
+    checkActive?.call();
+    onProgress?.call('Pulling ${entry.key} index');
     checkActive?.call();
     final raw = await adapter.download(entry.path);
     checkActive?.call();
@@ -166,6 +174,8 @@ class ReconciliationPageTransport {
         throw const FormatException('Invalid legacy reconciliation payload');
       }
       checkActive?.call();
+      onProgress?.call('Applying ${entry.key}');
+      checkActive?.call();
       return consume(
         _GuardedSource(MapReconciliationStateSource(data), checkActive),
       );
@@ -174,18 +184,30 @@ class ReconciliationPageTransport {
       throw const FormatException('Reconciliation page index exceeds budget');
     }
     final sections = _validateIndex(entry, decoded);
+    final totalPages = sections.fold<int>(
+      0,
+      (count, section) => count + (section['pages'] as List).length,
+    );
+    var downloadedPages = 0;
     final staging = await ReconciliationStaging.create(
       entry.id,
       decoded['schemaVersion'] as int,
       temporaryRoot: temporaryRoot,
     );
     try {
+      checkActive?.call();
       var totalRows = 0;
       for (var index = 0; index < sections.length; index++) {
         final section = ReconciliationSection.values[index];
         final descriptor = sections[index];
         final output = await staging.file(section).open(mode: FileMode.write);
         try {
+          checkActive?.call();
+          if ((descriptor['pages'] as List).isNotEmpty) {
+            onProgress?.call(
+              'Pulling ${entry.key}: pages $downloadedPages/$totalPages',
+            );
+          }
           for (final page in descriptor['pages'] as List) {
             checkActive?.call();
             final encoded = await adapter.download(
@@ -206,9 +228,18 @@ class ReconciliationPageTransport {
               page['bytes'] as int,
             );
             await output.writeFrom(bytes);
+            checkActive?.call();
+            downloadedPages++;
+            onProgress?.call(
+              'Pulling ${entry.key}: pages $downloadedPages/$totalPages',
+            );
           }
         } finally {
           await output.close();
+        }
+        checkActive?.call();
+        if ((descriptor['pages'] as List).isNotEmpty) {
+          onProgress?.call('Checking ${entry.key}: ${section.name}');
         }
         var count = 0;
         await for (final _ in _GuardedSource(
@@ -227,12 +258,17 @@ class ReconciliationPageTransport {
         }
         staging.counts[section] = count;
       }
+      checkActive?.call();
+      onProgress?.call('Verifying ${entry.key} payload');
+      checkActive?.call();
       await staging.verifyFingerprint(
         decoded['payloadHash'] as String,
         decoded['jsonBytes'] as int,
       );
       // Domain writes only start after every page and the whole logical hash
       // have been checked. Network failure never leaves a half-imported lane.
+      checkActive?.call();
+      onProgress?.call('Applying ${entry.key}');
       checkActive?.call();
       return await consume(_GuardedSource(staging, checkActive));
     } finally {

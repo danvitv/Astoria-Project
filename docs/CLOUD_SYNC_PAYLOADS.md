@@ -54,14 +54,25 @@ small rows in at most 64 KiB per section (nine sections), while large rows bypas
 those buffers. All pending tails flush before the snapshot becomes usable.
 
 NDJSON section streams are divided into independent gzip pages. Existing
-content-addressed pages are reused, so unchanged immutable history is not
-re-uploaded on every sync. All pages are uploaded before the small root index;
-the overall sync manifest follows successful tasks as before.
+content-addressed pages are reused. New journal pages use gzip OS byte 255
+(unspecified), so Windows/Android/Apple OS metadata does not change their hashes.
+Published legacy pages are also reusable: the uploader checks the exact SHA-256
+of the same compressed bytes with supported legacy OS headers and retains the
+matching original descriptor/path. No old pages need renaming or re-uploading
+just to adopt the portable header. Actual changes to page bytes still require
+upload; fixed 512 KiB boundaries can shift after inserting/editing earlier rows,
+and differences in the compressed body are not treated as identical content.
+All pages are uploaded before the small root index; the overall sync manifest
+follows successful tasks as before.
 
 Progress counts completed entity tasks, not tasks started or retry attempts.
 Journal pushes distinguish local preparation, completed pages (and actual page
 uploads), and root publication. Overall manifest publication has its own phase
 label; a full entity counter does not mean that final publication has finished.
+Journal pulls show completed downloaded pages, section checks, full payload
+verification and application separately. A downloaded page is counted only
+after size/hash/decompression checks and its private staging write complete;
+the journal task remains incomplete until the verified source is applied.
 Pull finalization likewise labels rebuilding the local manifest, verifying
 anchors and saving the accepted manifest. Rebuilding still fingerprints all
 local journals; this optimization does not add a cross-sync fingerprint cache
@@ -91,6 +102,8 @@ collection of superseded versions is not implemented.
 ## Compatibility and deployment
 
 Updated readers accept existing plain JSON and the new staged page encoding.
+Portable gzip headers and retained legacy page descriptors use the same version-2
+index; existing paged readers can read both without a schema upgrade.
 The bounded-map transport also accepts version-1 gzip/chunk envelopes for chats
 and reconciliation compatibility adapters. No database schema migration or
 history replay is needed. **Update both phone and PC before syncing compressed

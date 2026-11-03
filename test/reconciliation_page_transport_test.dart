@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -78,6 +79,13 @@ class _Cloud extends fixtures.FakeCloudAdapter {
   int? failPage;
   final writes = <String>[];
   void Function(String)? afterUpload;
+  Future<void> Function(String)? beforeDownload;
+
+  @override
+  Future<String> download(String path) async {
+    await beforeDownload?.call(path);
+    return super.download(path);
+  }
 
   @override
   Future<void> upload(String path, String data) async {
@@ -260,6 +268,129 @@ void main() {
   });
 
   test(
+    'pull pages count completed downloads before checked application',
+    () async {
+      final source = _Source(100, 'proof ' * 1024);
+      final entry = await _entry(source);
+      await transport.upload(cloud, entry, _Store(source));
+      final pages = _pages(_root(cloud, entry));
+      expect(pages.length, greaterThan(1));
+      final blockedPath = '${entry.path}.pages/${pages[1]['hash']}.b64';
+      final started = Completer<void>();
+      final resume = Completer<void>();
+      cloud.beforeDownload = (path) async {
+        if (path != blockedPath) return;
+        started.complete();
+        await resume.future;
+      };
+      final progress = <String>[];
+      transport = ReconciliationPageTransport(
+        temporaryRoot: temporaryRoot,
+        onProgress: progress.add,
+      );
+      var consumed = false;
+      final pending = transport.withDownloadedSource(cloud, entry, (
+        incoming,
+      ) async {
+        consumed = true;
+        expect(
+          (await ReconciliationJsonCodec.fingerprint(incoming)).hash,
+          entry.hash,
+        );
+      });
+      try {
+        await started.future.timeout(const Duration(seconds: 10));
+        expect(progress.first, 'Pulling ${entry.key} index');
+        expect(progress.last, 'Pulling ${entry.key}: pages 1/${pages.length}');
+        expect(consumed, isFalse);
+        expect(progress, isNot(contains('Applying ${entry.key}')));
+      } finally {
+        resume.complete();
+      }
+      await pending;
+      expect(consumed, isTrue);
+      expect(
+        progress,
+        contains('Pulling ${entry.key}: pages ${pages.length}/${pages.length}'),
+      );
+      expect(progress[progress.length - 2], 'Verifying ${entry.key} payload');
+      expect(progress.last, 'Applying ${entry.key}');
+    },
+  );
+
+  test(
+    'retirement during the applying phase cannot enter the consumer',
+    () async {
+      final source = _Source(100, 'proof ' * 1024);
+      final entry = await _entry(source);
+      await transport.upload(cloud, entry, _Store(source));
+      final queue = SyncQueue();
+      transport = ReconciliationPageTransport(
+        temporaryRoot: temporaryRoot,
+        checkActive: queue.captureActiveGuard(),
+        onProgress: (message) {
+          if (message == 'Applying ${entry.key}') {
+            queue.abort();
+            queue.reset();
+          }
+        },
+      );
+      var consumed = false;
+      await expectLater(
+        transport.withDownloadedSource(cloud, entry, (_) async {
+          consumed = true;
+        }),
+        throwsStateError,
+      );
+      expect(consumed, isFalse);
+    },
+  );
+
+  for (final paged in [false, true]) {
+    test(
+      'retirement during root publication preserves old root (paged=$paged)',
+      () async {
+        final previous = _Source(1, 'old proof');
+        final oldEntry = await _entry(previous);
+        await transport.upload(cloud, oldEntry, _Store(previous));
+        final oldRoot = cloud.files[oldEntry.path];
+        final replacement = paged
+            ? _Source(100, 'replacement proof ' * 1024)
+            : _Source(1, 'replacement proof');
+        final entry = await _entry(replacement);
+        final queue = SyncQueue();
+        transport = ReconciliationPageTransport(
+          temporaryRoot: temporaryRoot,
+          checkActive: queue.captureActiveGuard(),
+          onProgress: (message) {
+            final publication = paged
+                ? 'Publishing ${entry.key} index'
+                : 'Pushing ${entry.key}';
+            if (message == publication) {
+              queue.abort();
+              queue.reset();
+            }
+          },
+        );
+        await expectLater(
+          transport.upload(cloud, entry, _Store(replacement)),
+          throwsStateError,
+        );
+        expect(cloud.files[entry.path], oldRoot);
+        expect(cloud.writes.where((path) => path == entry.path), hasLength(1));
+        await ReconciliationPageTransport(
+          temporaryRoot: temporaryRoot,
+        ).withDownloadedSource(cloud, oldEntry, (incoming) async {
+          expect(
+            (await ReconciliationJsonCodec.fingerprint(incoming)).hash,
+            oldEntry.hash,
+          );
+        });
+      },
+    );
+  }
+
+  test(
     'mutation between fingerprint and export cannot publish stale-hash bytes',
     () async {
       final entry = await _entry(_Source(1, 'old'));
@@ -381,6 +512,11 @@ void main() {
         }
         cloud.files[entry.path] = jsonEncode(root);
         cloud.downloadCalls.clear();
+        final progress = <String>[];
+        transport = ReconciliationPageTransport(
+          temporaryRoot: temporaryRoot,
+          onProgress: progress.add,
+        );
         var consumed = false;
         await expectLater(
           transport.withDownloadedSource(cloud, entry, (_) async {
@@ -389,6 +525,7 @@ void main() {
           throwsA(isA<Exception>()),
         );
         expect(consumed, isFalse);
+        expect(progress, isNot(contains('Applying ${entry.key}')));
         if (mutation == 'path') expect(cloud.downloadCalls, [entry.path]);
       },
     );
@@ -427,9 +564,30 @@ void main() {
         reconciliationStateStore: receiverStore,
       );
       receiver.cloud.files.addAll(sender.cloud.files);
+      final pullProgress = <SyncProgress>[];
       await receiver.engine.pullEntities(
-        onProgress: (_) {},
+        onProgress: pullProgress.add,
         onConflict: (_) {},
+      );
+      final pullingPages = pullProgress.where(
+        (event) => event.message?.contains(': pages ') ?? false,
+      );
+      expect(pullingPages, isNotEmpty);
+      expect(
+        pullingPages.every((event) => event.current < event.total),
+        isTrue,
+      );
+      final applying = pullProgress.singleWhere(
+        (event) => event.message == 'Applying reconciliation_state:$_session',
+      );
+      expect(applying.current, lessThan(applying.total));
+      expect(
+        pullProgress.indexOf(applying),
+        lessThan(
+          pullProgress.indexWhere(
+            (event) => event.message == 'Pulled reconciliation_state:$_session',
+          ),
+        ),
       );
       expect(receiverStore.imports, greaterThan(0));
       expect(receiverStore.imported!.hash, entry.hash);
