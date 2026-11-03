@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../models/api_config.dart';
 import '../../models/chat_message.dart' show ChatMessage, TriggeredEntry;
 import '../../models/studio_config.dart';
 import '../../utils/cast_helpers.dart';
@@ -9,17 +10,74 @@ import '../generation_context_inputs.dart';
 import '../game_time.dart';
 import '../history_assembler.dart';
 import '../macro_engine.dart';
+import '../memory_selector.dart';
 import '../prompt/lorebook_context_resolver.dart';
 import '../prompt/memory_block_injector.dart' show finalizeMemoryCoverage;
 import '../prompt/memory_context_resolver.dart';
 import '../prompt/recalled_messages_resolver.dart';
 import '../prompt/effective_canon_prompt_materializer.dart';
+import '../prompt/effective_canon_prompt_formatter.dart';
 import '../prompt/exact_lorebook_manifest.dart';
+import '../prompt/recalled_message_chunk.dart';
 import '../prompt/selective_ledger_projection_filter.dart';
+import '../prompt_worker.dart';
+import '../tokenizer.dart';
 import 'studio_context.dart';
 
 final class StudioContextPreparer {
   const StudioContextPreparer();
+
+  /// Exact data admitted to the worker, also available for boundary assertions.
+  /// Transport credentials and arbitrary request parameters are not prompt data.
+  static GenerationContextInputs snapshotForWorker(
+    GenerationContextInputs inputs,
+    Set<String> visibleIds,
+  ) => _snapshotInputs(inputs, Set.unmodifiable(visibleIds));
+
+  /// Same context preparation as [prepare], using the long-lived prompt worker.
+  /// Freeze the explicit window before waiting for worker startup/queueing.
+  /// Only selected prompt text travels; swipe variants and UI/runtime metadata
+  /// are deliberately absent. Lore scanning still sees the whole source
+  /// history, not just the final writer's visible window.
+  Future<StudioContext> prepareAsync({
+    required GenerationContextInputs inputs,
+    required Set<String> visibleMessageIds,
+    LedgerPromptInjectionPolicy ledgerPromptInjectionPolicy =
+        const LedgerPromptInjectionPolicy(
+          presetOptIn: true,
+          mode: LedgerPromptInjectionMode.legacy,
+        ),
+    String consumerPath = 'studio',
+    bool disableSourceWindowExclusion = false,
+    String? reasoningTagStartOverride,
+    String? reasoningTagEndOverride,
+    StudioPreset? studioPreset,
+    PromptWorker? worker,
+  }) async {
+    final useO200k = o200kBaseLoaded;
+    final visibleIds = Set<String>.unmodifiable(visibleMessageIds);
+    final job = _StudioContextJob(
+      inputs: snapshotForWorker(inputs, visibleIds),
+      visibleMessageIds: visibleIds,
+      ledgerPromptInjectionPolicy: ledgerPromptInjectionPolicy,
+      consumerPath: consumerPath,
+      disableSourceWindowExclusion: disableSourceWindowExclusion,
+      reasoningTagStartOverride: reasoningTagStartOverride,
+      reasoningTagEndOverride: reasoningTagEndOverride,
+      studioPreset: studioPreset,
+    );
+    final promptWorker = worker ?? await PromptWorker.ensureInitialized();
+    // Startup can finish loading main's tokenizer while we await. Count this
+    // job with the mode at invocation, not whatever became ready meanwhile.
+    return runWithTokenizerMode(
+      useO200k,
+      () => promptWorker.runTokenized<StudioContext>(
+        _prepareStudioContext,
+        job,
+        payloadBytes: job.payloadBytes,
+      ),
+    );
+  }
 
   StudioContext prepare({
     required GenerationContextInputs inputs,
@@ -378,3 +436,178 @@ Do not reapply an older timeskip or treat future plans as elapsed time.
     return value?.trim().isNotEmpty == true ? '$prefix\n\n$value' : prefix;
   }
 }
+
+final class _StudioContextJob {
+  const _StudioContextJob({
+    required this.inputs,
+    required this.visibleMessageIds,
+    required this.ledgerPromptInjectionPolicy,
+    required this.consumerPath,
+    required this.disableSourceWindowExclusion,
+    this.reasoningTagStartOverride,
+    this.reasoningTagEndOverride,
+    this.studioPreset,
+  });
+
+  final GenerationContextInputs inputs;
+  final Set<String> visibleMessageIds;
+  final LedgerPromptInjectionPolicy ledgerPromptInjectionPolicy;
+  final String consumerPath;
+  final bool disableSourceWindowExclusion;
+  final String? reasoningTagStartOverride;
+  final String? reasoningTagEndOverride;
+  final StudioPreset? studioPreset;
+
+  // Size hint for the existing bounded deadline, without encoding the graph.
+  int get payloadBytes =>
+      inputs.history.fold<int>(
+        0,
+        (size, message) =>
+            size + message.content.length + (message.reasoning?.length ?? 0),
+      ) +
+      inputs.lorebooks.fold<int>(
+        0,
+        (size, book) =>
+            size +
+            book.entries.fold<int>(
+              0,
+              (size, entry) => size + entry.content.length,
+            ),
+      ) +
+      (inputs.memorySelection?.entries.fold<int>(
+            0,
+            (size, entry) => size + entry.content.length,
+          ) ??
+          0) +
+      inputs.recalledMessageChunks.fold<int>(
+        0,
+        (size, chunk) =>
+            size + chunk.text.length + (chunk.rawText?.length ?? 0),
+      );
+}
+
+// A top-level tear-off, never a closure over the calling service or Ref.
+StudioContext _prepareStudioContext(Object? input) {
+  final job = input as _StudioContextJob;
+  return const StudioContextPreparer().prepare(
+    inputs: job.inputs,
+    visibleMessageIds: job.visibleMessageIds,
+    ledgerPromptInjectionPolicy: job.ledgerPromptInjectionPolicy,
+    consumerPath: job.consumerPath,
+    disableSourceWindowExclusion: job.disableSourceWindowExclusion,
+    reasoningTagStartOverride: job.reasoningTagStartOverride,
+    reasoningTagEndOverride: job.reasoningTagEndOverride,
+    studioPreset: job.studioPreset,
+  );
+}
+
+GenerationContextInputs _snapshotInputs(
+  GenerationContextInputs inputs,
+  Set<String> visibleIds,
+) => GenerationContextInputs(
+  character: inputs.character,
+  persona: inputs.persona,
+  history: List<ChatMessage>.unmodifiable([
+    for (final message in inputs.history)
+      ChatMessage(
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        swipeId: message.swipeId,
+        isHidden: message.isHidden,
+        isTyping: message.isTyping,
+        isError: message.isError,
+        time: message.time,
+        reasoning: visibleIds.contains(message.id) ? message.reasoning : null,
+        imagePath: message.imagePath,
+        extraImagePaths: List<String>.unmodifiable(message.extraImagePaths),
+        imageHidden: message.imageHidden,
+      ),
+  ]),
+  sessionId: inputs.sessionId,
+  apiConfig: ApiConfig(
+    id: inputs.apiConfig.id,
+    reasoningTagStart: inputs.apiConfig.reasoningTagStart,
+    reasoningTagEnd: inputs.apiConfig.reasoningTagEnd,
+  ),
+  sessionVars: Map<String, String>.unmodifiable(inputs.sessionVars),
+  globalVars: Map<String, String>.unmodifiable(inputs.globalVars),
+  summaryContent: inputs.summaryContent,
+  summaryPrefix: inputs.summaryPrefix,
+  memoryContent: inputs.memoryContent,
+  memoryMacroContent: inputs.memoryMacroContent,
+  guidanceText: inputs.guidanceText,
+  continueInstruction: inputs.continueInstruction,
+  lorebooks: List.unmodifiable(inputs.lorebooks),
+  lorebookSettings: inputs.lorebookSettings,
+  lorebookActivations: inputs.lorebookActivations,
+  vectorEntries: List.unmodifiable(inputs.vectorEntries),
+  authorsNote: inputs.authorsNote,
+  memoryCoverage: Map<String, dynamic>.unmodifiable(inputs.memoryCoverage),
+  preScannedEntries: inputs.preScannedEntries == null
+      ? null
+      : List.unmodifiable(inputs.preScannedEntries!),
+  triggeredMemories: List.unmodifiable(inputs.triggeredMemories),
+  runtimePromptBlocks: List.unmodifiable(inputs.runtimePromptBlocks),
+  memorySelection: inputs.memorySelection == null
+      ? null
+      : MemorySelection(
+          selectionMode: inputs.memorySelection!.selectionMode,
+          entries: List.unmodifiable(inputs.memorySelection!.entries),
+          allScores: List.unmodifiable(inputs.memorySelection!.allScores),
+          totalTokens: inputs.memorySelection!.totalTokens,
+          budgetTokens: inputs.memorySelection!.budgetTokens,
+          entryCap: inputs.memorySelection!.entryCap,
+          budgetTrimmed: inputs.memorySelection!.budgetTrimmed,
+          excludedBySourceWindow:
+              inputs.memorySelection!.excludedBySourceWindow,
+        ),
+  memoryExcerptingEnabled: inputs.memoryExcerptingEnabled,
+  memoryPackingMode: inputs.memoryPackingMode,
+  memoryExcerptTokensPerChunk: inputs.memoryExcerptTokensPerChunk,
+  memoryExcerptChunksPerEntry: inputs.memoryExcerptChunksPerEntry,
+  chunkFirstTopEntries: inputs.chunkFirstTopEntries,
+  chunkFirstTopChunks: inputs.chunkFirstTopChunks,
+  arcContent: inputs.arcContent,
+  entitiesContent: inputs.entitiesContent,
+  studioSessionStateContent: inputs.studioSessionStateContent,
+  gameTime: inputs.gameTime,
+  gameDate: inputs.gameDate,
+  gameDay: inputs.gameDay,
+  characterKnowledgeContent: inputs.characterKnowledgeContent,
+  recalledMessagesContent: inputs.recalledMessagesContent,
+  recalledMessageChunks: List.unmodifiable([
+    for (final chunk in inputs.recalledMessageChunks)
+      RecalledMessageChunk(
+        text: chunk.text,
+        messageIds: List.unmodifiable(chunk.messageIds),
+        ledgerRange: chunk.ledgerRange,
+        entryId: chunk.entryId,
+        chunkIndex: chunk.chunkIndex,
+        score: chunk.score,
+        rawText: chunk.rawText,
+      ),
+  ]),
+  effectiveCanonProjection: inputs.effectiveCanonProjection == null
+      ? null
+      : EffectiveCanonPromptProjection(
+          facts: List.unmodifiable(inputs.effectiveCanonProjection!.facts),
+          trackers: List.unmodifiable(
+            inputs.effectiveCanonProjection!.trackers,
+          ),
+          unblockedTransitionClaims: List.unmodifiable(
+            inputs.effectiveCanonProjection!.unblockedTransitionClaims,
+          ),
+          transitions: List.unmodifiable(
+            inputs.effectiveCanonProjection!.transitions,
+          ),
+          revisionNumber: inputs.effectiveCanonProjection!.revisionNumber,
+          revisionHash: inputs.effectiveCanonProjection!.revisionHash,
+          cacheIdentity: inputs.effectiveCanonProjection!.cacheIdentity,
+        ),
+  effectiveCanonRevisionNumber: inputs.effectiveCanonRevisionNumber,
+  effectiveCanonRevisionHash: inputs.effectiveCanonRevisionHash,
+  effectiveCanonCacheIdentity: inputs.effectiveCanonCacheIdentity,
+  ledgerProjectionFreshnessProvenCurrent:
+      inputs.ledgerProjectionFreshnessProvenCurrent,
+);

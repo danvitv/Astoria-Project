@@ -84,8 +84,9 @@ class PromptWorker {
   bool _restarting = false;
   bool _disposed = false;
   int _requestId = 0;
+  String? _appSupportPath;
 
-  PromptWorker._();
+  PromptWorker._([this._appSupportPath]);
 
   static Future<PromptWorker> ensureInitialized() async {
     if (_instance != null) return _instance!;
@@ -104,15 +105,21 @@ class PromptWorker {
     return _instance!;
   }
 
-  static Future<PromptWorker> _create() async {
-    final worker = PromptWorker._();
+  /// Independent offline worker for tests; never changes the runtime singleton.
+  static Future<PromptWorker> createForTesting({
+    required String appSupportPath,
+  }) => _create(appSupportPath: appSupportPath);
+
+  static Future<PromptWorker> _create({String? appSupportPath}) async {
+    final worker = PromptWorker._(appSupportPath);
     await worker._spawnIsolate();
     await worker._send('init', null);
     return worker;
   }
 
   Future<void> _spawnIsolate() async {
-    final appSupportPath = await getAppDataDir();
+    final appSupportPath = _appSupportPath ?? await getAppDataDir();
+    _appSupportPath = appSupportPath;
 
     final commandPort = ReceivePort();
     final responsePort = ReceivePort();
@@ -199,7 +206,17 @@ class PromptWorker {
       // but retain requests which have not been dispatched yet.
       unawaited(_restartAfterTimeout());
     });
-    sendPort.send([request.id, request.command, request.data]);
+    try {
+      sendPort.send([request.id, request.command, request.data]);
+    } catch (error, stackTrace) {
+      // An unsendable payload must fail its own request, not wedge the queue
+      // until timeout or prevent unrelated foreground jobs from completing.
+      _activeTimer?.cancel();
+      _activeTimer = null;
+      _active = null;
+      request.completer.completeError(error, stackTrace);
+      _dispatchNext();
+    }
   }
 
   void _handleResponse(int id, dynamic data) {
@@ -296,6 +313,30 @@ class PromptWorker {
     return deserializeResult(jsonDecode(response) as Map<String, dynamic>);
   }
 
+  /// Runs a small pure synchronous job on this worker's existing queue/cache.
+  /// [compute] MUST be a top-level or static tear-off, never a closure or
+  /// instance method: those can capture services, Refs and cancellation tokens.
+  /// [input] and the result must be immutable, isolate-sendable data only.
+  /// No JSON serialization or new tokenizer isolate is involved. Consumers
+  /// must recheck their cancellation/ownership after awaiting this future.
+  Future<R> runTokenized<R>(
+    R Function(Object?) compute,
+    Object? input, {
+    PromptWorkerPriority priority = PromptWorkerPriority.foreground,
+    int payloadBytes = 0,
+  }) async {
+    final useO200k = o200kBaseLoaded;
+    final response =
+        await _send(
+              'runTokenized',
+              (compute, input, useO200k),
+              priority: priority,
+              timeout: timeoutForPayload(payloadBytes),
+            )
+            as _TokenizedResult;
+    return response.value as R;
+  }
+
   /// Test-only command used to exercise queueing and restart semantics.
   Future<String> debugBlock(
     Duration duration,
@@ -321,6 +362,13 @@ class PromptWorker {
     _failQueued(error, StackTrace.current);
     if (_instance == this) _instance = null;
   }
+}
+
+// Keeps legitimate object results (including maps with an 'error' key) separate
+// from the existing worker error envelope.
+final class _TokenizedResult {
+  const _TokenizedResult(this.value);
+  final Object? value;
 }
 
 class _PromptWorkerRequest {
@@ -375,6 +423,22 @@ void _isolateEntryPoint(List<dynamic> args) {
           );
           final result2 = _buildFromInputs(inputs);
           responseSendPort.send([id, jsonEncode(serializeResult(result2))]);
+
+        case 'runTokenized':
+          final job = data as (Function, Object?, bool);
+          if (job.$3 && !o200kBaseLoaded) {
+            // Main startup may have finished caching the vocabulary after the
+            // worker was created. Retry the existing file only, never network.
+            await preloadO200kBaseInIsolate(appSupportPath);
+          }
+          final tokenizedResult = runWithTokenizerMode<Object?>(
+            job.$3,
+            () => Function.apply(job.$1, [job.$2]),
+          );
+          if (tokenizedResult is Future) {
+            throw ArgumentError('runTokenized compute must be synchronous');
+          }
+          responseSendPort.send([id, _TokenizedResult(tokenizedResult)]);
 
         case 'debugBlock':
           final options = data as Map;

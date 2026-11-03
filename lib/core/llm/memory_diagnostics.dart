@@ -304,6 +304,29 @@ class MemoryDiagnostics {
     };
   }
 
+  /// Stamp the completed diagnostic build, including chunk-counting CPU time.
+  MemoryDiagnostics withLatencyMs(int value) => MemoryDiagnostics(
+    selectedEntryIds: selectedEntryIds,
+    candidates: candidates,
+    missingContextSuspected: missingContextSuspected,
+    missingContextReasons: missingContextReasons,
+    reliableCandidateFound: reliableCandidateFound,
+    factualContinuityGuardEnabled: factualContinuityGuardEnabled,
+    factualContinuityGuardActive: factualContinuityGuardActive,
+    memoryMode: memoryMode,
+    selectedCount: selectedCount,
+    skippedCount: skippedCount,
+    totalCandidates: totalCandidates,
+    selectedTokens: selectedTokens,
+    budget: budget,
+    budgetTrimmed: budgetTrimmed,
+    excludedBySourceWindow: excludedBySourceWindow,
+    latencyMs: value,
+    agenticStatus: agenticStatus,
+    agenticLatencyMs: agenticLatencyMs,
+    agenticAttempts: agenticAttempts,
+  );
+
   String get summary => selectedCount == 0
       ? 'Memory: no entries selected'
       : 'Memory: $selectedCount entries, $selectedTokens tokens';

@@ -7,7 +7,7 @@ import '../models/character.dart';
 import '../models/chat_message.dart';
 import '../models/historical_message_window.dart';
 import '../db/repositories/ledger_raw_tracker_state_reader.dart';
-import 'memory_draft_transcript_builder.dart';
+import 'message_recall_source_clock.dart';
 import '../utils/cast_helpers.dart';
 import '../models/lorebook.dart';
 import '../models/memory_book.dart';
@@ -404,6 +404,8 @@ class PromptPayloadBuilder {
       vectorEntries = results[1] as List<LorebookEntry>;
       final recallResult = results[2] as MessageRecallResult;
       if (recallResult.matches.isNotEmpty) {
+        final sourceClocks = RecallSourceClockIndex(session.messages);
+
         recalledMessageChunks = recallResult.matches
             .map(
               (m) => RecalledMessageChunk(
@@ -413,11 +415,7 @@ class PromptPayloadBuilder {
                 chunkIndex: m.chunkIndex,
                 score: m.score,
                 rawText: m.rawText,
-                ledgerRange: MemoryDraftTranscriptBuilder.ledgerRange(
-                  session!.messages
-                      .where((message) => m.messageIds.contains(message.id))
-                      .toList(),
-                ),
+                ledgerRange: sourceClocks.rangeFor(m.messageIds),
               ),
             )
             .toList(growable: false);

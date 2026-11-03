@@ -208,7 +208,10 @@ class EmbeddingRepo extends DatabaseAccessor<AppDatabase>
     );
   }
 
-  List<List<double>>? decodeVectors(EmbeddingRow row) {
+  List<List<double>>? decodeVectors(EmbeddingRow row) => decodeRowVectors(row);
+
+  /// Pure decoding for retrieval workers. No database handle crosses isolates.
+  static List<List<double>>? decodeRowVectors(EmbeddingRow row) {
     final stored = row.vectorsBlob;
     if (stored == null) return null;
     // A previous backup import saved BLOB byte arrays as SQLite TEXT. Drift
@@ -244,7 +247,10 @@ class EmbeddingRepo extends DatabaseAccessor<AppDatabase>
     }
   }
 
-  Map<String, dynamic>? decodeMetadata(EmbeddingRow row) {
+  Map<String, dynamic>? decodeMetadata(EmbeddingRow row) =>
+      decodeRowMetadata(row);
+
+  static Map<String, dynamic>? decodeRowMetadata(EmbeddingRow row) {
     if (row.retrievalHintsJson == null) return null;
     try {
       final decoded = jsonDecode(row.retrievalHintsJson!);

@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:isolate';
+import 'dart:typed_data';
+
 import '../models/character.dart';
 import '../models/lorebook.dart';
 import '../db/app_db.dart';
@@ -45,6 +49,7 @@ class LorebookVectorSearch {
     int? overrideTopK,
     CancelToken? cancelToken,
   }) async {
+    if (cancelToken?.isCancelled == true) return [];
     if (settings.searchType == 'keyword') return [];
 
     final activeLorebooks = activeLorebooksFor(
@@ -111,6 +116,7 @@ class LorebookVectorSearch {
       for (final (_, lorebookId) in vectorEntries) lorebookId,
       for (final (_, lorebookId) in fallbackEntries) lorebookId,
     };
+    if (cancelToken?.isCancelled == true) return [];
     final rowGroups = await Future.wait([
       _repo.getBySourceIds('lorebook_entry', relevantLorebookIds),
       if (chatId != null && sessionOverlayTargets.isNotEmpty)
@@ -118,14 +124,18 @@ class LorebookVectorSearch {
       else
         Future.value(const <EmbeddingRow>[]),
     ]);
+    if (cancelToken?.isCancelled == true) return [];
 
     final embeddingMap = <String, EmbeddingRow>{};
     for (final row in rowGroups.expand((rows) => rows)) {
       embeddingMap[row.entryId] = row;
     }
+    final embeddingTargets = <String, String?>{};
+    for (final lb in lorebooks) {
+      embeddingTargets.putIfAbsent(lb.id, () => lb.settings?.embeddingTarget);
+    }
 
-    final candidates = <VectorCandidate>[];
-    for (final (entry, lbId) in vectorEntries) {
+    _CandidateInput? candidateInput(LorebookEntry entry, String lbId) {
       final namespacedId = _embeddingId(
         chatId: chatId,
         lorebookId: lbId,
@@ -133,83 +143,32 @@ class LorebookVectorSearch {
         sessionOverlayTargets: sessionOverlayTargets,
       );
       final row = embeddingMap[namespacedId];
-      if (row == null || row.vectorsBlob == null) continue;
-
-      final text = _getEmbeddingText(entry, lorebooks, lbId);
-      final fingerprint = LorebookEmbeddingService.buildEmbeddingFingerprint(
-        entry,
-        text,
-      );
-      final currentHash = computeHash(fingerprint);
-      if (row.textHash != currentHash) continue;
-      if (!embeddingSignatureMatches(
-        _repo.decodeMetadata(row)?['embeddingSignature'],
-        embeddingModelSignature(config),
-      )) {
-        continue;
-      }
-
-      final vectors = _repo.decodeVectors(row);
-      if (vectors == null || vectors.isEmpty) continue;
-
-      candidates.add(
-        VectorCandidate(
-          id: entry.id,
-          vectors: vectors
-              .map((v) => VectorChunk(text: '', vector: v))
-              .toList(),
-          metadata: {
-            'lorebookId': lbId,
-            'entry': entry,
-            'hints': _repo.decodeHints(row) ?? [],
-          },
-        ),
-      );
-    }
-
-    // Separate candidate pool for fallback (keyless) entries.
-    final fallbackCandidates = <VectorCandidate>[];
-    for (final (entry, lbId) in fallbackEntries) {
-      final namespacedId = _embeddingId(
-        chatId: chatId,
+      if (row == null || row.vectorsBlob == null) return null;
+      return _CandidateInput(
+        entry: entry,
         lorebookId: lbId,
-        entryId: entry.id,
-        sessionOverlayTargets: sessionOverlayTargets,
-      );
-      final row = embeddingMap[namespacedId];
-      if (row == null || row.vectorsBlob == null) continue;
-
-      final text = _getEmbeddingText(entry, lorebooks, lbId);
-      final fingerprint = LorebookEmbeddingService.buildEmbeddingFingerprint(
-        entry,
-        text,
-      );
-      final currentHash = computeHash(fingerprint);
-      if (row.textHash != currentHash) continue;
-      if (!embeddingSignatureMatches(
-        _repo.decodeMetadata(row)?['embeddingSignature'],
-        embeddingModelSignature(config),
-      )) {
-        continue;
-      }
-
-      final vectors = _repo.decodeVectors(row);
-      if (vectors == null || vectors.isEmpty) continue;
-
-      fallbackCandidates.add(
-        VectorCandidate(
-          id: entry.id,
-          vectors: vectors
-              .map((v) => VectorChunk(text: '', vector: v))
-              .toList(),
-          metadata: {
-            'lorebookId': lbId,
-            'entry': entry,
-            'hints': _repo.decodeHints(row) ?? [],
-          },
-        ),
+        embeddingTarget: embeddingTargets[lbId],
+        textHash: row.textHash,
+        vectorsBlob: row.vectorsBlob!.asUnmodifiableView(),
+        retrievalHintsJson: row.retrievalHintsJson,
       );
     }
+
+    final preparationInput = _CandidatePreparationInput(
+      main: List.unmodifiable([
+        for (final (entry, lbId) in vectorEntries) ?candidateInput(entry, lbId),
+      ]),
+      fallback: List.unmodifiable([
+        for (final (entry, lbId) in fallbackEntries)
+          ?candidateInput(entry, lbId),
+      ]),
+      signature: embeddingModelSignature(config),
+    );
+    if (cancelToken?.isCancelled == true) return [];
+    final prepared = await _prepareCandidatesInBackground(preparationInput);
+    if (cancelToken?.isCancelled == true) return [];
+    final candidates = prepared.main;
+    final fallbackCandidates = prepared.fallback;
 
     if (candidates.isEmpty && fallbackCandidates.isEmpty) return [];
 
@@ -231,22 +190,34 @@ class LorebookVectorSearch {
       config.maxChunkTokens,
     );
 
-    final allResults = <String, double>{};
-    final allLorebookIds = <String, String>{};
+    final mainScores = <List<VectorSearchResult>>[];
+    var fallbackScores = const <VectorSearchResult>[];
 
     Future<List<VectorChunk>> embedQuery(String query) async {
-      final chunks = await _embeddingService.getEmbeddingsWithChunks(
-        [query],
-        config,
-        cancelToken: cancelToken,
-        captureContext: LlmCaptureContext(
-          stage: 'embedding.lorebook',
-          sessionId: chatId,
-        ),
-      );
-      return chunks
-          .map((c) => VectorChunk(text: c.text, vector: c.vector))
-          .toList();
+      if (cancelToken?.isCancelled == true) return [];
+      final List<EmbeddingChunk> chunks;
+      try {
+        chunks = await _embeddingService.getEmbeddingsWithChunks(
+          [query],
+          config,
+          cancelToken: cancelToken,
+          captureContext: LlmCaptureContext(
+            stage: 'embedding.lorebook',
+            sessionId: chatId,
+          ),
+        );
+      } catch (_) {
+        if (cancelToken?.isCancelled == true) return [];
+        rethrow;
+      }
+      if (cancelToken?.isCancelled == true) return [];
+      return List.unmodifiable([
+        for (final chunk in chunks)
+          VectorChunk(
+            text: chunk.text,
+            vector: List.unmodifiable(chunk.vector),
+          ),
+      ]);
     }
 
     final focusedChunks = focusedQuery.isNotEmpty
@@ -258,26 +229,30 @@ class LorebookVectorSearch {
       String query,
       Future<List<VectorChunk>>? sharedChunks,
     ) async {
+      if (cancelToken?.isCancelled == true) return;
       if (query.isEmpty || pool.isEmpty) return;
       final vecChunks = await (sharedChunks ?? embedQuery(query));
-      final results = findTopKMulti(vecChunks, pool, pool.length, 0);
-      for (final r in results) {
-        final entry = r.metadata['entry'] as LorebookEntry;
-        final lorebookId = r.metadata['lorebookId'] as String;
-        final resultId = '${lorebookId}_${entry.id}';
-        final hints = r.metadata['hints'] as List<String>;
-        final boosted = _applyHybridBoost(r.score, entry, hints, query);
-        if (allResults[resultId] == null || boosted > allResults[resultId]!) {
-          allResults[resultId] = boosted;
-        }
-        allLorebookIds[resultId] = lorebookId;
-      }
+      if (cancelToken?.isCancelled == true) return;
+      // Previously scoring was synchronous after the embedding await. Reserve
+      // that arrival order so different worker runtimes cannot change score ties.
+      final arrivalIndex = mainScores.length;
+      mainScores.add(const []);
+      final results = await _scorePoolInBackground(
+        _PoolScoringInput(pool, vecChunks, query, hybridBoost: true),
+      );
+      if (cancelToken?.isCancelled == true) return;
+      mainScores[arrivalIndex] = results;
     }
 
     // Main vector pool (vectorSearch=true entries) — both focused and
     // fallback queries if available. Run in parallel with a 1s stagger
     // to avoid bursting the embedding endpoint with simultaneous requests.
     final mainFutures = <Future<void>>[];
+    if (focusedChunks != null) {
+      // Always drain the shared request, even if a synchronous transport hook
+      // cancels before either pool can await it.
+      mainFutures.add(focusedChunks.then<void>((_) {}));
+    }
     if (focusedQuery.isNotEmpty) {
       mainFutures.add(searchPool(candidates, focusedQuery, focusedChunks));
     }
@@ -292,74 +267,37 @@ class LorebookVectorSearch {
     // Keyless fallback reuses the focused query's in-flight embedding request.
     // Starting another identical request here bypasses the cache until the
     // first one completes and can trigger rate limits on slower endpoints.
-    final fallbackThreshold = settings.fallbackThreshold;
-    final fallbackTopK = settings.fallbackTopK;
-    final fallbackResults = <String, double>{};
-    final fallbackLorebookIds = <String, String>{};
     if (focusedChunks != null && fallbackCandidates.isNotEmpty) {
       mainFutures.add(() async {
+        if (cancelToken?.isCancelled == true) return;
         final vecChunks = await focusedChunks;
-        final results = findTopKMulti(
-          vecChunks,
-          fallbackCandidates,
-          fallbackCandidates.length,
-          0,
+        if (cancelToken?.isCancelled == true) return;
+        final results = await _scorePoolInBackground(
+          _PoolScoringInput(
+            fallbackCandidates,
+            vecChunks,
+            focusedQuery,
+            hybridBoost: false,
+          ),
         );
-        for (final r in results) {
-          final entry = r.metadata['entry'] as LorebookEntry;
-          final lorebookId = r.metadata['lorebookId'] as String;
-          final resultId = '${lorebookId}_${entry.id}';
-          final score = r.score;
-          if (score >= fallbackThreshold) {
-            fallbackResults[resultId] = score;
-            fallbackLorebookIds[resultId] = lorebookId;
-          }
-        }
+        if (cancelToken?.isCancelled == true) return;
+        fallbackScores = results;
       }());
     }
     await Future.wait(mainFutures);
-
-    final threshold = effectiveThreshold;
-    final topK = effectiveTopK;
-
-    final sorted = allResults.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-
-    final mainResults = sorted
-        .where((e) => e.value >= threshold)
-        .take(topK)
-        .map(
-          (e) => VectorSearchResult(
-            entryId: e.key.substring((allLorebookIds[e.key]?.length ?? -1) + 1),
-            score: e.value,
-            lorebookId: allLorebookIds[e.key] ?? '',
-          ),
-        )
-        .toList();
-
-    // Merge fallback results into the final list. Take top fallbackTopK
-    // sorted by score, then dedupe against mainResults (entryId) so a
-    // keyless entry that also has vectorSearch=true is not double-counted.
-    final fallbackSorted = fallbackResults.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    final mainIds = mainResults
-        .map((r) => '${r.lorebookId}_${r.entryId}')
-        .toSet();
-    final fallbackFinal = fallbackSorted
-        .where((e) => !mainIds.contains(e.key))
-        .take(fallbackTopK)
-        .map(
-          (e) => VectorSearchResult(
-            entryId: e.key.substring(
-              (fallbackLorebookIds[e.key]?.length ?? -1) + 1,
-            ),
-            score: e.value,
-            lorebookId: fallbackLorebookIds[e.key] ?? '',
-          ),
-        )
-        .toList();
-
-    return [...mainResults, ...fallbackFinal];
+    if (cancelToken?.isCancelled == true) return [];
+    final results = await _mergeScoresInBackground(
+      _ScoreMergeInput(
+        main: List.unmodifiable(mainScores),
+        fallback: fallbackScores,
+        threshold: effectiveThreshold,
+        topK: effectiveTopK,
+        fallbackThreshold: settings.fallbackThreshold,
+        fallbackTopK: settings.fallbackTopK,
+      ),
+    );
+    if (cancelToken?.isCancelled == true) return [];
+    return results.toList();
   }
 
   String _buildFocusedQuery(
@@ -422,7 +360,7 @@ class LorebookVectorSearch {
     return clean.trim();
   }
 
-  double _applyHybridBoost(
+  static double _applyHybridBoost(
     double rawScore,
     LorebookEntry entry,
     List<String> hints,
@@ -461,22 +399,11 @@ class LorebookVectorSearch {
     return (rawScore + boost).clamp(0, 1);
   }
 
-  List<String> _tokenize(String text) {
+  static List<String> _tokenize(String text) {
     return text
         .split(RegExp(r'[\s,.;:!?]+'))
         .where((t) => t.length > 2)
         .toList();
-  }
-
-  /// The text the indexer would have embedded for [entry], rebuilt so the
-  /// stored fingerprint can be checked against the entry as it stands now.
-  String _getEmbeddingText(
-    LorebookEntry entry,
-    List<Lorebook> lorebooks,
-    String lbId,
-  ) {
-    final lb = lorebooks.where((l) => l.id == lbId).firstOrNull;
-    return lorebookEmbeddingText(entry, lb?.settings?.embeddingTarget);
   }
 
   String _embeddingId({
@@ -508,4 +435,236 @@ class LorebookVectorSearch {
     if (!filter.isExclude && !isInCategory) return true;
     return false;
   }
+}
+
+// These inputs contain data only. Keep Isolate.run closures in top-level
+// wrappers: a closure created inside search can implicitly retain its service,
+// repository, Dio/capture state or cancellation token even when not used.
+class _CandidateInput {
+  final LorebookEntry entry;
+  final String lorebookId;
+  final String? embeddingTarget;
+  final String? textHash;
+  final Uint8List vectorsBlob;
+  final String? retrievalHintsJson;
+
+  const _CandidateInput({
+    required this.entry,
+    required this.lorebookId,
+    required this.embeddingTarget,
+    required this.textHash,
+    required this.vectorsBlob,
+    required this.retrievalHintsJson,
+  });
+}
+
+class _CandidatePreparationInput {
+  final List<_CandidateInput> main;
+  final List<_CandidateInput> fallback;
+  final String signature;
+
+  const _CandidatePreparationInput({
+    required this.main,
+    required this.fallback,
+    required this.signature,
+  });
+}
+
+class _PreparedPools {
+  final List<VectorCandidate> main;
+  final List<VectorCandidate> fallback;
+
+  const _PreparedPools(this.main, this.fallback);
+}
+
+Future<_PreparedPools> _prepareCandidatesInBackground(
+  _CandidatePreparationInput input,
+) => Isolate.run(() => _prepareCandidates(input));
+
+_PreparedPools _prepareCandidates(_CandidatePreparationInput input) {
+  List<VectorCandidate> preparePool(List<_CandidateInput> pool) {
+    final candidates = <VectorCandidate>[];
+    for (final candidate in pool) {
+      final entry = candidate.entry;
+      final text = lorebookEmbeddingText(entry, candidate.embeddingTarget);
+      final fingerprint = LorebookEmbeddingService.buildEmbeddingFingerprint(
+        entry,
+        text,
+      );
+      if (candidate.textHash != computeHash(fingerprint)) continue;
+
+      Object? metadata;
+      try {
+        final json = candidate.retrievalHintsJson;
+        metadata = json == null ? null : jsonDecode(json);
+      } on FormatException {
+        metadata = null;
+      }
+      if (!embeddingSignatureMatches(
+        metadata is Map ? metadata['embeddingSignature'] : null,
+        input.signature,
+      )) {
+        continue;
+      }
+
+      // Match EmbeddingRepo.decodeVectors, including the historical backup
+      // TEXT-as-BLOB repair. The shared decoder validates sizes before allocation.
+      final stored = candidate.vectorsBlob;
+      final isJsonArray =
+          stored.length > 2 &&
+          stored.first == 0x5b &&
+          stored.last == 0x5d &&
+          stored[1] >= 0x30 &&
+          stored[1] <= 0x39;
+      final bytes = isJsonArray
+          ? vectorBytesFromJson(utf8.decode(stored, allowMalformed: true))
+          : stored;
+      final vectors = bytes == null
+          ? <List<double>>[]
+          : bytesToVectorList(bytes);
+      if (vectors.isEmpty) continue;
+
+      final hints = metadata is Map ? metadata['hints'] : null;
+      candidates.add(
+        VectorCandidate(
+          id: entry.id,
+          vectors: List.unmodifiable([
+            for (final vector in vectors)
+              VectorChunk(
+                text: '',
+                vector: Float64List.fromList(vector).asUnmodifiableView(),
+              ),
+          ]),
+          metadata: Map.unmodifiable({
+            'entry': entry,
+            'lorebookId': candidate.lorebookId,
+            'hints': hints is List
+                ? List<Object?>.unmodifiable(hints).cast<String>()
+                : const <String>[],
+          }),
+        ),
+      );
+    }
+    return List.unmodifiable(candidates);
+  }
+
+  return _PreparedPools(preparePool(input.main), preparePool(input.fallback));
+}
+
+class _PoolScoringInput {
+  final List<VectorCandidate> pool;
+  final List<VectorChunk> queryChunks;
+  final String query;
+  final bool hybridBoost;
+
+  const _PoolScoringInput(
+    this.pool,
+    this.queryChunks,
+    this.query, {
+    required this.hybridBoost,
+  });
+}
+
+Future<List<VectorSearchResult>> _scorePoolInBackground(
+  _PoolScoringInput input,
+) => Isolate.run(() => _scorePool(input));
+
+List<VectorSearchResult> _scorePool(_PoolScoringInput input) {
+  final results = findTopKMulti(
+    input.queryChunks,
+    input.pool,
+    input.pool.length,
+    0,
+  );
+  return List.unmodifiable([
+    for (final result in results)
+      VectorSearchResult(
+        entryId: result.id,
+        lorebookId: result.metadata['lorebookId'] as String,
+        score: input.hybridBoost
+            ? LorebookVectorSearch._applyHybridBoost(
+                result.score,
+                result.metadata['entry'] as LorebookEntry,
+                result.metadata['hints'] as List<String>,
+                input.query,
+              )
+            : result.score,
+      ),
+  ]);
+}
+
+class _ScoreMergeInput {
+  final List<List<VectorSearchResult>> main;
+  final List<VectorSearchResult> fallback;
+  final double threshold;
+  final int topK;
+  final double fallbackThreshold;
+  final int fallbackTopK;
+
+  const _ScoreMergeInput({
+    required this.main,
+    required this.fallback,
+    required this.threshold,
+    required this.topK,
+    required this.fallbackThreshold,
+    required this.fallbackTopK,
+  });
+}
+
+Future<List<VectorSearchResult>> _mergeScoresInBackground(
+  _ScoreMergeInput input,
+) => Isolate.run(() => _mergeScores(input));
+
+List<VectorSearchResult> _mergeScores(_ScoreMergeInput input) {
+  final allResults = <String, double>{};
+  final allLorebookIds = <String, String>{};
+  for (final pool in input.main) {
+    for (final result in pool) {
+      final id = '${result.lorebookId}_${result.entryId}';
+      if (allResults[id] == null || result.score > allResults[id]!) {
+        allResults[id] = result.score;
+      }
+      allLorebookIds[id] = result.lorebookId;
+    }
+  }
+  final sorted = allResults.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  final mainResults = sorted
+      .where((e) => e.value >= input.threshold)
+      .take(input.topK)
+      .map(
+        (e) => VectorSearchResult(
+          entryId: e.key.substring((allLorebookIds[e.key]?.length ?? -1) + 1),
+          score: e.value,
+          lorebookId: allLorebookIds[e.key] ?? '',
+        ),
+      )
+      .toList();
+
+  final fallbackResults = <String, double>{};
+  final fallbackLorebookIds = <String, String>{};
+  for (final result in input.fallback) {
+    if (!(result.score >= input.fallbackThreshold)) continue;
+    final id = '${result.lorebookId}_${result.entryId}';
+    fallbackResults[id] = result.score;
+    fallbackLorebookIds[id] = result.lorebookId;
+  }
+  final fallbackSorted = fallbackResults.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  final mainIds = mainResults
+      .map((r) => '${r.lorebookId}_${r.entryId}')
+      .toSet();
+  final fallbackFinal = fallbackSorted
+      .where((e) => !mainIds.contains(e.key))
+      .take(input.fallbackTopK)
+      .map(
+        (e) => VectorSearchResult(
+          entryId: e.key.substring(
+            (fallbackLorebookIds[e.key]?.length ?? -1) + 1,
+          ),
+          score: e.value,
+          lorebookId: fallbackLorebookIds[e.key] ?? '',
+        ),
+      );
+  return List.unmodifiable([...mainResults, ...fallbackFinal]);
 }

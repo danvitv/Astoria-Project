@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:glaze_flutter/core/llm/memory_budget.dart';
 import 'package:glaze_flutter/core/llm/memory_diagnostics.dart';
+import 'package:glaze_flutter/core/llm/memory_excerpt_selector.dart';
 import 'package:glaze_flutter/core/llm/memory_selector.dart';
 import 'package:glaze_flutter/core/models/memory_book.dart';
 
@@ -67,6 +68,56 @@ void main() {
   });
 
   group('MemoryDiagnostics', () {
+    test(
+      'chunk counts honor mutable custom counters after default-cache warmup',
+      () {
+        final entry = _entry(id: 'a', content: 'one two three four five six');
+        final selection = MemorySelection(
+          entries: [entry],
+          allScores: [MemoryCandidateScore(entry: entry, score: 2)],
+        );
+        const budget = MemoryBudgetBreakdown(source: 'none');
+        MemoryExcerptSelector.countChunks(entry.content, 3);
+        var multiplier = 1;
+        int count(String text) =>
+            text.split(RegExp(r'\s+')).length * multiplier;
+        MemoryDiagnostics build() => MemoryDiagnostics.fromSelection(
+          selection,
+          budget: budget,
+          excerptTokensPerChunk: 3,
+          tokenCounter: (_) => 42,
+          chunkTokenCounter: count,
+        );
+        final first = build();
+        expect(first.candidates.single.excerptChunksTotal, 2);
+        expect(first.selectedTokens, 42);
+        multiplier = 2;
+        final second = build();
+        expect(second.candidates.single.excerptChunksTotal, 6);
+        expect(second.candidates.single.tokenCost, 42);
+        expect(second.candidates.single.originalTokenCost, 42);
+      },
+    );
+
+    test('completed latency stamping preserves every diagnostic field', () {
+      final entry = _entry(id: 'a');
+      final diagnostics = MemoryDiagnostics.fromSelection(
+        MemorySelection(
+          entries: [entry],
+          allScores: [MemoryCandidateScore(entry: entry, score: 2)],
+        ),
+        budget: const MemoryBudgetBreakdown(source: 'none'),
+        memoryMode: 'balanced',
+        factualContinuityGuardEnabled: true,
+        agenticStatus: 'disabled',
+        agenticLatencyMs: 7,
+      );
+      expect(diagnostics.withLatencyMs(19).toJson(), {
+        ...diagnostics.toJson(),
+        'latencyMs': 19,
+      });
+    });
+
     test(
       'serializes selected and skipped candidates with score components',
       () {

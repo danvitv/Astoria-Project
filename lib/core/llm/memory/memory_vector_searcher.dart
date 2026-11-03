@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
@@ -11,8 +12,8 @@ import '../transport/llm_capture_context.dart';
 import '../../models/chat_message.dart';
 import '../../models/memory_book.dart';
 import '../embedding_service.dart';
-import '../memory_embedding_service.dart';
 import '../memory_retrieval_mode.dart';
+import '../retrieval_hints.dart';
 import '../retrieval_query_builder.dart';
 import '../vector_math.dart';
 
@@ -28,11 +29,208 @@ class MemoryVectorMatchResult {
   });
 }
 
+/// Caller-owned DB/model values only: no repository, transport or cancel state.
+class MemoryVectorSnapshot {
+  final String id;
+  final String title;
+  final String content;
+  final List<String> keys;
+  final String? storedHash;
+  final Uint8List? storedVectors;
+  final String? storedMetadata;
+
+  MemoryVectorSnapshot({
+    required this.id,
+    required this.title,
+    required this.content,
+    required List<String> keys,
+    this.storedHash,
+    Uint8List? storedVectors,
+    this.storedMetadata,
+  }) : keys = List.unmodifiable(keys),
+       storedVectors = storedVectors == null
+           ? null
+           : Uint8List.fromList(storedVectors).asUnmodifiableView();
+}
+
+class PreparedMemoryVectorCandidate {
+  final String id;
+  final List<List<double>> vectors;
+  final List<String> chunkTexts;
+
+  PreparedMemoryVectorCandidate({
+    required this.id,
+    required List<List<double>> vectors,
+    required List<String> chunkTexts,
+  }) : vectors = List.unmodifiable(
+         vectors.map(
+           (vector) => Float64List.fromList(vector).asUnmodifiableView(),
+         ),
+       ),
+       chunkTexts = List.unmodifiable(chunkTexts);
+}
+
+class MemoryVectorScoringInput {
+  final List<PreparedMemoryVectorCandidate> candidates;
+  final List<List<double>> queryVectors;
+  final double threshold;
+  final int topK;
+
+  MemoryVectorScoringInput({
+    required List<PreparedMemoryVectorCandidate> candidates,
+    required List<List<double>> queryVectors,
+    required this.threshold,
+    required this.topK,
+  }) : candidates = List.unmodifiable(candidates),
+       queryVectors = List.unmodifiable(
+         queryVectors.map(List<double>.unmodifiable),
+       );
+}
+
+// Keep Isolate.run in top-level wrappers. A closure created in search() could
+// implicitly retain its service/repo/network objects, even when unused.
+Future<List<PreparedMemoryVectorCandidate>> prepareMemoryVectorsInIsolate(
+  List<MemoryVectorSnapshot> entries,
+) {
+  final input = List<MemoryVectorSnapshot>.unmodifiable(entries);
+  return Isolate.run(() => prepareMemoryVectors(input));
+}
+
+Future<MemoryVectorMatchResult> scoreMemoryVectorsInIsolate(
+  MemoryVectorScoringInput input,
+) => Isolate.run(() => scoreMemoryVectors(input));
+
+/// Hash checking, vector and chunk-metadata decoding execute in the worker.
+List<PreparedMemoryVectorCandidate> prepareMemoryVectors(
+  List<MemoryVectorSnapshot> entries,
+) {
+  final candidates = <PreparedMemoryVectorCandidate>[];
+  for (final entry in entries) {
+    final blob = entry.storedVectors;
+    if (blob == null || blob.isEmpty) continue;
+    final hints = extractRetrievalHintsFrom(
+      label: entry.title,
+      keys: entry.keys,
+      content: entry.content,
+    );
+    final fingerprint = jsonEncode({
+      'text': entry.content,
+      'retrievalHints': hints,
+    });
+    final hash = sha256.convert(utf8.encode(fingerprint)).toString();
+    if (entry.storedHash != hash) continue;
+    final vectors = _decodeStoredMemoryVectors(blob);
+    if (vectors.isEmpty) continue;
+    candidates.add(
+      PreparedMemoryVectorCandidate(
+        id: entry.id,
+        vectors: vectors,
+        chunkTexts: _decodeMemoryChunkTexts(
+          entry.storedMetadata,
+          vectors.length,
+        ),
+      ),
+    );
+  }
+  return List.unmodifiable(candidates);
+}
+
+// Uses the same legacy JSON-byte-array recovery as EmbeddingRepo.decodeVectors.
+// No repository instance is needed or permitted in the worker.
+List<List<double>> _decodeStoredMemoryVectors(Uint8List stored) {
+  final isJsonArray =
+      stored.length > 2 &&
+      stored.first == 0x5b &&
+      stored.last == 0x5d &&
+      stored[1] >= 0x30 &&
+      stored[1] <= 0x39;
+  final bytes = isJsonArray
+      ? vectorBytesFromJson(utf8.decode(stored, allowMalformed: true))
+      : stored;
+  if (bytes == null) return [];
+  try {
+    return bytesToVectorList(bytes);
+  } on RangeError {
+    // A truncated later chunk header must not discard other valid entries.
+    return [];
+  }
+}
+
+List<String> _decodeMemoryChunkTexts(String? metadataJson, int vectorCount) {
+  if (metadataJson == null) return const [];
+  Object? metadata;
+  try {
+    metadata = jsonDecode(metadataJson);
+  } on FormatException {
+    return const [];
+  }
+  if (metadata is! Map || metadata['chunks'] is! List) return const [];
+  final texts = List<String>.filled(vectorCount, '');
+  for (final chunk in metadata['chunks'] as List) {
+    if (chunk is! Map) continue;
+    final indexRaw = chunk['index'];
+    final textRaw = chunk['text'];
+    if (indexRaw is! num || !indexRaw.isFinite || textRaw is! String) continue;
+    final index = indexRaw.toInt();
+    if (index < 0 || index >= texts.length) continue;
+    texts[index] = textRaw;
+  }
+  return texts;
+}
+
+/// Pure multi-chunk scoring and best-chunk/neighbor selection.
+MemoryVectorMatchResult scoreMemoryVectors(MemoryVectorScoringInput input) {
+  final candidates = [
+    for (final candidate in input.candidates)
+      VectorCandidate(
+        id: candidate.id,
+        vectors: [
+          for (final vector in candidate.vectors)
+            VectorChunk(text: '', vector: vector),
+        ],
+        metadata: {'chunkTexts': candidate.chunkTexts},
+      ),
+  ];
+  final results = findTopKMulti(
+    [
+      for (final vector in input.queryVectors)
+        VectorChunk(text: '', vector: vector),
+    ],
+    candidates,
+    candidates.length,
+    0,
+  );
+  final scores = <String, double>{};
+  final chunksByEntryId = <String, List<String>>{};
+  for (final result
+      in results
+          .where((r) => r.score >= input.threshold)
+          .take(input.topK.clamp(1, 50))) {
+    scores[result.id] = result.score;
+    final chunkTexts = result.metadata['chunkTexts'] as List<String>;
+    final bestIndex = result.bestCandidateChunk;
+    if (bestIndex == null) continue;
+    final matched = <String>[];
+    for (final index in [bestIndex, bestIndex - 1, bestIndex + 1]) {
+      if (index < 0 || index >= chunkTexts.length) continue;
+      final text = chunkTexts[index];
+      if (text.trim().isNotEmpty) matched.add(text);
+    }
+    if (matched.isNotEmpty) {
+      chunksByEntryId[result.id] = List.unmodifiable(matched);
+    }
+  }
+  return MemoryVectorMatchResult(
+    scores: Map.unmodifiable(scores),
+    chunksByEntryId: Map.unmodifiable(chunksByEntryId),
+  );
+}
+
 /// Performs vector similarity search over memory entries using stored
 /// embeddings and a live embedding API call for the retrieval query.
 ///
-/// Extracted from `MemoryInjectionService` (Phase 6a). The service holds
-/// the embedding repo + embedding service; the matcher is pure I/O.
+/// DB and live embedding calls stay on the caller. CPU work receives only
+/// immutable snapshots in a worker, with ownership checked after every await.
 class MemoryVectorSearcher {
   final EmbeddingRepo _embeddingRepo;
   final EmbeddingService _embeddingService;
@@ -55,73 +253,36 @@ class MemoryVectorSearcher {
     bool Function()? shouldAbort,
     CancelToken? cancelToken,
   }) async {
+    entries = List.unmodifiable(entries);
+    history = List.unmodifiable(history);
+    bool isAborted() =>
+        cancelToken?.isCancelled == true || shouldAbort?.call() == true;
     try {
-      if (shouldAbort?.call() == true) return const MemoryVectorMatchResult();
+      if (isAborted()) return const MemoryVectorMatchResult();
       debugPrint('[mem-vec] reading embeddings from DB...');
       final embeddingRows = await _embeddingRepo.getBySourceType(
         'memory_entry',
       );
-      if (shouldAbort?.call() == true) return const MemoryVectorMatchResult();
+      if (isAborted()) return const MemoryVectorMatchResult();
       final embeddingMap = <String, EmbeddingRow>{};
       for (final row in embeddingRows) {
         embeddingMap[row.entryId] = row;
       }
       debugPrint('[mem-vec] loaded ${embeddingRows.length} embedding rows');
 
-      final candidates = <VectorCandidate>[];
-      for (int i = 0; i < entries.length; i++) {
-        final entry = entries[i];
-        debugPrint(
-          '[mem-vec] processing entry ${i + 1}/${entries.length}: id=${entry.id}',
-        );
-        final row = embeddingMap[entry.id];
-        if (shouldAbort?.call() == true) {
-          return const MemoryVectorMatchResult();
-        }
-        if (row == null || !_embeddingRepo.hasUsableVectors(row)) {
-          debugPrint('[mem-vec]   skipped: no row or no vectorsBlob');
-          continue;
-        }
-
-        final text = entry.content;
-        final hints = MemoryEmbeddingService.extractMemoryRetrievalHints(entry);
-        final fingerprint = jsonEncode({'text': text, 'retrievalHints': hints});
-        final currentHash = sha256.convert(utf8.encode(fingerprint)).toString();
-        if (row.textHash != currentHash) {
-          debugPrint('[mem-vec]   skipped: hash mismatch');
-          continue;
-        }
-
-        final vectors = _embeddingRepo.decodeVectors(row);
-        if (vectors == null || vectors.isEmpty) {
-          debugPrint('[mem-vec]   skipped: vectors null or empty');
-          continue;
-        }
-        final chunkTexts = decodeMemoryChunkTexts(row, vectors.length);
-
-        candidates.add(
-          VectorCandidate(
+      final candidates = await prepareMemoryVectorsInIsolate([
+        for (final entry in entries)
+          MemoryVectorSnapshot(
             id: entry.id,
-            vectors: vectors
-                .asMap()
-                .entries
-                .map(
-                  (v) => VectorChunk(
-                    text: v.key < chunkTexts.length ? chunkTexts[v.key] : '',
-                    vector: v.value,
-                  ),
-                )
-                .toList(),
-            metadata: {
-              'hints': _embeddingRepo.decodeHints(row) ?? [],
-              'chunkTexts': chunkTexts,
-            },
+            title: entry.title,
+            content: entry.content,
+            keys: entry.keys,
+            storedHash: embeddingMap[entry.id]?.textHash,
+            storedVectors: embeddingMap[entry.id]?.vectorsBlob,
+            storedMetadata: embeddingMap[entry.id]?.retrievalHintsJson,
           ),
-        );
-        debugPrint(
-          '[mem-vec]   added candidate with ${vectors.length} vectors',
-        );
-      }
+      ]);
+      if (isAborted()) return const MemoryVectorMatchResult();
       debugPrint('[mem-vec] valid candidates: ${candidates.length}');
 
       if (candidates.isEmpty) return const MemoryVectorMatchResult();
@@ -137,7 +298,7 @@ class MemoryVectorSearcher {
               maxChars: settings.queryMaxChars,
             );
       if (queryText.isEmpty) return const MemoryVectorMatchResult();
-      if (shouldAbort?.call() == true) return const MemoryVectorMatchResult();
+      if (isAborted()) return const MemoryVectorMatchResult();
 
       debugPrint(
         '[mem-vec] calling embedding API (endpoint=${config.endpoint})...',
@@ -150,7 +311,7 @@ class MemoryVectorSearcher {
             captureContext: const LlmCaptureContext(stage: 'embedding.memory'),
           )
           .timeout(const Duration(seconds: 30), onTimeout: () => []);
-      if (cancelToken?.isCancelled == true) {
+      if (isAborted()) {
         return const MemoryVectorMatchResult();
       }
       debugPrint(
@@ -158,44 +319,16 @@ class MemoryVectorSearcher {
       );
       if (queryChunks.isEmpty) return const MemoryVectorMatchResult();
 
-      final queryVecChunks = queryChunks
-          .map((c) => VectorChunk(text: c.text, vector: c.vector))
-          .toList();
-      final results = findTopKMulti(
-        queryVecChunks,
-        candidates,
-        candidates.length,
-        0,
+      final result = await scoreMemoryVectorsInIsolate(
+        MemoryVectorScoringInput(
+          candidates: candidates,
+          queryVectors: [for (final chunk in queryChunks) chunk.vector],
+          threshold: settings.vectorThreshold,
+          topK: settings.maxInjectedEntries,
+        ),
       );
-
-      final threshold = settings.vectorThreshold;
-      final topK = settings.maxInjectedEntries.clamp(1, 50);
-      final scores = <String, double>{};
-      final chunksByEntryId = <String, List<String>>{};
-      for (final result
-          in results.where((r) => r.score >= threshold).take(topK)) {
-        scores[result.id] = result.score;
-        final chunkTexts = result.metadata['chunkTexts'];
-        if (chunkTexts is List && result.bestCandidateChunk != null) {
-          final bestIndex = result.bestCandidateChunk!;
-          final matched = <String>[];
-          if (bestIndex >= 0 && bestIndex < chunkTexts.length) {
-            final text = chunkTexts[bestIndex];
-            if (text is String && text.trim().isNotEmpty) matched.add(text);
-          }
-          final neighboringIndexes = [bestIndex - 1, bestIndex + 1];
-          for (final index in neighboringIndexes) {
-            if (index < 0 || index >= chunkTexts.length) continue;
-            final text = chunkTexts[index];
-            if (text is String && text.trim().isNotEmpty) matched.add(text);
-          }
-          if (matched.isNotEmpty) chunksByEntryId[result.id] = matched;
-        }
-      }
-      return MemoryVectorMatchResult(
-        scores: scores,
-        chunksByEntryId: chunksByEntryId,
-      );
+      if (isAborted()) return const MemoryVectorMatchResult();
+      return result;
     } catch (_) {
       return const MemoryVectorMatchResult();
     }
@@ -203,20 +336,7 @@ class MemoryVectorSearcher {
 
   /// Decode the per-chunk text metadata stored alongside vectors.
   List<String> decodeMemoryChunkTexts(EmbeddingRow row, int vectorCount) {
-    final metadata = _embeddingRepo.decodeMetadata(row);
-    final chunks = metadata?['chunks'];
-    if (chunks is! List) return const [];
-    final texts = List<String>.filled(vectorCount, '');
-    for (final chunk in chunks) {
-      if (chunk is! Map) continue;
-      final indexRaw = chunk['index'];
-      final textRaw = chunk['text'];
-      if (indexRaw is! num || textRaw is! String) continue;
-      final index = indexRaw.toInt();
-      if (index < 0 || index >= texts.length) continue;
-      texts[index] = textRaw;
-    }
-    return texts;
+    return _decodeMemoryChunkTexts(row.retrievalHintsJson, vectorCount);
   }
 
   /// Legacy vector query: current text + recent user turns up to 1500 chars.

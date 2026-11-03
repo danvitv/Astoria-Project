@@ -263,7 +263,7 @@ class StreamGenerationService {
             );
       final finalStudioContext = studioConfig == null
           ? null
-          : const StudioContextPreparer().prepare(
+          : await const StudioContextPreparer().prepareAsync(
               inputs: inputs,
               visibleMessageIds: studioFinalVisibleMessageIds,
               ledgerPromptInjectionPolicy:
@@ -274,6 +274,9 @@ class StreamGenerationService {
               reasoningTagEndOverride: studioPreset?.runtime.reasoningTagEnd,
               studioPreset: studioPreset,
             );
+      if (_isAborted() || cancelToken.isCancelled) {
+        return currentState.copyWith(isGenerating: false);
+      }
       final promptResult = studioConfig == null
           ? await buildPromptInIsolate(finalPayload)
           : _studioCompatibilityResult(finalStudioContext!);
@@ -382,7 +385,7 @@ class StreamGenerationService {
         final trackerStudioContext =
             setEquals(trackerVisibleMessageIds, studioFinalVisibleMessageIds)
             ? finalStudioContext!
-            : const StudioContextPreparer().prepare(
+            : await const StudioContextPreparer().prepareAsync(
                 inputs: inputs,
                 visibleMessageIds: trackerVisibleMessageIds,
                 ledgerPromptInjectionPolicy:
@@ -393,7 +396,7 @@ class StreamGenerationService {
                 reasoningTagEndOverride: studioPreset?.runtime.reasoningTagEnd,
                 studioPreset: studioPreset,
               );
-        if (_isAborted()) {
+        if (_isAborted() || cancelToken.isCancelled) {
           return ChatState(
             session: saveSession ?? session,
             isGenerating: false,

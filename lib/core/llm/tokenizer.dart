@@ -19,12 +19,16 @@ const _o200kBasePatStr =
 const _o200kCacheFile = 'o200k_base.tiktoken';
 
 Tiktoken? _o200kBaseEncoder;
+bool? _tokenizerModeOverride;
 
 final _tokenCache = <String, int>{};
 
 /// Loads o200k_base tokenizer. Call from main thread with no arguments,
 /// or from an isolate by passing [appSupportPath] to avoid platform channels.
-Future<void> preloadO200kBase({String? appSupportPath}) async {
+Future<void> preloadO200kBase({
+  String? appSupportPath,
+  bool allowDownload = true,
+}) async {
   if (_o200kBaseEncoder != null) return;
 
   try {
@@ -35,6 +39,7 @@ Future<void> preloadO200kBase({String? appSupportPath}) async {
     if (await cacheFile.exists()) {
       bpeData = await cacheFile.readAsString();
     } else {
+      if (!allowDownload) return;
       final response =
           await Dio(
             BaseOptions(
@@ -79,9 +84,26 @@ Future<void> preloadO200kBase({String? appSupportPath}) async {
 
 /// Convenience alias used by the isolate entry point.
 Future<void> preloadO200kBaseInIsolate(String appSupportPath) =>
-    preloadO200kBase(appSupportPath: appSupportPath);
+    preloadO200kBase(appSupportPath: appSupportPath, allowDownload: false);
 
-bool get o200kBaseLoaded => _o200kBaseEncoder != null;
+bool get o200kBaseLoaded =>
+    _tokenizerModeOverride != false && _o200kBaseEncoder != null;
+
+/// Runs synchronous worker-local code with the caller's token-counting mode.
+/// A ready caller must never silently receive approximate context packing.
+/// The loaded encoder and its BPE cache survive fallback-mode jobs unchanged.
+R runWithTokenizerMode<R>(bool useO200k, R Function() compute) {
+  if (useO200k && _o200kBaseEncoder == null) {
+    throw StateError('PromptWorker cannot match the caller o200k tokenizer');
+  }
+  final previous = _tokenizerModeOverride;
+  _tokenizerModeOverride = useO200k;
+  try {
+    return compute();
+  } finally {
+    _tokenizerModeOverride = previous;
+  }
+}
 
 /// Estimate token count for [text] using o200k_base with persistent caching.
 /// Falls back to ~4 chars/token if encoder is not yet loaded.
@@ -90,7 +112,7 @@ int estimateTokens(String text, {bool useCache = true}) {
   final cleaned = stripInlineMedia(text);
   if (cleaned.isEmpty) return 0;
 
-  final encoder = _o200kBaseEncoder;
+  final encoder = o200kBaseLoaded ? _o200kBaseEncoder : null;
   if (encoder == null) return _approxTokens(cleaned);
 
   if (!useCache) return _encode(encoder, cleaned);

@@ -276,7 +276,7 @@ class MemoryStudioService {
             historyWindowStartMessageId:
                 inputs.sessionVars[StudioHistoryLimiter.historyWindowStartVar],
           );
-      thinkContext = const StudioContextPreparer().prepare(
+      thinkContext = await const StudioContextPreparer().prepareAsync(
         inputs: inputs,
         visibleMessageIds: visibleIds,
         ledgerPromptInjectionPolicy: turnConfig.ledgerPromptInjectionPolicy,
@@ -285,6 +285,9 @@ class MemoryStudioService {
         reasoningTagEndOverride: preset.runtime.reasoningTagEnd,
         studioPreset: preset,
       );
+      if (!_ref.mounted || token.isCancelled) {
+        return const StudioPipelineResult(status: 'aborted', response: '');
+      }
     }
     final phaseResult = await _phaseRunner.run(
       config: config,

@@ -14,6 +14,7 @@ import 'package:glaze_flutter/core/models/lorebook.dart';
 import 'package:glaze_flutter/core/utils/cast_helpers.dart';
 
 class _BlockingEmbeddingService extends EmbeddingService {
+  final started = Completer<void>();
   final release = Completer<void>();
   int calls = 0;
   int active = 0;
@@ -27,6 +28,7 @@ class _BlockingEmbeddingService extends EmbeddingService {
     captureContext,
   }) async {
     calls++;
+    if (!started.isCompleted) started.complete();
     active++;
     if (active > maxActive) maxActive = active;
     try {
@@ -107,9 +109,7 @@ Future<void> _indexEntry(
 }
 
 void main() {
-  testWidgets('shares focused query embedding across vector pools', (
-    tester,
-  ) async {
+  test('shares focused query embedding across vector pools', () async {
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);
     final repo = EmbeddingRepo(db);
@@ -166,13 +166,12 @@ void main() {
       const EmbeddingConfig(endpoint: 'test', model: 'test'),
     );
 
-    await tester.pump();
-    await tester.pump(const Duration(seconds: 3));
+    // Real worker isolates do not advance with WidgetTester's fake clock.
+    await embeddings.started.future;
     expect(embeddings.calls, 1);
     expect(embeddings.maxActive, 1);
 
     embeddings.release.complete();
-    await tester.pump();
     final results = await pending;
     expect(results.map((r) => r.entryId).toSet(), {'main', 'keyless'});
   });

@@ -22,6 +22,8 @@ import 'prompt/memory_context_resolver.dart';
 import 'memory_retrieval_mode.dart';
 import 'message_recall_service.dart';
 import 'memory_selector.dart';
+import 'prompt_worker.dart';
+import 'tokenizer.dart';
 import 'retrieval_query_builder.dart';
 import 'memory/memory_catalog_matcher.dart';
 import 'memory/memory_vector_searcher.dart';
@@ -79,6 +81,7 @@ class MemoryInjectionService {
   final MemoryEntityRepo? _entityRepo;
   final EmbeddingService _embeddingService;
   final MemoryGlobalSettings Function() _readGlobalSettings;
+  final PromptWorker? promptWorker;
   late final MemoryVectorSearcher _vectorSearcher;
   late final MemoryCatalogMatcher _catalogMatcher;
 
@@ -90,6 +93,7 @@ class MemoryInjectionService {
     this._readGlobalSettings, {
     this._salienceRepo,
     this._entityRepo,
+    this.promptWorker,
   }) {
     _vectorSearcher = MemoryVectorSearcher(_embeddingRepo, _embeddingService);
     _catalogMatcher = MemoryCatalogMatcher(_catalogRepo);
@@ -120,6 +124,9 @@ class MemoryInjectionService {
       contextBudgetTokens: contextBudgetTokens,
       visibleMessageIds: visibleMessageIds,
     );
+    if (cancelToken?.isCancelled == true || shouldAbort?.call() == true) {
+      return const MemorySelection();
+    }
     return result.selection;
   }
 
@@ -135,42 +142,93 @@ class MemoryInjectionService {
     Set<String>? allowedSourceMessageIds,
   }) async {
     final sw = Stopwatch()..start();
-    MemoryCandidateBuildResult finish(
+    history = List.unmodifiable(history);
+    visibleMessageIds = Set.unmodifiable(visibleMessageIds);
+    allowedSourceMessageIds = allowedSourceMessageIds == null
+        ? null
+        : Set.unmodifiable(allowedSourceMessageIds);
+    bool isAborted() =>
+        cancelToken?.isCancelled == true || shouldAbort?.call() == true;
+    Future<MemoryCandidateBuildResult> finish(
       MemorySelection selection, {
+      MemorySelectionInput? selectionInput,
       MemoryBudgetBreakdown budget = const MemoryBudgetBreakdown(
         source: 'none',
       ),
       MemoryBookSettings? settings,
       String? agenticStatus,
       int? agenticLatencyMs,
-    }) {
-      sw.stop();
+    }) async {
       final resolvedSettings = settings ?? const MemoryBookSettings();
-      return MemoryCandidateBuildResult(
-        selection: selection,
+      MemoryCandidateBuildResult emptyResult() => MemoryCandidateBuildResult(
+        selection: const MemorySelection(),
         settings: settings,
         diagnostics: settings == null
             ? null
             : MemoryDiagnostics.fromSelection(
-                selection,
+                const MemorySelection(),
                 budget: budget,
-                latencyMs: sw.elapsedMilliseconds,
                 currentText: currentText,
                 memoryMode: resolvedSettings.memoryMode,
                 factualContinuityGuardEnabled:
                     resolvedSettings.factualContinuityGuardEnabled,
-                agenticStatus: agenticStatus,
-                agenticAttempts: const [],
-                agenticLatencyMs: agenticLatencyMs,
+                latencyMs: sw.elapsedMilliseconds,
               ),
+      );
+      if (isAborted()) {
+        sw.stop();
+        return emptyResult();
+      }
+      if (settings == null) {
+        sw.stop();
+        return MemoryCandidateBuildResult(
+          selection: selection,
+          diagnostics: null,
+        );
+      }
+      // Both selector token costs and diagnostic chunking use the same warm
+      // tokenizer/chunk cache as Studio preparation, never a new tokenizer job.
+      final useO200k = o200kBaseLoaded;
+      final job = _MemoryCandidateJob(
+        selection: selection,
+        selectionInput: selectionInput,
+        budget: budget,
+        settings: settings,
+        currentText: currentText,
+        agenticStatus: agenticStatus,
+        agenticLatencyMs: agenticLatencyMs,
+      );
+      final worker = promptWorker ?? await PromptWorker.ensureInitialized();
+      if (isAborted()) {
+        sw.stop();
+        return emptyResult();
+      }
+      final computed = await runWithTokenizerMode(
+        useO200k,
+        () => worker.runTokenized<MemoryCandidateBuildResult>(
+          _computeMemoryCandidates,
+          job,
+        ),
+      );
+      if (isAborted()) {
+        sw.stop();
+        return emptyResult();
+      }
+      sw.stop();
+      return MemoryCandidateBuildResult(
+        selection: computed.selection,
+        settings: settings,
+        diagnostics: computed.diagnostics?.withLatencyMs(
+          sw.elapsedMilliseconds,
+        ),
       );
     }
 
-    if (shouldAbort?.call() == true) {
+    if (isAborted()) {
       return finish(const MemorySelection());
     }
     final book = await _repo.getBySessionId(sessionId);
-    if (shouldAbort?.call() == true) {
+    if (isAborted()) {
       return finish(const MemorySelection());
     }
     if (book == null) {
@@ -205,6 +263,9 @@ class MemoryInjectionService {
     if (_salienceRepo != null &&
         retrievalMode.supports(MemoryRetrievalCapability.salienceEnrichment)) {
       final salienceRows = await _salienceRepo.getBySessionId(sessionId);
+      if (isAborted()) {
+        return finish(const MemorySelection(), settings: book.settings);
+      }
       for (final s in salienceRows) {
         salienceByEntryId[s.memoryEntryId] = s;
       }
@@ -220,6 +281,9 @@ class MemoryInjectionService {
         currentText,
       );
       final entities = await _entityRepo.getBySessionId(sessionId);
+      if (isAborted()) {
+        return finish(const MemorySelection(), settings: book.settings);
+      }
       if (entities.isNotEmpty) {
         final lowerQuery = scanText.toLowerCase();
         for (final entity in entities) {
@@ -268,7 +332,7 @@ class MemoryInjectionService {
             currentText: currentText,
           )
         : const CatalogMatchResult();
-    if (shouldAbort?.call() == true) {
+    if (isAborted()) {
       return finish(const MemorySelection(), settings: book.settings);
     }
     if (gs.vectorSearchEnabled &&
@@ -284,6 +348,9 @@ class MemoryInjectionService {
         shouldAbort: shouldAbort,
         cancelToken: cancelToken,
       );
+      if (isAborted()) {
+        return finish(const MemorySelection(), settings: book.settings);
+      }
     }
 
     final budget = MemoryInjectionBudget.describeBudget(
@@ -294,31 +361,30 @@ class MemoryInjectionService {
           : book.settings.maxInjectedTokens,
     );
 
-    final selection = MemorySelector.select(
-      MemorySelectionInput(
-        selectionMode: retrievalMode.isLegacy ? 'legacy' : 'v2',
-        entries: activeEntries,
-        vectorScores: vectorMatches.scores,
-        vectorMatchedChunks: vectorMatches.chunksByEntryId,
-        keywordMatchedTerms: keywordMatchedTerms,
-        catalogScores: catalogMatches.scores,
-        catalogMatchedTerms: catalogMatches.termsByEntryId,
-        visibleMessageIds: visibleMessageIds,
-        maxInjectionTokens: budget.effectiveTokens,
-        maxInjectedEntries: book.settings.maxInjectedEntries,
-        diversityAware: book.settings.diversityAware,
-        diversityPenalty: book.settings.diversityPenalty,
-        recencyBoost: book.settings.recencyBoost,
-        recencyHalfLifeDays: book.settings.recencyHalfLifeDays,
-        importanceBoost: book.settings.importanceBoost,
-        importanceWeight: book.settings.importanceWeight,
-        sourceWindowExclusion: book.settings.sourceWindowExclusion,
-        currentMessageIndex: history.length,
-        chunkBudgeting: book.settings.memoryPackingMode == 'chunk_first',
-        salienceByEntryId: salienceByEntryId,
-        queryEmotions: queryEmotions,
-        entityOverlapByEntryId: entityOverlapByEntryId,
-      ),
+    final selectionInput = MemorySelectionInput(
+      selectionMode: retrievalMode.isLegacy ? 'legacy' : 'v2',
+      entries: List.unmodifiable(activeEntries),
+      vectorScores: vectorMatches.scores,
+      vectorMatchedChunks: vectorMatches.chunksByEntryId,
+      keywordMatchedTerms: keywordMatchedTerms,
+      catalogScores: catalogMatches.scores,
+      catalogMatchedTerms: catalogMatches.termsByEntryId,
+      visibleMessageIds: Set.unmodifiable(visibleMessageIds),
+      maxInjectionTokens: budget.effectiveTokens,
+      maxInjectedEntries: book.settings.maxInjectedEntries,
+      diversityAware: book.settings.diversityAware,
+      diversityPenalty: book.settings.diversityPenalty,
+      recencyBoost: book.settings.recencyBoost,
+      recencyHalfLifeDays: book.settings.recencyHalfLifeDays,
+      importanceBoost: book.settings.importanceBoost,
+      importanceWeight: book.settings.importanceWeight,
+      sourceWindowExclusion: book.settings.sourceWindowExclusion,
+      currentMessageIndex: history.length,
+      chunkBudgeting: book.settings.memoryPackingMode == 'chunk_first',
+      salienceByEntryId: salienceByEntryId,
+      queryEmotions: queryEmotions,
+      entityOverlapByEntryId: entityOverlapByEntryId,
+      nowSeconds: DateTime.now().millisecondsSinceEpoch ~/ 1000,
     );
 
     // Agentic read (searchMemory tool) was previously gated by
@@ -327,7 +393,12 @@ class MemoryInjectionService {
     // pre-generation memory tracker in a later phase; until then it is
     // disabled.
 
-    return finish(selection, budget: budget, settings: book.settings);
+    return finish(
+      const MemorySelection(),
+      selectionInput: selectionInput,
+      budget: budget,
+      settings: book.settings,
+    );
   }
 
   /// Backwards-compatible facade for callers that still expect an
@@ -358,6 +429,9 @@ class MemoryInjectionService {
       contextBudgetTokens: contextBudgetTokens,
       visibleMessageIds: visibleMessageIds,
     );
+    if (cancelToken?.isCancelled == true || shouldAbort?.call() == true) {
+      return const MemoryInjectionResult();
+    }
     final selection = candidateResult.selection;
     final settings = candidateResult.settings ?? const MemoryBookSettings();
 
@@ -405,6 +479,48 @@ class MemoryInjectionService {
       candidatesTotal: selection.allScores.length,
     );
   }
+}
+
+final class _MemoryCandidateJob {
+  final MemorySelection selection;
+  final MemorySelectionInput? selectionInput;
+  final MemoryBudgetBreakdown budget;
+  final MemoryBookSettings settings;
+  final String currentText;
+  final String? agenticStatus;
+  final int? agenticLatencyMs;
+  const _MemoryCandidateJob({
+    required this.selection,
+    this.selectionInput,
+    required this.budget,
+    required this.settings,
+    required this.currentText,
+    this.agenticStatus,
+    this.agenticLatencyMs,
+  });
+}
+
+// Pure static/top-level callback: never closes over repositories, Ref, tokens
+// or network clients. The frozen source window is part of selectionInput.
+MemoryCandidateBuildResult _computeMemoryCandidates(Object? input) {
+  final job = input as _MemoryCandidateJob;
+  final selection = job.selectionInput == null
+      ? job.selection
+      : MemorySelector.select(job.selectionInput!);
+  return MemoryCandidateBuildResult(
+    selection: selection,
+    settings: job.settings,
+    diagnostics: MemoryDiagnostics.fromSelection(
+      selection,
+      budget: job.budget,
+      currentText: job.currentText,
+      memoryMode: job.settings.memoryMode,
+      factualContinuityGuardEnabled: job.settings.factualContinuityGuardEnabled,
+      agenticStatus: job.agenticStatus,
+      agenticAttempts: const [],
+      agenticLatencyMs: job.agenticLatencyMs,
+    ),
+  );
 }
 
 final memoryInjectionServiceProvider = Provider<MemoryInjectionService>((ref) {

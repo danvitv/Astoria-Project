@@ -23,6 +23,20 @@ class ExcerptChunk {
 class MemoryChunker {
   const MemoryChunker._();
 
+  // Shared by counting and excerpt packing in this isolate. Exact text keys
+  // avoid content-hash collisions; both entry count and retained text are bound.
+  static const _maxCachedEntries = 128;
+  static const _maxRetainedUnits = 2 * 1024 * 1024;
+  static final Map<(String, int), List<ExcerptChunk>> _cache = {};
+  static var _retainedUnits = 0;
+  static var _cachedTokenizerLoaded = o200kBaseLoaded;
+
+  static void clearCache() {
+    _cache.clear();
+    _retainedUnits = 0;
+    _cachedTokenizerLoaded = o200kBaseLoaded;
+  }
+
   /// Split [content] into chunks of at most [maxTokens] tokens each.
   ///
   /// Strategy:
@@ -31,6 +45,44 @@ class MemoryChunker {
   /// 3. Otherwise, split into sentences and accumulate into windows.
   /// 4. If a single sentence exceeds [maxTokens], hard-split by words.
   static List<ExcerptChunk> chunk(
+    String content,
+    int maxTokens,
+    int Function(String text) tokenCounter,
+  ) {
+    // A custom counter may close over mutable state. Even reusing the exact
+    // same function is not evidence that its counts have remained unchanged.
+    if (!identical(tokenCounter, estimateTokens)) {
+      return _chunk(content, maxTokens, tokenCounter);
+    }
+    if (_cachedTokenizerLoaded != o200kBaseLoaded) clearCache();
+    final key = (content.trim(), maxTokens);
+    final cached = _cache.remove(key);
+    if (cached != null) {
+      _cache[key] = cached;
+      return cached;
+    }
+    final chunks = List<ExcerptChunk>.unmodifiable(
+      _chunk(key.$1, maxTokens, tokenCounter),
+    );
+    final units = _cacheUnits(key.$1, chunks);
+    if (units <= _maxRetainedUnits) {
+      while (_cache.isNotEmpty &&
+          (_cache.length >= _maxCachedEntries ||
+              _retainedUnits + units > _maxRetainedUnits)) {
+        final oldest = _cache.keys.first;
+        _retainedUnits -= _cacheUnits(oldest.$1, _cache.remove(oldest)!);
+      }
+      _cache[key] = chunks;
+      _retainedUnits += units;
+    }
+    return chunks;
+  }
+
+  static int _cacheUnits(String content, List<ExcerptChunk> chunks) =>
+      content.length +
+      chunks.fold<int>(0, (sum, chunk) => sum + chunk.text.length + 64);
+
+  static List<ExcerptChunk> _chunk(
     String content,
     int maxTokens,
     int Function(String text) tokenCounter,
