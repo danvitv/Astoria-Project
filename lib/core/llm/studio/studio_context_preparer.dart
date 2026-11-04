@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../../models/api_config.dart';
 import '../../models/chat_message.dart' show ChatMessage, TriggeredEntry;
 import '../../models/studio_config.dart';
@@ -66,10 +68,12 @@ final class StudioContextPreparer {
       reasoningTagEndOverride: reasoningTagEndOverride,
       studioPreset: studioPreset,
     );
+    final sw = Stopwatch()..start();
     final promptWorker = worker ?? await PromptWorker.ensureInitialized();
+    final initMs = sw.elapsedMilliseconds;
     // Startup can finish loading main's tokenizer while we await. Count this
     // job with the mode at invocation, not whatever became ready meanwhile.
-    return runWithTokenizerMode(
+    final result = await runWithTokenizerMode(
       useO200k,
       () => promptWorker.runTokenized<StudioContext>(
         _prepareStudioContext,
@@ -77,6 +81,12 @@ final class StudioContextPreparer {
         payloadBytes: job.payloadBytes,
       ),
     );
+    debugPrint(
+      '[studio-prep] path=$consumerPath '
+      'payload=${(job.payloadBytes / 1024).toStringAsFixed(0)}KB '
+      'init=${initMs}ms took=${sw.elapsedMilliseconds - initMs}ms',
+    );
+    return result;
   }
 
   StudioContext prepare({

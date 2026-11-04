@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
 
+import 'package:flutter/foundation.dart';
+
 import '../utils/platform_paths.dart';
 
 import '../models/chat_message.dart';
@@ -162,6 +164,7 @@ class PromptWorker {
       completer: completer,
       priority: priority,
       timeout: timeout ?? requestTimeout,
+      enqueuedAtMs: DateTime.now().millisecondsSinceEpoch,
     );
     if (addFirst) {
       _queue.insert(0, request);
@@ -187,6 +190,16 @@ class PromptWorker {
 
     final request = _queue.removeAt(0);
     _active = request;
+    final dispatchedAtMs = DateTime.now().millisecondsSinceEpoch;
+    request.dispatchedAtMs = dispatchedAtMs;
+    if (request.command != 'init') {
+      debugPrint(
+        '[PromptWorker] start cmd=${request.command} '
+        '${describeWorkerRequest(request.command, request.data)} '
+        'queueWait=${dispatchedAtMs - request.enqueuedAtMs}ms '
+        'queuedBehind=${_queue.length}',
+      );
+    }
     // Only the request actually executing in the isolate owns a timeout.
     // Queued requests do not lose their budget while waiting for earlier work.
     _activeTimer = Timer(request.timeout, () {
@@ -225,6 +238,14 @@ class PromptWorker {
     _activeTimer?.cancel();
     _activeTimer = null;
     _active = null;
+    final dispatchedAtMs = request.dispatchedAtMs;
+    if (request.command != 'init' && dispatchedAtMs != null) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      debugPrint(
+        '[PromptWorker] done cmd=${request.command} '
+        'took=${now - dispatchedAtMs}ms total=${now - request.enqueuedAtMs}ms',
+      );
+    }
     if (!request.completer.isCompleted) {
       if (data is Map && data.containsKey('error')) {
         request.completer.completeError(Exception(data['error'] as String));
@@ -372,13 +393,14 @@ final class _TokenizedResult {
 }
 
 class _PromptWorkerRequest {
-  const _PromptWorkerRequest({
+  _PromptWorkerRequest({
     required this.id,
     required this.command,
     required this.data,
     required this.completer,
     required this.priority,
     required this.timeout,
+    required this.enqueuedAtMs,
   });
 
   final int id;
@@ -387,6 +409,8 @@ class _PromptWorkerRequest {
   final Completer<dynamic> completer;
   final PromptWorkerPriority priority;
   final Duration timeout;
+  final int enqueuedAtMs;
+  int? dispatchedAtMs;
 }
 
 void _isolateEntryPoint(List<dynamic> args) {

@@ -134,6 +134,13 @@ class StreamGenerationService {
     // Everything captured from here on belongs to this turn (see
     // `bindTurnMessageId`).
     final turnStartedAtMs = DateTime.now().millisecondsSinceEpoch;
+    // Temporary regression diagnostics: send → generation-start grew from
+    // ~15s to ~60s after the retrieval isolate offload. These offsets name
+    // the stage that owns the time until the culprit is fixed.
+    void timing(String stage) => debugPrint(
+      '[turn-timing] char=$_charId t+'
+      '${DateTime.now().millisecondsSinceEpoch - turnStartedAtMs}ms $stage',
+    );
     final cancelToken = CancelToken();
     var studioWasActive = false;
     _ref
@@ -191,6 +198,7 @@ class StreamGenerationService {
         cancelToken: cancelToken,
         onPhase: _phase,
       );
+      timing('context collected');
       if (_isAborted()) {
         return ChatState(
           session: saveSession ?? session,
@@ -274,12 +282,16 @@ class StreamGenerationService {
               reasoningTagEndOverride: studioPreset?.runtime.reasoningTagEnd,
               studioPreset: studioPreset,
             );
+      timing(studioConfig == null
+          ? 'studio final context (not active)'
+          : 'studio final context');
       if (_isAborted() || cancelToken.isCancelled) {
         return currentState.copyWith(isGenerating: false);
       }
       final promptResult = studioConfig == null
           ? await buildPromptInIsolate(finalPayload)
           : _studioCompatibilityResult(finalStudioContext!);
+      timing('prompt result');
       if (_isAborted()) return currentState.copyWith(isGenerating: false);
       if (studioConfig == null &&
           !promptFitsContext(
@@ -359,6 +371,7 @@ class StreamGenerationService {
       );
       final previousApiMessages = _lastRequestsBySession[session.id];
       _rememberRequest(session.id, apiMessages);
+      timing('base prompt ready');
       _log(
         'base prompt ready char=$_charId session=${session.id} '
         'messages=${apiMessages.length} model=${apiConfig.model} '
@@ -396,6 +409,7 @@ class StreamGenerationService {
                 reasoningTagEndOverride: studioPreset?.runtime.reasoningTagEnd,
                 studioPreset: studioPreset,
               );
+        timing('studio tracker context');
         if (_isAborted() || cancelToken.isCancelled) {
           return ChatState(
             session: saveSession ?? session,
@@ -511,6 +525,7 @@ class StreamGenerationService {
           },
           onFinalStart: () {
             if (_isAborted()) return;
+            timing('studio final writer started');
             _phase(GenerationPhase.waiting);
             final cur = _ref.read(studioCycleStateProvider);
             if (cur.phase == StudioCyclePhase.running) {

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:dio/dio.dart';
 
@@ -389,11 +390,38 @@ class PromptPayloadBuilder {
 
       throwIfAborted();
       onPhase?.call(GenerationPhase.retrieving);
+      // Temporary regression diagnostics: name which retrieval branch owns
+      // the wall time while send → generation-start is being profiled.
+      final retrievalT0 = DateTime.now().millisecondsSinceEpoch;
+      int retrievalElapsed() =>
+          DateTime.now().millisecondsSinceEpoch - retrievalT0;
+      final timedLorebookFuture = lorebookFuture.then((result) {
+        debugPrint(
+          '[retrieval] lorebook done in ${retrievalElapsed()}ms '
+          'entries=${result.length}',
+        );
+        return result;
+      });
+      final timedMemoryFuture = memoryFuture.then((result) {
+        debugPrint(
+          '[retrieval] memory done in ${retrievalElapsed()}ms '
+          'selected=${result.selection.entries.length}',
+        );
+        return result;
+      });
+      final timedRecallFuture = recallFuture.then((result) {
+        debugPrint(
+          '[retrieval] recall done in ${retrievalElapsed()}ms '
+          'reason=${result.reason.name} matches=${result.matches.length}',
+        );
+        return result;
+      });
       final results = await Future.wait([
-        memoryFuture,
-        lorebookFuture,
-        recallFuture,
+        timedMemoryFuture,
+        timedLorebookFuture,
+        timedRecallFuture,
       ]);
+      debugPrint('[retrieval] all done in ${retrievalElapsed()}ms');
       throwIfAborted();
       final memoryResult = results[0] as MemoryCandidateBuildResult;
       memorySelection = memoryResult.selection;
