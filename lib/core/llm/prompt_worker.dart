@@ -152,6 +152,8 @@ class PromptWorker {
     bool addFirst = false,
     PromptWorkerPriority priority = PromptWorkerPriority.foreground,
     Duration? timeout,
+    String? debugLabel,
+    int payloadBytes = 0,
   }) {
     if (_disposed) {
       return Future<dynamic>.error(StateError('PromptWorker is disposed'));
@@ -164,7 +166,8 @@ class PromptWorker {
       completer: completer,
       priority: priority,
       timeout: timeout ?? requestTimeout,
-      enqueuedAtMs: DateTime.now().millisecondsSinceEpoch,
+      debugLabel: debugLabel,
+      payloadBytes: payloadBytes,
     );
     if (addFirst) {
       _queue.insert(0, request);
@@ -190,14 +193,14 @@ class PromptWorker {
 
     final request = _queue.removeAt(0);
     _active = request;
-    final dispatchedAtMs = DateTime.now().millisecondsSinceEpoch;
-    request.dispatchedAtMs = dispatchedAtMs;
+    request.dispatchedAtMs = request.elapsed.elapsedMilliseconds;
     if (request.command != 'init') {
       debugPrint(
-        '[PromptWorker] start cmd=${request.command} '
+        '[PromptWorker] start id=${request.id} cmd=${request.command} '
+        'priority=${request.priority.name} label=${request.debugLabel ?? '-'} '
         '${describeWorkerRequest(request.command, request.data)} '
-        'queueWait=${dispatchedAtMs - request.enqueuedAtMs}ms '
-        'queuedBehind=${_queue.length}',
+        'estimatedPayload=${_payloadSize(request.payloadBytes)} '
+        'queueWait=${request.dispatchedAtMs}ms queuedBehind=${_queue.length}',
       );
     }
     // Only the request actually executing in the isolate owns a timeout.
@@ -205,6 +208,11 @@ class PromptWorker {
     _activeTimer = Timer(request.timeout, () {
       if (!identical(_active, request)) return;
       _active = null;
+      debugPrint(
+        '[PromptWorker] timeout id=${request.id} cmd=${request.command} '
+        'label=${request.debugLabel ?? '-'} '
+        'total=${request.elapsed.elapsedMilliseconds}ms',
+      );
       if (!request.completer.isCompleted) {
         request.completer.completeError(
           TimeoutException(
@@ -240,10 +248,11 @@ class PromptWorker {
     _active = null;
     final dispatchedAtMs = request.dispatchedAtMs;
     if (request.command != 'init' && dispatchedAtMs != null) {
-      final now = DateTime.now().millisecondsSinceEpoch;
+      final totalMs = request.elapsed.elapsedMilliseconds;
       debugPrint(
-        '[PromptWorker] done cmd=${request.command} '
-        'took=${now - dispatchedAtMs}ms total=${now - request.enqueuedAtMs}ms',
+        '[PromptWorker] done id=${request.id} cmd=${request.command} '
+        'priority=${request.priority.name} label=${request.debugLabel ?? '-'} '
+        'took=${totalMs - dispatchedAtMs}ms total=${totalMs}ms',
       );
     }
     if (!request.completer.isCompleted) {
@@ -303,6 +312,7 @@ class PromptWorker {
   Future<PromptResult> buildPrompt(
     PromptPayload payload, {
     PromptWorkerPriority priority = PromptWorkerPriority.foreground,
+    String? debugLabel,
   }) async {
     final json = jsonEncode(serializePayload(payload));
     final response =
@@ -311,6 +321,8 @@ class PromptWorker {
               json,
               priority: priority,
               timeout: timeoutForPayload(json.length),
+              debugLabel: debugLabel,
+              payloadBytes: json.length,
             )
             as String;
     return deserializeResult(jsonDecode(response) as Map<String, dynamic>);
@@ -321,6 +333,7 @@ class PromptWorker {
   Future<PromptResult> buildFromInputs(
     PromptInputs inputs, {
     PromptWorkerPriority priority = PromptWorkerPriority.background,
+    String? debugLabel,
   }) async {
     final json = jsonEncode(inputs.toJson());
     final response =
@@ -329,6 +342,8 @@ class PromptWorker {
               json,
               priority: priority,
               timeout: timeoutForPayload(json.length),
+              debugLabel: debugLabel,
+              payloadBytes: json.length,
             )
             as String;
     return deserializeResult(jsonDecode(response) as Map<String, dynamic>);
@@ -345,6 +360,7 @@ class PromptWorker {
     Object? input, {
     PromptWorkerPriority priority = PromptWorkerPriority.foreground,
     int payloadBytes = 0,
+    String? debugLabel,
   }) async {
     final useO200k = o200kBaseLoaded;
     final response =
@@ -353,6 +369,8 @@ class PromptWorker {
               (compute, input, useO200k),
               priority: priority,
               timeout: timeoutForPayload(payloadBytes),
+              debugLabel: debugLabel,
+              payloadBytes: payloadBytes,
             )
             as _TokenizedResult;
     return response.value as R;
@@ -400,7 +418,8 @@ class _PromptWorkerRequest {
     required this.completer,
     required this.priority,
     required this.timeout,
-    required this.enqueuedAtMs,
+    this.debugLabel,
+    this.payloadBytes = 0,
   });
 
   final int id;
@@ -409,7 +428,9 @@ class _PromptWorkerRequest {
   final Completer<dynamic> completer;
   final PromptWorkerPriority priority;
   final Duration timeout;
-  final int enqueuedAtMs;
+  final String? debugLabel;
+  final int payloadBytes;
+  final Stopwatch elapsed = Stopwatch()..start();
   int? dispatchedAtMs;
 }
 

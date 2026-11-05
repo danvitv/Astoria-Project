@@ -9,9 +9,14 @@ import 'prompt_worker.dart';
 Future<PromptResult> buildPromptInIsolate(
   PromptPayload payload, {
   PromptWorkerPriority priority = PromptWorkerPriority.foreground,
+  String? debugLabel,
 }) async {
   final worker = await PromptWorker.ensureInitialized();
-  return worker.buildPrompt(payload, priority: priority);
+  return worker.buildPrompt(
+    payload,
+    priority: priority,
+    debugLabel: debugLabel,
+  );
 }
 
 /// Builds a complete prompt from raw inputs in the isolate.
@@ -20,7 +25,12 @@ Future<PromptResult> buildPromptInIsolate(
 Future<PromptResult> buildFromInputsInIsolate(
   PromptInputs inputs, {
   PromptWorkerPriority priority = PromptWorkerPriority.background,
+  String? debugLabel,
 }) async {
   final worker = await PromptWorker.ensureInitialized();
-  return worker.buildFromInputs(inputs, priority: priority);
+  return worker.buildFromInputs(
+    inputs,
+    priority: priority,
+    debugLabel: debugLabel,
+  );
 }

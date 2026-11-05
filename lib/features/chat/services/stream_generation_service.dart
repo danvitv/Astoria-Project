@@ -134,13 +134,14 @@ class StreamGenerationService {
     // Everything captured from here on belongs to this turn (see
     // `bindTurnMessageId`).
     final turnStartedAtMs = DateTime.now().millisecondsSinceEpoch;
-    // Temporary regression diagnostics: send → generation-start grew from
-    // ~15s to ~60s after the retrieval isolate offload. These offsets name
-    // the stage that owns the time until the culprit is fixed.
+    final turnWatch = Stopwatch()..start();
+    // These offsets start at generation entry, after durable send preflight.
+    // Keep metadata only: never log prompt contents or credentials here.
     void timing(String stage) => debugPrint(
-      '[turn-timing] char=$_charId t+'
-      '${DateTime.now().millisecondsSinceEpoch - turnStartedAtMs}ms $stage',
+      '[turn-timing] char=$_charId session=${session.id} gen=$_genId '
+      't+${turnWatch.elapsedMilliseconds}ms $stage',
     );
+    timing('generation entered');
     final cancelToken = CancelToken();
     var studioWasActive = false;
     _ref
@@ -247,6 +248,7 @@ class StreamGenerationService {
                   .sessionVars[StudioHistoryLimiter.historyWindowStartVar],
             );
       _phase(GenerationPhase.prompt);
+      timing('prompt preparation started');
       final payload = studioConfig == null
           ? await builder.buildOrdinaryFromGenerationContext(
               inputs,
@@ -282,14 +284,16 @@ class StreamGenerationService {
               reasoningTagEndOverride: studioPreset?.runtime.reasoningTagEnd,
               studioPreset: studioPreset,
             );
-      timing(studioConfig == null
-          ? 'studio final context (not active)'
-          : 'studio final context');
+      timing(
+        studioConfig == null
+            ? 'studio final context (not active)'
+            : 'studio final context',
+      );
       if (_isAborted() || cancelToken.isCancelled) {
         return currentState.copyWith(isGenerating: false);
       }
       final promptResult = studioConfig == null
-          ? await buildPromptInIsolate(finalPayload)
+          ? await buildPromptInIsolate(finalPayload, debugLabel: 'generation')
           : _studioCompatibilityResult(finalStudioContext!);
       timing('prompt result');
       if (_isAborted()) return currentState.copyWith(isGenerating: false);

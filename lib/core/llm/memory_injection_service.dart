@@ -208,6 +208,7 @@ class MemoryInjectionService {
         () => worker.runTokenized<MemoryCandidateBuildResult>(
           _computeMemoryCandidates,
           job,
+          debugLabel: 'memory-selection',
         ),
       );
       if (isAborted()) {

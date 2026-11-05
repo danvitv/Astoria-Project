@@ -310,6 +310,7 @@ class PromptPayloadBuilder {
       // endpoint is slow. The final memory refilter against the visible
       // window happens later inside buildPrompt (see
       // docs/INVARIANTS.md §5.5).
+      final retrievalWatch = Stopwatch()..start();
       final lorebookFuture = (!skipVectorSearch && allowRemoteRetrieval)
           ? _vectorSearcher
                 .search(
@@ -390,28 +391,25 @@ class PromptPayloadBuilder {
 
       throwIfAborted();
       onPhase?.call(GenerationPhase.retrieving);
-      // Temporary regression diagnostics: name which retrieval branch owns
-      // the wall time while send → generation-start is being profiled.
-      final retrievalT0 = DateTime.now().millisecondsSinceEpoch;
-      int retrievalElapsed() =>
-          DateTime.now().millisecondsSinceEpoch - retrievalT0;
       final timedLorebookFuture = lorebookFuture.then((result) {
         debugPrint(
-          '[retrieval] lorebook done in ${retrievalElapsed()}ms '
-          'entries=${result.length}',
+          '[retrieval] session=$sessionId lorebook done in '
+          '${retrievalWatch.elapsedMilliseconds}ms entries=${result.length}',
         );
         return result;
       });
       final timedMemoryFuture = memoryFuture.then((result) {
         debugPrint(
-          '[retrieval] memory done in ${retrievalElapsed()}ms '
+          '[retrieval] session=$sessionId memory done in '
+          '${retrievalWatch.elapsedMilliseconds}ms '
           'selected=${result.selection.entries.length}',
         );
         return result;
       });
       final timedRecallFuture = recallFuture.then((result) {
         debugPrint(
-          '[retrieval] recall done in ${retrievalElapsed()}ms '
+          '[retrieval] session=$sessionId recall done in '
+          '${retrievalWatch.elapsedMilliseconds}ms '
           'reason=${result.reason.name} matches=${result.matches.length}',
         );
         return result;
@@ -421,7 +419,10 @@ class PromptPayloadBuilder {
         timedLorebookFuture,
         timedRecallFuture,
       ]);
-      debugPrint('[retrieval] all done in ${retrievalElapsed()}ms');
+      debugPrint(
+        '[retrieval] session=$sessionId all done in '
+        '${retrievalWatch.elapsedMilliseconds}ms',
+      );
       throwIfAborted();
       final memoryResult = results[0] as MemoryCandidateBuildResult;
       memorySelection = memoryResult.selection;
