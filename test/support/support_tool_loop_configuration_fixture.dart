@@ -10,6 +10,7 @@ import 'package:glaze_flutter/features/support_assistant/models/support_app_acti
 import 'package:glaze_flutter/features/support_assistant/widgets/support_model_tool_native_ui.dart';
 
 import 'support_tool_loop_screen_fixture.dart';
+import 'support_app_domain_loop_fixture.dart' show DomainLoopFixture;
 
 export 'support_tool_loop_fixture.dart';
 export 'support_tool_loop_screen_fixture.dart';
@@ -30,6 +31,10 @@ void configurationWidgetTest(
   String name,
   Future<void> Function(WidgetTester, ToolLoopScreenFixture) body,
 ) => toolLoopWidgetTest(name, (tester, f) async {
+  // The production action registry now constructs the native-domain adapters.
+  // Reuse their existing finite graph over this SAME synthetic DB/vault/root;
+  // filesystem, sockets, channels and unexpected providers remain tripwires.
+  DomainLoopFixture(f).installFiniteGraph();
   try {
     await body(tester, f);
   } finally {
@@ -102,7 +107,9 @@ Future<void> configurationModal(
     final original = rows.where(
       (row) => row.role == 'assistant' && row.runId != null,
     );
-    final reply = original.isEmpty ? null : original.single;
+    // A fresh Send can have more than one original reply. Ambiguity is not
+    // authority to choose the newest one, and must not mask the actual refusal.
+    final reply = original.length == 1 ? original.single : null;
     final replyStatus =
         const {
           'preparing',
@@ -129,7 +136,8 @@ Future<void> configurationModal(
       'Original native confirmation was not rendered: '
       'posts=${f.core.wire.length}, roots=$rootEntries, busy=${view.busy}, '
       'reason=${view.reason.name}, status=${view.status?.name}, '
-      'replyStatus=$replyStatus, nativeCode=${nativeFact ?? 'noNativeFact'}.',
+      'replyCount=${original.length}, replyStatus=$replyStatus, '
+      'nativeCode=${nativeFact ?? 'noNativeFact'}.',
     );
   }
   final accept = find.byKey(const ValueKey('support_tool_confirmation_accept'));
@@ -231,10 +239,13 @@ Future<void> configurationSend(
     find.byType(TextField).first,
     'Edit this exact connection.',
   );
-  await configurationAction(
-    tester,
-    () => tester.tap(find.byKey(const ValueKey('support_composer_send_btn'))),
-  );
+  await tester.pump();
+  final send = find
+      .byKey(const ValueKey('support_composer_send_btn'))
+      .hitTestable();
+  expect(send, findsOneWidget);
+  expect(tester.widget<IconButton>(send).onPressed, isNotNull);
+  await configurationAction(tester, () => tester.tap(send));
   await f.join(tester, f.core.firstFetch.future);
   await configurationModal(tester, f);
 }

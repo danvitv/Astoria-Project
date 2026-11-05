@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/db/repositories/manual_rewrite_job_repo.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/card_rewriter_contracts.dart';
@@ -22,6 +24,14 @@ void domainLoopTest(
 
 const rewriteJobId = 'native-rewrite-job';
 const rewriteOperationId = 'native-rewrite-operation';
+
+final _rewriteOperationUpdate = RegExp(
+  r'^\s*UPDATE\s+(?:"rewrite_operations"|rewrite_operations)(?=\s)',
+  caseSensitive: false,
+);
+
+bool isRewriteOperationUpdate(String statement) =>
+    _rewriteOperationUpdate.hasMatch(statement);
 
 Map<String, Object?> rewriteRejectArguments() => {
   'jobId': rewriteJobId,
@@ -192,6 +202,62 @@ Future<void> startRewriteReject(
       : 'Отклони операцию переписывания',
 );
 
+/// Return through the actual HEADER Back before a fresh Undo preview. This
+/// joins the original mounted Review's exact rejected rows, never a replacement
+/// owner or an automatic refresh after a test has introduced a stale/ABA fault.
+Future<void> reopenNativeRewriteAfterRejection(
+  WidgetTester tester,
+  DomainLoopFixture f,
+) async {
+  final expected = await nativeRewriteRow(tester, f);
+  final operation = expected.operations.single.operation;
+  expect(operation.decision, 'rejected');
+  final owner = nativeRewriteOwner(f);
+  final state = tester.state(
+    find.byType(RewriteReviewScreen, skipOffstage: false),
+  );
+  final back = find
+      .descendant(
+        of: find.byType(SupportAssistantScreen),
+        matching: find.byIcon(Icons.arrow_back_ios_new_rounded),
+      )
+      .hitTestable();
+  expect(back, findsOneWidget);
+  await tester.tap(back);
+  await tester.pumpAndSettle();
+  expect(tester.state(find.byType(RewriteReviewScreen)), same(state));
+  expect(nativeRewriteOwner(f), same(owner));
+  final published = Completer<void>();
+  final watcher = f.screen.core.container.listen(
+    rewriteJobSnapshotProvider(rewriteJobId),
+    (_, next) {
+      final snapshot = next.asData?.value;
+      if (!published.isCompleted &&
+          snapshot != null &&
+          snapshot.job == expected.job &&
+          snapshot.operations.any((view) => view.operation == operation)) {
+        published.complete();
+      }
+    },
+    fireImmediately: true,
+  );
+  try {
+    await f.screen.join(tester, published.future);
+    await tester.pump();
+    expect(owner.readLoaded()?.job, expected.job);
+    expect(owner.selected()?.operation, operation);
+    expect(nativeRewriteOwner(f), same(owner));
+  } finally {
+    watcher.close();
+  }
+  final open = find.byKey(const Key('rewrite-open-astoria')).hitTestable();
+  expect(open, findsOneWidget);
+  expect(tester.widget<IconButton>(open).onPressed, isNotNull);
+  await tester.tap(open);
+  await tester.pumpAndSettle();
+  expect(nativeRewriteOwner(f), same(owner));
+}
+
 Future<ManualRewriteJobSnapshot> nativeRewriteRow(
   WidgetTester tester,
   DomainLoopFixture f, [
@@ -209,9 +275,14 @@ void scriptRewriteUndo(DomainLoopFixture f, {void Function(String)? handle}) =>
         'operation': 'receipts',
       }),
       next: (round) {
-        if (round != 2)
+        if (round != 2) {
           return f.screen.core.answer('Exact original rejection Undo settled.');
-        final records = f.lastData()['records'] as List;
+        }
+        final result = f.lastResult();
+        expect(result['code'], 'completed');
+        final data = result['data'] as Map;
+        expect(data['count'], 1);
+        final records = data['records'] as List;
         expect(records, hasLength(1));
         final receipt = (records.single as Map)['receipt'] as String;
         handle?.call(receipt);

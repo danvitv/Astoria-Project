@@ -1,15 +1,23 @@
 # Astoria Assistant — active implementation plan
 
-Updated: 2026-11-02. This is the working plan, not a certificate of completion.
-Paused by user on 2026-11-02 for another agent's fixes; the local checkpoint is
-authorized to be committed, not pushed. Do not resume implementation or tests until asked.
+Updated: 2026-11-05. This is the working plan, not a certificate of completion.
+Reviewed repository HEAD: `90adea16`, following `0cd6ff69` and `9538896e`.
+Astoria WIP checkpoint: `e6260978`. Current review covers documentation and bounded
+tests, not implementation resumption. The small Rewrite continuation and its
+permissions below are historical, not authorization for the next task.
 It supersedes the October plans and local phase journals. The user's latest
 instruction and project safety rules take precedence over this document.
 
-The latest instruction requests one release APK and continued implementation.
-This overrides the earlier no-build rule for that APK only; app launches, private
+The November 5 documentation/test review now covers all 35 authored native Rewrite
+UI cases through non-overlapping serial evidence. Configuration coverage remains
+partial: 11 cases pass and a direct-core-send case still fails before its first model
+signal; later cases are unrun. See the handoff's current review section. This is
+not whole-plan acceptance or authorization to restart fixture repair automatically.
+
+An earlier instruction requested one release APK and continued implementation.
+It overrode the no-build rule for that delivered APK only; app launches, private
 data access, live calls, dependency changes and pushes remain outside the task.
-The assistant checkpoint is `d56d506a`; current HEAD `2670b845` retains the neighbor's
+At closure of the small Rewrite slice, HEAD was `699c2e06`, retaining the neighbor's
 canon changes. Custom Memory draft/Summary custody is verified; one-message visibility
 is blocked on bounded original cleanup/Undo, with zero new definitions. No accepted
 delivery is reopened merely by resumption.
@@ -44,10 +52,16 @@ pass. Callback-only late authority retirement no longer issues a current success
 The authorized first UI diagnostic located the stalled original snapshot future.
 Keeping that exact future and waiting with the existing bounded join now reaches
 persisted Reject and HEADER Back into the same mounted review; original cleanup closes.
-Fresh Undo still does not render confirmation. The full path and 35 native scenarios
-remain unverified. Do not
-mark Rewrite or the full plan finished, restart the exhausted fixture loop, or replace
-the missing mounted path with repository evidence. See the current handoff.
+The next bounded diagnostic located the Undo refusal at the original repository's
+exact loaded-job/operation comparison: the resumed Review watcher had not yet published
+the saved Reject rows. Joining that SAME provider's publication on the already-visible
+Review fixes the fixture race without adopting new authority or changing product guards.
+The original-file Review -> Astoria -> confirmed Reject -> HEADER Back -> fresh confirmed
+Undo now passes, with the same mounted owner and exact raw/evidence/journal restoration
+checks. The other 34 authored native UI cases were unverified at that main-path
+checkpoint; their later November 5 evidence is recorded in the current handoff.
+Do not equate that bounded corpus with whole-plan/device completion or restart a
+blind fixture loop.
 
 ## Authority and accepted work
 
@@ -59,6 +73,9 @@ the missing mounted path with repository evidence. See the current handoff.
 - `docs/untracked/` and the six `.slim/deepwork/astoria*` task directories contain
   historical design/evidence. Old imperatives, pending labels, build hashes,
   permission checklists and executor IDs are not instructions to resume work.
+- Exception: `docs/untracked/MEMORY_CONSOLIDATION_PLAN.md` is pending local planning
+  context, not an archived Astoria executor journal. Read it when present as directed
+  by `AGENTS.md`; it grants no implementation authority.
 - Accepted one-consent UI, typed SQLite readers, encrypted reports/decoder,
   Memory catalog integration, Studio dependency restoration, five global saved
   preferences families and the native/UI Memory wizard must not be rebuilt.
@@ -156,6 +173,21 @@ Required tracker failures must not be bypassed. Integrity diagnosis keeps
 canonical books, drafts, derived catalogs, Ledger and canon assembly separate.
 Autonomous multi-session discovery uses the existing global consent while every
 observation retains exact session/run/call identity.
+
+#### Complete preset macro and insertion knowledge — pending
+
+Astoria must know ALL supported macros and insertion points for ordinary and Studio
+presets, not just a curated subset. This includes raw recall injection, `{{lorebooks}}`,
+Ledger/state inserts and every other supported preset expansion. For each, explain
+the exact syntax (including supported parameters/aliases), what is inserted and from
+which source, valid placement/scope/pipeline phase, prerequisites and why an insertion
+can be empty or unavailable. Help locate and configure the appropriate insertion point.
+Ground the complete catalog in the current native macro engines, prompt/block resolvers
+and Studio insertion logic; examples are not evidence of exhaustive coverage. Verify
+catalog completeness and advice through the native Send path for both preset domains.
+Distinguish a saved macro from evidence that it actually expanded in a recorded request.
+This knowledge does not grant execution, preset mutation or access to private expansion
+contents beyond the existing consent and source/publication guards.
 
 A deterministic annotation of an already-admitted result is only an observation
 helper, **not** an internal specialist agent or a completed diagnostic product.

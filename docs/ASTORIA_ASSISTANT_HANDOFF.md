@@ -1,23 +1,68 @@
 # Astoria assistant — current handoff
 
-Date: 2026-11-02. Branch: `feat/astoria-assistant`.
-Latest assistant checkpoint: `d56d506a`, containing the verified bounded deliveries
-recorded below. Current HEAD is `2670b845`, the neighbor's canon/Ledger fix; those
-changes are retained. The earlier `6f4dd35a` checkpoint contained the wizard,
-documentation cleanup and first diagnostics. After the requested pause/local commit,
-the user explicitly resumed work. New custom Memory work remains uncommitted.
-The latest requested Windows release build passed in **84.1s**, including Studio
+Date: 2026-11-05. Branch: `feat/astoria-assistant`.
+Reviewed repository HEAD: `90adea16`, following `0cd6ff69` and `9538896e`.
+Astoria WIP checkpoint: `e6260978`. Current review covers documentation and bounded
+tests, not implementation resumption. Historical permissions and results below
+apply only to their named continuations; later explicit user instructions control
+the next task. This handoff is not a current dirty-file inventory.
+
+## Documentation and test review (2026-11-05)
+
+The user requested documentation/test cleanup, then explicitly requested a local
+commit. This does not authorize implementation, private-data repair, builds,
+application launches or a push. Historical work below is not a new permission.
+
+- The complete 35-case `support_app_rewrite_reject_loop_test.dart` corpus has
+  passing evidence in serial, non-overlapping batches: 18 unchanged cases reused
+  from this review, five retained-Undo cases after exact original Review publication,
+  and 12 SQL/publication boundary cases after fixing exact quoted-table matching.
+  This is bounded synthetic native UI coverage, not whole-plan/device acceptance.
+- Fresh negative Undo setup now uses normal HEADER Back, the SAME mounted Review
+  owner and an exact saved-row publication join before reopening Astoria. Faults
+  remain injected after the fresh preview; there is no automatic post-fault refresh.
+  SQL hooks accept Drift's quoted or unquoted exact `rewrite_operations` identifier;
+  injection assertions and native CAS/rollback/receipt/egress guards remain intact.
+- Configuration Send now waits for the normal input rebuild and requires an enabled,
+  hit-testable Send. Its original synthetic DB/vault/root uses the already-existing
+  finite native-domain provider graph; file/socket/channel/unexpected-provider
+  tripwires are not disabled. Eleven configuration cases pass. The next case,
+  `exact Apply cannot bypass protected model change or export key/error JSON`,
+  still fails waiting for the first model signal after direct `core.send(toolUi: ...)`.
+  Fail-fast leaves later configuration cases unrun. No product failure or all-green
+  configuration suite is claimed; further fixture repair is a separate bounded task.
+- Informational missing-brace lint findings were corrected without changing branch
+  behavior. Formatting the three changed test files and their scoped
+  `flutter analyze --no-pub` both pass; the analyzer reports no issues.
+- Logs are local under `Z:\OpenCode\work\astoria-docs-tests-20261105`:
+  `rewrite-tests.log`, `rewrite-negative-correction-compiled.log`,
+  `rewrite-sql-boundaries-final.log`, `configuration-final.log`, `analyze-final.log`.
+  These host-local files are not part of the repository.
+
+The root Hotel pipeline analysis was deleted as requested. The unchanged pending
+memory plan is now [local, intentionally untracked planning context](untracked/MEMORY_CONSOLIDATION_PLAN.md).
+`AGENTS.md` asks the next agent to read it when present, not to implement it implicitly.
+
+## Historical delivery record
+
+Earlier assistant checkpoint `d56d506a` contains the bounded deliveries recorded
+below. The November 2 handoff retained the neighbor's canon/Ledger fix `2670b845`.
+Checkpoint `6f4dd35a` contained the wizard, documentation cleanup and first
+diagnostics. Custom Memory work was recorded as uncommitted at that delivery,
+not as a claim about the current working tree.
+The then-requested Windows release build passed in **84.1s**, including Studio
 validation. The user explicitly resumed coding after the pause; the active slice
 delivered saved Studio agent topology/declared requirements through native sources.
 That build predates the topology changes. No application process was
 stopped or launched; the ambiguous launch request resulted only in read-only checks.
 No push, live calls or application/device launch was performed.
 
-## Current continuation and requested release APK
+## Historical continuation and requested release APK
 
-The latest user instruction is “собери мне апк --release, и продолжай работу”.
-One release APK is authorized; other build/app/live/private/public actions are not
-added. `flutter build apk --release --no-pub` passed in **118.9s**: dev-channel
+An earlier user instruction requested one release APK and continued implementation.
+That authorization covered the delivered APK only; it does not authorize another
+build or implementation during this documentation/test review.
+`flutter build apk --release --no-pub` passed in **118.9s**: dev-channel
 `build/app/outputs/flutter-apk/app-release.apk`, 167381582 bytes (159.6 MB as
 reported by Flutter). It includes the verified custom Memory and regex discovery
 changes below; subsequent OpenRouter-image custody work is not in that artifact.
@@ -173,10 +218,11 @@ by that stalled run. Two-file scoped analysis has no errors/warnings (style info
 Naistera is accepted as synthetic native integration, not live/device quality, and is
 not in the delivered APK. Other credential families and the full plan remain open.
 
-### Local Rewrite Reject/Undo — repository verified; native UI blocked
+### Local Rewrite Reject/Undo — repository and main native path verified
 
 The confirmed-version/decision-reset, genuine receipt, mounted-review ownership and
-conditional definition availability are implemented; the mounted UI slice is not accepted. The three
+conditional definition availability are implemented. The main original mounted path
+was verified at that checkpoint; later bounded UI coverage is recorded above. The three
 tools are advertised only for an original mounted review owner; a catalog captured
 before mounting cannot grow later. The accepted ordinary base remains 63, with the
 unchanged 64-definition ceiling and genuine Source4/complete-family overflow rules.
@@ -186,7 +232,8 @@ before the subsequent original-executor changes; they do not certify the new fen
 The original DB now owns the native commit-send fence beneath outer observers. It
 distinguishes delivery from pre-send refusal and requires actual rollback evidence,
 including SQLite's commit-hook error plus autocommit for local automatic rollback.
-The direct execution evidence below now proves this repository boundary, not its mounted UI.
+The direct execution evidence below proves this repository boundary, separately from
+the first native UI path now verified below.
 A synthetic original-file fixture
 is constructed before the DB/ROOT graph; its exact owned path is the only file allowed
 through the existing tripwires. Cleanup/path-normalization defects were fixed without
@@ -198,18 +245,56 @@ provider. Original close is issued once in real async and joined by that same he
 Native Russian decision captions replace missing-key fallback text in the existing
 synthetic translation stub; viewport and overflow assertions stay intact. The test now
 reaches persisted Reject and HEADER Back into the SAME mounted review, and cleanup
-finishes. Fresh Undo has no confirmation; the old helper's one-reply `.single` diagnostic
-then throws on two legitimate replies. Read-only source diagnosis found no proven
-product defect that necessarily loses the receipt. Missing evidence is the fresh native
-receipt-discovery result's finite `code` and `data.count`, plus Undo `code` only if it
-was dispatched; absence of a handle in a retired original model result is not receipt
-loss. Temporary stage/error prints were removed at pause. The whole mounted path and
-all 35 cases remain unaccepted; no loop or
-timeout increase, guard weakening, app launch or live evidence is implied.
+finishes. The user's later small-slice continuation used two bounded diagnostic runs
+of only this original scenario. Fresh `astoria_rewrite_review_receipts` returns
+`completed` with `data.count=1`; the dispatched Undo returned `unavailable` before native
+confirmation. No receipt-loss product bug was established.
 
-Paused by the user's 2026-11-02 instruction to allow another agent's fixes. A local WIP
-checkpoint commit is authorized; no new tests, implementation, build, launch or push.
-All read-only child lanes have finished. Resume only when explicitly requested.
+`configurationModal` now emits an ambiguous reply count rather than throwing `.single`
+or guessing the latest reply. Receipt-discovery assertions explicitly retain the observed
+code/count as well as one genuine record. Temporary enum/count prints were removed.
+Synthetic logs: approved temp `astoria-rewrite-receipt-discovery.log` and
+`astoria-rewrite-native-undo-code.log`. Both diagnostic runs finish in about four seconds
+with the still-unresolved missing-confirmation failure, not a PASS. Two-fixture analysis
+has no errors/warnings (one existing style info); scoped `git diff --check` passes.
+These were then-failing diagnostics, not UI acceptance.
+
+The next explicit small-slice request isolated the exact refusal in two bounded runs
+of the same original scenario. Fixed branch probes showed adapter refusal after
+`owner.observeUndo`, then the repository's initial comparison reported
+`jobMatches=false`, `operationMatches=false`, `selectedMember=true`. The genuine
+receipt remained retained, but the loaded Review aggregate had not caught up with its
+saved Reject rows. This is a correct native CAS refusal, not authority to adopt latest
+rows. Riverpod pauses hidden Consumer subscriptions; fake animation settlement alone
+does not join asynchronous publication after HEADER Back.
+
+`test/support/support_app_rewrite_reject_loop_test.dart` now observes the SAME original
+`rewriteJobSnapshotProvider` only after the original Review is visible again. Its
+publication must match the actual saved Reject job and operation exactly. The existing
+bounded `screen.join` drains that original signal; an ordinary UI pump then must expose
+those rows through the SAME original owner. The temporary observer closes before
+pushing Astoria again. No forced snapshot, DB write, provider invalidation, owner
+replacement, guard bypass or timeout increase is used. Product source is unchanged;
+all fixed branch/boolean probes were removed.
+
+The original-file native Review -> Astoria -> confirmed Reject -> HEADER Back -> fresh
+confirmed Undo scenario now passes in about four seconds. Its existing assertions
+prove the same mounted state/owner, monotonic job versions, exact prior decision and
+decisionRevision, unchanged raw snapshot/evidence/revisions/collateral, encrypted
+`undone` journal and no private egress. At that checkpoint the other 34 authored UI
+cases were not run; the November 5 review above records their later scoped evidence.
+This is synthetic native UI execution, not app/device/live success.
+That checkpoint's log: approved temp `astoria-rewrite-original-watcher-undo.log`; earlier branch
+diagnostics are `astoria-rewrite-undo-refusal-branch.log` and
+`astoria-rewrite-undo-native-observation.log`. Single-test analysis has no errors or
+warnings and 12 existing style infos; it exits nonzero for those infos.
+
+At closure of this main-path slice, WIP checkpoint was `e6260978` and HEAD was
+`699c2e06`, retaining the other agent's sync work. No child lanes remained active
+at that closure. It did not authorize further implementation, commits, pushes,
+builds or launches. Remaining native custody/negative cases require their own
+explicit scope; do not repeat an unchanged happy path by habit. The full plan
+remains open.
 
 The existing NativeInputFixture now optionally retains an original synthetic in-memory
 connection from first construction; its default native-memory DB remains unchanged.
@@ -237,7 +322,7 @@ correction only the 12 affected cases were rerun. The happy baseline was reused.
 
 Scoped analysis of 25 current image/core/fixture files has no errors or warnings after
 one redundant assertion and one unused test import were removed; informational style
-hints remain. That earlier analysis alone does not close the Rewrite runtime blocker.
+hints remain. That earlier analysis alone does not certify the remaining native UI cases.
 No further build, launch,
 private-data access, cleanup, commit or push was performed.
 
@@ -247,8 +332,8 @@ and reconcile canon, while whole-message serialization loses unknown raw fields.
 adapter or definition was added. A bounded collateral-free native contract is still required;
 raw flag writes and partial Undo are not substituted for the original semantics.
 
-The earlier continuation excluded builds; the latest instruction authorizes the APK
-above without reopening accepted evidence. Twenty-three
+The earlier APK request temporarily overrode that continuation's no-build rule
+for the artifact recorded above, without reopening accepted evidence. Twenty-three
 focused specialist/presentation cases and seven native/UI cases pass: narrowed trusted profiles
 use the original Send run and one shared budget; a provider snapshot request is
 refused before native file selection. Unexpected effects retain factual settlement
@@ -369,7 +454,9 @@ are covered. The source-less base is 56; actual source/backup composition remain
 within the existing bound. All six private FIFO hooks have refreshed 14 preferences-owner
 and 18 preferences-CAS cases passing. Scoped analysis of 34 changed items has no
 errors/warnings after targeted warning fixes; informational style hints remain.
-All follow-up changes are uncommitted; the existing Release lacks them.
+These changes were uncommitted at that historical delivery and absent from its
+Release artifact. Subsequent commits incorporated source changes; this is not a
+claim about today's working tree or distribution artifacts.
 
 ## Scope on resumption
 
@@ -578,7 +665,8 @@ The 76.3s build included the recorded-failure slice but predated Studio validati
 The later **84.1s** build includes the Studio source changes. It used the same
 `flutter build windows --release --no-pub` command, default dev channel and full
 Release output directory. The user requested a pause after that build; no further
-feature work or checks are running. The observed Debug process was left untouched.
+feature work or checks were running at that checkpoint. The observed Debug process
+was left untouched.
 
 ## Current saved Studio validation — native path verified
 
@@ -661,8 +749,9 @@ retries, historical prompts/phases, full dependency graph, runtime normalization
 auxiliary lanes and connections/credentials remain explicitly unverified. This is
 not an internal specialist agent or whole-Studio health verdict. No app/process,
 new build, live provider, commit or push action was performed in this continuation;
-the current Release is still the pre-topology 84.1s build. Follow-up source/tests
-and these evidence updates remain uncommitted after `6f4dd35a`.
+the Release at that checkpoint was the pre-topology 84.1s build. The topology
+delivery was subsequently recorded in `d56d506a`; the old uncommitted label is
+not current repository state.
 
 ## Files to start with
 
@@ -702,12 +791,12 @@ Machine-local detailed contracts/evidence remain under
 They are ignored local artifacts, not additional committed source files. Older
 partial labels there do not override this resumed root delivery.
 
-## Execution constraints
+## Execution constraints and historical lane notes
 
 Use `CLAUDE.md`, `docs/WORKFLOW.md` and applicable UI/race/database rules.
-The stalled old subagent was canceled; the neighboring root finished. Do not
-rerun its launcher or create a duplicate writer. The user requested root-session
-continuation for normal DCP, not another wizard subagent.
+At the historical wizard continuation, the stalled subagent was canceled and the
+neighboring root finished. Those lane IDs and launcher requests are not current
+work; do not revive them or create duplicate writers from this handoff.
 
 SDK: `Z:\GlazeProject\flutter\bin\flutter.bat`. Native checks are serial with
 `--no-pub --concurrency=1`; per-process PATH prepend:
@@ -717,3 +806,70 @@ No source budget increases, assertion weakening, cosmetic lint-zero project or
 repeated full verification. No GUI/device/live provider/user DB/prefs/operator-key
 access, dependency/toolchain installation, reset or publishing is implied.
 The report recipient is already provisioned; do not regenerate/read private keys.
+
+## Case: multi-layer term saturation in prompt («солянка/морс», Hotel Petersburg)
+
+Historical case report, not authorization to inspect or modify live data. Any
+repair requires explicit user-approved scope, the native revision contract and
+a separately authorized backup. The historical observations below were not
+revalidated by this documentation review.
+
+Reported 2026-11-03. Every reroll of the then-current reply made Chisato mention
+food terms from the user's single phone call. Diagnosis is a prompt-saturation
+case, not a storage bug: the same term cluster arrived in ~5 layers (old
+MemoryBook entries re-selected each turn, one legitimate Ledger event fact,
+the call and its reply in visible history, and the Think recap). Trackers and
+Raw Recall were clean; the model also violated an explicit language barrier
+(Chisato does not understand Russian) — a model-level knowledge-scope failure
+amplified by repetition.
+
+Detection procedure for the assistant:
+
+1. Use `memoryCoverage.entryIds` when retained, binding it to the exact message,
+   swipe and request under investigation. Absence is not proof that no Memory
+   was selected.
+2. Count how many prompt layers contain the offending term cluster: memory
+   block, `current_character_state`, visible history, Think recap, catalog
+   terms. Tracker rows and Raw Recall must be checked before blaming storage.
+3. When retained, inspect `memoryCoverage.diagnostics.candidates` for per-entry
+   `matchedKeys`, `catalogMatchedTerms` and keyword/catalog/vector scores. Several
+   channels can contribute simultaneously. Key matching uses the configured
+   `keyMatchMode` against its actual scan text, not universally substring matching.
+   Catalog matching includes retained keys/entities/locations/topics/title terms,
+   including multiword terms. Lightweight Studio contexts can report
+   `diagnosticsOmitted`; missing diagnostics or a missing literal hit do not prove
+   vector selection. Without exact recorded scan/selection inputs, attribution
+   remains insufficient or inferred.
+
+Treatment rules:
+
+- For an explicitly approved key repair, append the next revision via
+  `MemoryEntryRevisions.prepare` (`r2` only for the historical entries below),
+  removing only the narrow colliding keys;
+  keep scene-anchor keys («Софи Лоран», «заказ Софи Лоран», «десерт Руби»),
+  remove matching `keyParagraphs` entries, purge the stale
+  `memory_catalog_rows` for those entries, leave embeddings and content
+  untouched. Never bulk-delete entries or whole memories.
+- Changing only the per-entry `vectorSearch` flag is ineffective in the current
+  `MemoryVectorSearcher`. Other settings/data changes can affect search: global
+  `vectorSearchEnabled` gates it, and key/title changes can alter the retrieval-hints
+  fingerprint and make retained embeddings ineligible. Preserve embedding bytes
+  unless separately authorized; unchanged bytes do not prove unchanged eligibility.
+  Durable selective saturation control remains pending code-level work; see the
+  [pending Memory consolidation plan](untracked/MEMORY_CONSOLIDATION_PLAN.md)
+  (local, intentionally untracked; may be absent in another checkout).
+- Visible history, legitimate Ledger facts and Think recaps are not garbage;
+  they must never be edited to cure saturation.
+
+Applied repair (2026-11-04, live DB, backup first): entry
+`mem_1793253346821_0_713900001@mvts4fsq00me_0@mvwd3ix8003y_0@mvx1zaj2008r_0`
+(removed key «ягодный морс») and `mem_1793494194109_0_67448820` (removed
+«клюквенный морс», «лимонад на тархуне»), both as user-reviewed r2 revisions
+with catalog cache purge and embedding bytes untouched. The prior repair record
+reports a passing rehearsal and scoped post-write checks, with backup at
+`Z:\OpenCode\work\sophie-keys-repair-20261104-011003`. Their exact scope and live-data
+result were not revalidated in this documentation review.
+Honest limit: historical channel attribution and post-repair vector eligibility
+are not established here. The key repair may affect both keyword matching and
+embedding-hash eligibility. Investigate persistent saturation from exact retained
+selection evidence, not attribution to vectors by exclusion alone.

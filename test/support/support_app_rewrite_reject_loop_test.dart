@@ -59,8 +59,9 @@ void main() {
             'operation': 'discover',
           }),
           next: (round) {
-            if (round != 2)
+            if (round != 2) {
               return f.screen.core.answer('The exact rejection was saved.');
+            }
             final record = (f.lastData()['records'] as List).single as Map;
             expect(record['job'], rewriteJobId);
             expect(record['operation'], rewriteOperationId);
@@ -125,6 +126,32 @@ void main() {
           same(originalState),
         );
         expect(nativeRewriteOwner(f), same(originalOwner));
+        // The mounted Review subscription resumes on HEADER Back. Join its
+        // actual publication, not just fake-clock entrance animations, before
+        // issuing a fresh Undo against the exact retained rejection rows.
+        final published = Completer<void>();
+        final originalWatcher = f.screen.core.container.listen(
+          rewriteJobSnapshotProvider(rewriteJobId),
+          (_, next) {
+            final snapshot = next.asData?.value;
+            if (!published.isCompleted &&
+                snapshot != null &&
+                snapshot.job == rejected.job &&
+                snapshot.operations.any((view) => view.operation == opAfter)) {
+              published.complete();
+            }
+          },
+          fireImmediately: true,
+        );
+        try {
+          await f.screen.join(tester, published.future);
+          await tester.pump();
+          expect(originalOwner.readLoaded()?.job, rejected.job);
+          expect(originalOwner.selected()?.operation, opAfter);
+          expect(nativeRewriteOwner(f), same(originalOwner));
+        } finally {
+          originalWatcher.close();
+        }
         await tester.tap(find.byKey(const Key('rewrite-open-astoria')));
         await tester.pumpAndSettle();
         scriptRewriteUndo(f);
@@ -437,6 +464,7 @@ void main() {
           await f.finish(tester);
           final c = f.screen.core.container,
               repo = c.read(manualRewriteJobRepoProvider);
+          await reopenNativeRewriteAfterRejection(tester, f);
           String? handle;
           scriptRewriteUndo(f, handle: (id) => handle = id);
           await startRewriteReject(tester, f, undo: true);
@@ -470,18 +498,19 @@ void main() {
                 .beginMutation(sessionId: DomainLoopFixture.session)();
           }
           final before = await nativeRewriteRow(tester, f);
-          if (mode == 'cancel' || mode == 'guessedReceipt')
+          if (mode == 'cancel' || mode == 'guessedReceipt') {
             await f.cancel(tester);
-          else {
+          } else {
             await configurationAction(tester, expired);
             await tester.pump();
-            if (route.isCurrent)
+            if (route.isCurrent) {
               await f.cancel(tester);
-            else
+            } else {
               await tester.pump(
                 route.reverseTransitionDuration +
                     const Duration(microseconds: 1),
               );
+            }
           }
           final reply = await f.finish(tester),
               after = await nativeRewriteRow(tester, f);
@@ -557,22 +586,21 @@ void main() {
               await startRewriteReject(tester, f);
               await f.apply(tester);
               await f.finish(tester);
+              await reopenNativeRewriteAfterRejection(tester, f);
               scriptRewriteUndo(f);
-            } else
+            } else {
               f.script(
                 f.screen.core.call(
                   'astoria_rewrite_reject',
                   rewriteRejectArguments(),
                 ),
               );
+            }
             await startRewriteReject(tester, f, undo: undo);
             final before = await nativeRewriteRow(tester, f);
             var fired = false;
             sql.afterWrite = (statement) async {
-              if (!fired &&
-                  statement.trimLeft().toLowerCase().startsWith(
-                    'update rewrite_operations',
-                  )) {
+              if (!fired && isRewriteOperationUpdate(statement)) {
                 fired = true;
                 f.screen.core.native.redaction.registerSecret(
                   matching
@@ -633,6 +661,7 @@ void main() {
               await startRewriteReject(tester, f);
               await f.apply(tester);
               await f.finish(tester);
+              await reopenNativeRewriteAfterRejection(tester, f);
               scriptRewriteUndo(f);
             } else {
               f.script(
@@ -646,18 +675,18 @@ void main() {
             final before = await nativeRewriteRow(tester, f);
             var written = false, fired = false;
             sql.afterWrite = (statement) async {
-              if (statement.trimLeft().toLowerCase().startsWith(
-                'update rewrite_operations',
-              ))
+              if (isRewriteOperationUpdate(statement)) {
                 written = true;
+              }
             };
             await configurationAction(tester, () async {
               final originalZone = Zone.current;
               Future<void> fire() async {
                 if (!written || fired) return;
                 fired = true;
-                if (fault == 'postPhysicalUnknown')
+                if (fault == 'postPhysicalUnknown') {
                   throw StateError(DomainLoopFixture.private);
+                }
                 if (fault == 'lateOrdinaryWriter') {
                   sql.afterOuterSend = null;
                   ordinary = originalZone.run(
@@ -679,15 +708,17 @@ void main() {
                 }
               }
 
-              if (fault == 'preCommitRetire')
+              if (fault == 'preCommitRetire') {
                 sql.beforeOuterSend = fire;
-              else
+              } else {
                 sql.afterOuterSend = fire;
+              }
             });
             await f.apply(tester);
             final reply = await f.finish(tester);
-            if (ordinary != null)
+            if (ordinary != null) {
               await configurationAction(tester, () => ordinary!);
+            }
             sql.afterWrite = null;
             sql.beforeOuterSend = null;
             sql.afterOuterSend = null;
@@ -727,8 +758,9 @@ void main() {
                 reply.body,
                 contains('обновление нативных представлений ожидается'),
               );
-            } else
+            } else {
               expect(reply.body, isNot(contains('изменение сохранено')));
+            }
             f.script(
               f.screen.core.call('astoria_rewrite_review_receipts', {
                 'operation': 'receipts',
@@ -752,8 +784,9 @@ void main() {
             sql.afterWrite = null;
             sql.beforeOuterSend = null;
             sql.afterOuterSend = null;
-            if (ordinary != null)
+            if (ordinary != null) {
               await configurationAction(tester, () => ordinary!);
+            }
             await closeNativeRewrite(tester, navigator);
           }
         },

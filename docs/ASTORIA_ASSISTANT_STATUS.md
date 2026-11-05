@@ -1,18 +1,29 @@
 # Astoria Assistant — implementation status
 
-Paused by user on 2026-11-02; this local checkpoint is committed as work in progress,
-not a finished plan or passing Rewrite UI delivery. No push is authorized.
+The historical small-slice request resumed work after WIP checkpoint `e6260978`.
+The main Rewrite UI path and its 35-case authored native corpus have passing scoped
+evidence; the whole plan remains incomplete. Current review covers documentation
+and bounded tests, not implementation resumption. Historical permissions/results
+apply only to their named continuations.
 
-Updated: 2026-11-02. Active plan: [ASTORIA_ASSISTANT_PLAN.md](ASTORIA_ASSISTANT_PLAN.md).
+Updated: 2026-11-05. Active plan: [ASTORIA_ASSISTANT_PLAN.md](ASTORIA_ASSISTANT_PLAN.md).
 
-Resumed after the requested pause/local checkpoint `d56d506a`. Current HEAD is
-`2670b845`; the neighbor's canon changes are preserved. Custom Memory API custody
+Current review: all 35 authored Rewrite UI cases have passing serial evidence
+(18 unchanged + five retained Undo + 12 SQL/publication boundaries). Configuration
+tests are not all green: 11 pass, then the direct-core-send protected-model-change
+case fails waiting for the first model signal; fail-fast leaves later cases unrun.
+The handoff records exact scopes and local logs. No product failure is established
+by that fixture signal failure, and no device/full-plan acceptance is inferred.
+
+Reviewed HEAD is `90adea16`, following `0cd6ff69` and `9538896e`; the neighbor's canon
+and subsequent sync changes are preserved. Astoria checkpoint is `e6260978`.
+Custom Memory API custody
 is verified for draft generation and Summaries, with exact native destination binding,
 keyless public settings, synthetic retry/cancellation and final publication guards.
 Legacy plaintext remains. One-message visibility/Undo is blocked on cleanup/raw
 preservation and contributes no definitions. The seventh pipeline FIFO passes all
 24 preferences-owner cases; 18 scalar CAS regressions also pass.
-The latest request authorizes one release APK, then continued coding. That dev build
+The earlier request authorized one release APK, then continued coding. That dev build
 passed in 118.9s (159.6 MB); it was not installed or launched. OpenRouter-image custody
 now passes 50 connection, 54 lifecycle and nine native model-UI cases, with bounded
 review findings resolved and affected block/codec/matcher regressions passing. It
@@ -48,19 +59,31 @@ independent review closed. Direct queued CAS and both affected Naistera scalar c
 pass; a combined run later stalled in the old NovelAI fixture and was not repeated.
 This is synthetic native integration, not live/device quality. Plaintext/APK unchanged.
 
-Local Rewrite Reject/Undo has verified direct original-repository execution, not UI delivery.
+Local Rewrite Reject/Undo has verified direct original-repository execution and its
+original-file native UI corpus; this is not exhaustive product/device UI coverage.
 Seventy-seven pure readiness cases pass; accepted ordinary runtime base remains 63.
 The first authorized UI diagnostic located an original snapshot-future scheduling
 stall. Existing bounded join now reaches persisted Reject and same-owner HEADER Back;
-cleanup closes. Fresh Undo has no confirmation, so the full UI path and 35 cases are
-not accepted. Existing NativeInputFixture proves
+cleanup closes. Earlier receipt discovery proved `completed`/`count=1`, then Undo
+`unavailable`. The next two bounded diagnostics locate refusal after `observeUndo`:
+the original loaded job/operation do not match the saved Reject rows. The hidden
+Review's subscription resumes on HEADER Back, but its asynchronous watcher publication
+was not joined before the fixture's fresh Send. One existing bounded join of that
+original provider on the visible Review now yields a PASS for Review -> Astoria ->
+confirmed Reject -> HEADER Back -> fresh confirmed Undo. The same mounted owner,
+exact prior decision/revision, raw payload/evidence and encrypted undone journal are
+asserted. No snapshot/owner replacement, new harness or product guard change occurred.
+Temporary source probes were removed; the other 34 authored UI cases were not run
+at that checkpoint. The current review above records their later scoped evidence.
+Existing NativeInputFixture evidence is reused:
 a genuine Reject -> fresh Undo baseline plus 12 fault cases: delivered rollback refusal,
 undelivered rollback uncertainty, SQLite commit-hook automatic rollback, retained
 delivered facts without stale successor, and delivered COMMIT/outer-error uncertainty.
 Both epoch and callback-only late retirement are covered. The latter had issued a
 current successor; original captured authority now gates issuance, with review closed.
-No replacement owner, guard waiver, new harness or widget success is inferred.
-Scoped current analysis is error/warning-free with style hints, not runtime acceptance.
+No additional widget success is inferred from repository evidence. That checkpoint's
+single-test analysis had no errors/warnings and 12 style infos; the current review
+checks the changed fixtures separately and records its analyzer result in the handoff.
 Full plan completion remains open; see the handoff's concrete blockers.
 
 Current continuation: bounded read-only specialists are connected and
@@ -342,7 +365,7 @@ one-consent/SQLite/report slice above is not being implemented again.
     Diagnostics and individually bounded extended actions follow as separate slices.
 
 The earlier integrations are in checkpoint `e5fd03d8`; the resumed wizard delivery
-is currently uncommitted. See [session handoff](ASTORIA_ASSISTANT_HANDOFF.md).
+was subsequently recorded in `6f4dd35a`. See [session handoff](ASTORIA_ASSISTANT_HANDOFF.md).
 The completed Memory integration
 passed its targeted native cases and 27 existing mutation/effect/fence regressions;
 Studio passed 44 repository/codec/toggle/control cases and scoped analysis.
@@ -462,8 +485,9 @@ The requested Windows release build passed in 76.3s. Run
 `build/windows/x64/runner/Release/Astoria.exe` with the full Release directory.
 It is the default **dev** channel. The running Debug was left untouched; no agent
 launch, installation, process kill, live call, private-data access or push occurred.
-These source/test/evidence updates remain uncommitted after `6f4dd35a`. This is a
-usable bounded diagnostic delivery and fresh build, not whole-plan completion.
+Those updates were local at that historical delivery; subsequent commits incorporated
+source changes. Its bounded diagnostic delivery and build are not whole-plan
+completion or a claim about today's dirty files/artifacts.
 
 ### Current saved Studio block validation
 
@@ -482,8 +506,8 @@ Recovery warnings, truncated issue lists and missing checks remain explicit.
 Twelve new cases pass (seven pure, four native FILE/source, one native five-POST
 UI path); nine existing validator and eight affected advice cases pass as
 regressions. Scoped analysis has no errors/warnings, with one unchanged navigation
-info; the corrected new test reports no issues. Source/evidence updates are local
-after `6f4dd35a`. The latest Windows release build passed in **84.1s** with Studio
+info; the corrected new test reports no issues. Source/evidence updates were local
+at that historical delivery. Its Windows release build passed in **84.1s** with Studio
 validation included, superseding the pre-Studio 76.3s output. Default dev channel,
 full Release folder required. The running Debug was not stopped or launched.
 The user explicitly resumed coding after that pause, not an application launch.
@@ -508,8 +532,9 @@ owner/Stop/redaction fence, runtime behavior or quota was weakened.
 The scope is current saved topology only, not actual controller outcomes/retries,
 full graph/runtime/auxiliary lanes, historical evidence or connection validity.
 Full diagnostic agents, runtime/history checks, extended actions and credential
-migration remain subsequent scope. Updates are local after `6f4dd35a`; app/process,
-commit, push and rebuild actions were not performed by this continuation.
+migration remain subsequent scope. The topology delivery was subsequently recorded
+in `d56d506a`; app/process, commit, push and rebuild actions were not performed by
+the historical continuation described here.
 
 ## Plan and history pointers
 
@@ -528,3 +553,7 @@ tracked plan explicitly distinguishes superseded design from remaining product
 scope. This repository summary distinguishes remaining
 implementation, changed design and missing runtime evidence; no completion
 percentage or whole-product acceptance is claimed.
+
+Exception: `docs/untracked/MEMORY_CONSOLIDATION_PLAN.md` is pending local planning
+context, not an archived Astoria executor journal. Read it when present as directed
+by `AGENTS.md`; it grants no implementation authority.
