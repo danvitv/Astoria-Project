@@ -17,6 +17,7 @@ import '../../../shared/widgets/glass_surface.dart';
 import '../../settings/api_settings_screen.dart';
 import '../chat_provider.dart';
 import '../state/cached_token_breakdown.dart';
+import '../state/context_window_marker.dart';
 import 'requests/inspector_insets.dart';
 import 'tokenizer_widgets.dart';
 
@@ -42,6 +43,7 @@ class _TokenizerSheetState extends ConsumerState<TokenizerSheet> {
   int? _contextSize;
   bool _loading = false;
   bool _recountPending = false;
+  bool? _ordinaryRecountEnabled;
 
   /// Slider positions while the sheet is open, null until the user drags one.
   ///
@@ -59,8 +61,9 @@ class _TokenizerSheetState extends ConsumerState<TokenizerSheet> {
   void _loadOrCalculate() {
     final chatApi = _resolveApiConfig();
     _contextSize = chatApi?.contextSize;
-    // Last generation is a placeholder, never a substitute for a fresh build.
-    _breakdown = ref.read(cachedTokenBreakdownProvider(widget.charId));
+    // Ordinary mode refreshes this placeholder. Studio keeps the breakdown its
+    // final preparation left behind; an ordinary build cannot recount it.
+    _breakdown = _cachedBreakdownForCurrentSession;
     WidgetsBinding.instance.addPostFrameCallback((_) => _calculate());
   }
 
@@ -70,6 +73,31 @@ class _TokenizerSheetState extends ConsumerState<TokenizerSheet> {
     } catch (_) {
       return null;
     }
+  }
+
+  bool get _canRecount {
+    final mode = ref.read(ordinaryPromptRecountEnabledProvider);
+    return !mode.isLoading && mode.value == true;
+  }
+
+  TokenBreakdown? get _cachedBreakdownForCurrentSession {
+    final builtFor = ref.read(
+      cachedTokenBreakdownSessionProvider(widget.charId),
+    );
+    final sessionId = ref.read(chatProvider(widget.charId)).value?.session?.id;
+    if (builtFor != null && builtFor != sessionId) return null;
+    return ref.read(cachedTokenBreakdownProvider(widget.charId));
+  }
+
+  void _refreshStudioBreakdown() {
+    if (!mounted ||
+        ref.read(ordinaryPromptRecountEnabledProvider).value != false) {
+      return;
+    }
+    setState(() {
+      _contextSize = _resolveApiConfig()?.contextSize;
+      _breakdown = _cachedBreakdownForCurrentSession;
+    });
   }
 
   Future<void> _calculate() async {
@@ -83,6 +111,17 @@ class _TokenizerSheetState extends ConsumerState<TokenizerSheet> {
     setState(() => _loading = true);
 
     try {
+      final ordinaryEnabled = await ref.read(
+        ordinaryPromptRecountEnabledProvider.future,
+      );
+      if (!mounted) return;
+      if (!ordinaryEnabled || !_canRecount) {
+        setState(() {
+          _contextSize = _resolveApiConfig()?.contextSize;
+          _breakdown = _cachedBreakdownForCurrentSession;
+        });
+        return;
+      }
       final chatState = ref.read(chatProvider(widget.charId)).value;
       final session = chatState?.session;
       if (session == null) {
@@ -95,10 +134,15 @@ class _TokenizerSheetState extends ConsumerState<TokenizerSheet> {
         charId: widget.charId,
         session: session,
       );
-      if (!mounted) return;
+      if (!mounted || !_canRecount) return;
 
-      final result = await buildFromInputsInIsolate(inputs);
-      if (!mounted || _recountPending) return;
+      final result = await buildFromInputsInIsolate(
+        inputs,
+        debugLabel: 'tokenizer-sheet',
+      );
+      if (!mounted || _recountPending || !_canRecount) {
+        return;
+      }
       if (ref.read(chatProvider(widget.charId)).value?.session?.id !=
           session.id) {
         _recountPending = true;
@@ -128,6 +172,21 @@ class _TokenizerSheetState extends ConsumerState<TokenizerSheet> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(ordinaryPromptRecountEnabledProvider, (previous, next) {
+      if (next.isLoading || !next.hasValue) return;
+      final previousMode = _ordinaryRecountEnabled;
+      _ordinaryRecountEnabled = next.value;
+      if (previousMode != null && previousMode != next.value) _calculate();
+    });
+    ref.listen(cachedTokenBreakdownProvider(widget.charId), (previous, next) {
+      _refreshStudioBreakdown();
+    });
+    ref.listen(cachedTokenBreakdownSessionProvider(widget.charId), (
+      previous,
+      next,
+    ) {
+      _refreshStudioBreakdown();
+    });
     ref.listen(chatProvider(widget.charId), (prev, next) {
       final prevSession = prev?.value?.session;
       final nextSession = next.value?.session;
@@ -138,15 +197,18 @@ class _TokenizerSheetState extends ConsumerState<TokenizerSheet> {
 
     // Editing the connection's window or trim mode changes which messages
     // survive, so the numbers on screen are wrong the moment it is saved. The
-    // previous breakdown is only a placeholder, so invalidate it too.
+    // ordinary breakdown is only a placeholder, so invalidate it too. Studio
+    // retains its last actual final-preparation breakdown instead of guessing.
     ref.listen(
       activeApiConfigProvider.select(
         (config) => config?.contextBudgetSignature ?? '',
       ),
       (previous, next) {
         if (previous == null || previous == next) return;
-        ref.read(cachedTokenBreakdownProvider(widget.charId).notifier).state =
-            null;
+        if (_canRecount) {
+          ref.read(cachedTokenBreakdownProvider(widget.charId).notifier).state =
+              null;
+        }
         _calculate();
       },
     );

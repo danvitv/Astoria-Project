@@ -399,8 +399,11 @@ class StreamGenerationService {
               inputs.history,
               trackerContextSize,
             );
-        final trackerStudioContext =
-            setEquals(trackerVisibleMessageIds, studioFinalVisibleMessageIds)
+        final reuseFinalContext = setEquals(
+          trackerVisibleMessageIds,
+          studioFinalVisibleMessageIds,
+        );
+        final trackerStudioContext = reuseFinalContext
             ? finalStudioContext!
             : await const StudioContextPreparer().prepareAsync(
                 inputs: inputs,
@@ -408,12 +411,13 @@ class StreamGenerationService {
                 ledgerPromptInjectionPolicy:
                     turnConfig.ledgerPromptInjectionPolicy,
                 consumerPath: 'studio-tracker',
+                includeMemoryDiagnostics: false,
                 reasoningTagStartOverride:
                     studioPreset?.runtime.reasoningTagStart,
                 reasoningTagEndOverride: studioPreset?.runtime.reasoningTagEnd,
                 studioPreset: studioPreset,
               );
-        timing('studio tracker context');
+        timing('studio tracker context reused=$reuseFinalContext');
         if (_isAborted() || cancelToken.isCancelled) {
           return ChatState(
             session: saveSession ?? session,

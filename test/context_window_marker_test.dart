@@ -41,7 +41,11 @@ TokenBreakdown _run(
 Future<ProviderContainer> _openChat(int count) async {
   final db = AppDatabase.forTesting(NativeDatabase.memory());
   final container = ProviderContainer(
-    overrides: [appDbProvider.overrideWithValue(db)],
+    overrides: [
+      appDbProvider.overrideWithValue(db),
+      // These tests exercise the cached boundary, not automatic preparation.
+      contextWindowRecountProvider('c1').overrideWith((ref) async => null),
+    ],
   );
   addTearDown(() async {
     container.dispose();

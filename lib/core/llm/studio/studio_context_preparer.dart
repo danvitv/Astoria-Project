@@ -51,6 +51,7 @@ final class StudioContextPreparer {
         ),
     String consumerPath = 'studio',
     bool disableSourceWindowExclusion = false,
+    bool includeMemoryDiagnostics = true,
     String? reasoningTagStartOverride,
     String? reasoningTagEndOverride,
     StudioPreset? studioPreset,
@@ -64,6 +65,7 @@ final class StudioContextPreparer {
       ledgerPromptInjectionPolicy: ledgerPromptInjectionPolicy,
       consumerPath: consumerPath,
       disableSourceWindowExclusion: disableSourceWindowExclusion,
+      includeMemoryDiagnostics: includeMemoryDiagnostics,
       reasoningTagStartOverride: reasoningTagStartOverride,
       reasoningTagEndOverride: reasoningTagEndOverride,
       studioPreset: studioPreset,
@@ -79,12 +81,14 @@ final class StudioContextPreparer {
         _prepareStudioContext,
         job,
         payloadBytes: job.payloadBytes,
+        debugLabel: consumerPath,
       ),
     );
     debugPrint(
       '[studio-prep] path=$consumerPath '
       'payload=${(job.payloadBytes / 1024).toStringAsFixed(0)}KB '
-      'init=${initMs}ms took=${sw.elapsedMilliseconds - initMs}ms',
+      'init=${initMs}ms took=${sw.elapsedMilliseconds - initMs}ms '
+      'memoryDiagnostics=$includeMemoryDiagnostics',
     );
     return result;
   }
@@ -99,6 +103,10 @@ final class StudioContextPreparer {
         ),
     String consumerPath = 'studio',
     bool disableSourceWindowExclusion = false,
+
+    /// Tracker-only contexts can omit the expensive per-candidate diagnostic
+    /// pass. Selection, excerpts, packing and all other diagnostics are intact.
+    bool includeMemoryDiagnostics = true,
 
     /// When non-empty, overrides `inputs.apiConfig.reasoningTagStart/End` in
     /// the [MacroContext]. Passed from the Studio preset's
@@ -375,7 +383,9 @@ Do not reapply an older timeskip or treat future plans as elapsed time.
       );
     }
 
-    final memoryCoverage = memory == null
+    final memoryCoverage = !includeMemoryDiagnostics
+        ? _lightweightMemoryCoverage(inputs, memory)
+        : memory == null
         ? inputs.memoryCoverage
         : finalizeMemoryCoverage(
             inputs.memoryCoverage,
@@ -412,6 +422,33 @@ Do not reapply an older timeskip or treat future plans as elapsed time.
       ),
     );
   }
+
+  Map<String, dynamic> _lightweightMemoryCoverage(
+    GenerationContextInputs inputs,
+    MemoryContextResolution? memory,
+  ) => {
+    // Do not forward retrieval diagnostics, fingerprints or selection counters
+    // from another window. Only the already resolved packing facts are valid
+    // here; raw-recall finalPacking is added by this context's resolver below.
+    'diagnosticsOmitted': true,
+    if (memory != null) ...{
+      'packingMode': inputs.memoryPackingMode,
+      'excerptTokensPerChunk': inputs.memoryExcerptTokensPerChunk,
+      'excerptChunksPerEntry': inputs.memoryExcerptChunksPerEntry,
+      'chunkFirstTopEntries': inputs.chunkFirstTopEntries,
+      'chunkFirstTopChunks': inputs.chunkFirstTopChunks,
+      'entryIds': [
+        for (final item in memory.excerptSelection.items) item.entry.id,
+      ],
+      'candidatesTotal': memory.selection.allScores.length,
+      'excludedBySourceWindow': memory.selection.excludedBySourceWindow,
+      'budgetTokens': memory.selection.budgetTokens,
+      'budgetTrimmed': memory.excerptSelection.budgetTrimmed,
+      'selectedCount': memory.excerptSelection.items.length,
+      'selectedTokens': memory.excerptSelection.totalTokens,
+      'memoryMacroMissing': false,
+    },
+  };
 
   EffectiveCanonPromptMaterialization? _materializeLedger({
     required GenerationContextInputs inputs,
@@ -454,6 +491,7 @@ final class _StudioContextJob {
     required this.ledgerPromptInjectionPolicy,
     required this.consumerPath,
     required this.disableSourceWindowExclusion,
+    required this.includeMemoryDiagnostics,
     this.reasoningTagStartOverride,
     this.reasoningTagEndOverride,
     this.studioPreset,
@@ -464,6 +502,7 @@ final class _StudioContextJob {
   final LedgerPromptInjectionPolicy ledgerPromptInjectionPolicy;
   final String consumerPath;
   final bool disableSourceWindowExclusion;
+  final bool includeMemoryDiagnostics;
   final String? reasoningTagStartOverride;
   final String? reasoningTagEndOverride;
   final StudioPreset? studioPreset;
@@ -505,6 +544,7 @@ StudioContext _prepareStudioContext(Object? input) {
     ledgerPromptInjectionPolicy: job.ledgerPromptInjectionPolicy,
     consumerPath: job.consumerPath,
     disableSourceWindowExclusion: job.disableSourceWindowExclusion,
+    includeMemoryDiagnostics: job.includeMemoryDiagnostics,
     reasoningTagStartOverride: job.reasoningTagStartOverride,
     reasoningTagEndOverride: job.reasoningTagEndOverride,
     studioPreset: job.studioPreset,

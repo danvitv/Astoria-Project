@@ -4,7 +4,11 @@ import '../chat_provider.dart';
 import 'cached_token_breakdown.dart';
 import '../../../core/llm/context_calculator.dart';
 import '../../../core/llm/prompt_isolate.dart';
+import '../../../core/llm/studio_controller_ontology.dart';
+import '../../../core/models/studio_pregen_mode.dart';
 import '../../../core/state/active_selection_provider.dart';
+import '../../../core/state/active_studio_preset_provider.dart';
+import '../../../core/state/studio_feature_provider.dart';
 import '../../settings/api_list_provider.dart';
 import '../../presets/preset_list_provider.dart';
 import '../providers/prompt_build_providers.dart';
@@ -53,7 +57,34 @@ class ContextWindowBoundary {
   int get hashCode => Object.hash(messageId, afterMessage);
 }
 
-/// Auto-disposed idle recount: stale isolate results cannot publish elsewhere.
+/// Ordinary recounts cannot describe a Studio final prompt. Wait for the mode
+/// to settle and resolve the same selected/default preset generation uses, so
+/// an enabled preference without a runnable preset still gets ordinary counts.
+final ordinaryPromptRecountEnabledProvider = FutureProvider.autoDispose<bool>((
+  ref,
+) async {
+  final studioEnabled = await ref.watch(studioFeatureSettledProvider.future);
+  if (!ref.mounted) return false;
+  if (!studioEnabled) return true;
+  final preset = await ref.watch(studioPresetProvider.future);
+  if (!ref.mounted) return false;
+  if (preset == null) return true;
+  final useThink =
+      studioPregenMode(preset) == StudioPregenMode.thinkReplacement;
+  // Mirror StudioTurnConfigResolver's runnable-agent gate without resolving API
+  // slots or starting any preparation work merely to draw a context marker.
+  return !preset.agents.any((agent) {
+    final spec = StudioControllerOntology.specForAgent(agent);
+    if (spec == null) return false;
+    if (spec.isFinal) return true;
+    if (agent.phase != spec.phase) return false;
+    if (spec.id == 'think') return useThink;
+    if (useThink && spec.phase == 'pre_generation') return false;
+    return agent.enabled && preset.agentEnabled[spec.id] != false;
+  });
+});
+
+/// Auto-disposed ordinary idle recount: stale results cannot publish elsewhere.
 final contextWindowRecountProvider = FutureProvider.autoDispose
     .family<TokenBreakdown?, String>((ref, charId) async {
       final chat = ref.watch(
@@ -67,6 +98,11 @@ final contextWindowRecountProvider = FutureProvider.autoDispose
           ),
         ),
       );
+      if (chat.session == null || chat.busy) return null;
+      final ordinaryEnabled = await ref.watch(
+        ordinaryPromptRecountEnabledProvider.future,
+      );
+      if (!ref.mounted || !ordinaryEnabled) return null;
       ref.watch(activeApiConfigProvider);
       ref.watch(activePresetIdProvider);
       ref.watch(presetConnectionsProvider);
@@ -74,14 +110,16 @@ final contextWindowRecountProvider = FutureProvider.autoDispose
       ref.watch(personaConnectionsProvider);
       ref.watch(globalVarsProvider);
       ref.watch(presetListProvider);
-      if (chat.session == null || chat.busy) return null;
       await Future<void>.delayed(const Duration(milliseconds: 200));
       if (!ref.mounted) return null;
       final inputs = await ref
           .read(promptPayloadBuilderProvider)
           .collectInputs(charId: charId, session: chat.session);
       if (!ref.mounted) return null;
-      final built = await buildFromInputsInIsolate(inputs);
+      final built = await buildFromInputsInIsolate(
+        inputs,
+        debugLabel: 'context-window-recount',
+      );
       return ref.mounted ? built.breakdown : null;
     });
 

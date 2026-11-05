@@ -2,6 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:glaze_flutter/core/llm/generation_context_inputs.dart';
 import 'package:glaze_flutter/core/llm/memory_selector.dart';
+import 'package:glaze_flutter/core/llm/prompt/memory_block_injector.dart';
+import 'package:glaze_flutter/core/llm/prompt/memory_context_resolver.dart';
 import 'package:glaze_flutter/core/llm/prompt/recalled_message_chunk.dart';
 import 'package:glaze_flutter/core/llm/prompt/runtime_prompt_block.dart';
 import 'package:glaze_flutter/core/llm/studio/studio_context.dart';
@@ -19,8 +21,343 @@ import 'package:glaze_flutter/core/llm/prompt/selective_ledger_projection_filter
 import 'package:glaze_flutter/core/models/tracker.dart';
 import 'package:glaze_flutter/core/models/studio_config.dart';
 
+Map<String, Object?> _contextWithoutMemoryCoverage(StudioContext context) => {
+  'slots': {
+    for (final slot in StudioContextSlot.values)
+      slot.name: context.messagesFor(slot).map((m) => m.toJson()).toList(),
+  },
+  'history': context.history.map((m) => m.toJson()).toList(),
+  'continue': context.continueInstruction,
+  'session': context.sessionVars,
+  'global': context.globalVars,
+  'macro': context.macroContext.toJson(),
+  'triggeredLore': context.diagnostics.triggeredLorebooks
+      .map((e) => e.toJson())
+      .toList(),
+  'triggeredMemory': context.diagnostics.triggeredMemories
+      .map((e) => e.toJson())
+      .toList(),
+  'vectorTokens': context.diagnostics.vectorLoreTokens,
+  'visible': context.diagnostics.visibleMessageIds,
+  'ledgerIdentity': context.diagnostics.ledgerInjectionIdentity,
+  'ledgerDiagnostics': [
+    for (final diagnostic in context.diagnostics.ledgerProjectionDiagnostics)
+      {
+        'group': diagnostic.groupId,
+        'selected': diagnostic.selected,
+        'reason': diagnostic.reason,
+        'tier': diagnostic.tier,
+        'sources': diagnostic.matchingSourceIds,
+      },
+  ],
+  'manifest': context.diagnostics.exactLorebookManifest?.toJson(),
+};
+
 void main() {
   const preparer = StudioContextPreparer();
+
+  test('lightweight coverage changes no context or packing facts', () {
+    final entries = [
+      const MemoryEntry(
+        id: 'source-memory',
+        title: 'Promise',
+        content: 'Lucy promised to keep the bronze key.',
+        messageIds: ['source'],
+        keys: ['key'],
+        importance: 1,
+      ),
+      MemoryEntry(
+        id: 'long-memory',
+        title: 'Older key history',
+        content: List.generate(
+          70,
+          (index) =>
+              'The bronze key opened the old gate at visit $index. '
+              'Lucy carefully recorded where it was kept.',
+        ).join('\n\n'),
+        messageIds: const ['outside'],
+        keys: const ['key'],
+        importance: 0,
+      ),
+    ];
+    for (final packing in ['full', 'hybrid', 'chunk_first']) {
+      final selection = MemorySelector.select(
+        MemorySelectionInput(
+          selectionMode: 'hybrid',
+          entries: entries,
+          keywordMatchedTerms: const {
+            'source-memory': ['key'],
+            'long-memory': ['key'],
+          },
+          maxInjectionTokens: 1000,
+          maxInjectedEntries: 2,
+          diversityAware: false,
+          chunkBudgeting: packing == 'chunk_first',
+        ),
+      );
+      final inputs = GenerationContextInputs(
+        character: const Character(id: 'char', name: 'Lucy'),
+        persona: const Persona(id: 'persona', name: 'Sam', prompt: 'Curious'),
+        history: const [
+          ChatMessage(id: 'source', role: 'assistant', content: 'Key promise.'),
+          ChatMessage(
+            id: 'latest',
+            role: 'user',
+            content: '{{char}}, continue.',
+            imagePath: 'image.png',
+          ),
+          ChatMessage(
+            id: 'hidden',
+            role: 'user',
+            content: 'Hidden',
+            isHidden: true,
+          ),
+        ],
+        sessionId: 'session',
+        apiConfig: const ApiConfig(id: 'api'),
+        sessionVars: const {'place': 'gate'},
+        globalVars: const {'weather': 'rain'},
+        continueInstruction: 'Continue this reply',
+        memorySelection: selection,
+        memoryPackingMode: packing,
+        memoryExcerptTokensPerChunk: 120,
+        memoryExcerptChunksPerEntry: 1,
+        chunkFirstTopEntries: 2,
+        chunkFirstTopChunks: 1,
+        memoryCoverage: {
+          'packingMode': packing,
+          'excerptTokensPerChunk': 120,
+          'excerptChunksPerEntry': 1,
+          'entryIds': ['stale-entry'],
+          'candidatesTotal': 999,
+          'excludedBySourceWindow': 999,
+          'memoryInjectionFingerprint': 'retrieval-window-fingerprint',
+          'diagnostics': {
+            'candidates': ['stale-candidate'],
+            'selectedCount': 999,
+          },
+          'rawRecall': {
+            'selected': ['retrieval-window-source'],
+          },
+        },
+        recalledMessageChunks: const [
+          RecalledMessageChunk(text: 'Key promise.', messageIds: ['source']),
+          RecalledMessageChunk(
+            text: 'Outside evidence',
+            messageIds: ['outside'],
+          ),
+        ],
+        lorebooks: const [
+          Lorebook(
+            id: 'book',
+            name: 'World',
+            entries: [
+              LorebookEntry(
+                id: 'lore',
+                lorebookId: 'book',
+                keys: ['Key'],
+                content: 'Lore for {{char}}',
+                position: 'lorebooksMacro',
+              ),
+            ],
+          ),
+        ],
+        runtimePromptBlocks: const [
+          RuntimePromptBlock(
+            id: 'runtime',
+            content: '{{char}} remembers {{memory}}',
+            role: 'user',
+            depth: 2,
+          ),
+        ],
+        effectiveCanonProjection: const EffectiveCanonPromptProjection(
+          facts: [],
+          trackers: [
+            Tracker(
+              sessionId: 'session',
+              name: 'scene.immediate_thread',
+              value: 'Lucy promised to keep the key',
+              provenance: 'messageId=source',
+            ),
+          ],
+          unblockedTransitionClaims: [],
+          revisionNumber: 4,
+          revisionHash: 'revision',
+          cacheIdentity: 'canon/4',
+        ),
+        effectiveCanonRevisionNumber: 4,
+        effectiveCanonRevisionHash: 'revision',
+        effectiveCanonCacheIdentity: 'canon/4',
+        ledgerProjectionFreshnessProvenCurrent: true,
+      );
+      for (final visible in [
+        <String>{'latest'},
+        <String>{'source', 'latest'},
+      ]) {
+        for (final disableExclusion in [false, true]) {
+          StudioContext prepare({bool? diagnostics}) => preparer.prepare(
+            inputs: inputs,
+            visibleMessageIds: visible,
+            includeMemoryDiagnostics: diagnostics ?? true,
+            disableSourceWindowExclusion: disableExclusion,
+            consumerPath: 'studio-tracker',
+            ledgerPromptInjectionPolicy: const LedgerPromptInjectionPolicy(
+              presetOptIn: true,
+              mode: LedgerPromptInjectionMode.gapFiller,
+            ),
+            studioPreset: const StudioPreset(id: 'studio'),
+          );
+          final full = prepare();
+          final lightweight = prepare(diagnostics: false);
+          expect(
+            _contextWithoutMemoryCoverage(lightweight),
+            _contextWithoutMemoryCoverage(full),
+            reason: '$packing/$visible/disableExclusion=$disableExclusion',
+          );
+          expect(full.diagnostics.ledgerProjectionDiagnostics, isNotEmpty);
+          expect(full.diagnostics.exactLorebookManifest!.entries, hasLength(1));
+
+          final coverage = lightweight.diagnostics.memoryCoverage;
+          final fullCoverage = full.diagnostics.memoryCoverage;
+          final detailed = fullCoverage['diagnostics'] as Map;
+          expect(detailed['candidates'], hasLength(2));
+          expect(coverage['diagnosticsOmitted'], isTrue);
+          expect(coverage, isNot(contains('diagnostics')));
+          expect(coverage, isNot(contains('memoryInjectionFingerprint')));
+          for (final key in [
+            'packingMode',
+            'excerptTokensPerChunk',
+            'excerptChunksPerEntry',
+            'entryIds',
+            'candidatesTotal',
+            'excludedBySourceWindow',
+            'budgetTrimmed',
+            'memoryMacroMissing',
+          ]) {
+            expect(coverage[key], fullCoverage[key], reason: key);
+          }
+          expect(coverage['selectedCount'], detailed['selectedCount']);
+          expect(coverage['selectedTokens'], detailed['selectedTokens']);
+          expect(
+            coverage['entryIds'],
+            lightweight.diagnostics.triggeredMemories.map((e) => e.id).toList(),
+          );
+          final raw = coverage['rawRecall'] as Map;
+          expect(raw.keys, ['finalPacking']);
+          expect(
+            raw['finalPacking'],
+            (fullCoverage['rawRecall'] as Map)['finalPacking'],
+          );
+          expect(
+            coverage['excludedBySourceWindow'],
+            visible.contains('source') && !disableExclusion ? 1 : 0,
+          );
+          if (packing == 'full' && !visible.contains('source')) {
+            expect(coverage['entryIds'], ['source-memory']);
+          }
+          if (packing != 'full') {
+            expect(
+              (detailed['candidates'] as List).any(
+                (candidate) => candidate['injectionType'] == 'excerpt',
+              ),
+              isTrue,
+            );
+          }
+        }
+      }
+    }
+  });
+
+  test('default coverage retains the existing full diagnostic finalizer', () {
+    final selection = MemorySelector.select(
+      const MemorySelectionInput(
+        entries: [MemoryEntry(id: 'm', content: 'Remember this fact')],
+        maxInjectedEntries: 1,
+      ),
+    );
+    final inputs = GenerationContextInputs(
+      character: const Character(id: 'char', name: 'Lucy'),
+      history: const [],
+      apiConfig: const ApiConfig(id: 'api'),
+      memorySelection: selection,
+      memoryCoverage: const {'metadata': 'preserved'},
+    );
+    final resolved = const MemoryContextResolver().resolve(
+      selection: selection,
+      visibleMessageIds: const {},
+      disableSourceWindowExclusion: false,
+      excerptingEnabled: inputs.memoryExcerptingEnabled,
+      packingMode: inputs.memoryPackingMode,
+      excerptTokensPerChunk: inputs.memoryExcerptTokensPerChunk,
+      excerptChunksPerEntry: inputs.memoryExcerptChunksPerEntry,
+      chunkFirstTopEntries: inputs.chunkFirstTopEntries,
+      chunkFirstTopChunks: inputs.chunkFirstTopChunks,
+    );
+    final defaults = preparer.prepare(
+      inputs: inputs,
+      visibleMessageIds: const {},
+    );
+    final explicit = preparer.prepare(
+      inputs: inputs,
+      visibleMessageIds: const {},
+      includeMemoryDiagnostics: true,
+    );
+    expect(
+      defaults.diagnostics.memoryCoverage,
+      explicit.diagnostics.memoryCoverage,
+    );
+    final coverage = Map<String, dynamic>.from(
+      defaults.diagnostics.memoryCoverage,
+    )..remove('rawRecall');
+    expect(
+      coverage,
+      finalizeMemoryCoverage(
+        inputs.memoryCoverage,
+        resolved.selection,
+        resolved.excerptSelection,
+      ),
+    );
+  });
+
+  test('lightweight legacy content drops stale unresolved coverage too', () {
+    const inputs = GenerationContextInputs(
+      character: Character(id: 'char', name: 'Lucy'),
+      history: [],
+      apiConfig: ApiConfig(id: 'api'),
+      memoryContent: 'Legacy memory content',
+      memoryCoverage: {
+        'entryIds': ['stale-entry'],
+        'diagnostics': {'selectedCount': 999},
+        'rawRecall': {
+          'selected': ['stale-source'],
+        },
+      },
+    );
+    final defaults = preparer.prepare(
+      inputs: inputs,
+      visibleMessageIds: const {},
+    );
+    final lightweight = preparer.prepare(
+      inputs: inputs,
+      visibleMessageIds: const {},
+      includeMemoryDiagnostics: false,
+    );
+    expect(
+      _contextWithoutMemoryCoverage(lightweight),
+      _contextWithoutMemoryCoverage(defaults),
+    );
+    expect(lightweight.join(StudioContextSlot.memory), 'Legacy memory content');
+    expect(
+      lightweight.diagnostics.memoryCoverage.keys,
+      unorderedEquals(['diagnosticsOmitted', 'rawRecall']),
+    );
+    expect((lightweight.diagnostics.memoryCoverage['rawRecall'] as Map).keys, [
+      'finalPacking',
+    ]);
+    expect(defaults.diagnostics.memoryCoverage['diagnostics'], {
+      'selectedCount': 999,
+    });
+  });
 
   test('builds exact Studio lorebook provenance from merged entries', () {
     final context = preparer.prepare(
@@ -416,6 +753,7 @@ void main() {
         visibleMessageIds: const {'latest'},
         ledgerPromptInjectionPolicy: policy,
         consumerPath: 'studio-tracker',
+        includeMemoryDiagnostics: false,
       );
       final finalWriter = preparer.prepare(
         inputs: inputs,

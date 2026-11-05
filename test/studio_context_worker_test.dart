@@ -65,7 +65,18 @@ Map<String, Object?> _contextValue(StudioContext context) => {
   'vectorTokens': context.diagnostics.vectorLoreTokens,
   'visible': context.diagnostics.visibleMessageIds,
   'ledgerIdentity': context.diagnostics.ledgerInjectionIdentity,
+  'ledgerDiagnostics': [
+    for (final diagnostic in context.diagnostics.ledgerProjectionDiagnostics)
+      {
+        'group': diagnostic.groupId,
+        'selected': diagnostic.selected,
+        'reason': diagnostic.reason,
+        'tier': diagnostic.tier,
+        'sources': diagnostic.matchingSourceIds,
+      },
+  ],
   'manifest': context.diagnostics.exactLorebookManifest?.toJson(),
+  'macro': context.macroContext.toJson(),
   'reasoningStart': context.macroContext.reasoningStart,
   'reasoningEnd': context.macroContext.reasoningEnd,
 };
@@ -345,6 +356,52 @@ void main() {
           expect(
             prepared.join(StudioContextSlot.loreMacro),
             contains('Lore for Кот'),
+          );
+          final lightweight = await preparer.prepareAsync(
+            inputs: inputs,
+            visibleMessageIds: visible,
+            reasoningTagStartOverride: '<studio-think>',
+            studioPreset: const StudioPreset(id: 'studio'),
+            consumerPath: 'studio-tracker',
+            includeMemoryDiagnostics: false,
+            worker: worker,
+          );
+          final lightweightSync = preparer.prepare(
+            inputs: inputs,
+            visibleMessageIds: visible,
+            reasoningTagStartOverride: '<studio-think>',
+            studioPreset: const StudioPreset(id: 'studio'),
+            consumerPath: 'studio-tracker',
+            includeMemoryDiagnostics: false,
+          );
+          expect(
+            _contextValue(lightweight),
+            _contextValue(lightweightSync),
+            reason: 'lightweight $packing/$visible',
+          );
+          // Compare the same consumer identity, not a tracker against a writer.
+          final fullTracker = preparer.prepare(
+            inputs: inputs,
+            visibleMessageIds: visible,
+            reasoningTagStartOverride: '<studio-think>',
+            studioPreset: const StudioPreset(id: 'studio'),
+            consumerPath: 'studio-tracker',
+          );
+          expect(
+            _contextValue(lightweight)..remove('memory'),
+            _contextValue(fullTracker)..remove('memory'),
+          );
+          expect(
+            lightweight.diagnostics.memoryCoverage['diagnosticsOmitted'],
+            isTrue,
+          );
+          expect(
+            lightweight.diagnostics.memoryCoverage,
+            isNot(contains('diagnostics')),
+          );
+          expect(
+            prepared.diagnostics.memoryCoverage['diagnostics'],
+            isA<Map<String, dynamic>>(),
           );
         }
       }
@@ -632,6 +689,28 @@ void main() {
                   as Map)['finalPacking']
               as Map;
       expect(packing['tokenCounter'], 'o200k_base_estimate');
+
+      final lightweight = await preparer.prepareAsync(
+        inputs: inputs,
+        visibleMessageIds: const {'current'},
+        includeMemoryDiagnostics: false,
+        worker: worker,
+      );
+      expect(
+        _contextValue(lightweight),
+        _contextValue(
+          preparer.prepare(
+            inputs: inputs,
+            visibleMessageIds: const {'current'},
+            includeMemoryDiagnostics: false,
+          ),
+        ),
+      );
+      expect(
+        (lightweight.diagnostics.memoryCoverage['rawRecall']
+            as Map)['finalPacking'],
+        packing,
+      );
 
       final missingCache = await fixture.parent.createTemp(
         'studio-worker-empty-',
