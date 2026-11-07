@@ -1,19 +1,26 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/models/chat_message.dart';
 import '../../../core/models/memory_book.dart';
+import '../../../core/models/memory_book_api_settings.dart';
+import '../../../core/credentials/memory_custom_api_credential_owner.dart';
+import '../../../core/services/memory_consolidation_coordinator.dart';
 import '../../../core/services/generation_notification_service.dart';
 import '../../../core/utils/error_format.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../core/state/lorebook_embedding_provider.dart';
 import '../../../core/state/memory_settings_provider.dart';
+import '../../../core/state/memory_custom_api_credentials_provider.dart';
+import '../../../core/llm/memory_draft_api_source.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/widgets/glass_surface.dart';
 import '../../../shared/widgets/glaze_bottom_sheet.dart';
+import '../../../shared/widgets/glaze_action_button.dart';
 import '../../../shared/widgets/glaze_error_dialog.dart';
 import '../../../shared/widgets/glaze_filter_chip_bar.dart';
 import '../../../shared/widgets/glaze_spinner.dart';
@@ -25,6 +32,7 @@ import '../../../shared/widgets/tab_slide_switcher.dart';
 import '../../memory/controllers/memory_book_controller.dart';
 import '../../memory/state/memory_book_revision_provider.dart';
 import '../../memory/state/memory_draft_jobs_provider.dart';
+import '../../settings/api_list_provider.dart';
 import 'memory/memory_books_controls.dart';
 import 'memory/memory_books_toolbar.dart';
 import 'memory/memory_draft_card.dart';
@@ -134,6 +142,9 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   /// sheet setState'd itself on every frame and never settled.
   MemoryBooksActions? _publishedActions;
   bool _reindexRequested = false;
+  CancelToken? _consolidationCancelToken;
+  String? _consolidatingEntryId;
+  int _consolidationEpoch = 0;
 
   @override
   void initState() {
@@ -189,6 +200,8 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
 
   @override
   void dispose() {
+    _consolidationEpoch++;
+    _consolidationCancelToken?.cancel('Memory Books tab disposed');
     _ctrl.dispose();
     _searchCtrl.dispose();
     _searchFocus.dispose();
@@ -200,6 +213,10 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.sessionId != widget.sessionId ||
         oldWidget.charId != widget.charId) {
+      _consolidationEpoch++;
+      _consolidationCancelToken?.cancel('Memory Books context changed');
+      _consolidationCancelToken = null;
+      _consolidatingEntryId = null;
       // This State owns a final controller. A -> B -> A cannot resurrect it.
       _ctrl.dispose();
     }
@@ -587,6 +604,17 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (_consolidatingEntryId != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: GlazeActionButton(
+              tone: GlazeActionTone.neutral,
+              icon: Icons.close_rounded,
+              label: 'memory_consolidation_cancel'.tr(),
+              onTap: () =>
+                  _consolidationCancelToken?.cancel('Cancelled by user'),
+            ),
+          ),
         if (visible.isEmpty)
           _buildEmpty(
             entries.isEmpty
@@ -605,6 +633,9 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
                   : null,
               onEdit: () => _editEntry(entry),
               onDelete: () => _deleteEntry(entry.id),
+              onConsolidate: _canConsolidate(entry)
+                  ? () => _consolidateEntry(entry)
+                  : null,
             ),
           ),
       ],
@@ -737,6 +768,222 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
     await _ctrl.deleteEntry(entryId);
     if (mounted) setState(() {});
   }
+
+  bool _canConsolidate(MemoryEntry entry) {
+    final settings = _ctrl.book?.settings;
+    return _tabIndex == _tabApproved &&
+        settings?.consolidationEnabled == true &&
+        entry.status == 'active' &&
+        entry.activeRevisionId != null &&
+        _hasEligibleManifest(entry) &&
+        _consolidatingEntryId == null;
+  }
+
+  bool _hasEligibleManifest(MemoryEntry entry) {
+    final revisionId = entry.activeRevisionId;
+    if (revisionId == null) return false;
+    MemoryEntryRevision? activeRevision;
+    for (final revision in entry.revisions) {
+      if (revision.id == revisionId) {
+        activeRevision = revision;
+        break;
+      }
+    }
+    if (activeRevision == null) return false;
+    final manifest = activeRevision.sourceManifest;
+    return manifest != null &&
+        !manifest.invalidated &&
+        manifest.version == 1 &&
+        manifest.originSessionId == widget.sessionId &&
+        activeRevision.messageIds.isNotEmpty &&
+        manifest.messages.length == activeRevision.messageIds.length &&
+        activeRevision.messageIds.asMap().entries.every(
+          (item) => manifest.messages[item.key].messageId == item.value,
+        ) &&
+        entry.messageIds.length == activeRevision.messageIds.length &&
+        entry.messageIds.asMap().entries.every(
+          (item) => activeRevision!.messageIds[item.key] == item.value,
+        );
+  }
+
+  Future<void> _consolidateEntry(MemoryEntry entry) async {
+    if (!_canConsolidate(entry)) return;
+    final pipeline = ref.read(pipelineSettingsProvider);
+    final apiSettings = pipeline.memoryBookApi;
+    final runtime = ref.read(nativeProviderRuntimeProvider);
+    final sources = runtime?.sources;
+    final customOwner = apiSettings.generationSource == 'custom'
+        ? ref.read(memoryCustomApiCredentialOwnerProvider)
+        : null;
+    final epoch = ++_consolidationEpoch;
+    final cancelToken = CancelToken();
+    _consolidationCancelToken = cancelToken;
+    _consolidatingEntryId = entry.id;
+    final sessionId = widget.sessionId;
+    final charId = widget.charId;
+    final revisionEpoch = ref.read(memoryBookRevisionProvider);
+    final bookSettings = _ctrl.book!.settings;
+    final entryIdentity = _entryConsolidationIdentity(entry);
+    MemoryCustomApiInvocation? customInvocation;
+    bool isCurrent() => _consolidationCurrent(
+      epoch,
+      sessionId,
+      charId,
+      cancelToken,
+      revisionEpoch,
+      entry.id,
+      entryIdentity,
+      apiSettings,
+      bookSettings,
+    );
+
+    setState(() {});
+    GlazeToast.show(context, 'memory_consolidation_generating'.tr());
+    try {
+      customInvocation = customOwner?.capture(
+        apiSettings,
+        isCurrent: isCurrent,
+      );
+      final originalStamp = apiSettings.generationSource == 'custom'
+          ? null
+          : sources?.captureOriginalStamp();
+      final apiResolver = MemoryDraftApiSourceResolver(
+        sources: sources,
+        loadApiConfigs: () async {
+          await ref.read(apiListProvider.future);
+          if (!isCurrent()) return const [];
+          return ref.read(apiListProvider).value ?? const [];
+        },
+        readActiveApiConfig: () => ref.read(activeApiConfigProvider),
+      );
+      final coordinator = ref.read(memoryConsolidationCoordinatorProvider);
+      final draft = await coordinator.generateDraftWithSettings(
+        sessionId: sessionId,
+        branchId: sessionId,
+        proposedEventId: 'event_${DateTime.now().microsecondsSinceEpoch}',
+        memoryEntryIds: [entry.id],
+        settings: apiSettings,
+        apiResolver: apiResolver,
+        originalStamp: originalStamp,
+        originalCustomApi: customInvocation,
+        isCurrent: isCurrent,
+        cancelToken: cancelToken,
+      );
+      if (!isCurrent()) return;
+      if (draft == null) {
+        if (mounted) {
+          GlazeToast.show(context, 'memory_consolidation_unavailable'.tr());
+        }
+        return;
+      }
+      final accepted = await _reviewConsolidation(draft);
+      if (accepted != true || !isCurrent()) return;
+      final saved = await coordinator.acceptReviewed(
+        draft: draft,
+        isCurrent: isCurrent,
+      );
+      if (!isCurrent()) return;
+      if (saved) {
+        if (mounted) {
+          GlazeToast.show(context, 'memory_consolidation_accepted'.tr());
+        }
+      } else {
+        if (mounted) {
+          GlazeToast.show(context, 'memory_consolidation_stale'.tr());
+        }
+      }
+    } catch (error) {
+      if (mounted && isCurrent()) {
+        GlazeToast.show(
+          context,
+          'memory_consolidation_failed'.tr(
+            namedArgs: {'error': formatError(error)},
+          ),
+        );
+      }
+    } finally {
+      if (mounted && epoch == _consolidationEpoch) {
+        setState(() {
+          _consolidationCancelToken = null;
+          _consolidatingEntryId = null;
+        });
+      }
+    }
+  }
+
+  bool _consolidationCurrent(
+    int epoch,
+    String sessionId,
+    String charId,
+    CancelToken cancelToken,
+    int revisionEpoch,
+    String entryId,
+    String identity,
+    MemoryBookApiSettings apiSettings,
+    MemoryBookSettings bookSettings,
+  ) {
+    if (!mounted ||
+        epoch != _consolidationEpoch ||
+        cancelToken.isCancelled ||
+        widget.sessionId != sessionId ||
+        widget.charId != charId ||
+        ref.read(memoryBookRevisionProvider) != revisionEpoch ||
+        ref.read(pipelineSettingsProvider).memoryBookApi != apiSettings ||
+        _ctrl.book?.settings != bookSettings ||
+        !bookSettings.consolidationEnabled) {
+      return false;
+    }
+    MemoryEntry? current;
+    for (final item in _ctrl.book?.entries ?? const <MemoryEntry>[]) {
+      if (item.id == entryId) {
+        current = item;
+        break;
+      }
+    }
+    return current != null &&
+        current.status == 'active' &&
+        _hasEligibleManifest(current) &&
+        _entryConsolidationIdentity(current) == identity;
+  }
+
+  String _entryConsolidationIdentity(MemoryEntry entry) =>
+      '${entry.activeRevisionId}|${_activeRevisionIdentity(entry)}|'
+      '${entry.sourceSwipeId}|'
+      '${entry.sourceAgentSwipeId}|${entry.sourceManifest?.toJson()}|'
+      '${entry.title}|${entry.content}|${entry.messageIds.join(',')}';
+
+  String _activeRevisionIdentity(MemoryEntry entry) {
+    for (final revision in entry.revisions) {
+      if (revision.id == entry.activeRevisionId) {
+        return '${revision.id}|${revision.version}|${revision.title}|'
+            '${revision.content}|${revision.messageIds.join(',')}|'
+            '${revision.sourceManifest?.toJson()}';
+      }
+    }
+    return '';
+  }
+
+  Future<bool?> _reviewConsolidation(MemoryConsolidationDraft draft) =>
+      GlazeBottomSheet.show<bool>(
+        context,
+        title: 'memory_consolidation_review_title'.tr(),
+        child: _MemoryConsolidationReview(draft: draft),
+        items: [
+          if (draft.response.outcome != 'unable_to_verify')
+            BottomSheetItem(
+              icon: Icons.check_rounded,
+              label: 'memory_consolidation_accept'.tr(),
+              centered: true,
+              onTap: () => Navigator.of(context, rootNavigator: true).pop(true),
+            ),
+          BottomSheetItem(
+            icon: Icons.close_rounded,
+            label: 'memory_consolidation_reject'.tr(),
+            centered: true,
+            onTap: () => Navigator.of(context, rootNavigator: true).pop(false),
+          ),
+        ],
+      );
 
   void _openSettings() async {
     final currentSettings = _ctrl.globalSettingsAsBookSettings();
@@ -890,4 +1137,134 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
       if (mounted) setState(() {});
     }
   }
+}
+
+class _MemoryConsolidationReview extends StatelessWidget {
+  const _MemoryConsolidationReview({required this.draft});
+
+  final MemoryConsolidationDraft draft;
+
+  @override
+  Widget build(BuildContext context) {
+    final response = draft.response;
+    final event = response.event;
+    final outcomeKey = switch (response.outcome) {
+      'confirmed' => 'memory_consolidation_outcome_confirmed',
+      'independent_similarity' =>
+        'memory_consolidation_outcome_independent_similarity',
+      _ => 'memory_consolidation_outcome_unable',
+    };
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(response.outcome == 'unable_to_verify' ? '⚠' : '●'),
+          const SizedBox(height: 8),
+          Text(outcomeKey.tr()),
+          if (event != null) ...[
+            const SizedBox(height: 20),
+            _sectionTitle(context, 'memory_consolidation_event'.tr()),
+            const SizedBox(height: 6),
+            Text('${event.kind} · ${event.state}'),
+            const SizedBox(height: 4),
+            Text(event.description),
+            if (event.boundaryMessageId != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Boundary: ${event.boundaryMessageId} · '
+                'swipe ${event.boundarySwipeId} · '
+                'agent swipe ${event.boundaryAgentSwipeId} · '
+                'ordinal ${event.boundaryOrdinal}',
+              ),
+            ],
+          ],
+          if (response.links.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            _sectionTitle(context, 'memory_consolidation_links'.tr()),
+            const SizedBox(height: 6),
+            for (final link in response.links)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  '${link.fromEventId} — ${link.relation} → ${link.toEventId}',
+                ),
+              ),
+          ],
+          const SizedBox(height: 20),
+          _sectionTitle(context, 'memory_consolidation_sources'.tr()),
+          for (final source in draft.pack.sources) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    source.title.isEmpty ? source.memoryEntryId : source.title,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Text(
+                  response.unverifiedSourceRefs.contains(source.ref)
+                      ? 'Unverified'
+                      : event?.sourceRefs.contains(source.ref) == true
+                      ? 'Cited'
+                      : 'Context',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: response.unverifiedSourceRefs.contains(source.ref)
+                        ? context.cs.error
+                        : context.cs.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'memory_consolidation_source_provenance'.tr(
+                namedArgs: {
+                  'revision':
+                      '${source.revisionId} (${source.fingerprint}) · '
+                      'session ${source.sessionId} · branch ${source.branchId} · '
+                      'manifest ${source.sourceManifest.version} '
+                      '(${source.sourceManifest.originSessionId})',
+                  'messages': source.messageIds.join(', '),
+                  'swipe': '${source.sourceSwipeId}',
+                  'agentSwipe': '${source.sourceAgentSwipeId}',
+                },
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              source.sourceManifest.messages
+                  .map(
+                    (stamp) =>
+                        '${stamp.messageId}: swipe ${stamp.swipeId}, '
+                        'agent swipe ${stamp.agentSwipeId}, '
+                        '${stamp.contentHash}',
+                  )
+                  .join('\n'),
+            ),
+            const SizedBox(height: 8),
+            SelectableText(source.content),
+          ],
+          if (draft.pack.unexaminedOpenObligationIds.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            Text(
+              'Unexamined: '
+              '${draft.pack.unexaminedOpenObligationIds.join(', ')}',
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionTitle(BuildContext context, String title) => Text(
+    title,
+    style: TextStyle(
+      fontSize: 14,
+      fontWeight: FontWeight.w700,
+      color: context.cs.primary,
+    ),
+  );
 }

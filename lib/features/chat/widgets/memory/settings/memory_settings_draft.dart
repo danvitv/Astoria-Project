@@ -42,6 +42,8 @@ class MemorySettingsDraft {
   double importanceWeight;
   bool sourceWindowExclusion;
   bool factualContinuityGuardEnabled;
+  bool consolidationEnabled;
+  int consolidationThreshold;
   bool queryIncludeAssistant;
   int queryRecentTurns;
   int queryMaxChars;
@@ -90,6 +92,8 @@ class MemorySettingsDraft {
     required this.importanceWeight,
     required this.sourceWindowExclusion,
     required this.factualContinuityGuardEnabled,
+    required this.consolidationEnabled,
+    required this.consolidationThreshold,
     required this.queryIncludeAssistant,
     required this.queryRecentTurns,
     required this.queryMaxChars,
@@ -147,6 +151,8 @@ class MemorySettingsDraft {
       importanceWeight: s.importanceWeight,
       sourceWindowExclusion: s.sourceWindowExclusion,
       factualContinuityGuardEnabled: s.factualContinuityGuardEnabled,
+      consolidationEnabled: s.consolidationEnabled,
+      consolidationThreshold: s.consolidationThreshold.clamp(1, 100),
       queryIncludeAssistant: s.queryIncludeAssistant,
       queryRecentTurns: s.queryRecentTurns,
       queryMaxChars: s.queryMaxChars,
@@ -203,6 +209,8 @@ class MemorySettingsDraft {
     importanceWeight: importanceWeight,
     sourceWindowExclusion: sourceWindowExclusion,
     factualContinuityGuardEnabled: factualContinuityGuardEnabled,
+    consolidationEnabled: consolidationEnabled,
+    consolidationThreshold: consolidationThreshold,
     queryIncludeAssistant: queryIncludeAssistant,
     queryRecentTurns: queryRecentTurns,
     queryMaxChars: queryMaxChars,

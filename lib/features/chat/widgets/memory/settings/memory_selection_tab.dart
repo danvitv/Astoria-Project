@@ -243,6 +243,15 @@ class MemorySelectionSections {
                 onChanged();
               },
             ),
+            MenuSwitchItem(
+              label: 'memory_consolidation_enabled'.tr(),
+              description: 'memory_consolidation_enabled_desc'.tr(),
+              value: draft.consolidationEnabled,
+              onChanged: (value) {
+                draft.consolidationEnabled = value;
+                onChanged();
+              },
+            ),
           ],
         ),
         MenuGroup(

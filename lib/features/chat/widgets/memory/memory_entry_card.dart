@@ -36,6 +36,7 @@ class MemoryEntryCard extends StatelessWidget {
 
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final VoidCallback? onConsolidate;
 
   const MemoryEntryCard({
     super.key,
@@ -44,6 +45,7 @@ class MemoryEntryCard extends StatelessWidget {
     required this.onEdit,
     required this.onDelete,
     this.showStatus = false,
+    this.onConsolidate,
   });
 
   bool get _isActive =>
@@ -103,6 +105,15 @@ class MemoryEntryCard extends StatelessWidget {
                       onEdit();
                     },
                   ),
+                  if (onConsolidate != null)
+                    BottomSheetItem(
+                      icon: Icons.link_outlined,
+                      label: 'memory_consolidation_action'.tr(),
+                      onTap: () {
+                        Navigator.of(menuContext, rootNavigator: true).pop();
+                        onConsolidate!();
+                      },
+                    ),
                   BottomSheetItem(
                     icon: Icons.delete_outline,
                     label: 'btn_delete'.tr(),
