@@ -29,7 +29,7 @@ class FlutterBackupImporter extends BackupHelpers {
   /// Table entries larger than this are decompressed to a temp file and read
   /// back from disk instead of being materialised in memory.
   static const int _spillToDiskBytes = 8 * 1024 * 1024;
-  static const int _maxSchemaVersion = 13;
+  static const int _maxSchemaVersion = 14;
   // Support-assistant state is device-local and encrypted. The exporter
   // intentionally omits these tables; do not trust hand-crafted archives to
   // restore them through the generic table importer.
@@ -336,6 +336,9 @@ class FlutterBackupImporter extends BackupHelpers {
       if (schemaVersion < 12) {
         await _clearAgentOpsStateMissingFromLegacyBackup();
       }
+      if (schemaVersion < 14) {
+        await _clearMemoryEventRegistryMissingFromLegacyBackup();
+      }
       for (final f in tableFiles) {
         _cancel.check();
         // e.g. tables/characters.jsonl → characters
@@ -417,6 +420,13 @@ class FlutterBackupImporter extends BackupHelpers {
     await db.customStatement('DELETE FROM card_evolution_collector_runs');
     await db.customStatement('DELETE FROM card_evolution_observations');
   });
+
+  Future<void> _clearMemoryEventRegistryMissingFromLegacyBackup() =>
+      db.transaction(() async {
+        await db.customStatement('DELETE FROM memory_event_link_rows');
+        await db.customStatement('DELETE FROM memory_event_source_rows');
+        await db.customStatement('DELETE FROM memory_event_rows');
+      });
 
   /// Restores all SharedPreferences from [preferences.json] inside the ZIP.
   /// Keys are written as-is; missing file is silently ignored (v1 legacy or

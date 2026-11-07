@@ -31,7 +31,8 @@ class BackupExporter {
   //  11 — added complete Card Rewriter/session-canon provenance.
   //  12 — added complete Agent Ops reconciliation and recovery provenance.
   //  13 — Collector journals use three-reconciliation batches.
-  static const int schemaVersion = 13;
+  //  14 — durable memory event registry and provenance links.
+  static const int schemaVersion = 14;
 
   /// Rows fetched per page while serializing a table. The whole table is never
   /// materialized at once — `chat_sessions` stores every message of every chat
@@ -71,6 +72,9 @@ class BackupExporter {
     'memory_salience_rows',
     'memory_cadence_rows',
     'memory_consolidation_rows',
+    'memory_event_rows',
+    'memory_event_source_rows',
+    'memory_event_link_rows',
     'character_knowledge_fact_rows',
     'character_session_baseline_rows',
     'reconciliation_successful_runs',

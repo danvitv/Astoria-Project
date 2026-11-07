@@ -5,56 +5,62 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/services/backup/backup_exporter.dart';
 
 void main() {
-  test('backup v13 includes Agent Ops authority but excludes diagnostics', () {
-    expect(BackupExporter.schemaVersion, 13);
-    expect(
-      BackupExporter.tableNames,
-      containsAll(const [
-        'reconciliation_successful_runs',
-        'ledger_reconciliation_effects',
-        'reconciliation_run_invalidations',
-        'ledger_reconciliation_checkpoints',
-        'ledger_reconciliation_cleanup_journals',
-        'ledger_reconciliation_cursors',
-        'lorebook_use_manifests',
-        'lorebook_use_manifest_entries',
-        'lorebook_use_acceptance_records',
-        'card_evolution_collector_runs',
-        'card_evolution_observations',
-        'card_evolution_claims',
-        'card_evolution_writer_calls',
-        'card_evolution_proposal_runs',
-        'rewrite_jobs',
-        'rewrite_operations',
-        'rewrite_operation_revisions',
-        'rewrite_evidence_rows',
-      ]),
-    );
-    expect(
-      BackupExporter.tableNames,
-      isNot(
+  test(
+    'backup v14 includes event registry authority but excludes diagnostics',
+    () {
+      expect(BackupExporter.schemaVersion, 14);
+      expect(
+        BackupExporter.tableNames,
         containsAll(const [
-          'ledger_debug_runs',
-          'card_evolution_debug_runs',
-          'llm_request_capture_rows',
-          'llm_call_event_rows',
-          'session_lorebook_embedding_job_rows',
+          'reconciliation_successful_runs',
+          'ledger_reconciliation_effects',
+          'reconciliation_run_invalidations',
+          'ledger_reconciliation_checkpoints',
+          'ledger_reconciliation_cleanup_journals',
+          'ledger_reconciliation_cursors',
+          'lorebook_use_manifests',
+          'lorebook_use_manifest_entries',
+          'lorebook_use_acceptance_records',
+          'card_evolution_collector_runs',
+          'card_evolution_observations',
+          'card_evolution_claims',
+          'card_evolution_writer_calls',
+          'card_evolution_proposal_runs',
+          'rewrite_jobs',
+          'rewrite_operations',
+          'rewrite_operation_revisions',
+          'rewrite_evidence_rows',
+          'memory_event_rows',
+          'memory_event_source_rows',
+          'memory_event_link_rows',
         ]),
-      ),
-    );
-    expect(
-      BackupExporter.tableNames.indexOf('reconciliation_successful_runs'),
-      lessThan(
-        BackupExporter.tableNames.indexOf('ledger_reconciliation_effects'),
-      ),
-    );
-    expect(
-      BackupExporter.tableNames.indexOf('card_evolution_claims'),
-      lessThan(
-        BackupExporter.tableNames.indexOf('card_evolution_writer_calls'),
-      ),
-    );
-  });
+      );
+      expect(
+        BackupExporter.tableNames,
+        isNot(
+          containsAll(const [
+            'ledger_debug_runs',
+            'card_evolution_debug_runs',
+            'llm_request_capture_rows',
+            'llm_call_event_rows',
+            'session_lorebook_embedding_job_rows',
+          ]),
+        ),
+      );
+      expect(
+        BackupExporter.tableNames.indexOf('reconciliation_successful_runs'),
+        lessThan(
+          BackupExporter.tableNames.indexOf('ledger_reconciliation_effects'),
+        ),
+      );
+      expect(
+        BackupExporter.tableNames.indexOf('card_evolution_claims'),
+        lessThan(
+          BackupExporter.tableNames.indexOf('card_evolution_writer_calls'),
+        ),
+      );
+    },
+  );
 
   group('BackupExporter streaming JSON', () {
     late Directory tempDir;

@@ -1058,7 +1058,7 @@ void main() {
         ..addFile(
           ArchiveFile.bytes(
             'manifest.json',
-            utf8.encode(jsonEncode({'schemaVersion': 14})),
+            utf8.encode(jsonEncode({'schemaVersion': 15})),
           ),
         );
 
@@ -1106,44 +1106,73 @@ void main() {
       );
     });
 
-    test('accepts backup schema v13', () async {
+    test('restores event registry rows from backup schema v14', () async {
       final archive = Archive()
         ..addFile(
           ArchiveFile.bytes(
             'manifest.json',
-            utf8.encode(jsonEncode({'schemaVersion': 13})),
+            utf8.encode(jsonEncode({'schemaVersion': 14})),
           ),
         )
         ..addFile(
           ArchiveFile.bytes(
-            'tables/ledger_reconciliation_checkpoints.jsonl',
-            const [],
+            'tables/memory_event_rows.jsonl',
+            utf8.encode(
+              '${jsonEncode({'id': 'event-1', 'session_id': 'session-1', 'branch_id': 'session-1', 'kind': 'promise', 'description': 'Return the key', 'state': 'open', 'accepted_at': 10, 'created_at': 10})}\n',
+            ),
+          ),
+        )
+        ..addFile(
+          ArchiveFile.bytes(
+            'tables/memory_event_source_rows.jsonl',
+            utf8.encode(
+              '${jsonEncode({'id': 'source-1', 'event_id': 'event-1', 'session_id': 'session-1', 'branch_id': 'session-1', 'memory_entry_id': 'memory-1', 'revision_id': 'memory-1:r1', 'fingerprint': 'a' * 64})}\n',
+            ),
+          ),
+        )
+        ..addFile(
+          ArchiveFile.bytes(
+            'tables/memory_event_link_rows.jsonl',
+            utf8.encode(
+              '${jsonEncode({'id': 'link-1', 'session_id': 'session-1', 'branch_id': 'session-1', 'from_event_id': 'event-1', 'to_event_id': 'event-2', 'relation': 'continues', 'accepted_at': 10})}\n',
+            ),
           ),
         );
 
       await importArchive(archive);
+
+      expect((await db.select(db.memoryEventRows).get()).single.id, 'event-1');
+      expect(
+        (await db.select(db.memoryEventSourceRows).get()).single.eventId,
+        'event-1',
+      );
+      expect(
+        (await db.select(db.memoryEventLinkRows).get()).single.id,
+        'link-1',
+      );
     });
 
     test('restores JSONL embedding byte arrays as SQLite blobs', () async {
-      final encoded = vectorListToBytes(const [[0.5, -0.25]]);
+      final encoded = vectorListToBytes(const [
+        [0.5, -0.25],
+      ]);
       final archive = buildGlzArchive();
       archive.addFile(
         ArchiveFile.bytes(
           'tables/embeddings.jsonl',
-          utf8.encode('${jsonEncode({
-            'entry_id': 'from-zip',
-            'source_type': 'lorebook_entry',
-            'source_id': 'book',
-            'vectors_blob': encoded,
-          })}\n'),
+          utf8.encode(
+            '${jsonEncode({'entry_id': 'from-zip', 'source_type': 'lorebook_entry', 'source_id': 'book', 'vectors_blob': encoded})}\n',
+          ),
         ),
       );
 
       await importArchive(archive);
 
-      final type = await db.customSelect(
-        "SELECT typeof(vectors_blob) AS type FROM embeddings WHERE entry_id = 'from-zip'",
-      ).getSingle();
+      final type = await db
+          .customSelect(
+            "SELECT typeof(vectors_blob) AS type FROM embeddings WHERE entry_id = 'from-zip'",
+          )
+          .getSingle();
       expect(type.read<String>('type'), 'blob');
       final repo = EmbeddingRepo(db);
       expect(repo.decodeVectors((await repo.getByEntryId('from-zip'))!), [
@@ -1159,15 +1188,19 @@ void main() {
               'entry_id': 'from-json',
               'source_type': 'lorebook_entry',
               'source_id': 'book',
-              'vectors_blob': vectorListToBytes(const [[0.5, -0.25]]).toList(),
+              'vectors_blob': vectorListToBytes(const [
+                [0.5, -0.25],
+              ]).toList(),
             },
           ],
         },
       });
 
-      final type = await db.customSelect(
-        "SELECT typeof(vectors_blob) AS type FROM embeddings WHERE entry_id = 'from-json'",
-      ).getSingle();
+      final type = await db
+          .customSelect(
+            "SELECT typeof(vectors_blob) AS type FROM embeddings WHERE entry_id = 'from-json'",
+          )
+          .getSingle();
       expect(type.read<String>('type'), 'blob');
       final repo = EmbeddingRepo(db);
       expect(repo.decodeVectors((await repo.getByEntryId('from-json'))!), [
@@ -1411,10 +1444,12 @@ void main() {
       archive.addFile(
         ArchiveFile.bytes(
           'tables/characters.jsonl',
-          utf8.encode([
-            for (var i = 0; i < rowCount; i++)
-              jsonEncode({'char_id': 'char_$i', 'name': 'Card $i'}),
-          ].join('\n')),
+          utf8.encode(
+            [
+              for (var i = 0; i < rowCount; i++)
+                jsonEncode({'char_id': 'char_$i', 'name': 'Card $i'}),
+            ].join('\n'),
+          ),
         ),
       );
 
@@ -1435,14 +1470,16 @@ void main() {
       archive.addFile(
         ArchiveFile.bytes(
           'tables/characters.jsonl',
-          utf8.encode([
-            for (var i = 0; i < rowCount; i++)
-              jsonEncode({
-                'char_id': 'big_$i',
-                'name': 'Big $i',
-                'description': filler,
-              }),
-          ].join('\n')),
+          utf8.encode(
+            [
+              for (var i = 0; i < rowCount; i++)
+                jsonEncode({
+                  'char_id': 'big_$i',
+                  'name': 'Big $i',
+                  'description': filler,
+                }),
+            ].join('\n'),
+          ),
         ),
       );
 
