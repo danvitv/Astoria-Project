@@ -98,7 +98,7 @@ void runDbMigrationTests() {
       database = null;
     });
 
-    test('v142 adds local durable memory consolidation package tables', () async {
+    test('v143 adds a durable package-level review draft', () async {
       final file = File(
         '${Directory.systemTemp.path}/glaze_mig_memory_jobs_${DateTime.now().microsecondsSinceEpoch}.db',
       );
@@ -110,7 +110,10 @@ void runDbMigrationTests() {
         NativeDatabase.createInBackground(file),
       );
       await seeded.customSelect('SELECT 1').get();
-      await seeded.customStatement('PRAGMA user_version = 141');
+      await seeded.customStatement(
+        'ALTER TABLE memory_consolidation_job_rows DROP COLUMN package_draft_json',
+      );
+      await seeded.customStatement('PRAGMA user_version = 142');
       await seeded.close();
 
       final upgraded = AppDatabase.forTesting(
@@ -122,7 +125,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
       expect(
         await upgraded
             .customSelect("PRAGMA table_info('memory_consolidation_job_rows')")
@@ -136,6 +139,15 @@ void runDbMigrationTests() {
             )
             .get(),
         isNotEmpty,
+      );
+      expect(
+        (await upgraded
+                .customSelect(
+                  "PRAGMA table_info('memory_consolidation_job_rows')",
+                )
+                .get())
+            .map((row) => row.read<String>('name')),
+        contains('package_draft_json'),
       );
     });
 
@@ -290,7 +302,7 @@ void runDbMigrationTests() {
         final version = await upgraded
             .customSelect('PRAGMA user_version')
             .get();
-        expect(version.first.read<int>('user_version'), 142);
+        expect(version.first.read<int>('user_version'), 143);
         expect(names, contains('variant_group_id'));
         expect(names, contains('hidden'));
         final invalidationTable = await upgraded
@@ -340,7 +352,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test(
@@ -690,7 +702,7 @@ void runDbMigrationTests() {
     test('current schema includes atomic character fact tables', () async {
       final db = currentDatabase();
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
 
       final factColumns = await db
           .customSelect("PRAGMA table_info('character_knowledge_fact_rows')")
@@ -803,7 +815,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test(
@@ -913,7 +925,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v80 adds Responses API toggle defaulting to off', () async {
@@ -953,7 +965,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v81 adds composite embedding source index', () async {
@@ -987,7 +999,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v82 creates rewrite persistence schema and provenance columns', () async {
@@ -1061,7 +1073,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v83 rebuilds interim text revision columns without losing rows', () async {
@@ -1516,7 +1528,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
 
       // Rows and payloads survive; legacy statuses pass through or are
       // normalized fail-closed, and new columns carry neutral defaults.
@@ -1721,7 +1733,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
       final row = await upgraded
           .customSelect(
             'SELECT blocks_json FROM studio_preset_rows WHERE preset_id = ?',
@@ -1837,7 +1849,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
       final check = await upgraded.customSelect('PRAGMA integrity_check').get();
       expect(check.single.read<String>('integrity_check'), 'ok');
     });
@@ -2507,7 +2519,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test(
@@ -2605,7 +2617,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v118 defaults prompt post-processing without a preset', () async {
@@ -2735,7 +2747,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v120 adds the ledger debug journal to an older database', () async {
@@ -2821,7 +2833,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v121 adds the session canon timeline foundation', () async {
@@ -2881,7 +2893,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v122 adds the embedding request rate limit', () async {
@@ -2920,7 +2932,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v123 raises only the legacy Studio final history limit', () async {
@@ -2972,7 +2984,7 @@ void runDbMigrationTests() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v124 and v125 add LLM capture history and linkage', () async {
@@ -3046,7 +3058,7 @@ void runDbMigrationTests() {
           'idx_llm_call_event_call_attempt',
         ]),
       );
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v125 upgrades an existing v124 request capture table', () async {
@@ -3104,7 +3116,7 @@ void runDbMigrationTests() {
         contains('call_id'),
       );
       expect(eventColumns, isNotEmpty);
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v126 adds immutable reconciliation effects', () async {
@@ -3155,7 +3167,7 @@ void runDbMigrationTests() {
         indexes.map((row) => row.read<String>('name')),
         contains('idx_reconciliation_effect_session_created'),
       );
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test(
@@ -3232,7 +3244,7 @@ INSERT INTO card_evolution_collector_runs VALUES
         );
         // v132 intentionally resets pair-based Collector journals.
         expect(rows, isEmpty);
-        expect(version.read<int>('user_version'), 142);
+        expect(version.read<int>('user_version'), 143);
       },
     );
 
@@ -3321,7 +3333,7 @@ INSERT INTO card_evolution_claims VALUES
         writerIndexes.map((row) => row.read<String>('name')),
         contains('idx_card_evolution_writer_call_session_updated'),
       );
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v129 adds active job and immutable audit guards', () async {
@@ -3398,7 +3410,7 @@ INSERT INTO card_evolution_claims VALUES
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
       await upgraded.customStatement(
         "INSERT INTO ledger_reconciliation_leases VALUES ('session', 'owner', 'normal', 2, 1)",
       );
@@ -3736,7 +3748,7 @@ INSERT INTO card_evolution_claims VALUES
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 142);
+      expect(version.read<int>('user_version'), 143);
     });
 
     test('v132 resets pair-based Collector state only', () async {

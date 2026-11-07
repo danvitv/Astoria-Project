@@ -189,6 +189,104 @@ class MemoryConsolidationJobRepo {
             ..orderBy([(row) => OrderingTerm.asc(row.createdAt)]))
           .get();
 
+  /// Persists the single response for a source package. Item rows remain the
+  /// immutable source snapshot; no per-source model calls are implied.
+  Future<bool> savePackageDraft({
+    required String jobId,
+    required String ownerId,
+    required String draftJson,
+  }) => db.transaction(() async {
+    final now = _now;
+    final job = await _ownedLease(jobId, ownerId, now);
+    if (job == null) return false;
+    final items = await getItems(jobId);
+    if (items.isEmpty || items.any((item) => item.status != 'running')) {
+      throw StateError('Every package source must be claimed before drafting.');
+    }
+    final changed =
+        await (db.update(db.memoryConsolidationJobRows)..where(
+              (row) =>
+                  row.id.equals(jobId) &
+                  row.version.equals(job.version) &
+                  row.status.equals('running') &
+                  row.packageDraftJson.isNull(),
+            ))
+            .write(
+              MemoryConsolidationJobRowsCompanion(
+                status: const Value('review_pending'),
+                packageDraftJson: Value(draftJson),
+                leaseOwnerId: const Value(null),
+                leaseExpiresAt: const Value(null),
+                version: Value(job.version + 1),
+                updatedAt: Value(now),
+              ),
+            );
+    if (changed != 1) return false;
+    await (db.update(db.memoryConsolidationJobItemRows)..where(
+          (row) => row.jobId.equals(jobId) & row.status.equals('running'),
+        ))
+        .write(
+          MemoryConsolidationJobItemRowsCompanion(
+            status: const Value('review_pending'),
+            updatedAt: Value(now),
+          ),
+        );
+    return true;
+  });
+
+  /// Accepts the one reviewed package graph change and completes the job in
+  /// the same transaction. The callback must use this database instance and
+  /// perform no network work.
+  Future<bool> acceptReviewedPackage({
+    required String jobId,
+    required Future<void> Function(String draftJson) acceptReviewed,
+  }) => db.transaction(() async {
+    final job =
+        await (db.select(db.memoryConsolidationJobRows)..where(
+              (row) =>
+                  row.id.equals(jobId) &
+                  row.status.equals('review_pending') &
+                  row.packageDraftJson.isNotNull(),
+            ))
+            .getSingleOrNull();
+    if (job == null) return false;
+    await acceptReviewed(job.packageDraftJson!);
+    final now = _now;
+    final changedItems =
+        await (db.update(db.memoryConsolidationJobItemRows)..where(
+              (row) =>
+                  row.jobId.equals(jobId) & row.status.equals('review_pending'),
+            ))
+            .write(
+              MemoryConsolidationJobItemRowsCompanion(
+                status: const Value('accepted'),
+                updatedAt: Value(now),
+              ),
+            );
+    if (changedItems == 0) {
+      throw StateError('Reviewed package has no source items to accept.');
+    }
+    final changed =
+        await (db.update(db.memoryConsolidationJobRows)..where(
+              (row) =>
+                  row.id.equals(jobId) &
+                  row.version.equals(job.version) &
+                  row.status.equals('review_pending') &
+                  row.packageDraftJson.equals(job.packageDraftJson!),
+            ))
+            .write(
+              MemoryConsolidationJobRowsCompanion(
+                status: const Value('completed'),
+                version: Value(job.version + 1),
+                updatedAt: Value(now),
+              ),
+            );
+    if (changed != 1) {
+      throw StateError('Reviewed package changed during acceptance.');
+    }
+    return true;
+  });
+
   Future<void> _verifyExistingRequest(
     MemoryConsolidationJobRow job,
     String sessionId,

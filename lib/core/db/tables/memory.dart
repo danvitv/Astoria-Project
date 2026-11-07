@@ -300,6 +300,7 @@ class MemoryConsolidationJobRows extends Table {
   TextColumn get branchId => text()();
   TextColumn get requestKey => text()();
   TextColumn get status => text().withDefault(const Constant('pending'))();
+  TextColumn get packageDraftJson => text().nullable()();
   TextColumn get leaseOwnerId => text().nullable()();
   IntColumn get leaseExpiresAt => integer().nullable()();
   IntColumn get attemptCount => integer().withDefault(const Constant(0))();

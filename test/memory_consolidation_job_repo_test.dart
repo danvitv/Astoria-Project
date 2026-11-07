@@ -312,4 +312,62 @@ void main() {
       expect(otherSession?.sessionId, 'session-2');
     },
   );
+
+  test('one package draft is durable and accepts atomically', () async {
+    final job = await createJob();
+    await repo.claimNext(ownerId: 'worker-a', leaseDurationSeconds: 100);
+    final first = await repo.claimNextItem(jobId: job.id, ownerId: 'worker-a');
+    final second = await repo.claimNextItem(jobId: job.id, ownerId: 'worker-a');
+    expect(first, isNotNull);
+    expect(second, isNotNull);
+    expect(
+      await repo.savePackageDraft(
+        jobId: job.id,
+        ownerId: 'worker-a',
+        draftJson: '{"pack":{},"response":{}}',
+      ),
+      isTrue,
+    );
+    final review = await (db.select(
+      db.memoryConsolidationJobRows,
+    )..where((row) => row.id.equals(job.id))).getSingle();
+    expect(review.status, 'review_pending');
+    expect(review.packageDraftJson, '{"pack":{},"response":{}}');
+    expect(review.leaseOwnerId, isNull);
+    expect(
+      (await repo.getItems(job.id)).map((item) => item.status),
+      everyElement('review_pending'),
+    );
+
+    await expectLater(
+      repo.acceptReviewedPackage(
+        jobId: job.id,
+        acceptReviewed: (_) async => throw StateError('stale package'),
+      ),
+      throwsStateError,
+    );
+    final afterFailure = await (db.select(
+      db.memoryConsolidationJobRows,
+    )..where((row) => row.id.equals(job.id))).getSingle();
+    expect(afterFailure.status, 'review_pending');
+
+    var accepted = '';
+    expect(
+      await repo.acceptReviewedPackage(
+        jobId: job.id,
+        acceptReviewed: (draft) async => accepted = draft,
+      ),
+      isTrue,
+    );
+    expect(accepted, '{"pack":{},"response":{}}');
+    final completed = await (db.select(
+      db.memoryConsolidationJobRows,
+    )..where((row) => row.id.equals(job.id))).getSingle();
+    expect(completed.status, 'completed');
+    expect(completed.packageDraftJson, review.packageDraftJson);
+    expect(
+      (await repo.getItems(job.id)).map((item) => item.status),
+      everyElement('accepted'),
+    );
+  });
 }
