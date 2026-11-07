@@ -7,9 +7,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/memory_book_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/memory_event_registry_repo.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/memory_book.dart';
 import 'package:glaze_flutter/core/models/memory_entry_revisions.dart';
+import 'package:glaze_flutter/core/models/memory_source_manifest.dart';
 import 'package:glaze_flutter/core/state/db_provider.dart';
 
 void main() {
@@ -131,6 +133,129 @@ void main() {
       expect(stored.content, 'Mara leaves at dawn.');
       expect(stored.revisions, hasLength(2));
     });
+
+    test(
+      'deletion invalidates accepted event provenance in the same write',
+      () async {
+        final manifest = MemorySourceManifest.capture(
+          'session',
+          [source],
+          const ['m1'],
+        );
+        final current = MemoryEntry(
+          id: 'source-memory',
+          title: 'Camp',
+          content: 'Mara waits in camp.',
+          messageIds: const ['m1'],
+          sourceManifest: manifest,
+          activeRevisionId: 'source-memory:r1',
+          revisions: [
+            MemoryEntryRevision(
+              id: 'source-memory:r1',
+              version: 1,
+              title: 'Camp',
+              content: 'Mara waits in camp.',
+              messageIds: const ['m1'],
+              sourceManifest: manifest,
+              createdAt: 1,
+            ),
+          ],
+        );
+        await repo.put(
+          MemoryBook(id: 'book', sessionId: 'session', entries: [current]),
+        );
+        final acceptedEntry = (await repo.getBySessionId(
+          'session',
+        ))!.entries.single;
+        final sourceInput = MemoryEventSourceInput(
+          id: 'source-1',
+          memoryEntryId: acceptedEntry.id,
+          revisionId: acceptedEntry.activeRevisionId!,
+          fingerprint: MemoryEventRegistryRepo.sourceFingerprint(
+            acceptedEntry.revisions.last,
+            sourceSwipeId: acceptedEntry.sourceSwipeId,
+            sourceAgentSwipeId: acceptedEntry.sourceAgentSwipeId,
+          ),
+          messageIds: acceptedEntry.messageIds,
+          sourceSwipeId: acceptedEntry.sourceSwipeId,
+          sourceAgentSwipeId: acceptedEntry.sourceAgentSwipeId,
+        );
+        final registry = MemoryEventRegistryRepo(db);
+        expect(
+          await registry.accept(
+            event: MemoryEventInput(
+              id: 'event-1',
+              sessionId: 'session',
+              branchId: 'session',
+              kind: 'promise',
+              description: 'Mara waits in camp.',
+              state: 'open',
+              sources: [sourceInput],
+            ),
+            isCurrent: () => true,
+          ),
+          isTrue,
+        );
+        final secondSource = MemoryEventSourceInput(
+          id: 'source-2',
+          memoryEntryId: sourceInput.memoryEntryId,
+          revisionId: sourceInput.revisionId,
+          fingerprint: sourceInput.fingerprint,
+          messageIds: sourceInput.messageIds,
+          sourceSwipeId: sourceInput.sourceSwipeId,
+          sourceAgentSwipeId: sourceInput.sourceAgentSwipeId,
+        );
+        expect(
+          await registry.accept(
+            event: MemoryEventInput(
+              id: 'event-2',
+              sessionId: 'session',
+              branchId: 'session',
+              kind: 'result',
+              description: 'Mara left the camp.',
+              state: 'completed',
+              sources: [secondSource],
+            ),
+            links: const [
+              MemoryEventLinkInput(
+                id: 'link-1',
+                fromEventId: 'event-2',
+                toEventId: 'event-1',
+                relation: 'fulfills',
+              ),
+            ],
+            isCurrent: () => true,
+          ),
+          isTrue,
+        );
+
+        await repo.deleteEntry(sessionId: 'session', entryId: acceptedEntry.id);
+
+        final invalidations = await registry.getInvalidations(
+          sessionId: 'session',
+          branchId: 'session',
+        );
+        expect(
+          invalidations
+              .where((row) => row.targetType == 'event')
+              .map((row) => row.targetId),
+          containsAll(['event-1', 'event-2']),
+        );
+        expect(
+          invalidations
+              .where((row) => row.targetType == 'link')
+              .map((row) => row.targetId),
+          contains('link-1'),
+        );
+        expect(
+          (await registry.getActiveEvents(
+            sessionId: 'session',
+            branchId: 'session',
+          )),
+          isEmpty,
+        );
+      },
+    );
 
     test('unchanged full-book saves retain revision history', () async {
       final first = (await repo.getBySessionId('session'))!;

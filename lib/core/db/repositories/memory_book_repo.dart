@@ -16,6 +16,7 @@ import '../../utils/time_helpers.dart';
 import '../../application/sync_repo_interfaces.dart';
 import 'chat_repo.dart';
 import 'memory_catalog_repo.dart';
+import 'memory_event_registry_repo.dart';
 import 'support_repo.dart';
 import '../../models/support_models.dart';
 
@@ -407,6 +408,29 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
         updatedAt: Value(currentTimestampSeconds()),
       ),
     );
+    final changedEntryIds = <String>{};
+    final currentEntries = {
+      for (final entry in existing?.entries ?? const <MemoryEntry>[])
+        entry.id: entry,
+    };
+    final nextEntries = {
+      for (final entry in sanitized.entries) entry.id: entry,
+    };
+    for (final entryId in {...currentEntries.keys, ...nextEntries.keys}) {
+      final before = currentEntries[entryId];
+      final after = nextEntries[entryId];
+      if (before == null ||
+          after == null ||
+          jsonEncode(before.toJson()) != jsonEncode(after.toJson())) {
+        changedEntryIds.add(entryId);
+      }
+    }
+    await MemoryEventRegistryRepo(attachedDatabase).invalidateForMemoryEntries(
+      sessionId: sanitized.sessionId,
+      branchId: sanitized.sessionId,
+      memoryEntryIds: changedEntryIds,
+      reason: 'memory_entry_changed',
+    );
     for (final entryId in retiredEntryIds) {
       await customStatement('DELETE FROM embeddings WHERE entry_id = ?', [
         entryId,
@@ -587,8 +611,9 @@ class MemoryBookRepo extends DatabaseAccessor<AppDatabase>
       await transaction(() async {
         if (customPublicationIsCurrent?.call() == false) return;
         final existing = await getBySessionId(sessionId);
-        if (existing == null || customPublicationIsCurrent?.call() == false)
+        if (existing == null || customPublicationIsCurrent?.call() == false) {
           return;
+        }
         final index = existing.pendingDrafts.indexWhere((d) => d.id == draftId);
         if (index < 0) return;
         if (customPublicationIsCurrent != null) {

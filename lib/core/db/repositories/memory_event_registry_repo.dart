@@ -168,6 +168,83 @@ class MemoryEventRegistryRepo {
             ]))
           .get();
 
+  /// Records provenance invalidation for accepted events that reference any
+  /// of [memoryEntryIds]. The registry rows remain immutable; this method is
+  /// intentionally safe to call inside the caller's transaction.
+  Future<void> invalidateForMemoryEntries({
+    required String sessionId,
+    required String branchId,
+    required Iterable<String> memoryEntryIds,
+    required String reason,
+  }) async {
+    final entryIds = memoryEntryIds.where((id) => id.isNotEmpty).toSet();
+    if (sessionId.isEmpty || branchId.isEmpty || entryIds.isEmpty) return;
+    final sourceRows =
+        await (db.select(db.memoryEventSourceRows)..where(
+              (row) =>
+                  row.sessionId.equals(sessionId) &
+                  row.branchId.equals(branchId) &
+                  row.memoryEntryId.isIn(entryIds),
+            ))
+            .get();
+    if (sourceRows.isEmpty) return;
+    final affectedEventIds = sourceRows.map((row) => row.eventId).toSet();
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    for (final source in sourceRows) {
+      await _insertInvalidation(
+        sessionId: sessionId,
+        branchId: branchId,
+        targetType: 'event',
+        targetId: source.eventId,
+        causeMemoryEntryId: source.memoryEntryId,
+        reason: reason,
+        createdAt: now,
+      );
+    }
+    final links =
+        await (db.select(db.memoryEventLinkRows)..where(
+              (row) =>
+                  row.sessionId.equals(sessionId) &
+                  row.branchId.equals(branchId) &
+                  (row.fromEventId.isIn(affectedEventIds) |
+                      row.toEventId.isIn(affectedEventIds)),
+            ))
+            .get();
+    for (final link in links) {
+      await _insertInvalidation(
+        sessionId: sessionId,
+        branchId: branchId,
+        targetType: 'link',
+        targetId: link.id,
+        reason: 'endpoint_$reason',
+        createdAt: now,
+      );
+    }
+  }
+
+  Future<void> _insertInvalidation({
+    required String sessionId,
+    required String branchId,
+    required String targetType,
+    required String targetId,
+    String? causeMemoryEntryId,
+    required String reason,
+    required int createdAt,
+  }) => db
+      .into(db.memoryEventInvalidationRows)
+      .insert(
+        MemoryEventInvalidationRowsCompanion.insert(
+          sessionId: sessionId,
+          branchId: branchId,
+          targetType: targetType,
+          targetId: targetId,
+          causeMemoryEntryId: Value(causeMemoryEntryId),
+          reason: reason,
+          createdAt: createdAt,
+        ),
+        mode: InsertMode.insertOrIgnore,
+      );
+
   Future<Set<String>> _invalidatedIds(
     String sessionId,
     String branchId,
