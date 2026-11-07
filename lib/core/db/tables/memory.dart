@@ -279,6 +279,84 @@ class MemoryEventInvalidationRows extends Table {
   ];
 }
 
+/// Durable, resumable package work. Model output remains a draft until each
+/// item is explicitly accepted through the event registry.
+@DataClassName('MemoryConsolidationJobRow')
+@TableIndex(
+  name: 'idx_memory_consolidation_job_status_lease',
+  columns: {#status, #leaseExpiresAt},
+)
+@TableIndex(
+  name: 'idx_memory_consolidation_job_request_key',
+  columns: {#requestKey},
+  unique: true,
+)
+class MemoryConsolidationJobRows extends Table {
+  @override
+  String get tableName => 'memory_consolidation_job_rows';
+
+  TextColumn get id => text()();
+  TextColumn get sessionId => text()();
+  TextColumn get branchId => text()();
+  TextColumn get requestKey => text()();
+  TextColumn get status => text().withDefault(const Constant('pending'))();
+  TextColumn get leaseOwnerId => text().nullable()();
+  IntColumn get leaseExpiresAt => integer().nullable()();
+  IntColumn get attemptCount => integer().withDefault(const Constant(0))();
+  IntColumn get version => integer().withDefault(const Constant(1))();
+  TextColumn get lastError => text().nullable()();
+  IntColumn get createdAt => integer()();
+  IntColumn get updatedAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<String> get customConstraints => [
+    "CHECK (id <> '' AND session_id <> '' AND branch_id <> '' AND request_key <> '')",
+    "CHECK (status IN ('pending', 'running', 'review_pending', 'failed', 'cancelled', 'completed'))",
+    'CHECK (attempt_count >= 0 AND version > 0)',
+    'CHECK ((lease_owner_id IS NULL AND lease_expires_at IS NULL) OR '
+        '(lease_owner_id IS NOT NULL AND lease_expires_at IS NOT NULL))',
+  ];
+}
+
+/// Per-source durable package progress and review draft. Draft JSON is not an
+/// accepted registry write; acceptance remains a separate user action.
+@DataClassName('MemoryConsolidationJobItemRow')
+@TableIndex(
+  name: 'idx_memory_consolidation_job_item_status',
+  columns: {#jobId, #status},
+)
+class MemoryConsolidationJobItemRows extends Table {
+  @override
+  String get tableName => 'memory_consolidation_job_item_rows';
+
+  TextColumn get id => text()();
+  TextColumn get jobId => text()();
+  TextColumn get memoryEntryId => text()();
+  TextColumn get revisionId => text()();
+  TextColumn get fingerprint => text()();
+  TextColumn get proposedEventId => text()();
+  TextColumn get status => text().withDefault(const Constant('pending'))();
+  TextColumn get draftJson => text().nullable()();
+  TextColumn get lastError => text().nullable()();
+  IntColumn get attemptCount => integer().withDefault(const Constant(0))();
+  IntColumn get createdAt => integer()();
+  IntColumn get updatedAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<String> get customConstraints => [
+    "CHECK (id <> '' AND job_id <> '' AND memory_entry_id <> '' AND revision_id <> '' AND fingerprint <> '' AND proposed_event_id <> '')",
+    "CHECK (status IN ('pending', 'running', 'review_pending', 'accepted', 'failed', 'cancelled'))",
+    'CHECK (attempt_count >= 0)',
+    'FOREIGN KEY (job_id) REFERENCES memory_consolidation_job_rows (id) ON DELETE CASCADE',
+  ];
+}
+
 @DataClassName('EmbeddingRow')
 @TableIndex(name: 'idx_embeddings_source_type', columns: {#sourceType})
 @TableIndex(name: 'idx_embeddings_source_id', columns: {#sourceId})

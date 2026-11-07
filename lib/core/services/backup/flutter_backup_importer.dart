@@ -393,6 +393,11 @@ class FlutterBackupImporter extends BackupHelpers {
       archive,
       localSecrets: keysStripped ? localPrefs : null,
     );
+    // Consolidation packages and leases are local work state, not backup
+    // data. Preserve them unless the complete database/assets/settings restore
+    // reaches its success boundary.
+    await db.customStatement('DELETE FROM memory_consolidation_job_item_rows');
+    await db.customStatement('DELETE FROM memory_consolidation_job_rows');
   }
 
   Future<void> _clearAgentOpsStateMissingFromLegacyBackup() =>

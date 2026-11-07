@@ -107,6 +107,19 @@ class SessionDeletionQueries {
     await (_db.delete(
       _db.memoryEventRows,
     )..where((row) => row.sessionId.equals(sessionId))).go();
+    await (_db.delete(_db.memoryConsolidationJobItemRows)..where(
+          (row) => row.jobId.isInQuery(
+            _db.selectOnly(_db.memoryConsolidationJobRows)
+              ..addColumns([_db.memoryConsolidationJobRows.id])
+              ..where(
+                _db.memoryConsolidationJobRows.sessionId.equals(sessionId),
+              ),
+          ),
+        ))
+        .go();
+    await (_db.delete(
+      _db.memoryConsolidationJobRows,
+    )..where((row) => row.sessionId.equals(sessionId))).go();
     await (_db.delete(
       _db.trackerRows,
     )..where((row) => row.sessionId.equals(sessionId))).go();
