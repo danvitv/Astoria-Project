@@ -16,7 +16,8 @@ enum MemoryRetrievalMode {
   legacy('legacy'),
   fast('fast'),
   balanced('balanced'),
-  deep('deep');
+  deep('deep'),
+  memoryLinks('memory_links');
 
   const MemoryRetrievalMode(this.value);
 
@@ -26,10 +27,13 @@ enum MemoryRetrievalMode {
     'legacy' => legacy,
     'balanced' => balanced,
     'deep' || 'agentic' => deep,
+    'memory_links' => memoryLinks,
     _ => fast,
   };
 
   bool get isLegacy => this == legacy;
+
+  bool get isConsolidationMode => this == memoryLinks;
 
   Set<MemoryRetrievalCapability> get capabilities => switch (this) {
     legacy => const {},
@@ -40,6 +44,9 @@ enum MemoryRetrievalMode {
     // capability set. Keeping this explicit prevents it from accidentally
     // dropping catalog matching when deeper integrations change.
     deep => _deepCapabilities,
+    // Memory + links is deliberately an event/consolidation overlay on
+    // Balanced retrieval. It must not inherit future Deep-only capabilities.
+    memoryLinks => _balancedCapabilities,
   };
 
   bool supports(MemoryRetrievalCapability capability) =>

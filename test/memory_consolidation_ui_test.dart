@@ -134,7 +134,7 @@ Future<_Harness> _makeHarness({Completer<void>? requestGate}) async {
           id: 'memorybook_$_sessionId',
           sessionId: _sessionId,
           settings: const MemoryBookSettings(
-            consolidationEnabled: true,
+            memoryMode: 'memory_links',
             autoCreateEnabled: false,
             autoGenerateEnabled: false,
           ),

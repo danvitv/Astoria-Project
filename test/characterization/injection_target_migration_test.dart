@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:glaze_flutter/core/models/memory_book.dart';
+import 'package:glaze_flutter/core/models/memory_mode.dart';
+import 'package:glaze_flutter/features/memory/controllers/memory_settings_mapper.dart';
 import 'package:glaze_flutter/core/state/memory_settings_provider.dart';
 
 /// Characterization test for the legacy `summary_block` /
@@ -89,6 +91,58 @@ void main() {
     test('removed agentic memory mode migrates to deep', () {
       final result = MemoryGlobalSettings.fromJson({'memoryMode': 'agentic'});
       expect(result.memoryMode, 'deep');
+    });
+
+    test('legacy consolidation flag migrates to Memory + links', () {
+      final result = MemoryGlobalSettings.fromJson({
+        'memoryMode': 'balanced',
+        'consolidationEnabled': true,
+      });
+      expect(result.memoryMode, 'memory_links');
+      expect(result.consolidationEnabled, isTrue);
+    });
+
+    test('MemoryBook snapshot also migrates the legacy consolidation flag', () {
+      final result = MemoryBookSettings.fromJson({
+        'memoryMode': 'fast',
+        'consolidationEnabled': true,
+      });
+      expect(result.memoryMode, 'memory_links');
+      expect(result.consolidationEnabled, isTrue);
+
+      final explicitMode = MemoryBookSettings.fromJson({
+        'memoryMode': 'memory_links',
+      });
+      expect(explicitMode.consolidationEnabled, isTrue);
+    });
+
+    test('explicit ordinary mode keeps consolidation disabled', () {
+      final result = MemoryGlobalSettings.fromJson({
+        'memoryMode': 'balanced',
+        'consolidationEnabled': false,
+      });
+      expect(result.memoryMode, 'balanced');
+      expect(result.consolidationEnabled, isFalse);
+    });
+
+    test('settings mapper derives the compatibility flag from memory mode', () {
+      const mapper = MemorySettingsMapper();
+      const global = MemoryGlobalSettings(memoryMode: memoryLinksMode);
+
+      final book = mapper.globalToBook(global);
+      expect(book.memoryMode, memoryLinksMode);
+      expect(book.consolidationEnabled, isTrue);
+
+      final ordinary = mapper.bookToGlobal(
+        const MemoryBookSettings(
+          memoryMode: 'balanced',
+          consolidationEnabled: true,
+        ),
+        global,
+        global.vectorThreshold,
+      );
+      expect(ordinary.memoryMode, 'balanced');
+      expect(ordinary.consolidationEnabled, isFalse);
     });
 
     test('summary_block -> hard_block', () {

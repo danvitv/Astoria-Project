@@ -173,6 +173,7 @@ class MemoryBookController {
     'balanced' => 'memory_mode_balanced'.tr(),
     'deep' => 'memory_mode_deep'.tr(),
     'legacy' => 'memory_mode_legacy'.tr(),
+    'memory_links' => 'memory_mode_memory_links'.tr(),
     // `agentic` was removed in Phase 4 — migrate to `deep` for display.
     'agentic' => 'memory_mode_deep'.tr(),
     _ => 'memory_mode_fast'.tr(),

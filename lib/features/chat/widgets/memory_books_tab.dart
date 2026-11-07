@@ -9,6 +9,7 @@ import '../../../core/models/chat_message.dart';
 import '../../../core/models/memory_book.dart';
 import '../../../core/models/memory_book_api_settings.dart';
 import '../../../core/credentials/memory_custom_api_credential_owner.dart';
+import '../../../core/llm/memory_retrieval_mode.dart';
 import '../../../core/services/memory_consolidation_coordinator.dart';
 import '../../../core/services/generation_notification_service.dart';
 import '../../../core/utils/error_format.dart';
@@ -772,7 +773,9 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   bool _canConsolidate(MemoryEntry entry) {
     final settings = _ctrl.book?.settings;
     return _tabIndex == _tabApproved &&
-        settings?.consolidationEnabled == true &&
+        MemoryRetrievalMode.fromValue(
+          settings?.memoryMode ?? 'fast',
+        ).isConsolidationMode &&
         entry.status == 'active' &&
         entry.activeRevisionId != null &&
         _hasEligibleManifest(entry) &&
@@ -930,7 +933,9 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
         ref.read(memoryBookRevisionProvider) != revisionEpoch ||
         ref.read(pipelineSettingsProvider).memoryBookApi != apiSettings ||
         _ctrl.book?.settings != bookSettings ||
-        !bookSettings.consolidationEnabled) {
+        !MemoryRetrievalMode.fromValue(
+          bookSettings.memoryMode,
+        ).isConsolidationMode) {
       return false;
     }
     MemoryEntry? current;

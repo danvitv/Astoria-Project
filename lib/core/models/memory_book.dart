@@ -1,4 +1,5 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
+import 'memory_mode.dart';
 import 'memory_source_manifest.dart';
 
 part 'memory_book.freezed.dart';
@@ -156,16 +157,36 @@ abstract class MemoryBookSettings with _$MemoryBookSettings {
     @Default(1500) int queryMaxChars,
     @Default(3) int cadenceInterval,
 
-    /// Enables the memory consolidation pass. The consolidation LLM config
-    /// (model/endpoint/key/timeout) lives in [PipelineSettings]; this flag is
-    /// the retrieval-side toggle that gates whether the post-turn pipeline
-    /// triggers consolidation at all.
+    /// Legacy compatibility flag for the former consolidation switch.
+    ///
+    /// The selected [memoryMode] is now the source of truth. This field stays
+    /// in the serialized shape so older settings can migrate without data
+    /// loss; new settings derive it from `memory_links` when they are saved.
     @Default(false) bool consolidationEnabled,
     @Default(5) int consolidationThreshold,
   }) = _MemoryBookSettings;
 
   factory MemoryBookSettings.fromJson(Map<String, dynamic> json) =>
-      _$MemoryBookSettingsFromJson(_migrateInjectionTargetInPlace(json));
+      _$MemoryBookSettingsFromJson(
+        _migrateMemorySettingsInPlace(_migrateInjectionTargetInPlace(json)),
+      );
+}
+
+Map<String, dynamic> _migrateMemorySettingsInPlace(Map<String, dynamic> json) {
+  final mode = migrateMemoryModeValue(
+    json['memoryMode'],
+    consolidationEnabled: json['consolidationEnabled'] == true,
+  );
+  final compatibilityFlag = memoryLinksCompatibilityFlag(mode);
+  if (json['memoryMode'] == mode &&
+      json['consolidationEnabled'] == compatibilityFlag) {
+    return json;
+  }
+  return {
+    ...json,
+    'memoryMode': mode,
+    'consolidationEnabled': compatibilityFlag,
+  };
 }
 
 /// Translates the legacy `summary_block` / `summary_macro` enum values

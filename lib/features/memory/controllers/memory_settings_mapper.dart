@@ -1,4 +1,5 @@
 import '../../../core/models/memory_book.dart';
+import '../../../core/models/memory_mode.dart';
 import '../../../core/state/memory_settings_provider.dart';
 
 /// Pure bidirectional mapper between the global [MemoryGlobalSettings]
@@ -48,6 +49,7 @@ class MemorySettingsMapper {
       queryIncludeAssistant: g.queryIncludeAssistant,
       queryRecentTurns: g.queryRecentTurns,
       queryMaxChars: g.queryMaxChars,
+      consolidationEnabled: isMemoryLinksMode(g.memoryMode),
     );
   }
 
@@ -96,8 +98,8 @@ class MemorySettingsMapper {
       queryIncludeAssistant: newSettings.queryIncludeAssistant,
       queryRecentTurns: newSettings.queryRecentTurns,
       queryMaxChars: newSettings.queryMaxChars,
+      consolidationEnabled: isMemoryLinksMode(newSettings.memoryMode),
       cadenceInterval: newSettings.cadenceInterval,
-      consolidationEnabled: newSettings.consolidationEnabled,
       consolidationThreshold: newSettings.consolidationThreshold,
       customPrompts: currentGlobal.customPrompts,
     );

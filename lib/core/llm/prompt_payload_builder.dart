@@ -282,6 +282,7 @@ class PromptPayloadBuilder {
     }
     var memorySettings = MemoryBookSettings(
       enabled: g.enabled,
+      memoryMode: g.memoryMode,
       memoryExcerptingEnabled: g.memoryExcerptingEnabled,
       memoryPackingMode: g.memoryPackingMode,
       memoryExcerptTokensPerChunk: g.memoryExcerptTokensPerChunk,
@@ -427,7 +428,11 @@ class PromptPayloadBuilder {
       throwIfAborted();
       final memoryResult = results[0] as MemoryCandidateBuildResult;
       memorySelection = memoryResult.selection;
-      if (memorySelection.entries.isNotEmpty) {
+      memorySettings = memoryResult.settings ?? memorySettings;
+      if (memorySelection.entries.isNotEmpty &&
+          MemoryRetrievalMode.fromValue(
+            memorySettings.memoryMode,
+          ).isConsolidationMode) {
         final annotations = await MemoryEventPromptAnnotationLoader(
           _ref.read(appDbProvider),
         ).load(
@@ -438,7 +443,6 @@ class PromptPayloadBuilder {
         );
         memorySelection = memorySelection.withEventAnnotations(annotations);
       }
-      memorySettings = memoryResult.settings ?? memorySettings;
       memoryInjectionTarget = memorySettings.injectionTarget == 'macro'
           ? 'macro'
           : 'hard_block';

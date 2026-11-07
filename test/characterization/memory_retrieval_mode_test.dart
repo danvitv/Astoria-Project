@@ -50,5 +50,20 @@ void main() {
         );
       },
     );
+
+    test(
+      'Memory + links uses Balanced retrieval and enables consolidation',
+      () {
+        final mode = MemoryRetrievalMode.fromValue('memory_links');
+
+        expect(mode, MemoryRetrievalMode.memoryLinks);
+        expect(
+          mode.capabilities,
+          equals(MemoryRetrievalMode.balanced.capabilities),
+        );
+        expect(mode.isConsolidationMode, isTrue);
+        expect(MemoryRetrievalMode.balanced.isConsolidationMode, isFalse);
+      },
+    );
   });
 }

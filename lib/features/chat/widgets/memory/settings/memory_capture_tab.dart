@@ -1,6 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 
+import '../../../../../core/models/memory_mode.dart';
 import '../../../../../core/services/memory_prompt_presets.dart';
 import '../../../../../shared/theme/app_colors.dart';
 import '../../../../../shared/widgets/list_controls.dart';
@@ -169,12 +170,14 @@ class MemoryCaptureSections {
   static String _modeLabel(String mode) => switch (mode) {
     'legacy' => 'memory_mode_legacy'.tr(),
     'balanced' => 'memory_mode_balanced'.tr(),
+    memoryLinksMode => 'memory_mode_memory_links'.tr(),
     _ => 'memory_mode_fast'.tr(),
   };
 
   static String _modeDescription(String mode) => switch (mode) {
     'legacy' => 'memory_mode_legacy_desc'.tr(),
     'balanced' => 'memory_mode_balanced_desc'.tr(),
+    memoryLinksMode => 'memory_mode_memory_links_desc'.tr(),
     _ => 'memory_mode_fast_desc'.tr(),
   };
 
@@ -183,7 +186,12 @@ class MemoryCaptureSections {
       context,
       title: 'memory_mode'.tr(),
       items: [
-        for (final mode in const ['legacy', 'fast', 'balanced'])
+        for (final mode in const [
+          'legacy',
+          'fast',
+          'balanced',
+          memoryLinksMode,
+        ])
           GlazePickerItem(
             label: _modeLabel(mode),
             hint: _modeDescription(mode),

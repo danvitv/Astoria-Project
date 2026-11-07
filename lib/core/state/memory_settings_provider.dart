@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 import 'shared_prefs_provider.dart';
+import '../models/memory_mode.dart';
 
 part 'memory_settings_provider.freezed.dart';
 part 'memory_settings_provider.g.dart';
@@ -53,7 +54,26 @@ abstract class MemoryGlobalSettings with _$MemoryGlobalSettings {
   }) = _MemoryGlobalSettings;
 
   factory MemoryGlobalSettings.fromJson(Map<String, dynamic> json) =>
-      _$MemoryGlobalSettingsFromJson(_migrateLegacyValuesInPlace(json));
+      _$MemoryGlobalSettingsFromJson(
+        _migrateLegacyValuesInPlace(_migrateMemorySettingsInPlace(json)),
+      );
+}
+
+Map<String, dynamic> _migrateMemorySettingsInPlace(Map<String, dynamic> json) {
+  final mode = migrateMemoryModeValue(
+    json['memoryMode'],
+    consolidationEnabled: json['consolidationEnabled'] == true,
+  );
+  final compatibilityFlag = memoryLinksCompatibilityFlag(mode);
+  if (json['memoryMode'] == mode &&
+      json['consolidationEnabled'] == compatibilityFlag) {
+    return json;
+  }
+  return {
+    ...json,
+    'memoryMode': mode,
+    'consolidationEnabled': compatibilityFlag,
+  };
 }
 
 /// Translates the legacy `summary_block` / `summary_macro` enum values

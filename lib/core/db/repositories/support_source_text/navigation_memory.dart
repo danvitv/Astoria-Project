@@ -389,6 +389,7 @@ extension _NavMemory on SupportSourceNavigationRepo {
       'balanced',
       'deep',
       'agentic',
+      'memory_links',
     });
     _shape.choice(settings, 'memoryPackingMode', const {
       'hybrid',

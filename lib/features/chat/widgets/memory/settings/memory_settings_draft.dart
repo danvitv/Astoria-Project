@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../../core/models/memory_book.dart';
 import '../../../../../core/models/memory_book_api_settings.dart';
+import '../../../../../core/models/memory_mode.dart';
 
 /// The in-progress edit of [MemoryBookSettings] behind the settings sheet.
 ///
@@ -42,7 +43,6 @@ class MemorySettingsDraft {
   double importanceWeight;
   bool sourceWindowExclusion;
   bool factualContinuityGuardEnabled;
-  bool consolidationEnabled;
   int consolidationThreshold;
   bool queryIncludeAssistant;
   int queryRecentTurns;
@@ -92,7 +92,6 @@ class MemorySettingsDraft {
     required this.importanceWeight,
     required this.sourceWindowExclusion,
     required this.factualContinuityGuardEnabled,
-    required this.consolidationEnabled,
     required this.consolidationThreshold,
     required this.queryIncludeAssistant,
     required this.queryRecentTurns,
@@ -151,7 +150,6 @@ class MemorySettingsDraft {
       importanceWeight: s.importanceWeight,
       sourceWindowExclusion: s.sourceWindowExclusion,
       factualContinuityGuardEnabled: s.factualContinuityGuardEnabled,
-      consolidationEnabled: s.consolidationEnabled,
       consolidationThreshold: s.consolidationThreshold.clamp(1, 100),
       queryIncludeAssistant: s.queryIncludeAssistant,
       queryRecentTurns: s.queryRecentTurns,
@@ -209,7 +207,7 @@ class MemorySettingsDraft {
     importanceWeight: importanceWeight,
     sourceWindowExclusion: sourceWindowExclusion,
     factualContinuityGuardEnabled: factualContinuityGuardEnabled,
-    consolidationEnabled: consolidationEnabled,
+    consolidationEnabled: isMemoryLinksMode(memoryMode),
     consolidationThreshold: consolidationThreshold,
     queryIncludeAssistant: queryIncludeAssistant,
     queryRecentTurns: queryRecentTurns,
@@ -228,6 +226,7 @@ String migrateInjectionTarget(String raw) {
 
 String normalizeMemoryMode(String raw) {
   if (raw == 'legacy') return 'legacy';
+  if (raw == memoryLinksMode) return memoryLinksMode;
   // Deep is hidden while it is being completed. The intended mode uses a
   // separate LLM call to select relevant memories and to propose consolidated
   // or updated entries. Keep accepting persisted `deep`/`agentic` values for
