@@ -245,7 +245,14 @@ class MemoryEventRegistryRepo {
                 .get();
         if (!isCurrent() ||
             endpoints.length != 1 ||
-            endpoints.single.id != otherId) {
+            endpoints.single.id != otherId ||
+            !await _hasCurrentEventSources(
+              eventId: otherId,
+              sessionId: event.sessionId,
+              branchId: event.branchId,
+              entries: entries,
+              history: history,
+            )) {
           return false;
         }
       }
@@ -399,6 +406,86 @@ class MemoryEventRegistryRepo {
                 ChatMessage.fromJson(Map<String, dynamic>.from(item as Map)),
           )
           .toList(growable: false);
+    } on Object {
+      return null;
+    }
+  }
+
+  Future<bool> _hasCurrentEventSources({
+    required String eventId,
+    required String sessionId,
+    required String branchId,
+    required Map<String, MemoryEntry> entries,
+    required List<ChatMessage> history,
+  }) async {
+    final rows =
+        await (db.select(db.memoryEventSourceRows)..where(
+              (row) =>
+                  row.eventId.equals(eventId) &
+                  row.sessionId.equals(sessionId) &
+                  row.branchId.equals(branchId),
+            ))
+            .get();
+    if (rows.isEmpty) return false;
+    for (final row in rows) {
+      final entry = entries[row.memoryEntryId];
+      if (entry == null ||
+          entry.status != 'active' ||
+          !MemoryEntryRevisions.isUsable(entry)) {
+        return false;
+      }
+      final revision = MemoryEntryRevisions.find(entry, row.revisionId);
+      final manifest = revision?.sourceManifest;
+      final storedManifest = _decodeManifest(row.sourceManifestJson);
+      final messageIds = _decodeStringList(row.messageIdsJson);
+      if (revision == null ||
+          revision.id != entry.activeRevisionId ||
+          manifest == null ||
+          manifest.invalidated ||
+          manifest != entry.sourceManifest ||
+          storedManifest != manifest ||
+          messageIds == null ||
+          !const ListEquality<String>().equals(
+            messageIds,
+            revision.messageIds,
+          ) ||
+          !const ListEquality<String>().equals(
+            entry.messageIds,
+            revision.messageIds,
+          ) ||
+          manifest.validate(messageIds, history) !=
+              MemorySourceValidity.verified ||
+          row.sourceSwipeId != entry.sourceSwipeId ||
+          row.sourceAgentSwipeId != entry.sourceAgentSwipeId ||
+          row.fingerprint !=
+              _fingerprint(
+                revision,
+                sourceSwipeId: row.sourceSwipeId,
+                sourceAgentSwipeId: row.sourceAgentSwipeId,
+              )) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static MemorySourceManifest? _decodeManifest(String json) {
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! Map) return null;
+      return MemorySourceManifest.fromJson(Map<String, dynamic>.from(decoded));
+    } on Object {
+      return null;
+    }
+  }
+
+  static List<String>? _decodeStringList(String json) {
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! List || decoded.any((value) => value is! String)) {
+        return null;
+      }
+      return decoded.cast<String>();
     } on Object {
       return null;
     }

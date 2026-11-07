@@ -9,6 +9,7 @@ import 'package:glaze_flutter/core/db/repositories/memory_consolidation_pack_bui
 import 'package:glaze_flutter/core/db/repositories/memory_event_registry_repo.dart';
 import 'package:glaze_flutter/core/llm/aux_llm_client.dart';
 import 'package:glaze_flutter/core/models/memory_book.dart';
+import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/memory_consolidation.dart';
 import 'package:glaze_flutter/core/models/memory_source_manifest.dart';
 import 'package:glaze_flutter/core/services/memory_consolidation_acceptance_service.dart';
@@ -32,16 +33,17 @@ void main() {
 
   MemoryEntry entry(String id, String content) {
     final messageId = 'message-$id';
-    final manifest = MemorySourceManifest(
-      originSessionId: 'session-1',
-      messages: [
-        MemorySourceStamp(
-          messageId: messageId,
-          swipeId: 1,
-          agentSwipeId: 2,
-          contentHash: 'hash-$id',
-        ),
-      ],
+    final message = ChatMessage(
+      id: messageId,
+      role: 'assistant',
+      content: content,
+      swipeId: 1,
+      agentSwipeId: 2,
+    );
+    final manifest = MemorySourceManifest.capture(
+      'session-1',
+      [message],
+      [messageId],
     );
     final revision = MemoryEntryRevision(
       id: '$id:r1',
@@ -68,6 +70,16 @@ void main() {
   Future<void> seed() async {
     final requested = entry('requested', 'The key was returned.');
     final obligation = entry('obligation', 'The key had been promised.');
+    final history = [
+      for (final item in [requested, obligation])
+        ChatMessage(
+          id: item.messageIds.single,
+          role: 'assistant',
+          content: item.content,
+          swipeId: item.sourceSwipeId,
+          agentSwipeId: item.sourceAgentSwipeId,
+        ),
+    ];
     await db
         .into(db.chatSessions)
         .insert(
@@ -75,7 +87,9 @@ void main() {
             sessionId: 'session-1',
             characterId: 'character-1',
             sessionIndex: 0,
-            messagesJson: '[]',
+            messagesJson: jsonEncode(
+              history.map((item) => item.toJson()).toList(),
+            ),
           ),
         );
     await db

@@ -164,6 +164,51 @@ void main() {
     expect(await db.select(db.memoryEventRows).get(), isEmpty);
   });
 
+  test('rejects linking to an active event without verified sources', () async {
+    final source = await seedSessionAndMemory();
+    expect(
+      await repo.accept(
+        event: event(source, id: 'event-old'),
+        isCurrent: () => true,
+      ),
+      isTrue,
+    );
+    await (db.delete(
+      db.memoryEventSourceRows,
+    )..where((row) => row.eventId.equals('event-old'))).go();
+
+    final newSource = MemoryEventSourceInput(
+      id: 'source-new',
+      memoryEntryId: source.memoryEntryId,
+      revisionId: source.revisionId,
+      fingerprint: source.fingerprint,
+      messageIds: source.messageIds,
+      sourceSwipeId: source.sourceSwipeId,
+      sourceAgentSwipeId: source.sourceAgentSwipeId,
+    );
+    final accepted = await repo.accept(
+      event: event(newSource, id: 'event-new'),
+      links: const [
+        MemoryEventLinkInput(
+          id: 'link-new',
+          fromEventId: 'event-new',
+          toEventId: 'event-old',
+          relation: 'continues',
+        ),
+      ],
+      isCurrent: () => true,
+    );
+
+    expect(accepted, isFalse);
+    expect(
+      await (db.select(
+        db.memoryEventRows,
+      )..where((row) => row.id.equals('event-new'))).get(),
+      isEmpty,
+    );
+    expect(await db.select(db.memoryEventLinkRows).get(), isEmpty);
+  });
+
   test(
     'session cleanup removes registry rows with child-first ordering',
     () async {
