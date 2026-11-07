@@ -174,6 +174,84 @@ class MemoryConsolidationRows extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+@DataClassName('MemoryEventRow')
+@TableIndex(
+  name: 'idx_memory_events_session_branch_status',
+  columns: {#sessionId, #branchId, #status},
+)
+class MemoryEventRows extends Table {
+  @override
+  String get tableName => 'memory_event_rows';
+
+  TextColumn get id => text()();
+  TextColumn get sessionId => text()();
+  TextColumn get branchId => text()();
+  TextColumn get kind => text()();
+  TextColumn get description => text()();
+  TextColumn get state => text()();
+  TextColumn get status => text().withDefault(const Constant('active'))();
+  TextColumn get boundaryMessageId => text().nullable()();
+  IntColumn get boundarySwipeId => integer().nullable()();
+  IntColumn get boundaryAgentSwipeId => integer().nullable()();
+  IntColumn get boundaryOrdinal => integer().nullable()();
+  IntColumn get revision => integer().withDefault(const Constant(1))();
+  IntColumn get acceptedAt => integer()();
+  TextColumn get acceptedBy => text().withDefault(const Constant('user'))();
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+@DataClassName('MemoryEventSourceRow')
+@TableIndex(name: 'idx_memory_event_sources_event', columns: {#eventId})
+@TableIndex(
+  name: 'idx_memory_event_sources_memory',
+  columns: {#sessionId, #memoryEntryId},
+)
+class MemoryEventSourceRows extends Table {
+  @override
+  String get tableName => 'memory_event_source_rows';
+
+  TextColumn get id => text()();
+  TextColumn get eventId => text()();
+  TextColumn get sessionId => text()();
+  TextColumn get branchId => text()();
+  TextColumn get memoryEntryId => text()();
+  TextColumn get revisionId => text()();
+  TextColumn get fingerprint => text()();
+  TextColumn get sourceManifestJson =>
+      text().withDefault(const Constant('{}'))();
+  TextColumn get messageIdsJson => text().withDefault(const Constant('[]'))();
+  IntColumn get sourceSwipeId => integer().withDefault(const Constant(0))();
+  IntColumn get sourceAgentSwipeId =>
+      integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+@DataClassName('MemoryEventLinkRow')
+@TableIndex(name: 'idx_memory_event_links_from', columns: {#fromEventId})
+@TableIndex(name: 'idx_memory_event_links_to', columns: {#toEventId})
+class MemoryEventLinkRows extends Table {
+  @override
+  String get tableName => 'memory_event_link_rows';
+
+  TextColumn get id => text()();
+  TextColumn get sessionId => text()();
+  TextColumn get branchId => text()();
+  TextColumn get fromEventId => text()();
+  TextColumn get toEventId => text()();
+  TextColumn get relation => text()();
+  TextColumn get status => text().withDefault(const Constant('active'))();
+  IntColumn get revision => integer().withDefault(const Constant(1))();
+  IntColumn get acceptedAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 @DataClassName('EmbeddingRow')
 @TableIndex(name: 'idx_embeddings_source_type', columns: {#sourceType})
 @TableIndex(name: 'idx_embeddings_source_id', columns: {#sourceId})

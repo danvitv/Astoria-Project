@@ -47,7 +47,9 @@ class SessionDeletionQueries {
   }
 
   static Future<T> trackInventoryMutation<T>(
-      AppDatabase db, Future<T> Function() write) async {
+    AppDatabase db,
+    Future<T> Function() write,
+  ) async {
     final settle = beginInventoryMutation(db);
     try {
       return await write();
@@ -93,6 +95,15 @@ class SessionDeletionQueries {
     await (_db.delete(
       _db.memoryConsolidationRows,
     )..where((row) => row.chatSessionId.equals(sessionId))).go();
+    await (_db.delete(
+      _db.memoryEventLinkRows,
+    )..where((row) => row.sessionId.equals(sessionId))).go();
+    await (_db.delete(
+      _db.memoryEventSourceRows,
+    )..where((row) => row.sessionId.equals(sessionId))).go();
+    await (_db.delete(
+      _db.memoryEventRows,
+    )..where((row) => row.sessionId.equals(sessionId))).go();
     await (_db.delete(
       _db.trackerRows,
     )..where((row) => row.sessionId.equals(sessionId))).go();

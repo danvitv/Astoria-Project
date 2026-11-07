@@ -44,6 +44,7 @@ part 'migrations/upgrade_v135.dart';
 part 'migrations/upgrade_v137.dart';
 part 'migrations/upgrade_v138.dart';
 part 'migrations/upgrade_v139.dart';
+part 'migrations/upgrade_v140.dart';
 
 @DriftDatabase(
   tables: [
@@ -75,6 +76,9 @@ part 'migrations/upgrade_v139.dart';
     MemorySalienceRows,
     MemoryCadenceRows,
     MemoryConsolidationRows,
+    MemoryEventRows,
+    MemoryEventSourceRows,
+    MemoryEventLinkRows,
     StudioConfigRows,
     StudioPresetRows,
     TrackerRows,
@@ -132,11 +136,10 @@ class AppDatabase extends _$AppDatabase {
     _AppDatabaseNativeFile native,
     _NativeCommitSendFence fence, {
     File? fixedFile,
-  })
-    : _nativeFile = native,
-      _commitSendFence = fence,
-      _stockSingleConnectionExecutor = true,
-      super(_openConnection(native, fence, fixedFile: fixedFile));
+  }) : _nativeFile = native,
+       _commitSendFence = fence,
+       _stockSingleConnectionExecutor = true,
+       super(_openConnection(native, fence, fixedFile: fixedFile));
 
   AppDatabase.forTesting(super.e)
     : _nativeFile = null,
@@ -232,8 +235,7 @@ class AppDatabase extends _$AppDatabase {
     super.executor,
     this._nativeFile,
     this._commitSendFence,
-  )
-    : _stockSingleConnectionExecutor = false;
+  ) : _stockSingleConnectionExecutor = false;
 
   final _AppDatabaseNativeFile? _nativeFile;
   final _NativeCommitSendFence? _commitSendFence;
@@ -297,7 +299,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 139;
+  int get schemaVersion => 140;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -339,6 +341,7 @@ class AppDatabase extends _$AppDatabase {
       await _upgradeV137(m, from);
       await _upgradeV138(m, from);
       await _upgradeV139(m, from);
+      await _upgradeV140(m, from);
       // Local v136 repairs missing indexes/triggers and replaces the request
       // capture trigger. Only install current-schema integrity after all
       // historical table rebuilds and data normalization have finished.
