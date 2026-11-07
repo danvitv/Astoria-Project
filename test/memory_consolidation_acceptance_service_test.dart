@@ -175,6 +175,107 @@ void main() {
     'unexaminedOpenObligationIds': pack.unexaminedOpenObligationIds,
   });
 
+  Future<MemoryEventInput> eventInput(String id, String entryId) async {
+    final row = await (db.select(
+      db.memoryBookRows,
+    )..where((item) => item.sessionId.equals('session-1'))).getSingle();
+    final storedEntries = (jsonDecode(row.entriesJson) as List)
+        .map(
+          (value) =>
+              MemoryEntry.fromJson(Map<String, dynamic>.from(value as Map)),
+        )
+        .toList();
+    final sourceEntry = storedEntries.singleWhere((item) => item.id == entryId);
+    final revision = sourceEntry.revisions.single;
+    return MemoryEventInput(
+      id: id,
+      sessionId: 'session-1',
+      branchId: 'session-1',
+      kind: 'result',
+      description: 'Independent package event $id.',
+      state: 'completed',
+      sources: [
+        MemoryEventSourceInput(
+          id: '$id-source',
+          memoryEntryId: entryId,
+          revisionId: revision.id,
+          fingerprint: MemoryEventRegistryRepo.sourceFingerprint(
+            revision,
+            sourceSwipeId: sourceEntry.sourceSwipeId,
+            sourceAgentSwipeId: sourceEntry.sourceAgentSwipeId,
+          ),
+          messageIds: revision.messageIds,
+          sourceSwipeId: sourceEntry.sourceSwipeId,
+          sourceAgentSwipeId: sourceEntry.sourceAgentSwipeId,
+        ),
+      ],
+    );
+  }
+
+  test(
+    'accepts a package graph atomically and rolls back invalid endpoints',
+    () async {
+      await seed();
+      final events = [
+        await eventInput('package-event-one', 'requested'),
+        await eventInput('package-event-two', 'obligation'),
+      ];
+
+      expect(
+        await registry.acceptPackage(
+          events: events,
+          links: const [
+            MemoryEventLinkInput(
+              id: 'package-link-invalid',
+              fromEventId: 'package-event-one',
+              toEventId: 'missing-endpoint',
+              relation: 'fulfills',
+            ),
+          ],
+          isCurrent: () => true,
+        ),
+        isFalse,
+      );
+      expect(
+        (await registry.getActiveEvents(
+          sessionId: 'session-1',
+          branchId: 'session-1',
+        )).map((row) => row.id),
+        ['event-open'],
+      );
+
+      expect(
+        await registry.acceptPackage(
+          events: events,
+          links: const [
+            MemoryEventLinkInput(
+              id: 'package-link-valid',
+              fromEventId: 'package-event-one',
+              toEventId: 'package-event-two',
+              relation: 'continues',
+            ),
+          ],
+          isCurrent: () => true,
+        ),
+        isTrue,
+      );
+      expect(
+        (await registry.getActiveEvents(
+          sessionId: 'session-1',
+          branchId: 'session-1',
+        )).map((row) => row.id),
+        ['event-open', 'package-event-one', 'package-event-two'],
+      );
+      expect(
+        (await registry.getActiveLinks(
+          sessionId: 'session-1',
+          branchId: 'session-1',
+        )).single.relation,
+        'continues',
+      );
+    },
+  );
+
   test('accepts one event and its link transactionally', () async {
     await seed();
     final pack = await buildPack();

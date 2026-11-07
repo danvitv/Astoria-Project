@@ -4,6 +4,7 @@ import 'package:collection/collection.dart';
 
 import '../db/repositories/memory_event_registry_repo.dart';
 import '../llm/memory_consolidation_response_parser.dart';
+import '../llm/memory_consolidation_package_parser.dart';
 import '../models/memory_consolidation.dart';
 
 /// Parses and transactionally accepts one reviewed consolidation response.
@@ -20,6 +21,34 @@ class MemoryConsolidationAcceptanceService {
     required String rawResponse,
     required MemoryConsolidationSourcePack pack,
   }) => MemoryConsolidationResponseParser.parse(rawResponse, pack);
+
+  MemoryConsolidationPackageResponse parsePackageDraft({
+    required String rawResponse,
+    required MemoryConsolidationSourcePack pack,
+  }) => MemoryConsolidationPackageParser.parse(rawResponse, pack);
+
+  Future<bool> acceptReviewedPackage({
+    required MemoryConsolidationPackageResponse response,
+    required MemoryConsolidationSourcePack pack,
+    required bool Function() isCurrent,
+    String acceptedBy = 'user',
+  }) async {
+    final canonical = MemoryConsolidationPackageParser.parse(
+      jsonEncode(_packageResponseJson(response)),
+      pack,
+    );
+    if (canonical.outcome == 'unable_to_verify') return false;
+    final accepted = await registry.acceptPackage(
+      events: canonical.toRegistryEvents(pack),
+      links: canonical.toRegistryLinks(),
+      isCurrent: isCurrent,
+      acceptedBy: acceptedBy,
+    );
+    if (!accepted) {
+      throw StateError('Consolidation package became stale before acceptance.');
+    }
+    return true;
+  }
 
   Future<bool> acceptReviewed({
     required MemoryConsolidationResponse response,
@@ -82,6 +111,43 @@ class MemoryConsolidationAcceptanceService {
                     'ordinal': value.event!.boundaryOrdinal,
                   },
           },
+    'links': [
+      for (final link in value.links)
+        {
+          'linkId': link.linkId,
+          'fromEventId': link.fromEventId,
+          'toEventId': link.toEventId,
+          'relation': link.relation,
+        },
+    ],
+    'unverifiedSourceRefs': value.unverifiedSourceRefs,
+    'unexaminedOpenObligationIds': value.unexaminedOpenObligationIds,
+  };
+
+  static Map<String, dynamic> _packageResponseJson(
+    MemoryConsolidationPackageResponse value,
+  ) => {
+    'contract': value.contract,
+    'version': value.version,
+    'outcome': value.outcome,
+    'events': [
+      for (final event in value.events)
+        {
+          'eventId': event.eventId,
+          'kind': event.kind,
+          'description': event.description,
+          'state': event.state,
+          'sourceRefs': event.sourceRefs,
+          'boundary': event.boundaryMessageId == null
+              ? null
+              : {
+                  'messageId': event.boundaryMessageId,
+                  'swipeId': event.boundarySwipeId,
+                  'agentSwipeId': event.boundaryAgentSwipeId,
+                  'ordinal': event.boundaryOrdinal,
+                },
+        },
+    ],
     'links': [
       for (final link in value.links)
         {

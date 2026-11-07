@@ -28,6 +28,7 @@ class MemoryConsolidationPackBuilder {
     required String sessionId,
     required String branchId,
     required String proposedEventId,
+    List<String>? proposedEventIds,
     required List<String> memoryEntryIds,
     int maxCandidates = 12,
     int maxContextCharacters = 120000,
@@ -40,6 +41,13 @@ class MemoryConsolidationPackBuilder {
         maxCandidates < 1 ||
         maxContextCharacters < 1) {
       throw ArgumentError('Invalid consolidation pack bounds.');
+    }
+    final eventIds = proposedEventIds ?? [proposedEventId];
+    if (eventIds.isEmpty ||
+        eventIds.length > memoryEntryIds.length ||
+        eventIds.toSet().length != eventIds.length ||
+        eventIds.any((id) => id.trim().isEmpty || id != id.trim())) {
+      throw ArgumentError('Invalid proposed event ID set.');
     }
     final row = await (db.select(
       db.memoryBookRows,
@@ -81,6 +89,7 @@ class MemoryConsolidationPackBuilder {
           sessionId: sessionId,
           branchId: branchId,
           proposedEventId: proposedEventId,
+          proposedEventIds: eventIds,
           sources: selectedSources,
           candidates: const [],
           unexaminedOpenObligationIds: const [],
@@ -196,6 +205,7 @@ class MemoryConsolidationPackBuilder {
             sessionId: sessionId,
             branchId: branchId,
             proposedEventId: proposedEventId,
+            proposedEventIds: eventIds,
             sources: prospectiveSources,
             candidates: prospectiveCandidates,
             unexaminedOpenObligationIds: prospectiveUnexamined,
@@ -232,6 +242,7 @@ class MemoryConsolidationPackBuilder {
           sessionId: sessionId,
           branchId: branchId,
           proposedEventId: proposedEventId,
+          proposedEventIds: eventIds,
           sources: selectedSources,
           candidates: candidates,
           unexaminedOpenObligationIds: unexaminedIds,
@@ -244,6 +255,7 @@ class MemoryConsolidationPackBuilder {
       sessionId: sessionId,
       branchId: branchId,
       proposedEventId: proposedEventId,
+      proposedEventIds: eventIds,
       sources: selectedSources,
       candidates: candidates,
       unexaminedOpenObligationIds: unexaminedIds,
@@ -406,6 +418,7 @@ class MemoryConsolidationPackBuilder {
     required String sessionId,
     required String branchId,
     required String proposedEventId,
+    required List<String> proposedEventIds,
     required List<MemoryConsolidationSource> sources,
     required List<MemoryConsolidationEventCandidate> candidates,
     required List<String> unexaminedOpenObligationIds,
@@ -414,6 +427,7 @@ class MemoryConsolidationPackBuilder {
     'sessionId': sessionId,
     'branchId': branchId,
     'proposedEventId': proposedEventId,
+    'proposedEventIds': proposedEventIds,
     'sources': sources.map((source) => source.toJson()).toList(),
     'candidates': candidates.map((candidate) => candidate.toJson()).toList(),
     'unexaminedOpenObligationIds': unexaminedOpenObligationIds,

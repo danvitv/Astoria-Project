@@ -73,6 +73,10 @@ class MemoryEventLinkInput {
   });
 }
 
+class _PackageAcceptAborted implements Exception {
+  const _PackageAcceptAborted();
+}
+
 /// Persistence boundary for accepted event-registry facts. Model output must
 /// be parsed and reviewed before it reaches this repository.
 class MemoryEventRegistryRepo {
@@ -468,6 +472,146 @@ class MemoryEventRegistryRepo {
       }
       return true;
     });
+  }
+
+  /// Atomically accepts a reviewed package containing several independent
+  /// events and links between those events or existing current endpoints.
+  Future<bool> acceptPackage({
+    required List<MemoryEventInput> events,
+    required List<MemoryEventLinkInput> links,
+    required bool Function() isCurrent,
+    String acceptedBy = 'user',
+  }) async {
+    try {
+      return await db.transaction(() async {
+        if (events.isEmpty || events.length > 100) {
+          throw ArgumentError('Package must contain between 1 and 100 events.');
+        }
+        final eventIds = events.map((event) => event.id).toSet();
+        if (eventIds.length != events.length ||
+            events.any(
+              (event) =>
+                  event.sessionId != events.first.sessionId ||
+                  event.branchId != events.first.branchId,
+            )) {
+          throw ArgumentError(
+            'Package events must be unique and share one branch.',
+          );
+        }
+        final linkIds = links.map((link) => link.id).toSet();
+        final sourceIds = {
+          for (final event in events)
+            for (final source in event.sources) source.id,
+        };
+        if (linkIds.length != links.length ||
+            sourceIds.length !=
+                events.fold<int>(
+                  0,
+                  (count, event) => count + event.sources.length,
+                ) ||
+            linkIds.intersection(eventIds).isNotEmpty ||
+            linkIds.intersection(sourceIds).isNotEmpty ||
+            eventIds.intersection(sourceIds).isNotEmpty ||
+            links.any(
+              (link) =>
+                  link.fromEventId == link.toEventId ||
+                  !eventIds.contains(link.fromEventId) &&
+                      !eventIds.contains(link.toEventId) ||
+                  !relations.contains(link.relation),
+            )) {
+          throw ArgumentError('Package contains an invalid link operation.');
+        }
+        if (!isCurrent()) return false;
+        final existingEvents = await (db.select(
+          db.memoryEventRows,
+        )..where((row) => row.id.isIn(eventIds))).get();
+        final existingLinks = await (db.select(
+          db.memoryEventLinkRows,
+        )..where((row) => row.id.isIn(linkIds))).get();
+        final existingSources = await (db.select(
+          db.memoryEventSourceRows,
+        )..where((row) => row.id.isIn(sourceIds))).get();
+        if (existingEvents.isNotEmpty ||
+            existingLinks.isNotEmpty ||
+            existingSources.isNotEmpty) {
+          return false;
+        }
+
+        for (final event in events) {
+          if (!await accept(
+            event: event,
+            isCurrent: isCurrent,
+            acceptedBy: acceptedBy,
+          )) {
+            throw const _PackageAcceptAborted();
+          }
+        }
+
+        final session =
+            await (db.select(
+                  db.chatSessions,
+                )..where((row) => row.sessionId.equals(events.first.sessionId)))
+                .getSingleOrNull();
+        if (session == null) throw const _PackageAcceptAborted();
+        final branchIdentity = SessionBranchIdentity.fromSessionVarsJson(
+          sessionId: events.first.sessionId,
+          sessionVarsJson: session.sessionVarsJson,
+        );
+        if (branchIdentity?.branchId != events.first.branchId) {
+          throw const _PackageAcceptAborted();
+        }
+        final history = _decodeHistory(session.messagesJson);
+        final entries = await _readEntries(events.first.sessionId);
+        if (history == null || entries == null) {
+          throw const _PackageAcceptAborted();
+        }
+        for (final link in links) {
+          final endpoints =
+              await (db.select(db.memoryEventRows)..where(
+                    (row) =>
+                        row.id.isIn({link.fromEventId, link.toEventId}) &
+                        row.sessionId.equals(events.first.sessionId) &
+                        row.branchId.equals(events.first.branchId) &
+                        row.status.equals('active'),
+                  ))
+                  .get();
+          if (endpoints.length != 2 || !isCurrent()) {
+            throw const _PackageAcceptAborted();
+          }
+          for (final endpoint in endpoints) {
+            if (!await _hasCurrentEventSources(
+              eventId: endpoint.id,
+              sessionId: events.first.sessionId,
+              branchId: events.first.branchId,
+              entries: entries,
+              history: history,
+            )) {
+              throw const _PackageAcceptAborted();
+            }
+          }
+        }
+        if (!isCurrent()) throw const _PackageAcceptAborted();
+        final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        for (final link in links) {
+          await db
+              .into(db.memoryEventLinkRows)
+              .insert(
+                MemoryEventLinkRowsCompanion.insert(
+                  id: link.id,
+                  sessionId: events.first.sessionId,
+                  branchId: events.first.branchId,
+                  fromEventId: link.fromEventId,
+                  toEventId: link.toEventId,
+                  relation: link.relation,
+                  acceptedAt: now,
+                ),
+              );
+        }
+        return true;
+      });
+    } on _PackageAcceptAborted {
+      return false;
+    }
   }
 
   /// Stable source fingerprint over the exact revision text and provenance.

@@ -99,6 +99,7 @@ class MemoryConsolidationSourcePack {
   final String sessionId;
   final String branchId;
   final String proposedEventId;
+  final List<String> proposedEventIds;
   final List<MemoryConsolidationSource> sources;
   final List<MemoryConsolidationEventCandidate> candidates;
   final List<String> unexaminedOpenObligationIds;
@@ -108,10 +109,14 @@ class MemoryConsolidationSourcePack {
     required this.sessionId,
     required this.branchId,
     required this.proposedEventId,
+    List<String>? proposedEventIds,
     required List<MemoryConsolidationSource> sources,
     required List<MemoryConsolidationEventCandidate> candidates,
     required List<String> unexaminedOpenObligationIds,
-  }) : sources = List.unmodifiable(sources),
+  }) : proposedEventIds = List.unmodifiable(
+         proposedEventIds ?? [proposedEventId],
+       ),
+       sources = List.unmodifiable(sources),
        candidates = List.unmodifiable(candidates),
        unexaminedOpenObligationIds = List.unmodifiable(
          unexaminedOpenObligationIds,
@@ -122,12 +127,91 @@ class MemoryConsolidationSourcePack {
     'sessionId': sessionId,
     'branchId': branchId,
     'proposedEventId': proposedEventId,
+    'proposedEventIds': proposedEventIds,
     'sources': sources.map((source) => source.toJson()).toList(),
     'candidates': candidates.map((candidate) => candidate.toJson()).toList(),
     'unexaminedOpenObligationIds': unexaminedOpenObligationIds,
   };
 
   String toJsonString() => jsonEncode(toJson());
+}
+
+/// One event operation in a package-level consolidation response.
+class MemoryConsolidationPackageEventOperation {
+  final String eventId;
+  final String kind;
+  final String description;
+  final String state;
+  final List<String> sourceRefs;
+  final String? boundaryMessageId;
+  final int? boundarySwipeId;
+  final int? boundaryAgentSwipeId;
+  final int? boundaryOrdinal;
+
+  const MemoryConsolidationPackageEventOperation({
+    required this.eventId,
+    required this.kind,
+    required this.description,
+    required this.state,
+    required this.sourceRefs,
+    this.boundaryMessageId,
+    this.boundarySwipeId,
+    this.boundaryAgentSwipeId,
+    this.boundaryOrdinal,
+  });
+}
+
+class MemoryConsolidationPackageResponse {
+  final String contract;
+  final int version;
+  final String outcome;
+  final List<MemoryConsolidationPackageEventOperation> events;
+  final List<MemoryConsolidationLinkOperation> links;
+  final List<String> unverifiedSourceRefs;
+  final List<String> unexaminedOpenObligationIds;
+
+  const MemoryConsolidationPackageResponse({
+    required this.contract,
+    required this.version,
+    required this.outcome,
+    required this.events,
+    required this.links,
+    required this.unverifiedSourceRefs,
+    required this.unexaminedOpenObligationIds,
+  });
+
+  List<MemoryEventInput> toRegistryEvents(MemoryConsolidationSourcePack pack) {
+    final sourceByRef = {for (final source in pack.sources) source.ref: source};
+    return [
+      for (final event in events)
+        MemoryEventInput(
+          id: event.eventId,
+          sessionId: pack.sessionId,
+          branchId: pack.branchId,
+          kind: event.kind,
+          description: event.description,
+          state: event.state,
+          sources: [
+            for (final ref in event.sourceRefs)
+              sourceByRef[ref]!.toRegistryInput(event.eventId),
+          ],
+          boundaryMessageId: event.boundaryMessageId,
+          boundarySwipeId: event.boundarySwipeId,
+          boundaryAgentSwipeId: event.boundaryAgentSwipeId,
+          boundaryOrdinal: event.boundaryOrdinal,
+        ),
+    ];
+  }
+
+  List<MemoryEventLinkInput> toRegistryLinks() => [
+    for (final link in links)
+      MemoryEventLinkInput(
+        id: link.linkId,
+        fromEventId: link.fromEventId,
+        toEventId: link.toEventId,
+        relation: link.relation,
+      ),
+  ];
 }
 
 /// A parsed, strict response operation that can still be displayed as a
