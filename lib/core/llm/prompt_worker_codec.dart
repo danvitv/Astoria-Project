@@ -264,6 +264,10 @@ Map<String, dynamic>? serializeMemorySelection(MemorySelection? selection) {
     'entryCap': selection.entryCap,
     'budgetTrimmed': selection.budgetTrimmed,
     'excludedBySourceWindow': selection.excludedBySourceWindow,
+    'eventAnnotationsByEntryId': {
+      for (final item in selection.eventAnnotationsByEntryId.entries)
+        item.key: item.value.map((annotation) => annotation.toJson()).toList(),
+    },
   };
 }
 
@@ -298,6 +302,17 @@ MemorySelection? deserializeMemorySelection(Map<String, dynamic>? json) {
     entryCap: json['entryCap'] as int? ?? 0,
     budgetTrimmed: json['budgetTrimmed'] as bool? ?? false,
     excludedBySourceWindow: json['excludedBySourceWindow'] as int? ?? 0,
+    eventAnnotationsByEntryId: {
+      for (final item
+          in (json['eventAnnotationsByEntryId'] as Map? ?? {}).entries)
+        item.key as String: (item.value as List)
+            .map(
+              (annotation) => MemoryEventPromptAnnotation.fromJson(
+                Map<String, dynamic>.from(annotation as Map),
+              ),
+            )
+            .toList(growable: false),
+    },
   );
 }
 

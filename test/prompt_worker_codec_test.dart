@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/llm/prompt_builder.dart';
 import 'package:glaze_flutter/core/llm/prompt_worker_codec.dart';
+import 'package:glaze_flutter/core/llm/memory_selector.dart';
+import 'package:glaze_flutter/core/models/memory_book.dart';
 import 'package:glaze_flutter/core/models/api_config.dart';
 import 'package:glaze_flutter/core/models/character.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
@@ -13,6 +15,32 @@ void main() {
       '<studio_session_state>trust: full</studio_session_state>';
   const characterState =
       '<current_character_state>Alison trusts the user.</current_character_state>';
+
+  test('prompt worker codec preserves event annotations with selection', () {
+    const entry = MemoryEntry(id: 'memory-1', title: 'Key agreement');
+    const annotation = MemoryEventPromptAnnotation(
+      eventId: 'event-1',
+      kind: 'agreement',
+      description: 'Return the key tomorrow.',
+      state: 'open',
+      relation: 'continues',
+    );
+    final selection = MemorySelection(
+      entries: const [entry],
+      eventAnnotationsByEntryId: const {
+        'memory-1': [annotation],
+      },
+    );
+
+    final restored = deserializeMemorySelection(
+      serializeMemorySelection(selection),
+    );
+
+    final restoredAnnotations =
+        restored!.eventAnnotationsByEntryId['memory-1']!;
+    expect(restoredAnnotations, hasLength(1));
+    expect(restoredAnnotations.single.toJson(), annotation.toJson());
+  });
 
   PromptPayload payload() => const PromptPayload(
     character: Character(id: 'character', name: 'Alison'),

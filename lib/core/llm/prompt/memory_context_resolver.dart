@@ -36,11 +36,14 @@ final class MemoryContextResolver {
     String? summaryExcerpt,
     GameTimeState gameTime = const GameTimeState(),
   }) {
-    final refiltered = _refilterSelection(
+    final sourceWindowFiltered = _refilterSelection(
       selection,
       visibleMessageIds: visibleMessageIds,
       chunkBudgeting: packingMode == 'chunk_first',
       disableSourceWindowExclusion: disableSourceWindowExclusion,
+    );
+    final refiltered = sourceWindowFiltered.withEventAnnotations(
+      selection.eventAnnotationsByEntryId,
     );
     const packer = MemoryPromptPacker();
     final excerpted = packer.pack(

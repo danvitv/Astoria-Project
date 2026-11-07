@@ -8,6 +8,7 @@ import '../models/character.dart';
 import '../models/chat_message.dart';
 import '../models/historical_message_window.dart';
 import '../db/repositories/ledger_raw_tracker_state_reader.dart';
+import '../db/repositories/memory_event_prompt_annotation_loader.dart';
 import 'message_recall_source_clock.dart';
 import '../utils/cast_helpers.dart';
 import '../models/lorebook.dart';
@@ -426,6 +427,17 @@ class PromptPayloadBuilder {
       throwIfAborted();
       final memoryResult = results[0] as MemoryCandidateBuildResult;
       memorySelection = memoryResult.selection;
+      if (memorySelection.entries.isNotEmpty) {
+        final annotations = await MemoryEventPromptAnnotationLoader(
+          _ref.read(appDbProvider),
+        ).load(
+          sessionId: session.id,
+          branchId: session.id,
+          entries: memorySelection.entries,
+          history: session.messages,
+        );
+        memorySelection = memorySelection.withEventAnnotations(annotations);
+      }
       memorySettings = memoryResult.settings ?? memorySettings;
       memoryInjectionTarget = memorySettings.injectionTarget == 'macro'
           ? 'macro'

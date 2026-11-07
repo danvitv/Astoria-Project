@@ -36,12 +36,22 @@ String formatMemoryItems(
         : 'Memory: $title ($range)';
     final ledger = item.entry.ledgerRange.trim();
     final metadata = '\n${memoryOccurrence(ledger)}';
+    final annotationText = item.eventAnnotations
+        .map(
+          (event) =>
+              '[Accepted event ${event.kind}; ${event.state}; '
+              '${event.relation}]: ${event.description}',
+        )
+        .join('\n');
+    final injectedText = [item.text.trim(), annotationText]
+        .where((text) => text.isNotEmpty)
+        .join('\n');
     if (item.excerpt) {
       parts.add(
-        '$heading$metadata\n${item.text.trim()}\n[Excerpted from a larger Memory Book entry]',
+        '$heading$metadata\n$injectedText\n[Excerpted from a larger Memory Book entry]',
       );
     } else {
-      parts.add('$heading$metadata\n${item.text.trim()}');
+      parts.add('$heading$metadata\n$injectedText');
     }
   }
   return parts.where((part) => part.trim().isNotEmpty).join('\n\n');

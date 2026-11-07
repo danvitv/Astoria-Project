@@ -6,6 +6,39 @@ import 'memory_salience_scorer.dart';
 import 'tokenizer.dart';
 import 'glaze_matcher.dart';
 
+class MemoryEventPromptAnnotation {
+  final String eventId;
+  final String kind;
+  final String description;
+  final String state;
+  final String relation;
+
+  const MemoryEventPromptAnnotation({
+    required this.eventId,
+    required this.kind,
+    required this.description,
+    required this.state,
+    required this.relation,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'eventId': eventId,
+    'kind': kind,
+    'description': description,
+    'state': state,
+    'relation': relation,
+  };
+
+  factory MemoryEventPromptAnnotation.fromJson(Map<String, dynamic> json) =>
+      MemoryEventPromptAnnotation(
+        eventId: json['eventId'] as String? ?? '',
+        kind: json['kind'] as String? ?? '',
+        description: json['description'] as String? ?? '',
+        state: json['state'] as String? ?? '',
+        relation: json['relation'] as String? ?? '',
+      );
+}
+
 /// Result of one candidate after the deterministic selector.
 class MemoryCandidateScore {
   final MemoryEntry entry;
@@ -61,6 +94,8 @@ class MemorySelection {
   final int entryCap;
   final bool budgetTrimmed;
   final int excludedBySourceWindow;
+  final Map<String, List<MemoryEventPromptAnnotation>>
+  eventAnnotationsByEntryId;
 
   const MemorySelection({
     this.selectionMode = 'v2',
@@ -71,7 +106,25 @@ class MemorySelection {
     this.entryCap = 0,
     this.budgetTrimmed = false,
     this.excludedBySourceWindow = 0,
+    this.eventAnnotationsByEntryId = const {},
   });
+
+  MemorySelection withEventAnnotations(
+    Map<String, List<MemoryEventPromptAnnotation>> annotations,
+  ) => MemorySelection(
+    selectionMode: selectionMode,
+    entries: entries,
+    allScores: allScores,
+    totalTokens: totalTokens,
+    budgetTokens: budgetTokens,
+    entryCap: entryCap,
+    budgetTrimmed: budgetTrimmed,
+    excludedBySourceWindow: excludedBySourceWindow,
+    eventAnnotationsByEntryId: Map.unmodifiable({
+      for (final item in annotations.entries)
+        item.key: List<MemoryEventPromptAnnotation>.unmodifiable(item.value),
+    }),
+  );
 }
 
 /// Inputs to [MemorySelector.select]. Both keyword and vector layers are

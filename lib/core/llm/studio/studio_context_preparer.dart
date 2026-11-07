@@ -608,10 +608,12 @@ GenerationContextInputs _snapshotInputs(
           totalTokens: inputs.memorySelection!.totalTokens,
           budgetTokens: inputs.memorySelection!.budgetTokens,
           entryCap: inputs.memorySelection!.entryCap,
-          budgetTrimmed: inputs.memorySelection!.budgetTrimmed,
-          excludedBySourceWindow:
-              inputs.memorySelection!.excludedBySourceWindow,
-        ),
+           budgetTrimmed: inputs.memorySelection!.budgetTrimmed,
+           excludedBySourceWindow:
+               inputs.memorySelection!.excludedBySourceWindow,
+           eventAnnotationsByEntryId:
+               inputs.memorySelection!.eventAnnotationsByEntryId,
+         ),
   memoryExcerptingEnabled: inputs.memoryExcerptingEnabled,
   memoryPackingMode: inputs.memoryPackingMode,
   memoryExcerptTokensPerChunk: inputs.memoryExcerptTokensPerChunk,

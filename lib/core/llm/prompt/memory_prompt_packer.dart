@@ -30,17 +30,49 @@ final class MemoryPromptPacker {
     GameTimeState gameTime = const GameTimeState(),
     String? summaryExcerpt,
   }) {
-    MemoryExcerptSelection select(MemorySelection input) =>
-        !excerptingEnabled && packingMode != 'chunk_first'
-        ? MemoryExcerptSelector.fullEntries(input)
-        : MemoryExcerptSelector.select(
-            input,
-            packingMode: packingMode,
-            maxExcerptTokensPerEntry: excerptTokensPerChunk,
-            maxExcerptChunksPerEntry: excerptChunksPerEntry,
-            chunkFirstTopEntries: chunkFirstTopEntries,
-            chunkFirstTopChunks: chunkFirstTopChunks,
-          );
+    MemoryExcerptSelection select(MemorySelection input) {
+      final selected = !excerptingEnabled && packingMode != 'chunk_first'
+          ? MemoryExcerptSelector.fullEntries(input)
+          : MemoryExcerptSelector.select(
+              input,
+              packingMode: packingMode,
+              maxExcerptTokensPerEntry: excerptTokensPerChunk,
+              maxExcerptChunksPerEntry: excerptChunksPerEntry,
+              chunkFirstTopEntries: chunkFirstTopEntries,
+              chunkFirstTopChunks: chunkFirstTopChunks,
+            );
+      final items = <MemoryInjectionItem>[];
+      final bundledEntryIds = <String>{};
+      for (final item in selected.items) {
+        final annotations = input.eventAnnotationsByEntryId[item.entry.id];
+        if (annotations == null || annotations.isEmpty) {
+          items.add(item);
+          continue;
+        }
+        if (!bundledEntryIds.add(item.entry.id)) continue;
+        final text = item.entry.content.trim();
+        if (text.isEmpty) continue;
+        items.add(
+          MemoryInjectionItem(
+            entry: item.entry,
+            excerpt: false,
+            text: text,
+            tokenCost: estimateTokens(text),
+            originalTokenCost: estimateTokens(item.entry.content),
+            reason: 'event_bundle',
+            eventAnnotations: List<MemoryEventPromptAnnotation>.unmodifiable(
+              annotations,
+            ),
+          ),
+        );
+      }
+      return MemoryExcerptSelection(
+        items: List.unmodifiable(items),
+        totalTokens: selected.totalTokens,
+        budgetTrimmed: selected.budgetTrimmed,
+      );
+    }
+
     int cost(List<MemoryInjectionItem> items) => items.isEmpty
         ? 0
         : estimateTokens(
@@ -77,6 +109,7 @@ final class MemoryPromptPacker {
             entryCap: selection.entryCap,
             budgetTrimmed: true,
             excludedBySourceWindow: selection.excludedBySourceWindow,
+            eventAnnotationsByEntryId: selection.eventAnnotationsByEntryId,
           ),
         );
       }

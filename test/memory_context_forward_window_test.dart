@@ -326,6 +326,66 @@ void main() {
         expect(tooTight.totalTokens, 0);
         expect(tooTight.budgetTrimmed, isTrue);
       });
+
+      test('accepted event and complete source share one budget unit', () {
+        final entry = _scoped(
+          'festival exchange was offered. The full accepted source stays intact. '
+          'An unrelated later scene follows.',
+        );
+        const annotation = MemoryEventPromptAnnotation(
+          eventId: 'event-1',
+          kind: 'agreement',
+          description: 'The exchange was completed.',
+          state: 'completed',
+          relation: 'fulfills',
+        );
+        const packer = MemoryPromptPacker();
+        final expectedItem = MemoryInjectionItem(
+          entry: entry,
+          excerpt: false,
+          text: entry.content.trim(),
+          tokenCost: estimateTokens(entry.content),
+          originalTokenCost: estimateTokens(entry.content),
+          eventAnnotations: [annotation],
+        );
+        final budget = estimateTokens(
+          packer.format([expectedItem]).hardBlockContent,
+        );
+        MemoryExcerptSelection pack(int limit) => packer.pack(
+          selection: MemorySelection(
+            entries: [entry],
+            allScores: [
+              MemoryCandidateScore(
+                entry: entry,
+                score: 10,
+                matchedKeys: const ['festival'],
+              ),
+            ],
+            budgetTokens: limit,
+            entryCap: 1,
+            eventAnnotationsByEntryId: const {
+              'memory': [annotation],
+            },
+          ),
+          excerptingEnabled: true,
+          packingMode: mode,
+          excerptTokensPerChunk: 8,
+          excerptChunksPerEntry: 2,
+          chunkFirstTopEntries: 1,
+          chunkFirstTopChunks: 1,
+        );
+
+        final fits = pack(budget);
+        final tooTight = pack(budget - 1);
+        expect(fits.items, hasLength(1));
+        expect(fits.items.single.excerpt, isFalse);
+        expect(fits.items.single.text, entry.content.trim());
+        expect(fits.items.single.eventAnnotations, [annotation]);
+        expect(fits.totalTokens, budget);
+        expect(tooTight.items, isEmpty);
+        expect(tooTight.totalTokens, 0);
+        expect(tooTight.budgetTrimmed, isTrue);
+      });
     });
   }
 

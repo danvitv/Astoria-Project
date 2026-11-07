@@ -20,6 +20,7 @@ class MemoryInjectionItem {
   final List<int> chunkIndexes;
   final List<String> matchedTerms;
   final String reason;
+  final List<MemoryEventPromptAnnotation> eventAnnotations;
 
   const MemoryInjectionItem({
     required this.entry,
@@ -30,7 +31,22 @@ class MemoryInjectionItem {
     this.chunkIndexes = const [],
     this.matchedTerms = const [],
     this.reason = 'full_entry',
+    this.eventAnnotations = const [],
   });
+
+  MemoryInjectionItem withEventAnnotations(
+    List<MemoryEventPromptAnnotation> annotations,
+  ) => MemoryInjectionItem(
+    entry: entry,
+    excerpt: excerpt,
+    text: text,
+    tokenCost: tokenCost,
+    originalTokenCost: originalTokenCost,
+    chunkIndexes: chunkIndexes,
+    matchedTerms: matchedTerms,
+    reason: reason,
+    eventAnnotations: List.unmodifiable(annotations),
+  );
 }
 
 class MemoryExcerptSelection {
