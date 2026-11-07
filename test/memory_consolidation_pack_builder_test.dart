@@ -7,6 +7,7 @@ import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/memory_consolidation_pack_builder.dart';
 import 'package:glaze_flutter/core/db/repositories/memory_event_registry_repo.dart';
 import 'package:glaze_flutter/core/models/memory_book.dart';
+import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/memory_source_manifest.dart';
 
 void main() {
@@ -23,6 +24,16 @@ void main() {
   tearDown(() => db.close());
 
   Future<void> seedBook(List<MemoryEntry> entries) async {
+    final history = [
+      for (final entry in entries)
+        ChatMessage(
+          id: entry.messageIds.single,
+          role: 'assistant',
+          content: 'Source for ${entry.id}',
+          swipeId: 2,
+          agentSwipeId: 3,
+        ),
+    ];
     await db
         .into(db.chatSessions)
         .insert(
@@ -30,7 +41,9 @@ void main() {
             sessionId: 'session-1',
             characterId: 'character-1',
             sessionIndex: 0,
-            messagesJson: '[]',
+            messagesJson: jsonEncode(
+              history.map((item) => item.toJson()).toList(),
+            ),
           ),
         );
     await db
@@ -47,16 +60,17 @@ void main() {
 
   MemoryEntry entry(String id, {String content = 'A verified memory.'}) {
     final messageId = 'message-$id';
-    final manifest = MemorySourceManifest(
-      originSessionId: 'session-1',
-      messages: [
-        MemorySourceStamp(
-          messageId: messageId,
-          swipeId: 2,
-          agentSwipeId: 3,
-          contentHash: 'hash-$id',
-        ),
-      ],
+    final sourceMessage = ChatMessage(
+      id: messageId,
+      role: 'assistant',
+      content: 'Source for $id',
+      swipeId: 2,
+      agentSwipeId: 3,
+    );
+    final manifest = MemorySourceManifest.capture(
+      'session-1',
+      [sourceMessage],
+      [messageId],
     );
     final revision = MemoryEntryRevision(
       id: '$id:r1',

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:drift/native.dart';
 import 'package:easy_localization/easy_localization.dart';
@@ -13,6 +14,7 @@ import 'package:glaze_flutter/core/db/repositories/memory_consolidation_pack_bui
 import 'package:glaze_flutter/core/db/repositories/memory_event_registry_repo.dart';
 import 'package:glaze_flutter/core/llm/aux_llm_client.dart';
 import 'package:glaze_flutter/core/models/api_config.dart';
+import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/memory_book.dart';
 import 'package:glaze_flutter/core/models/memory_source_manifest.dart';
 import 'package:glaze_flutter/core/services/memory_consolidation_acceptance_service.dart';
@@ -94,6 +96,13 @@ Future<_Harness> _makeHarness({Completer<void>? requestGate}) async {
   );
   harness = _Harness(db, container, requestGate);
   await container.read(apiConfigRepoProvider).put(_config);
+  const sourceMessage = ChatMessage(
+    id: 'message-1',
+    role: 'assistant',
+    content: 'The key was returned.',
+    swipeId: 1,
+    agentSwipeId: 2,
+  );
   await db
       .into(db.chatSessions)
       .insert(
@@ -101,19 +110,13 @@ Future<_Harness> _makeHarness({Completer<void>? requestGate}) async {
           sessionId: _sessionId,
           characterId: _characterId,
           sessionIndex: 0,
-          messagesJson: '[]',
+          messagesJson: jsonEncode([sourceMessage.toJson()]),
         ),
       );
-  final manifest = MemorySourceManifest(
-    originSessionId: _sessionId,
-    messages: const [
-      MemorySourceStamp(
-        messageId: 'message-1',
-        swipeId: 1,
-        agentSwipeId: 2,
-        contentHash: 'message-hash',
-      ),
-    ],
+  final manifest = MemorySourceManifest.capture(
+    _sessionId,
+    const [sourceMessage],
+    const ['message-1'],
   );
   final revision = MemoryEntryRevision(
     id: 'memory-entry:r1',

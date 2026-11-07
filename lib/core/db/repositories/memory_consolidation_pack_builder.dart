@@ -5,9 +5,11 @@ import 'package:drift/drift.dart';
 
 import '../app_db.dart';
 import '../../models/memory_book.dart';
+import '../../models/chat_message.dart';
 import '../../models/memory_consolidation.dart';
 import '../../models/memory_entry_revisions.dart';
 import '../../models/memory_source_manifest.dart';
+import '../../models/session_branch_identity.dart';
 import 'memory_event_registry_repo.dart';
 
 /// Builds the bounded, immutable input for one consolidation request.
@@ -43,6 +45,16 @@ class MemoryConsolidationPackBuilder {
       db.memoryBookRows,
     )..where((item) => item.sessionId.equals(sessionId))).getSingleOrNull();
     if (row == null) return null;
+    final session = await (db.select(
+      db.chatSessions,
+    )..where((item) => item.sessionId.equals(sessionId))).getSingleOrNull();
+    final identity = SessionBranchIdentity.fromSessionVarsJson(
+      sessionId: sessionId,
+      sessionVarsJson: session?.sessionVarsJson,
+    );
+    if (identity == null || identity.branchId != branchId) return null;
+    final history = _decodeHistory(session!.messagesJson);
+    if (history == null) return null;
     final entries = _decodeEntries(row.entriesJson);
     if (entries == null) return null;
 
@@ -54,6 +66,7 @@ class MemoryConsolidationPackBuilder {
         entry: entries[entryId],
         sessionId: sessionId,
         branchId: branchId,
+        history: history,
         ref: 'entry:$entryId',
       );
       if (source == null || !sourceRefs.add(source.ref)) return null;
@@ -103,6 +116,7 @@ class MemoryConsolidationPackBuilder {
         entry: entry,
         sessionId: sessionId,
         branchId: branchId,
+        history: history,
       );
       if (source == null) {
         final event = events.firstWhereOrNull(
@@ -257,13 +271,19 @@ class MemoryConsolidationPackBuilder {
     required MemoryEntry? entry,
     required String sessionId,
     required String branchId,
+    required List<ChatMessage> history,
     required String ref,
   }) {
     if (entry == null || entry.status != 'active') return null;
     final revision = _activeRevision(entry);
     if (revision == null) return null;
     final manifest = revision.sourceManifest;
-    if (!_validManifest(entry, revision, manifest, sessionId)) return null;
+    if (manifest == null ||
+        !_validManifest(entry, revision, manifest, sessionId) ||
+        manifest.validate(revision.messageIds, history) !=
+            MemorySourceValidity.verified) {
+      return null;
+    }
     return MemoryConsolidationSource(
       ref: ref,
       sessionId: sessionId,
@@ -280,7 +300,7 @@ class MemoryConsolidationPackBuilder {
       messageIds: revision.messageIds,
       sourceSwipeId: entry.sourceSwipeId,
       sourceAgentSwipeId: entry.sourceAgentSwipeId,
-      sourceManifest: manifest!,
+      sourceManifest: manifest,
     );
   }
 
@@ -289,13 +309,17 @@ class MemoryConsolidationPackBuilder {
     required MemoryEntry? entry,
     required String sessionId,
     required String branchId,
+    required List<ChatMessage> history,
   }) {
     if (entry == null || entry.status != 'active') return null;
     final revision = MemoryEntryRevisions.find(entry, row.revisionId);
     if (revision == null || revision.id != entry.activeRevisionId) return null;
     final manifest = revision.sourceManifest;
     final storedManifest = _decodeManifest(row.sourceManifestJson);
-    if (!_validManifest(entry, revision, manifest, sessionId) ||
+    if (manifest == null ||
+        !_validManifest(entry, revision, manifest, sessionId) ||
+        manifest.validate(revision.messageIds, history) !=
+            MemorySourceValidity.verified ||
         storedManifest == null ||
         storedManifest != manifest ||
         row.fingerprint !=
@@ -328,7 +352,7 @@ class MemoryConsolidationPackBuilder {
       messageIds: messageIds,
       sourceSwipeId: row.sourceSwipeId,
       sourceAgentSwipeId: row.sourceAgentSwipeId,
-      sourceManifest: manifest!,
+      sourceManifest: manifest,
     );
   }
 
@@ -348,7 +372,7 @@ class MemoryConsolidationPackBuilder {
     String sessionId,
   ) =>
       manifest != null &&
-      manifest.originSessionId == sessionId &&
+      manifest.originSessionId.isNotEmpty &&
       !manifest.invalidated &&
       revision.messageIds.length == manifest.messages.length &&
       revision.messageIds.asMap().entries.every(
@@ -361,6 +385,21 @@ class MemoryConsolidationPackBuilder {
 
   static String _sourceIdentity(MemoryConsolidationSource source) =>
       '${source.memoryEntryId}\u0000${source.revisionId}\u0000${source.fingerprint}';
+
+  static List<ChatMessage>? _decodeHistory(String json) {
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! List) return null;
+      return decoded
+          .map(
+            (item) =>
+                ChatMessage.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
+          .toList(growable: false);
+    } on Object {
+      return null;
+    }
+  }
 
   static int _serializedContextCharacters({
     required String packId,

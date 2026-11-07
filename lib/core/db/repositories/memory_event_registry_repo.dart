@@ -5,7 +5,10 @@ import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 
 import '../../models/memory_book.dart';
+import '../../models/chat_message.dart';
 import '../../models/memory_entry_revisions.dart';
+import '../../models/memory_source_manifest.dart';
+import '../../models/session_branch_identity.dart';
 import '../app_db.dart';
 
 class MemoryEventSourceInput {
@@ -148,11 +151,18 @@ class MemoryEventRegistryRepo {
           await (db.select(db.chatSessions)
                 ..where((row) => row.sessionId.equals(event.sessionId)))
               .getSingleOrNull();
+      final branchIdentity = SessionBranchIdentity.fromSessionVarsJson(
+        sessionId: event.sessionId,
+        sessionVarsJson: session?.sessionVarsJson,
+      );
       if (session == null ||
-          event.branchId != event.sessionId ||
+          branchIdentity == null ||
+          branchIdentity.branchId != event.branchId ||
           !isCurrent()) {
         return false;
       }
+      final history = _decodeHistory(session.messagesJson);
+      if (history == null) return false;
       final existing = await (db.select(
         db.memoryEventRows,
       )..where((row) => row.id.equals(event.id))).getSingleOrNull();
@@ -182,9 +192,11 @@ class MemoryEventRegistryRepo {
               revision.messageIds,
             ) ||
             manifest == null ||
-            manifest.originSessionId != event.sessionId ||
+            manifest.originSessionId.isEmpty ||
             manifest.invalidated ||
             manifest != entry.sourceManifest ||
+            manifest.validate(source.messageIds, history) !=
+                MemorySourceValidity.verified ||
             !const ListEquality<String>().equals(
               manifest.messages.map((stamp) => stamp.messageId).toList(),
               source.messageIds,
@@ -373,6 +385,21 @@ class MemoryEventRegistryRepo {
       }
       return entries;
     } catch (_) {
+      return null;
+    }
+  }
+
+  static List<ChatMessage>? _decodeHistory(String json) {
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! List) return null;
+      return decoded
+          .map(
+            (item) =>
+                ChatMessage.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
+          .toList(growable: false);
+    } on Object {
       return null;
     }
   }

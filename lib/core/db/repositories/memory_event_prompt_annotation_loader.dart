@@ -8,6 +8,7 @@ import '../../models/chat_message.dart';
 import '../../models/memory_book.dart';
 import '../../models/memory_entry_revisions.dart';
 import '../../models/memory_source_manifest.dart';
+import '../../models/session_branch_identity.dart';
 import '../app_db.dart';
 import 'memory_event_registry_repo.dart';
 
@@ -27,6 +28,14 @@ class MemoryEventPromptAnnotationLoader {
     if (sessionId.isEmpty || branchId != sessionId || entries.isEmpty) {
       return const {};
     }
+    final session = await (db.select(
+      db.chatSessions,
+    )..where((row) => row.sessionId.equals(sessionId))).getSingleOrNull();
+    final identity = SessionBranchIdentity.fromSessionVarsJson(
+      sessionId: sessionId,
+      sessionVarsJson: session?.sessionVarsJson,
+    );
+    if (identity == null || identity.branchId != branchId) return const {};
     final bookRow = await (db.select(
       db.memoryBookRows,
     )..where((row) => row.sessionId.equals(sessionId))).getSingleOrNull();
@@ -206,7 +215,7 @@ class MemoryEventPromptAnnotationLoader {
         MemoryEntryRevisions.isUsable(entry) &&
         manifest != null &&
         !manifest.invalidated &&
-        manifest.originSessionId == sessionId &&
+        manifest.originSessionId.isNotEmpty &&
         storedManifest != null &&
         storedManifest == manifest &&
         sourceRow.fingerprint ==

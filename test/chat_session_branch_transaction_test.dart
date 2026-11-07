@@ -17,6 +17,7 @@ import 'package:glaze_flutter/core/models/character.dart';
 import 'package:glaze_flutter/core/models/character_knowledge_fact.dart';
 import 'package:glaze_flutter/core/models/character_session_baseline.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
+import 'package:glaze_flutter/core/models/session_branch_identity.dart';
 import 'package:glaze_flutter/core/models/memory_book.dart';
 import 'package:glaze_flutter/core/models/lorebook.dart';
 import 'package:glaze_flutter/core/models/persona.dart';
@@ -313,6 +314,19 @@ void main() {
       expect(branch.characterId, 'c1');
       expect(branch.id, 'c1_2');
       expect(branch.sessionIndex, 2);
+      final branchIdentity = SessionBranchIdentity.resolve(
+        sessionId: branch.id,
+        sessionVars: branch.sessionVars,
+      );
+      expect(branchIdentity?.branchId, branch.id);
+      expect(branchIdentity?.rootSessionId, current.id);
+      expect(branchIdentity?.parentSessionId, current.id);
+      expect(branchIdentity?.forkMessageId, 'm1');
+      expect(branchIdentity?.forkSwipeId, current.messages[1].swipeId);
+      expect(
+        branchIdentity?.forkAgentSwipeId,
+        current.messages[1].agentSwipeId,
+      );
       expect(
         await container.read(characterRepoProvider).getAll(),
         hasLength(1),

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/models/character.dart';
 import '../../core/models/chat_message.dart';
 import '../../core/models/persona.dart';
+import '../../core/models/session_branch_identity.dart';
 import '../../core/state/active_selection_provider.dart';
 import '../../core/state/lorebook_provider.dart';
 import '../../core/state/lorebook_embedding_provider.dart';
@@ -312,7 +313,7 @@ class ChatSessionService {
         durableIndex + 1,
       );
       final sessionVars = {
-        ...current.sessionVars,
+        ...durableSource.sessionVars,
         'branchedAt': DateTime.now().millisecondsSinceEpoch.toString(),
       };
       // A branch only needs a card of its own once the Card Rewriter can have
@@ -340,6 +341,16 @@ class ChatSessionService {
             retainedMessages: retainedMessages,
             sessionVars: sessionVars,
           );
+      final branchVars = SessionBranchIdentity.childSessionVars(
+        parentSessionVars: durableSource.sessionVars,
+        parentSessionId: durableSource.id,
+        branchSessionId: branch.id,
+        forkMessage: durableSource.messages[durableIndex],
+      );
+      await repo.updateSessionVarsJson(
+        branch.id,
+        (vars) => {...vars, ...branchVars},
+      );
       final messageIds = branch.messages.map((message) => message.id).toSet();
       await _ref
           .read(characterSessionBaselineRepoProvider)
