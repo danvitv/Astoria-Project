@@ -1058,7 +1058,7 @@ void main() {
         ..addFile(
           ArchiveFile.bytes(
             'manifest.json',
-            utf8.encode(jsonEncode({'schemaVersion': 15})),
+            utf8.encode(jsonEncode({'schemaVersion': 16})),
           ),
         );
 
@@ -1106,51 +1106,69 @@ void main() {
       );
     });
 
-    test('restores event registry rows from backup schema v14', () async {
-      final archive = Archive()
-        ..addFile(
-          ArchiveFile.bytes(
-            'manifest.json',
-            utf8.encode(jsonEncode({'schemaVersion': 14})),
-          ),
-        )
-        ..addFile(
-          ArchiveFile.bytes(
-            'tables/memory_event_rows.jsonl',
-            utf8.encode(
-              '${jsonEncode({'id': 'event-1', 'session_id': 'session-1', 'branch_id': 'session-1', 'kind': 'promise', 'description': 'Return the key', 'state': 'open', 'accepted_at': 10, 'created_at': 10})}\n',
+    test(
+      'restores event registry rows and invalidations from backup schema v15',
+      () async {
+        final archive = Archive()
+          ..addFile(
+            ArchiveFile.bytes(
+              'manifest.json',
+              utf8.encode(jsonEncode({'schemaVersion': 15})),
             ),
-          ),
-        )
-        ..addFile(
-          ArchiveFile.bytes(
-            'tables/memory_event_source_rows.jsonl',
-            utf8.encode(
-              '${jsonEncode({'id': 'source-1', 'event_id': 'event-1', 'session_id': 'session-1', 'branch_id': 'session-1', 'memory_entry_id': 'memory-1', 'revision_id': 'memory-1:r1', 'fingerprint': 'a' * 64})}\n',
+          )
+          ..addFile(
+            ArchiveFile.bytes(
+              'tables/memory_event_rows.jsonl',
+              utf8.encode(
+                '${jsonEncode({'id': 'event-1', 'session_id': 'session-1', 'branch_id': 'session-1', 'kind': 'promise', 'description': 'Return the key', 'state': 'open', 'accepted_at': 10, 'created_at': 10})}\n',
+              ),
             ),
-          ),
-        )
-        ..addFile(
-          ArchiveFile.bytes(
-            'tables/memory_event_link_rows.jsonl',
-            utf8.encode(
-              '${jsonEncode({'id': 'link-1', 'session_id': 'session-1', 'branch_id': 'session-1', 'from_event_id': 'event-1', 'to_event_id': 'event-2', 'relation': 'continues', 'accepted_at': 10})}\n',
+          )
+          ..addFile(
+            ArchiveFile.bytes(
+              'tables/memory_event_source_rows.jsonl',
+              utf8.encode(
+                '${jsonEncode({'id': 'source-1', 'event_id': 'event-1', 'session_id': 'session-1', 'branch_id': 'session-1', 'memory_entry_id': 'memory-1', 'revision_id': 'memory-1:r1', 'fingerprint': 'a' * 64})}\n',
+              ),
             ),
-          ),
+          )
+          ..addFile(
+            ArchiveFile.bytes(
+              'tables/memory_event_link_rows.jsonl',
+              utf8.encode(
+                '${jsonEncode({'id': 'link-1', 'session_id': 'session-1', 'branch_id': 'session-1', 'from_event_id': 'event-1', 'to_event_id': 'event-2', 'relation': 'continues', 'accepted_at': 10})}\n',
+              ),
+            ),
+          )
+          ..addFile(
+            ArchiveFile.bytes(
+              'tables/memory_event_invalidation_rows.jsonl',
+              utf8.encode(
+                '${jsonEncode({'id': 1, 'session_id': 'session-1', 'branch_id': 'session-1', 'target_type': 'event', 'target_id': 'event-1', 'cause_memory_entry_id': 'memory-1', 'reason': 'source_provenance_stale', 'created_at': 11})}\n',
+              ),
+            ),
+          );
+
+        await importArchive(archive);
+
+        expect(
+          (await db.select(db.memoryEventRows).get()).single.id,
+          'event-1',
         );
-
-      await importArchive(archive);
-
-      expect((await db.select(db.memoryEventRows).get()).single.id, 'event-1');
-      expect(
-        (await db.select(db.memoryEventSourceRows).get()).single.eventId,
-        'event-1',
-      );
-      expect(
-        (await db.select(db.memoryEventLinkRows).get()).single.id,
-        'link-1',
-      );
-    });
+        expect(
+          (await db.select(db.memoryEventSourceRows).get()).single.eventId,
+          'event-1',
+        );
+        expect(
+          (await db.select(db.memoryEventLinkRows).get()).single.id,
+          'link-1',
+        );
+        final invalidation =
+            (await db.select(db.memoryEventInvalidationRows).get()).single;
+        expect(invalidation.targetId, 'event-1');
+        expect(invalidation.reason, 'source_provenance_stale');
+      },
+    );
 
     test('restores JSONL embedding byte arrays as SQLite blobs', () async {
       final encoded = vectorListToBytes(const [

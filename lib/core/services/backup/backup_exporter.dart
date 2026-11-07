@@ -32,7 +32,8 @@ class BackupExporter {
   //  12 — added complete Agent Ops reconciliation and recovery provenance.
   //  13 — Collector journals use three-reconciliation batches.
   //  14 — durable memory event registry and provenance links.
-  static const int schemaVersion = 14;
+  //  15 — append-only memory event provenance invalidations.
+  static const int schemaVersion = 15;
 
   /// Rows fetched per page while serializing a table. The whole table is never
   /// materialized at once — `chat_sessions` stores every message of every chat
@@ -75,6 +76,7 @@ class BackupExporter {
     'memory_event_rows',
     'memory_event_source_rows',
     'memory_event_link_rows',
+    'memory_event_invalidation_rows',
     'character_knowledge_fact_rows',
     'character_session_baseline_rows',
     'reconciliation_successful_runs',

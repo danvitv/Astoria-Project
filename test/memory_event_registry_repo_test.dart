@@ -276,6 +276,7 @@ void main() {
       expect(await db.select(db.memoryEventRows).get(), isEmpty);
       expect(await db.select(db.memoryEventSourceRows).get(), isEmpty);
       expect(await db.select(db.memoryEventLinkRows).get(), isEmpty);
+      expect(await db.select(db.memoryEventInvalidationRows).get(), isEmpty);
     },
   );
 }

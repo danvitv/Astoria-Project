@@ -252,6 +252,33 @@ class MemoryEventLinkRows extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// Append-only audit trail for accepted events and links whose provenance
+/// stopped verifying. Registry rows remain available for review.
+@DataClassName('MemoryEventInvalidationRow')
+class MemoryEventInvalidationRows extends Table {
+  @override
+  String get tableName => 'memory_event_invalidation_rows';
+
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get sessionId => text()();
+  TextColumn get branchId => text()();
+  TextColumn get targetType => text()();
+  TextColumn get targetId => text()();
+  TextColumn get causeMemoryEntryId => text().nullable()();
+  TextColumn get reason => text()();
+  IntColumn get createdAt => integer()();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+    {sessionId, branchId, targetType, targetId, reason},
+  ];
+
+  @override
+  List<String> get customConstraints => [
+    "CHECK (session_id <> '' AND branch_id <> '' AND target_type IN ('event', 'link') AND target_id <> '' AND reason <> '')",
+  ];
+}
+
 @DataClassName('EmbeddingRow')
 @TableIndex(name: 'idx_embeddings_source_type', columns: {#sourceType})
 @TableIndex(name: 'idx_embeddings_source_id', columns: {#sourceId})

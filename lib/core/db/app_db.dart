@@ -45,6 +45,7 @@ part 'migrations/upgrade_v137.dart';
 part 'migrations/upgrade_v138.dart';
 part 'migrations/upgrade_v139.dart';
 part 'migrations/upgrade_v140.dart';
+part 'migrations/upgrade_v141.dart';
 
 @DriftDatabase(
   tables: [
@@ -79,6 +80,7 @@ part 'migrations/upgrade_v140.dart';
     MemoryEventRows,
     MemoryEventSourceRows,
     MemoryEventLinkRows,
+    MemoryEventInvalidationRows,
     StudioConfigRows,
     StudioPresetRows,
     TrackerRows,
@@ -299,7 +301,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 140;
+  int get schemaVersion => 141;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -342,6 +344,7 @@ class AppDatabase extends _$AppDatabase {
       await _upgradeV138(m, from);
       await _upgradeV139(m, from);
       await _upgradeV140(m, from);
+      await _upgradeV141(m, from);
       // Local v136 repairs missing indexes/triggers and replaces the request
       // capture trigger. Only install current-schema integrity after all
       // historical table rebuilds and data normalization have finished.

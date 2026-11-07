@@ -211,6 +211,57 @@ void main() {
       );
 
       expect(annotations, isEmpty);
+      final invalidations = await db
+          .select(db.memoryEventInvalidationRows)
+          .get();
+      expect(
+        invalidations
+            .where((row) => row.targetType == 'event')
+            .map((row) => row.targetId),
+        contains('event-old'),
+      );
+      expect(
+        invalidations
+            .where((row) => row.targetType == 'event')
+            .map((row) => row.targetId),
+        isNot(contains('event-new')),
+      );
+      expect(
+        invalidations
+            .where((row) => row.targetType == 'link')
+            .map((row) => row.targetId),
+        contains('link-1'),
+      );
     },
   );
+
+  test('keeps stale-event invalidation append-only and idempotent', () async {
+    final (entry, history) = await seed();
+    await acceptLinkedEvents(entry);
+    final staleHistory = [history.single.copyWith(swipeId: 4)];
+
+    for (var i = 0; i < 2; i++) {
+      await loader.load(
+        sessionId: 'session-1',
+        branchId: 'session-1',
+        entries: [entry],
+        history: staleHistory,
+      );
+    }
+
+    final invalidations = await db.select(db.memoryEventInvalidationRows).get();
+    expect(invalidations, hasLength(3));
+    expect(
+      (await db.select(db.memoryEventRows).get()).every(
+        (row) => row.status == 'active',
+      ),
+      isTrue,
+    );
+    expect(
+      (await db.select(db.memoryEventLinkRows).get()).every(
+        (row) => row.status == 'active',
+      ),
+      isTrue,
+    );
+  });
 }

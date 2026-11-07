@@ -107,30 +107,81 @@ class MemoryEventRegistryRepo {
   Future<List<MemoryEventRow>> getActiveEvents({
     required String sessionId,
     required String branchId,
-  }) =>
-      (db.select(db.memoryEventRows)
-            ..where(
-              (row) =>
-                  row.sessionId.equals(sessionId) &
-                  row.branchId.equals(branchId) &
-                  row.status.equals('active'),
-            )
-            ..orderBy([(row) => OrderingTerm(expression: row.acceptedAt)]))
-          .get();
+  }) async {
+    final rows =
+        await (db.select(db.memoryEventRows)
+              ..where(
+                (row) =>
+                    row.sessionId.equals(sessionId) &
+                    row.branchId.equals(branchId) &
+                    row.status.equals('active'),
+              )
+              ..orderBy([(row) => OrderingTerm(expression: row.acceptedAt)]))
+            .get();
+    final invalidated = await _invalidatedIds(sessionId, branchId, 'event');
+    return rows.where((row) => !invalidated.contains(row.id)).toList();
+  }
 
   Future<List<MemoryEventLinkRow>> getActiveLinks({
     required String sessionId,
     required String branchId,
+  }) async {
+    final rows =
+        await (db.select(db.memoryEventLinkRows)
+              ..where(
+                (row) =>
+                    row.sessionId.equals(sessionId) &
+                    row.branchId.equals(branchId) &
+                    row.status.equals('active'),
+              )
+              ..orderBy([(row) => OrderingTerm(expression: row.acceptedAt)]))
+            .get();
+    final invalidatedLinks = await _invalidatedIds(sessionId, branchId, 'link');
+    final invalidatedEvents = await _invalidatedIds(
+      sessionId,
+      branchId,
+      'event',
+    );
+    return rows
+        .where(
+          (row) =>
+              !invalidatedLinks.contains(row.id) &&
+              !invalidatedEvents.contains(row.fromEventId) &&
+              !invalidatedEvents.contains(row.toEventId),
+        )
+        .toList();
+  }
+
+  Future<List<MemoryEventInvalidationRow>> getInvalidations({
+    required String sessionId,
+    required String branchId,
   }) =>
-      (db.select(db.memoryEventLinkRows)
+      (db.select(db.memoryEventInvalidationRows)
             ..where(
               (row) =>
                   row.sessionId.equals(sessionId) &
-                  row.branchId.equals(branchId) &
-                  row.status.equals('active'),
+                  row.branchId.equals(branchId),
             )
-            ..orderBy([(row) => OrderingTerm(expression: row.acceptedAt)]))
+            ..orderBy([
+              (row) => OrderingTerm.asc(row.createdAt),
+              (row) => OrderingTerm.asc(row.id),
+            ]))
           .get();
+
+  Future<Set<String>> _invalidatedIds(
+    String sessionId,
+    String branchId,
+    String targetType,
+  ) async =>
+      (await (db.select(db.memoryEventInvalidationRows)..where(
+                (row) =>
+                    row.sessionId.equals(sessionId) &
+                    row.branchId.equals(branchId) &
+                    row.targetType.equals(targetType),
+              ))
+              .get())
+          .map((row) => row.targetId)
+          .toSet();
 
   /// Rechecks every source inside the same transaction that inserts the event.
   /// Returns false if a source changed or an ID is already occupied.
@@ -418,6 +469,13 @@ class MemoryEventRegistryRepo {
     required Map<String, MemoryEntry> entries,
     required List<ChatMessage> history,
   }) async {
+    if ((await _invalidatedIds(
+      sessionId,
+      branchId,
+      'event',
+    )).contains(eventId)) {
+      return false;
+    }
     final rows =
         await (db.select(db.memoryEventSourceRows)..where(
               (row) =>

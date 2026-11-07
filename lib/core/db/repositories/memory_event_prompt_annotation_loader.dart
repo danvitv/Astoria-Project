@@ -132,6 +132,54 @@ class MemoryEventPromptAnnotationLoader {
         validEventIds.add(item.key);
       }
     }
+    final allEndpoints = {...eventIds, ...activeEndpointIds};
+    final invalidEventIds = <String>{};
+    for (final eventId in allEndpoints) {
+      final sources = sourcesByEvent[eventId] ?? const <MemoryEventSourceRow>[];
+      if (sources.isNotEmpty && validEventIds.contains(eventId)) continue;
+      invalidEventIds.add(eventId);
+      await _recordInvalidation(
+        sessionId: sessionId,
+        branchId: branchId,
+        targetType: 'event',
+        targetId: eventId,
+        causeMemoryEntryId: sources.isEmpty
+            ? null
+            : sources.first.memoryEntryId,
+        reason: sources.isEmpty
+            ? 'missing_source_rows'
+            : 'source_provenance_stale',
+      );
+    }
+    final existingInvalidations =
+        await (db.select(db.memoryEventInvalidationRows)..where(
+              (row) =>
+                  row.sessionId.equals(sessionId) &
+                  row.branchId.equals(branchId),
+            ))
+            .get();
+    final invalidatedEventIds = existingInvalidations
+        .where((row) => row.targetType == 'event')
+        .map((row) => row.targetId)
+        .toSet();
+    invalidEventIds.addAll(invalidatedEventIds);
+    for (final link in links) {
+      if (invalidEventIds.contains(link.fromEventId) ||
+          invalidEventIds.contains(link.toEventId)) {
+        await _recordInvalidation(
+          sessionId: sessionId,
+          branchId: branchId,
+          targetType: 'link',
+          targetId: link.id,
+          reason: 'endpoint_provenance_stale',
+        );
+      }
+    }
+    final invalidatedLinkIds = existingInvalidations
+        .where((row) => row.targetType == 'link')
+        .map((row) => row.targetId)
+        .toSet();
+    validEventIds.removeAll(invalidEventIds);
     final verifiedHistory = List<ChatMessage>.unmodifiable(history);
     final byEntry = <String, Map<String, MemoryEventPromptAnnotation>>{};
     for (final sourceRow in sourceRows) {
@@ -161,6 +209,9 @@ class MemoryEventPromptAnnotationLoader {
       final validRelations = links
           .where(
             (link) =>
+                !invalidatedLinkIds.contains(link.id) &&
+                !invalidEventIds.contains(link.fromEventId) &&
+                !invalidEventIds.contains(link.toEventId) &&
                 ((link.fromEventId == event.id &&
                         activeEndpointIds.contains(link.toEventId) &&
                         validEventIds.contains(link.toEventId)) ||
@@ -197,6 +248,28 @@ class MemoryEventPromptAnnotationLoader {
         ),
     };
   }
+
+  Future<void> _recordInvalidation({
+    required String sessionId,
+    required String branchId,
+    required String targetType,
+    required String targetId,
+    String? causeMemoryEntryId,
+    required String reason,
+  }) => db
+      .into(db.memoryEventInvalidationRows)
+      .insert(
+        MemoryEventInvalidationRowsCompanion.insert(
+          sessionId: sessionId,
+          branchId: branchId,
+          targetType: targetType,
+          targetId: targetId,
+          causeMemoryEntryId: Value(causeMemoryEntryId),
+          reason: reason,
+          createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        ),
+        mode: InsertMode.insertOrIgnore,
+      );
 
   static bool _sourceIsCurrent(
     MemoryEventSourceRow sourceRow,

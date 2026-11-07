@@ -96,6 +96,9 @@ class SessionDeletionQueries {
       _db.memoryConsolidationRows,
     )..where((row) => row.chatSessionId.equals(sessionId))).go();
     await (_db.delete(
+      _db.memoryEventInvalidationRows,
+    )..where((row) => row.sessionId.equals(sessionId))).go();
+    await (_db.delete(
       _db.memoryEventLinkRows,
     )..where((row) => row.sessionId.equals(sessionId))).go();
     await (_db.delete(

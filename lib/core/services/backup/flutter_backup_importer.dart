@@ -29,7 +29,7 @@ class FlutterBackupImporter extends BackupHelpers {
   /// Table entries larger than this are decompressed to a temp file and read
   /// back from disk instead of being materialised in memory.
   static const int _spillToDiskBytes = 8 * 1024 * 1024;
-  static const int _maxSchemaVersion = 14;
+  static const int _maxSchemaVersion = 15;
   // Support-assistant state is device-local and encrypted. The exporter
   // intentionally omits these tables; do not trust hand-crafted archives to
   // restore them through the generic table importer.
@@ -316,6 +316,10 @@ class FlutterBackupImporter extends BackupHelpers {
       'session_canon_checkpoint_rows',
       'session_lorebook_evolution_rows',
       'session_lorebook_revision_rows',
+      'memory_event_rows',
+      'memory_event_source_rows',
+      'memory_event_link_rows',
+      'memory_event_invalidation_rows',
     ];
     int rank(ArchiveFile file) {
       final table = file.name
@@ -338,6 +342,9 @@ class FlutterBackupImporter extends BackupHelpers {
       }
       if (schemaVersion < 14) {
         await _clearMemoryEventRegistryMissingFromLegacyBackup();
+      }
+      if (schemaVersion < 15) {
+        await db.customStatement('DELETE FROM memory_event_invalidation_rows');
       }
       for (final f in tableFiles) {
         _cancel.check();
@@ -423,6 +430,7 @@ class FlutterBackupImporter extends BackupHelpers {
 
   Future<void> _clearMemoryEventRegistryMissingFromLegacyBackup() =>
       db.transaction(() async {
+        await db.customStatement('DELETE FROM memory_event_invalidation_rows');
         await db.customStatement('DELETE FROM memory_event_link_rows');
         await db.customStatement('DELETE FROM memory_event_source_rows');
         await db.customStatement('DELETE FROM memory_event_rows');
