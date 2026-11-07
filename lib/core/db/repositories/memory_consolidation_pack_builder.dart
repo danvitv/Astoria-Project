@@ -1,0 +1,406 @@
+import 'dart:convert';
+
+import 'package:collection/collection.dart';
+import 'package:drift/drift.dart';
+
+import '../app_db.dart';
+import '../../models/memory_book.dart';
+import '../../models/memory_consolidation.dart';
+import '../../models/memory_entry_revisions.dart';
+import '../../models/memory_source_manifest.dart';
+import 'memory_event_registry_repo.dart';
+
+/// Builds the bounded, immutable input for one consolidation request.
+///
+/// Selection is deliberately conservative in this first vertical: requested
+/// active MemoryBook entries are always included, then active event sources
+/// are included for a bounded set of open obligations and neighbouring event
+/// cards. Anything that could not fit or could not be verified is explicit in
+/// [MemoryConsolidationSourcePack.unexaminedOpenObligationIds].
+class MemoryConsolidationPackBuilder {
+  final AppDatabase db;
+
+  const MemoryConsolidationPackBuilder(this.db);
+
+  Future<MemoryConsolidationSourcePack?> build({
+    required String sessionId,
+    required String branchId,
+    required String proposedEventId,
+    required List<String> memoryEntryIds,
+    int maxCandidates = 12,
+    int maxContextCharacters = 120000,
+  }) async {
+    if (sessionId.isEmpty ||
+        branchId.isEmpty ||
+        branchId != sessionId ||
+        proposedEventId.isEmpty ||
+        proposedEventId != proposedEventId.trim() ||
+        maxCandidates < 1 ||
+        maxContextCharacters < 1) {
+      throw ArgumentError('Invalid consolidation pack bounds.');
+    }
+    final row = await (db.select(
+      db.memoryBookRows,
+    )..where((item) => item.sessionId.equals(sessionId))).getSingleOrNull();
+    if (row == null) return null;
+    final entries = _decodeEntries(row.entriesJson);
+    if (entries == null) return null;
+
+    final selectedSources = <MemoryConsolidationSource>[];
+    final sourceRefs = <String>{};
+    final sourceRefByIdentity = <String, String>{};
+    for (final entryId in memoryEntryIds) {
+      final source = _sourceFromEntry(
+        entry: entries[entryId],
+        sessionId: sessionId,
+        branchId: branchId,
+        ref: 'entry:$entryId',
+      );
+      if (source == null || !sourceRefs.add(source.ref)) return null;
+      selectedSources.add(source);
+      sourceRefByIdentity[_sourceIdentity(source)] = source.ref;
+    }
+    if (selectedSources.isEmpty) return null;
+    final contextPackId =
+        'consolidation:$sessionId:${DateTime.now().microsecondsSinceEpoch}';
+    if (_serializedContextCharacters(
+          packId: contextPackId,
+          sessionId: sessionId,
+          branchId: branchId,
+          proposedEventId: proposedEventId,
+          sources: selectedSources,
+          candidates: const [],
+          unexaminedOpenObligationIds: const [],
+        ) >
+        maxContextCharacters) {
+      return null;
+    }
+
+    final events = await MemoryEventRegistryRepo(
+      db,
+    ).getActiveEvents(sessionId: sessionId, branchId: branchId);
+    final links = await MemoryEventRegistryRepo(
+      db,
+    ).getActiveLinks(sessionId: sessionId, branchId: branchId);
+    final sourceRows = events.isEmpty
+        ? const <MemoryEventSourceRow>[]
+        : await (db.select(db.memoryEventSourceRows)..where(
+                (row) =>
+                    row.sessionId.equals(sessionId) &
+                    row.branchId.equals(branchId) &
+                    row.eventId.isIn(
+                      events.map((event) => event.id).toList(growable: false),
+                    ),
+              ))
+              .get();
+
+    final sourceByEvent = <String, List<MemoryConsolidationSource>>{};
+    final unavailableOpenObligations = <String>{};
+    for (final sourceRow in sourceRows) {
+      final entry = entries[sourceRow.memoryEntryId];
+      final source = _sourceFromRow(
+        row: sourceRow,
+        entry: entry,
+        sessionId: sessionId,
+        branchId: branchId,
+      );
+      if (source == null) {
+        final event = events.firstWhereOrNull(
+          (candidate) => candidate.id == sourceRow.eventId,
+        );
+        if (event != null && _isOpenObligation(event)) {
+          unavailableOpenObligations.add(event.id);
+        }
+        continue;
+      }
+      sourceByEvent.putIfAbsent(sourceRow.eventId, () => []).add(source);
+    }
+
+    final open = events.where(_isOpenObligation).toList();
+    final allOpenIds = open.map((event) => event.id).toSet();
+    final directIds = <String>{};
+    for (final link in links) {
+      directIds
+        ..add(link.fromEventId)
+        ..add(link.toEventId);
+    }
+    final ordered = <MemoryEventRow>[
+      ...open.where((event) => directIds.contains(event.id)),
+      ...open.where((event) => !directIds.contains(event.id)),
+      ...events.where((event) => !_isOpenObligation(event)),
+    ];
+    final candidates = <MemoryConsolidationEventCandidate>[];
+    final selectedEventIds = <String>{};
+    for (final event in ordered) {
+      final sourcesForEvent = sourceByEvent[event.id];
+      if (sourcesForEvent == null || sourcesForEvent.isEmpty) {
+        if (_isOpenObligation(event)) unavailableOpenObligations.add(event.id);
+        continue;
+      }
+      if (candidates.length >= maxCandidates) continue;
+      final candidateSources = <String>{};
+      final sourcesToAdd = <MemoryConsolidationSource>[];
+      for (final source in sourcesForEvent) {
+        final identity = _sourceIdentity(source);
+        final existingRef = sourceRefByIdentity[identity];
+        if (existingRef != null) {
+          candidateSources.add(existingRef);
+          continue;
+        }
+        sourcesToAdd.add(source);
+        candidateSources.add(source.ref);
+      }
+      final linkedEventIds = [
+        for (final link in links)
+          if (link.fromEventId == event.id &&
+              selectedEventIds.contains(link.toEventId))
+            link.toEventId
+          else if (link.toEventId == event.id &&
+              selectedEventIds.contains(link.fromEventId))
+            link.fromEventId,
+      ];
+      final candidate = MemoryConsolidationEventCandidate(
+        id: event.id,
+        kind: event.kind,
+        description: event.description,
+        state: event.state,
+        sourceRefs: List.unmodifiable(candidateSources),
+        linkedEventIds: linkedEventIds,
+      );
+      final prospectiveSources = [...selectedSources, ...sourcesToAdd];
+      final prospectiveCandidates = [...candidates, candidate];
+      final prospectiveSelectedOpenIds = {
+        ...selectedEventIds.where(allOpenIds.contains),
+        if (_isOpenObligation(event)) event.id,
+      };
+      final prospectiveUnexamined = {
+        ...unavailableOpenObligations,
+        ...allOpenIds.difference(prospectiveSelectedOpenIds),
+      }.toList()..sort();
+      if (_serializedContextCharacters(
+            packId: contextPackId,
+            sessionId: sessionId,
+            branchId: branchId,
+            proposedEventId: proposedEventId,
+            sources: prospectiveSources,
+            candidates: prospectiveCandidates,
+            unexaminedOpenObligationIds: prospectiveUnexamined,
+          ) >
+          maxContextCharacters) {
+        if (_isOpenObligation(event)) unavailableOpenObligations.add(event.id);
+        continue;
+      }
+      selectedSources
+        ..clear()
+        ..addAll(prospectiveSources);
+      for (final source in sourcesToAdd) {
+        sourceRefs.add(source.ref);
+        sourceRefByIdentity[_sourceIdentity(source)] = source.ref;
+      }
+      selectedEventIds.add(event.id);
+      candidates.add(candidate);
+    }
+
+    final selectedOpenIds = candidates
+        .where(
+          (candidate) =>
+              candidate.state == 'open' || candidate.state == 'continuing',
+        )
+        .map((candidate) => candidate.id)
+        .toSet();
+    final unexamined = <String>{
+      ...unavailableOpenObligations,
+      ...allOpenIds.difference(selectedOpenIds),
+    };
+    final unexaminedIds = unexamined.toList()..sort();
+    if (_serializedContextCharacters(
+          packId: contextPackId,
+          sessionId: sessionId,
+          branchId: branchId,
+          proposedEventId: proposedEventId,
+          sources: selectedSources,
+          candidates: candidates,
+          unexaminedOpenObligationIds: unexaminedIds,
+        ) >
+        maxContextCharacters) {
+      return null;
+    }
+    return MemoryConsolidationSourcePack(
+      packId: contextPackId,
+      sessionId: sessionId,
+      branchId: branchId,
+      proposedEventId: proposedEventId,
+      sources: selectedSources,
+      candidates: candidates,
+      unexaminedOpenObligationIds: unexaminedIds,
+    );
+  }
+
+  static Map<String, MemoryEntry>? _decodeEntries(String json) {
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! List) return null;
+      final entries = <String, MemoryEntry>{};
+      for (final item in decoded) {
+        if (item is! Map) return null;
+        final entry = MemoryEntry.fromJson(Map<String, dynamic>.from(item));
+        if (entries.containsKey(entry.id)) return null;
+        entries[entry.id] = entry;
+      }
+      return entries;
+    } on Object {
+      return null;
+    }
+  }
+
+  static MemoryConsolidationSource? _sourceFromEntry({
+    required MemoryEntry? entry,
+    required String sessionId,
+    required String branchId,
+    required String ref,
+  }) {
+    if (entry == null || entry.status != 'active') return null;
+    final revision = _activeRevision(entry);
+    if (revision == null) return null;
+    final manifest = revision.sourceManifest;
+    if (!_validManifest(entry, revision, manifest, sessionId)) return null;
+    return MemoryConsolidationSource(
+      ref: ref,
+      sessionId: sessionId,
+      branchId: branchId,
+      memoryEntryId: entry.id,
+      revisionId: revision.id,
+      fingerprint: MemoryEventRegistryRepo.sourceFingerprint(
+        revision,
+        sourceSwipeId: entry.sourceSwipeId,
+        sourceAgentSwipeId: entry.sourceAgentSwipeId,
+      ),
+      title: revision.title,
+      content: revision.content,
+      messageIds: revision.messageIds,
+      sourceSwipeId: entry.sourceSwipeId,
+      sourceAgentSwipeId: entry.sourceAgentSwipeId,
+      sourceManifest: manifest!,
+    );
+  }
+
+  static MemoryConsolidationSource? _sourceFromRow({
+    required MemoryEventSourceRow row,
+    required MemoryEntry? entry,
+    required String sessionId,
+    required String branchId,
+  }) {
+    if (entry == null || entry.status != 'active') return null;
+    final revision = MemoryEntryRevisions.find(entry, row.revisionId);
+    if (revision == null || revision.id != entry.activeRevisionId) return null;
+    final manifest = revision.sourceManifest;
+    final storedManifest = _decodeManifest(row.sourceManifestJson);
+    if (!_validManifest(entry, revision, manifest, sessionId) ||
+        storedManifest == null ||
+        storedManifest != manifest ||
+        row.fingerprint !=
+            MemoryEventRegistryRepo.sourceFingerprint(
+              revision,
+              sourceSwipeId: row.sourceSwipeId,
+              sourceAgentSwipeId: row.sourceAgentSwipeId,
+            ) ||
+        row.sourceSwipeId != entry.sourceSwipeId ||
+        row.sourceAgentSwipeId != entry.sourceAgentSwipeId) {
+      return null;
+    }
+    final messageIds = _decodeStringList(row.messageIdsJson);
+    if (messageIds == null ||
+        messageIds.length != revision.messageIds.length ||
+        messageIds.asMap().entries.any(
+          (item) => item.value != revision.messageIds[item.key],
+        )) {
+      return null;
+    }
+    return MemoryConsolidationSource(
+      ref: 'event:${row.eventId}:source:${row.id}',
+      sessionId: sessionId,
+      branchId: branchId,
+      memoryEntryId: entry.id,
+      revisionId: revision.id,
+      fingerprint: row.fingerprint,
+      title: revision.title,
+      content: revision.content,
+      messageIds: messageIds,
+      sourceSwipeId: row.sourceSwipeId,
+      sourceAgentSwipeId: row.sourceAgentSwipeId,
+      sourceManifest: manifest!,
+    );
+  }
+
+  static MemoryEntryRevision? _activeRevision(MemoryEntry entry) {
+    if (!MemoryEntryRevisions.isUsable(entry) ||
+        entry.activeRevisionId == null) {
+      return null;
+    }
+    final revision = MemoryEntryRevisions.find(entry, entry.activeRevisionId!);
+    return revision?.id == entry.activeRevisionId ? revision : null;
+  }
+
+  static bool _validManifest(
+    MemoryEntry entry,
+    MemoryEntryRevision revision,
+    MemorySourceManifest? manifest,
+    String sessionId,
+  ) =>
+      manifest != null &&
+      manifest.originSessionId == sessionId &&
+      !manifest.invalidated &&
+      revision.messageIds.length == manifest.messages.length &&
+      revision.messageIds.asMap().entries.every(
+        (item) => manifest.messages[item.key].messageId == item.value,
+      ) &&
+      const ListEquality<String>().equals(
+        entry.messageIds,
+        revision.messageIds,
+      );
+
+  static String _sourceIdentity(MemoryConsolidationSource source) =>
+      '${source.memoryEntryId}\u0000${source.revisionId}\u0000${source.fingerprint}';
+
+  static int _serializedContextCharacters({
+    required String packId,
+    required String sessionId,
+    required String branchId,
+    required String proposedEventId,
+    required List<MemoryConsolidationSource> sources,
+    required List<MemoryConsolidationEventCandidate> candidates,
+    required List<String> unexaminedOpenObligationIds,
+  }) => jsonEncode({
+    'packId': packId,
+    'sessionId': sessionId,
+    'branchId': branchId,
+    'proposedEventId': proposedEventId,
+    'sources': sources.map((source) => source.toJson()).toList(),
+    'candidates': candidates.map((candidate) => candidate.toJson()).toList(),
+    'unexaminedOpenObligationIds': unexaminedOpenObligationIds,
+  }).length;
+
+  static List<String>? _decodeStringList(String json) {
+    try {
+      final value = jsonDecode(json);
+      if (value is! List || value.any((item) => item is! String)) return null;
+      return List<String>.from(value);
+    } on Object {
+      return null;
+    }
+  }
+
+  static MemorySourceManifest? _decodeManifest(String json) {
+    try {
+      final value = jsonDecode(json);
+      if (value is! Map) return null;
+      return MemorySourceManifest.fromJson(Map<String, dynamic>.from(value));
+    } on Object {
+      return null;
+    }
+  }
+
+  static bool _isOpenObligation(MemoryEventRow event) =>
+      (event.kind == 'promise' || event.kind == 'agreement') &&
+      (event.state == 'open' || event.state == 'continuing');
+}

@@ -21,6 +21,8 @@ import '../db/repositories/lorebook_use_manifest_repo.dart';
 import '../db/repositories/embedding_repo.dart';
 import '../db/repositories/summary_repo.dart';
 import '../db/repositories/memory_book_repo.dart';
+import '../db/repositories/memory_event_registry_repo.dart';
+import '../db/repositories/memory_consolidation_pack_builder.dart';
 import '../db/repositories/memory_catalog_repo.dart';
 import '../db/repositories/memory_entity_repo.dart';
 import '../db/repositories/memory_salience_repo.dart';
@@ -59,6 +61,9 @@ import '../llm/transport/llm_call_event.dart';
 import '../services/character_importer.dart';
 import '../services/image_storage_service.dart';
 import '../services/migration_service.dart';
+import '../services/memory_consolidation_acceptance_service.dart';
+import '../services/memory_consolidation_coordinator.dart';
+import '../services/memory_consolidation_service.dart';
 import '../services/card_rewriter/effective_canon_context_loader.dart';
 import '../services/card_rewriter/effective_canon_read_repository.dart';
 import '../support/support_payload_cipher.dart';
@@ -330,6 +335,21 @@ final summaryRepoProvider = Provider<SummaryRepo>((ref) {
 final memoryBookRepoProvider = Provider<MemoryBookRepo>((ref) {
   return MemoryBookRepo(ref.watch(appDbProvider), ref);
 });
+
+final memoryEventRegistryRepoProvider = Provider<MemoryEventRegistryRepo>(
+  (ref) => MemoryEventRegistryRepo(ref.watch(appDbProvider)),
+);
+
+final memoryConsolidationCoordinatorProvider =
+    Provider<MemoryConsolidationCoordinator>((ref) {
+      final db = ref.watch(appDbProvider);
+      final registry = ref.watch(memoryEventRegistryRepoProvider);
+      return MemoryConsolidationCoordinator(
+        packBuilder: MemoryConsolidationPackBuilder(db),
+        service: MemoryConsolidationService(),
+        acceptance: MemoryConsolidationAcceptanceService(registry),
+      );
+    });
 
 final memoryCatalogRepoProvider = Provider<MemoryCatalogRepo>((ref) {
   return MemoryCatalogRepo(ref.watch(appDbProvider));
