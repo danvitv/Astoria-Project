@@ -427,7 +427,9 @@ class MemoryEventRegistryRepo {
             ))
             .get();
     if (rows.isEmpty) return false;
+    final memoryEntryIds = <String>{};
     for (final row in rows) {
+      if (!memoryEntryIds.add(row.memoryEntryId)) return false;
       final entry = entries[row.memoryEntryId];
       if (entry == null ||
           entry.status != 'active' ||
