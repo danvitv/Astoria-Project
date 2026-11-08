@@ -22,6 +22,7 @@ import '../db/repositories/embedding_repo.dart';
 import '../db/repositories/summary_repo.dart';
 import '../db/repositories/memory_book_repo.dart';
 import '../db/repositories/memory_event_registry_repo.dart';
+import '../db/repositories/memory_consolidation_job_repo.dart';
 import '../db/repositories/memory_consolidation_pack_builder.dart';
 import '../db/repositories/memory_catalog_repo.dart';
 import '../db/repositories/memory_entity_repo.dart';
@@ -62,6 +63,7 @@ import '../services/character_importer.dart';
 import '../services/image_storage_service.dart';
 import '../services/migration_service.dart';
 import '../services/memory_consolidation_acceptance_service.dart';
+import '../services/memory_consolidation_batch_service.dart';
 import '../services/memory_consolidation_coordinator.dart';
 import '../services/memory_consolidation_service.dart';
 import '../services/card_rewriter/effective_canon_context_loader.dart';
@@ -345,6 +347,28 @@ final memoryConsolidationCoordinatorProvider =
       final db = ref.watch(appDbProvider);
       final registry = ref.watch(memoryEventRegistryRepoProvider);
       return MemoryConsolidationCoordinator(
+        packBuilder: MemoryConsolidationPackBuilder(db),
+        service: MemoryConsolidationService(),
+        acceptance: MemoryConsolidationAcceptanceService(registry),
+      );
+    });
+
+final memoryConsolidationJobRepoProvider = Provider<MemoryConsolidationJobRepo>(
+  (ref) {
+    return MemoryConsolidationJobRepo(ref.watch(appDbProvider));
+  },
+);
+
+/// Owns the durable package flow: enqueue, one-call generation per package,
+/// review loading and transactional explicit acceptance. Ordinary modes never
+/// route through it.
+final memoryConsolidationBatchProvider =
+    Provider<MemoryConsolidationBatchService>((ref) {
+      final db = ref.watch(appDbProvider);
+      final registry = ref.watch(memoryEventRegistryRepoProvider);
+      return MemoryConsolidationBatchService(
+        db: db,
+        jobRepo: ref.watch(memoryConsolidationJobRepoProvider),
         packBuilder: MemoryConsolidationPackBuilder(db),
         service: MemoryConsolidationService(),
         acceptance: MemoryConsolidationAcceptanceService(registry),

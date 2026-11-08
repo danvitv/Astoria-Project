@@ -34,7 +34,7 @@ class MemoryConsolidationAcceptanceService {
     String acceptedBy = 'user',
   }) async {
     final canonical = MemoryConsolidationPackageParser.parse(
-      jsonEncode(_packageResponseJson(response)),
+      jsonEncode(response.toStrictJson()),
       pack,
     );
     if (canonical.outcome == 'unable_to_verify') return false;
@@ -111,43 +111,6 @@ class MemoryConsolidationAcceptanceService {
                     'ordinal': value.event!.boundaryOrdinal,
                   },
           },
-    'links': [
-      for (final link in value.links)
-        {
-          'linkId': link.linkId,
-          'fromEventId': link.fromEventId,
-          'toEventId': link.toEventId,
-          'relation': link.relation,
-        },
-    ],
-    'unverifiedSourceRefs': value.unverifiedSourceRefs,
-    'unexaminedOpenObligationIds': value.unexaminedOpenObligationIds,
-  };
-
-  static Map<String, dynamic> _packageResponseJson(
-    MemoryConsolidationPackageResponse value,
-  ) => {
-    'contract': value.contract,
-    'version': value.version,
-    'outcome': value.outcome,
-    'events': [
-      for (final event in value.events)
-        {
-          'eventId': event.eventId,
-          'kind': event.kind,
-          'description': event.description,
-          'state': event.state,
-          'sourceRefs': event.sourceRefs,
-          'boundary': event.boundaryMessageId == null
-              ? null
-              : {
-                  'messageId': event.boundaryMessageId,
-                  'swipeId': event.boundarySwipeId,
-                  'agentSwipeId': event.boundaryAgentSwipeId,
-                  'ordinal': event.boundaryOrdinal,
-                },
-        },
-    ],
     'links': [
       for (final link in value.links)
         {

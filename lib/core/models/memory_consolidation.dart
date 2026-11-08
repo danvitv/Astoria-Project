@@ -47,6 +47,27 @@ class MemoryConsolidationSource {
         sourceAgentSwipeId: sourceAgentSwipeId,
       );
 
+  factory MemoryConsolidationSource.fromJson(Map<String, dynamic> json) =>
+      MemoryConsolidationSource(
+        ref: _requiredString(json, 'ref'),
+        sessionId: _requiredString(json, 'sessionId'),
+        branchId: _requiredString(json, 'branchId'),
+        memoryEntryId: _requiredString(json, 'memoryEntryId'),
+        revisionId: _requiredString(json, 'revisionId'),
+        fingerprint: _requiredString(json, 'fingerprint'),
+        title: _requiredString(json, 'title'),
+        content: _requiredString(json, 'content'),
+        messageIds: [
+          for (final id in (json['messageIds'] as List).cast<String>())
+            _requiredString({'id': id}, 'id'),
+        ],
+        sourceSwipeId: json['sourceSwipeId'] as int,
+        sourceAgentSwipeId: json['sourceAgentSwipeId'] as int,
+        sourceManifest: MemorySourceManifest.fromJson(
+          json['sourceManifest'] as Map<String, dynamic>,
+        ),
+      );
+
   Map<String, dynamic> toJson() => {
     'ref': ref,
     'sessionId': sessionId,
@@ -81,6 +102,17 @@ class MemoryConsolidationEventCandidate {
     required this.sourceRefs,
     this.linkedEventIds = const [],
   });
+
+  factory MemoryConsolidationEventCandidate.fromJson(
+    Map<String, dynamic> json,
+  ) => MemoryConsolidationEventCandidate(
+    id: _requiredString(json, 'id'),
+    kind: _requiredString(json, 'kind'),
+    description: _requiredString(json, 'description'),
+    state: _requiredString(json, 'state'),
+    sourceRefs: (json['sourceRefs'] as List).cast<String>(),
+    linkedEventIds: (json['linkedEventIds'] as List).cast<String>(),
+  );
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -121,6 +153,30 @@ class MemoryConsolidationSourcePack {
        unexaminedOpenObligationIds = List.unmodifiable(
          unexaminedOpenObligationIds,
        );
+
+  /// Rebuilds the frozen pack stored beside a package draft. The registry
+  /// transaction re-verifies live sources at acceptance time; this only
+  /// restores the exact context the reviewed response was parsed against.
+  factory MemoryConsolidationSourcePack.fromJson(Map<String, dynamic> json) =>
+      MemoryConsolidationSourcePack(
+        packId: _requiredString(json, 'packId'),
+        sessionId: _requiredString(json, 'sessionId'),
+        branchId: _requiredString(json, 'branchId'),
+        proposedEventId: _requiredString(json, 'proposedEventId'),
+        proposedEventIds: (json['proposedEventIds'] as List).cast<String>(),
+        sources: [
+          for (final source in (json['sources'] as List))
+            MemoryConsolidationSource.fromJson(source as Map<String, dynamic>),
+        ],
+        candidates: [
+          for (final candidate in (json['candidates'] as List))
+            MemoryConsolidationEventCandidate.fromJson(
+              candidate as Map<String, dynamic>,
+            ),
+        ],
+        unexaminedOpenObligationIds:
+            (json['unexaminedOpenObligationIds'] as List).cast<String>(),
+      );
 
   Map<String, dynamic> toJson() => {
     'packId': packId,
@@ -179,6 +235,43 @@ class MemoryConsolidationPackageResponse {
     required this.unverifiedSourceRefs,
     required this.unexaminedOpenObligationIds,
   });
+
+  /// Canonical strict-contract JSON for this parsed response, suitable for
+  /// storing beside its pack and re-parsing through the same strict parser.
+  Map<String, dynamic> toStrictJson() => {
+    'contract': contract,
+    'version': version,
+    'outcome': outcome,
+    'events': [
+      for (final event in events)
+        {
+          'eventId': event.eventId,
+          'kind': event.kind,
+          'description': event.description,
+          'state': event.state,
+          'sourceRefs': event.sourceRefs,
+          'boundary': event.boundaryMessageId == null
+              ? null
+              : {
+                  'messageId': event.boundaryMessageId,
+                  'swipeId': event.boundarySwipeId,
+                  'agentSwipeId': event.boundaryAgentSwipeId,
+                  'ordinal': event.boundaryOrdinal,
+                },
+        },
+    ],
+    'links': [
+      for (final link in links)
+        {
+          'linkId': link.linkId,
+          'fromEventId': link.fromEventId,
+          'toEventId': link.toEventId,
+          'relation': link.relation,
+        },
+    ],
+    'unverifiedSourceRefs': unverifiedSourceRefs,
+    'unexaminedOpenObligationIds': unexaminedOpenObligationIds,
+  };
 
   List<MemoryEventInput> toRegistryEvents(MemoryConsolidationSourcePack pack) {
     final sourceByRef = {for (final source in pack.sources) source.ref: source};
@@ -330,4 +423,14 @@ class MemoryConsolidationRegistryChange {
     required this.event,
     required this.links,
   });
+}
+
+/// Shared strict read for persisted pack fields: a stored envelope that lost a
+/// field is corrupt and must fail loudly instead of silently degrading.
+String _requiredString(Map<String, dynamic> json, String key) {
+  final value = json[key];
+  if (value is! String || value.isEmpty) {
+    throw FormatException('Consolidation pack field "$key" is missing.');
+  }
+  return value;
 }
