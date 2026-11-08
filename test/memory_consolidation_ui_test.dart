@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/api_config_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/memory_consolidation_job_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/memory_consolidation_pack_builder.dart';
 import 'package:glaze_flutter/core/db/repositories/memory_event_registry_repo.dart';
 import 'package:glaze_flutter/core/llm/aux_llm_client.dart';
@@ -18,6 +19,7 @@ import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/memory_book.dart';
 import 'package:glaze_flutter/core/models/memory_source_manifest.dart';
 import 'package:glaze_flutter/core/services/memory_consolidation_acceptance_service.dart';
+import 'package:glaze_flutter/core/services/memory_consolidation_batch_service.dart';
 import 'package:glaze_flutter/core/services/memory_consolidation_coordinator.dart';
 import 'package:glaze_flutter/core/services/memory_consolidation_service.dart';
 import 'package:glaze_flutter/core/state/db_provider.dart';
@@ -56,32 +58,50 @@ class _Harness {
   }
 }
 
-Future<_Harness> _makeHarness({Completer<void>? requestGate}) async {
+Future<_Harness> _makeHarness({
+  Completer<void>? requestGate,
+  bool package = false,
+}) async {
   final db = AppDatabase.forTesting(NativeDatabase.memory());
   late final _Harness harness;
+  Future<String> transport({
+    required AuxApiConfig config,
+    required List<Map<String, String>> messages,
+    required int maxTokens,
+    required double temperature,
+    required int timeoutMs,
+    CancelToken? cancelToken,
+  }) async {
+    harness.transportCalls++;
+    harness.lastCancelToken = cancelToken;
+    expect(config.model, 'test-model');
+    expect(messages.last['content'], contains('The key was returned.'));
+    if (requestGate != null) await requestGate.future;
+    if (package) {
+      final eventId = RegExp(
+        r'"proposedEventIds":\["([^"]+)"\]',
+      ).firstMatch(messages.last['content']!)!.group(1)!;
+      return _packageResponse.replaceAll('event-reviewed', eventId);
+    }
+    final proposedEventId = RegExp(
+      r'"proposedEventId":"([^"]+)"',
+    ).firstMatch(messages.last['content']!)!.group(1)!;
+    return _response.replaceAll('event-reviewed', proposedEventId);
+  }
+
+  final service = MemoryConsolidationService(call: transport);
   final coordinator = MemoryConsolidationCoordinator(
     packBuilder: MemoryConsolidationPackBuilder(db),
-    service: MemoryConsolidationService(
-      call:
-          ({
-            required AuxApiConfig config,
-            required List<Map<String, String>> messages,
-            required int maxTokens,
-            required double temperature,
-            required int timeoutMs,
-            CancelToken? cancelToken,
-          }) async {
-            harness.transportCalls++;
-            harness.lastCancelToken = cancelToken;
-            expect(config.model, 'test-model');
-            expect(messages.last['content'], contains('The key was returned.'));
-            if (requestGate != null) await requestGate.future;
-            final proposedEventId = RegExp(
-              r'"proposedEventId":"([^"]+)"',
-            ).firstMatch(messages.last['content']!)!.group(1)!;
-            return _response.replaceAll('event-reviewed', proposedEventId);
-          },
+    service: service,
+    acceptance: MemoryConsolidationAcceptanceService(
+      MemoryEventRegistryRepo(db),
     ),
+  );
+  final batch = MemoryConsolidationBatchService(
+    db: db,
+    jobRepo: MemoryConsolidationJobRepo(db),
+    packBuilder: MemoryConsolidationPackBuilder(db),
+    service: service,
     acceptance: MemoryConsolidationAcceptanceService(
       MemoryEventRegistryRepo(db),
     ),
@@ -90,6 +110,7 @@ Future<_Harness> _makeHarness({Completer<void>? requestGate}) async {
     overrides: [
       appDbProvider.overrideWithValue(db),
       memoryConsolidationCoordinatorProvider.overrideWithValue(coordinator),
+      memoryConsolidationBatchProvider.overrideWithValue(batch),
       apiConfigRepoProvider.overrideWithValue(ApiConfigRepo(db)),
       vectorSearchAvailableProvider.overrideWithValue(false),
     ],
@@ -168,6 +189,18 @@ const _response = '''{
     "sourceRefs":["entry:memory-entry"],
     "boundary":null
   },
+  "links":[],
+  "unverifiedSourceRefs":[],
+  "unexaminedOpenObligationIds":[]
+}''';
+
+const _packageResponse = '''{
+  "contract":"memory_event_consolidation",
+  "version":2,
+  "outcome":"confirmed",
+  "events":[
+    {"eventId":"event-reviewed","kind":"result","description":"The key was returned.","state":"completed","sourceRefs":["entry:memory-entry"],"boundary":null}
+  ],
   "links":[],
   "unverifiedSourceRefs":[],
   "unexaminedOpenObligationIds":[]
@@ -316,5 +349,36 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(await harness.activeEventCount(), 0);
+  });
+
+  testWidgets('package flow runs one call and accepts after review', (
+    tester,
+  ) async {
+    final harness = await _makeHarness(package: true);
+    addTearDown(harness.dispose);
+    await _pumpTab(tester, harness);
+
+    expect(find.text('Consolidate new memories'), findsOneWidget);
+    await tester.tap(find.text('Consolidate new memories'));
+    for (var i = 0; i < 128; i++) {
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      if (find.text('Reject').evaluate().isNotEmpty) break;
+    }
+    await tester.pumpAndSettle();
+
+    expect(harness.transportCalls, 1);
+    expect(find.text('Proposed events'), findsOneWidget);
+    expect(find.text('result · completed'), findsOneWidget);
+    expect(await harness.activeEventCount(), 0);
+
+    await tester.tap(find.text('Accept event'));
+    await tester.pumpAndSettle();
+
+    expect(await harness.activeEventCount(), 1);
+    expect(find.text('Accept event'), findsNothing);
+    // The queue holds only the completed package, so the panel offers a
+    // fresh start instead of a review or retry.
+    expect(find.text('Consolidate new memories'), findsOneWidget);
   });
 }

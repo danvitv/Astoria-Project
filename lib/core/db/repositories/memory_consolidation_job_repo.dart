@@ -106,9 +106,13 @@ class MemoryConsolidationJobRepo {
     });
   }
 
+  /// Claims the earliest pending (or lease-expired running) job, optionally
+  /// restricted to one session. UI-driven runs pass [sessionId] so a tap never
+  /// executes another session's package.
   Future<MemoryConsolidationJobRow?> claimNext({
     required String ownerId,
     required int leaseDurationSeconds,
+    String? sessionId,
   }) {
     if (ownerId.trim().isEmpty || leaseDurationSeconds <= 0) {
       throw ArgumentError('Lease owner and positive duration are required.');
@@ -116,14 +120,20 @@ class MemoryConsolidationJobRepo {
     return db.transaction(() async {
       final now = _now;
       final table = db.memoryConsolidationJobRows;
+      final sessionScope = sessionId == null
+          ? null
+          : table.sessionId.equals(sessionId);
       final candidates =
           await (db.select(table)
-                ..where(
-                  (row) =>
+                ..where((row) {
+                  final claimable =
                       row.status.equals('pending') |
                       (row.status.equals('running') &
-                          row.leaseExpiresAt.isSmallerOrEqualValue(now)),
-                )
+                          row.leaseExpiresAt.isSmallerOrEqualValue(now));
+                  return sessionScope == null
+                      ? claimable
+                      : claimable & sessionScope;
+                })
                 ..orderBy([(row) => OrderingTerm.asc(row.createdAt)]))
               .get();
       MemoryConsolidationJobRow? candidate;
@@ -688,6 +698,75 @@ class MemoryConsolidationJobRepo {
     }
     return changed == 1;
   });
+
+  /// Re-queues a cancelled package with the same immutable source snapshot.
+  /// The stored draft is dropped: a revived package redrafts from the same
+  /// sources, it never resurrects a reviewed proposal. A concurrent claim that
+  /// already moved the row on loses to the CAS and returns the fresh row.
+  Future<MemoryConsolidationJobRow> revive(String jobId) =>
+      db.transaction(() async {
+        final now = _now;
+        final job = await (db.select(
+          db.memoryConsolidationJobRows,
+        )..where((row) => row.id.equals(jobId))).getSingle();
+        if (job.status != 'cancelled') return job;
+        final changed =
+            await (db.update(db.memoryConsolidationJobRows)..where(
+                  (row) =>
+                      row.id.equals(jobId) &
+                      row.version.equals(job.version) &
+                      row.status.equals('cancelled'),
+                ))
+                .write(
+                  MemoryConsolidationJobRowsCompanion(
+                    status: const Value('pending'),
+                    packageDraftJson: const Value(null),
+                    leaseOwnerId: const Value(null),
+                    leaseExpiresAt: const Value(null),
+                    lastError: const Value(null),
+                    version: Value(job.version + 1),
+                    updatedAt: Value(now),
+                  ),
+                );
+        if (changed != 1) {
+          return (db.select(
+            db.memoryConsolidationJobRows,
+          )..where((row) => row.id.equals(jobId))).getSingle();
+        }
+        await (db.update(db.memoryConsolidationJobItemRows)..where(
+              (row) =>
+                  row.jobId.equals(jobId) &
+                  row.status.isNotIn(const ['accepted']),
+            ))
+            .write(
+              MemoryConsolidationJobItemRowsCompanion(
+                status: const Value('pending'),
+                draftJson: const Value(null),
+                lastError: const Value(null),
+                updatedAt: Value(now),
+              ),
+            );
+        return (db.select(
+          db.memoryConsolidationJobRows,
+        )..where((row) => row.id.equals(jobId))).getSingle();
+      });
+
+  /// Watches this session's package jobs, newest first. Review and queue UI
+  /// follow this stream instead of polling.
+  Stream<List<MemoryConsolidationJobRow>> watchSessionJobs(String sessionId) =>
+      (db.select(db.memoryConsolidationJobRows)
+            ..where((row) => row.sessionId.equals(sessionId))
+            ..orderBy([
+              (row) => OrderingTerm.desc(row.createdAt),
+              (row) => OrderingTerm.desc(row.id),
+            ]))
+          .watch();
+
+  Stream<List<MemoryConsolidationJobItemRow>> watchItems(String jobId) =>
+      (db.select(db.memoryConsolidationJobItemRows)
+            ..where((row) => row.jobId.equals(jobId))
+            ..orderBy([(row) => OrderingTerm.asc(row.createdAt)]))
+          .watch();
 
   Future<MemoryConsolidationJobRow?> _ownedLease(
     String jobId,

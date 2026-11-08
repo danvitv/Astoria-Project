@@ -375,6 +375,21 @@ final memoryConsolidationBatchProvider =
       );
     });
 
+/// Package jobs of one session, newest first — what the memory books tab's
+/// package panel follows instead of polling.
+final memoryConsolidationSessionJobsProvider = StreamProvider.autoDispose
+    .family<List<MemoryConsolidationJobRow>, String>((ref, sessionId) {
+      return ref
+          .watch(memoryConsolidationJobRepoProvider)
+          .watchSessionJobs(sessionId);
+    });
+
+/// Source items of one package job, for queue counts on the panel.
+final memoryConsolidationJobItemsProvider = StreamProvider.autoDispose
+    .family<List<MemoryConsolidationJobItemRow>, String>((ref, jobId) {
+      return ref.watch(memoryConsolidationJobRepoProvider).watchItems(jobId);
+    });
+
 final memoryCatalogRepoProvider = Provider<MemoryCatalogRepo>((ref) {
   return MemoryCatalogRepo(ref.watch(appDbProvider));
 });

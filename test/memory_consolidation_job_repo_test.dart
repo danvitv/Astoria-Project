@@ -370,4 +370,135 @@ void main() {
       everyElement('accepted'),
     );
   });
+
+  test(
+    'revive re-queues a cancelled package and drops its rejected draft',
+    () async {
+      final job = await createJob();
+      await repo.claimNext(ownerId: 'worker-a', leaseDurationSeconds: 100);
+      await repo.claimNextItem(jobId: job.id, ownerId: 'worker-a');
+      await repo.claimNextItem(jobId: job.id, ownerId: 'worker-a');
+      expect(
+        await repo.savePackageDraft(
+          jobId: job.id,
+          ownerId: 'worker-a',
+          draftJson: '{"pack":{},"response":{}}',
+        ),
+        isTrue,
+      );
+      expect(await repo.cancel(job.id), isTrue);
+      final cancelled = await (db.select(
+        db.memoryConsolidationJobRows,
+      )..where((row) => row.id.equals(job.id))).getSingle();
+      expect(cancelled.status, 'cancelled');
+
+      final revived = await repo.revive(job.id);
+
+      expect(revived.id, job.id);
+      expect(revived.status, 'pending');
+      expect(revived.packageDraftJson, isNull);
+      expect(revived.leaseOwnerId, isNull);
+      expect(revived.version, cancelled.version + 1);
+      expect(
+        (await repo.getItems(job.id)).map((item) => item.status),
+        everyElement('pending'),
+      );
+      expect(
+        (await repo.getItems(job.id)).map((item) => item.draftJson),
+        everyElement(isNull),
+      );
+
+      // A revived package is claimable again like a fresh one.
+      final reclaimed = await repo.claimNext(
+        ownerId: 'worker-b',
+        leaseDurationSeconds: 100,
+      );
+      expect(reclaimed?.id, job.id);
+      expect(reclaimed?.attemptCount, 2);
+
+      // Reviving a live job is a no-op that returns the current row.
+      final live = await repo.revive(job.id);
+      expect(live.status, 'running');
+      expect(live.id, job.id);
+    },
+  );
+
+  test('claimNext can be scoped to one session', () async {
+    final first = await createJob();
+    await repo.createOrGet(
+      sessionId: 'session-2',
+      branchId: 'session-2',
+      requestKey: 'other-session-package',
+      items: [
+        MemoryConsolidationJobItemInput(
+          memoryEntryId: 'entry-4',
+          revisionId: 'entry-4:r1',
+          fingerprint: 'd' * 64,
+          proposedEventId: 'event-4',
+        ),
+      ],
+    );
+
+    final scoped = await repo.claimNext(
+      ownerId: 'worker-b',
+      leaseDurationSeconds: 100,
+      sessionId: 'session-2',
+    );
+    expect(scoped?.sessionId, 'session-2');
+    expect(scoped?.id, isNot(first.id));
+
+    // An unscoped claim still sees the oldest job from the other session.
+    final unscoped = await repo.claimNext(
+      ownerId: 'worker-c',
+      leaseDurationSeconds: 100,
+    );
+    expect(unscoped?.id, first.id);
+
+    // The scoped queue is empty for a session without work.
+    expect(
+      await repo.claimNext(
+        ownerId: 'worker-d',
+        leaseDurationSeconds: 100,
+        sessionId: 'session-3',
+      ),
+      isNull,
+    );
+  });
+
+  test('watch streams follow session jobs and their items', () async {
+    final jobs = <List<MemoryConsolidationJobRow>>[];
+    final jobsSub = repo.watchSessionJobs('session-1').listen(jobs.add);
+    addTearDown(jobsSub.cancel);
+
+    final job = await createJob();
+    await repo.createOrGet(
+      sessionId: 'session-2',
+      branchId: 'session-2',
+      requestKey: 'other-session-package',
+      items: [
+        MemoryConsolidationJobItemInput(
+          memoryEntryId: 'entry-4',
+          revisionId: 'entry-4:r1',
+          fingerprint: 'd' * 64,
+          proposedEventId: 'event-4',
+        ),
+      ],
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(jobs, isNotEmpty);
+    expect(jobs.last, hasLength(1));
+    expect(jobs.last.first.id, job.id);
+
+    final items = <List<MemoryConsolidationJobItemRow>>[];
+    final itemsSub = repo.watchItems(job.id).listen(items.add);
+    addTearDown(itemsSub.cancel);
+
+    await repo.claimNext(ownerId: 'worker-a', leaseDurationSeconds: 100);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(items, isNotEmpty);
+    expect(items.last, hasLength(2));
+    expect(items.last.map((item) => item.status), everyElement('pending'));
+  });
 }

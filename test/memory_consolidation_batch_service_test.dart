@@ -205,6 +205,46 @@ Future<MemoryBook> _seedBook(_Harness harness) async {
   return book;
 }
 
+/// A structurally valid entry whose manifest was captured by another
+/// session: everything is present, but the provenance root is foreign.
+MemoryEntry _foreignEntry() {
+  const messageId = 'batch-message-3';
+  const content = 'A memory captured by another session.';
+  final manifest = MemorySourceManifest.capture(
+    'other-session',
+    const [
+      ChatMessage(
+        id: messageId,
+        role: 'assistant',
+        content: content,
+        swipeId: 1,
+        agentSwipeId: 2,
+      ),
+    ],
+    const [messageId],
+  );
+  final revision = MemoryEntryRevision(
+    id: 'batch-entry-3:r1',
+    version: 1,
+    title: 'Foreign memory',
+    content: content,
+    messageIds: const [messageId],
+    sourceManifest: manifest,
+    createdAt: 1,
+  );
+  return MemoryEntry(
+    id: 'batch-entry-3',
+    title: revision.title,
+    content: content,
+    messageIds: const [messageId],
+    sourceSwipeId: 1,
+    sourceAgentSwipeId: 2,
+    sourceManifest: manifest,
+    activeRevisionId: revision.id,
+    revisions: [revision],
+  );
+}
+
 MemoryDraftApiSourceResolver _resolver() => MemoryDraftApiSourceResolver(
   loadApiConfigs: () async => [_config],
   readActiveApiConfig: () => _config,
@@ -426,5 +466,140 @@ void main() {
       )).every((item) => item.status == 'failed'),
       isTrue,
     );
+  });
+
+  test('enqueuePending is gated by threshold and covered sources', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness);
+
+    // Below the threshold nothing is enqueued.
+    expect(
+      await harness.batch.enqueuePending(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries,
+        minCount: 3,
+      ),
+      isNull,
+    );
+
+    // At the threshold the eligible uncovered entries form one package.
+    final job = await harness.batch.enqueuePending(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+      minCount: 2,
+    );
+    expect(job, isNotNull);
+    expect(job!.status, 'pending');
+    expect(await harness.jobRepo.getItems(job.id), hasLength(2));
+
+    expect(await _run(harness, 'runner-1'), isTrue);
+    expect(
+      await harness.batch.acceptReviewed(
+        jobId: job.id,
+        isCurrent: _alwaysCurrent,
+      ),
+      isTrue,
+    );
+    expect(
+      await harness.batch.coveredEntryIds(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+      ),
+      {'batch-entry-1', 'batch-entry-2'},
+    );
+
+    // Both sources are covered now, so no new package is pending.
+    expect(
+      await harness.batch.enqueuePending(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries,
+        minCount: 1,
+      ),
+      isNull,
+    );
+  });
+
+  test('enqueuePending drops sources without eligible provenance', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness);
+    final foreign = _foreignEntry();
+    await harness.repo.put(book.copyWith(entries: [...book.entries, foreign]));
+
+    final job = await harness.batch.enqueuePending(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: [...book.entries, foreign],
+    );
+
+    expect(job, isNotNull);
+    final items = await harness.jobRepo.getItems(job!.id);
+    expect(items, hasLength(2));
+    expect(
+      items.map((item) => item.memoryEntryId),
+      isNot(contains(foreign.id)),
+    );
+  });
+
+  test('isEligibleSource mirrors the single-entry provenance bar', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness);
+
+    expect(
+      MemoryConsolidationBatchService.isEligibleSource(
+        book.entries.first,
+        _sessionId,
+      ),
+      isTrue,
+    );
+    expect(
+      MemoryConsolidationBatchService.isEligibleSource(
+        _foreignEntry(),
+        _sessionId,
+      ),
+      isFalse,
+    );
+    expect(
+      MemoryConsolidationBatchService.isEligibleSource(
+        book.entries.first.copyWith(activeRevisionId: 'missing-revision'),
+        _sessionId,
+      ),
+      isFalse,
+    );
+  });
+
+  test('re-enqueuing a cancelled package revives it for redraft', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness);
+
+    final job = await harness.batch.enqueue(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+    );
+    expect(await _run(harness, 'runner-1'), isTrue);
+    expect(await harness.batch.reject(job.id), isTrue);
+    expect((await harness.job(job.id))!.status, 'cancelled');
+
+    final revived = await harness.batch.enqueue(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+    );
+    expect(revived.id, job.id);
+    expect(revived.status, 'pending');
+    expect(revived.packageDraftJson, isNull);
+    expect(
+      (await harness.jobRepo.getItems(
+        job.id,
+      )).every((item) => item.status == 'pending'),
+      isTrue,
+    );
+
+    // The revived package redrafts and reaches review again.
+    expect(await _run(harness, 'runner-2'), isTrue);
+    expect((await harness.job(job.id))!.status, 'review_pending');
   });
 }

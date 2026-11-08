@@ -8,8 +8,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/models/chat_message.dart';
 import '../../../core/models/memory_book.dart';
 import '../../../core/models/memory_book_api_settings.dart';
+import '../../../core/models/memory_consolidation.dart';
 import '../../../core/credentials/memory_custom_api_credential_owner.dart';
+import '../../../core/db/app_db.dart';
 import '../../../core/llm/memory_retrieval_mode.dart';
+import '../../../core/services/memory_consolidation_batch_service.dart';
 import '../../../core/services/memory_consolidation_coordinator.dart';
 import '../../../core/services/generation_notification_service.dart';
 import '../../../core/utils/error_format.dart';
@@ -147,6 +150,13 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   String? _consolidatingEntryId;
   int _consolidationEpoch = 0;
 
+  /// The durable package flow mirrors the single-entry one with its own
+  /// fencing: while [_packageJobId] is set the panel shows progress and a
+  /// cancel control instead of another action.
+  int _packageEpoch = 0;
+  CancelToken? _packageCancelToken;
+  String? _packageJobId;
+
   @override
   void initState() {
     super.initState();
@@ -203,6 +213,8 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   void dispose() {
     _consolidationEpoch++;
     _consolidationCancelToken?.cancel('Memory Books tab disposed');
+    _packageEpoch++;
+    _packageCancelToken?.cancel('Memory Books tab disposed');
     _ctrl.dispose();
     _searchCtrl.dispose();
     _searchFocus.dispose();
@@ -218,6 +230,10 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
       _consolidationCancelToken?.cancel('Memory Books context changed');
       _consolidationCancelToken = null;
       _consolidatingEntryId = null;
+      _packageEpoch++;
+      _packageCancelToken?.cancel('Memory Books context changed');
+      _packageCancelToken = null;
+      _packageJobId = null;
       // This State owns a final controller. A -> B -> A cannot resurrect it.
       _ctrl.dispose();
     }
@@ -616,6 +632,7 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
                   _consolidationCancelToken?.cancel('Cancelled by user'),
             ),
           ),
+        _buildPackagePanel(),
         if (visible.isEmpty)
           _buildEmpty(
             entries.isEmpty
@@ -779,7 +796,8 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
         entry.status == 'active' &&
         entry.activeRevisionId != null &&
         _hasEligibleManifest(entry) &&
-        _consolidatingEntryId == null;
+        _consolidatingEntryId == null &&
+        _packageJobId == null;
   }
 
   bool _hasEligibleManifest(MemoryEntry entry) {
@@ -966,6 +984,350 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
       }
     }
     return '';
+  }
+
+  // ─── Package consolidation (durable jobs) ────────────────────────
+
+  /// The panel above the approved list: one actionable row for the session's
+  /// package queue. It reflects durable job state — pending, failed and
+  /// reviewed packages survive a restart — and only ever starts work the user
+  /// explicitly tapped.
+  Widget _buildPackagePanel() {
+    final settings = _ctrl.book?.settings;
+    if (settings == null ||
+        !MemoryRetrievalMode.fromValue(
+          settings.memoryMode,
+        ).isConsolidationMode) {
+      return const SizedBox.shrink();
+    }
+    if (_packageJobId != null) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                'memory_consolidation_package_running'.tr(),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: context.cs.onSurfaceVariant,
+                ),
+              ),
+            ),
+            GlazeActionButton(
+              tone: GlazeActionTone.neutral,
+              icon: Icons.close_rounded,
+              label: 'memory_consolidation_cancel'.tr(),
+              onTap: () => _packageCancelToken?.cancel('Cancelled by user'),
+            ),
+          ],
+        ),
+      );
+    }
+    final jobs =
+        ref
+            .watch(memoryConsolidationSessionJobsProvider(widget.sessionId))
+            .value ??
+        const <MemoryConsolidationJobRow>[];
+    MemoryConsolidationJobRow? job;
+    for (final status in const [
+      'review_pending',
+      'pending',
+      'failed',
+      'running',
+    ]) {
+      job = jobs.where((row) => row.status == status).firstOrNull;
+      if (job != null) break;
+    }
+    final action = switch (job?.status) {
+      'review_pending' => GlazeActionButton(
+        key: const ValueKey('package-review'),
+        icon: Icons.fact_check_outlined,
+        label: 'memory_consolidation_package_review'.tr(),
+        onTap: () => _openPendingPackageReview(job!),
+      ),
+      'pending' => GlazeActionButton(
+        key: const ValueKey('package-run'),
+        icon: Icons.hub_outlined,
+        label: 'memory_consolidation_package_count'.tr(
+          args: ['${_packageItemCount(job!.id)}'],
+        ),
+        onTap: () => _runPackage(job!),
+      ),
+      'failed' => GlazeActionButton(
+        key: const ValueKey('package-retry'),
+        icon: Icons.refresh_rounded,
+        label: 'memory_consolidation_package_retry'.tr(),
+        onTap: () => _retryPackage(job!),
+      ),
+      'running' => Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Text(
+          'memory_consolidation_package_running'.tr(),
+          style: TextStyle(fontSize: 12, color: context.cs.onSurfaceVariant),
+        ),
+      ),
+      _ => GlazeActionButton(
+        key: const ValueKey('package-start'),
+        icon: Icons.hub_outlined,
+        label: 'memory_consolidation_package'.tr(),
+        onTap: _startPackageFlow,
+      ),
+    };
+    return Padding(padding: const EdgeInsets.only(bottom: 8), child: action);
+  }
+
+  int _packageItemCount(String jobId) =>
+      ref.watch(memoryConsolidationJobItemsProvider(jobId)).value?.length ?? 0;
+
+  /// The shared API-resolution plumbing of both flows, extracted so the
+  /// package runner resolves the model exactly like the single-entry review.
+  MemoryDraftApiSourceResolver _apiResolver(
+    MemoryBookApiSettings apiSettings,
+    bool Function() isCurrent,
+  ) {
+    final sources = ref.read(nativeProviderRuntimeProvider)?.sources;
+    return MemoryDraftApiSourceResolver(
+      sources: sources,
+      loadApiConfigs: () async {
+        await ref.read(apiListProvider.future);
+        if (!isCurrent()) return const [];
+        return ref.read(apiListProvider).value ?? const [];
+      },
+      readActiveApiConfig: () => ref.read(activeApiConfigProvider),
+    );
+  }
+
+  Future<void> _startPackageFlow() async {
+    final book = _ctrl.book;
+    if (book == null ||
+        _packageJobId != null ||
+        _consolidatingEntryId != null) {
+      return;
+    }
+    final epoch = ++_packageEpoch;
+    final cancelToken = CancelToken();
+    _packageCancelToken = cancelToken;
+    setState(() => _packageJobId = 'enqueue');
+    try {
+      final batch = ref.read(memoryConsolidationBatchProvider);
+      final job = await batch.enqueuePending(
+        sessionId: widget.sessionId,
+        branchId: widget.sessionId,
+        entries: book.entries,
+      );
+      if (!mounted || !_packageFlowCurrent(epoch, cancelToken)) return;
+      if (job == null) {
+        GlazeToast.show(context, 'memory_consolidation_package_no_new'.tr());
+        return;
+      }
+      setState(() => _packageJobId = job.id);
+      if (job.status == 'review_pending') {
+        await _reviewPackageCore(epoch);
+        return;
+      }
+      if (job.status == 'failed') {
+        await ref.read(memoryConsolidationJobRepoProvider).retryFailed(job.id);
+      }
+      await _runPackageCore(epoch, cancelToken);
+    } catch (error) {
+      if (mounted && epoch == _packageEpoch && !cancelToken.isCancelled) {
+        GlazeToast.show(
+          context,
+          'memory_consolidation_failed'.tr(
+            namedArgs: {'error': formatError(error)},
+          ),
+        );
+      }
+    } finally {
+      _packageFinish(epoch);
+    }
+  }
+
+  Future<void> _runPackage(MemoryConsolidationJobRow job) async {
+    if (_packageJobId != null || _consolidatingEntryId != null) return;
+    final epoch = ++_packageEpoch;
+    final cancelToken = CancelToken();
+    _packageCancelToken = cancelToken;
+    setState(() => _packageJobId = job.id);
+    try {
+      await _runPackageCore(epoch, cancelToken);
+    } catch (error) {
+      if (mounted && epoch == _packageEpoch && !cancelToken.isCancelled) {
+        GlazeToast.show(
+          context,
+          'memory_consolidation_failed'.tr(
+            namedArgs: {'error': formatError(error)},
+          ),
+        );
+      }
+    } finally {
+      _packageFinish(epoch);
+    }
+  }
+
+  Future<void> _retryPackage(MemoryConsolidationJobRow job) async {
+    if (_packageJobId != null || _consolidatingEntryId != null) return;
+    final epoch = ++_packageEpoch;
+    final cancelToken = CancelToken();
+    _packageCancelToken = cancelToken;
+    setState(() => _packageJobId = job.id);
+    try {
+      await ref.read(memoryConsolidationJobRepoProvider).retryFailed(job.id);
+      await _runPackageCore(epoch, cancelToken);
+    } catch (error) {
+      if (mounted && epoch == _packageEpoch && !cancelToken.isCancelled) {
+        GlazeToast.show(
+          context,
+          'memory_consolidation_failed'.tr(
+            namedArgs: {'error': formatError(error)},
+          ),
+        );
+      }
+    } finally {
+      _packageFinish(epoch);
+    }
+  }
+
+  Future<void> _openPendingPackageReview(MemoryConsolidationJobRow job) async {
+    if (_packageJobId != null || _consolidatingEntryId != null) return;
+    final epoch = ++_packageEpoch;
+    setState(() => _packageJobId = job.id);
+    try {
+      await _reviewPackageCore(epoch);
+    } catch (error) {
+      if (mounted && epoch == _packageEpoch) {
+        GlazeToast.show(
+          context,
+          'memory_consolidation_failed'.tr(
+            namedArgs: {'error': formatError(error)},
+          ),
+        );
+      }
+    } finally {
+      _packageFinish(epoch);
+    }
+  }
+
+  Future<void> _runPackageCore(int epoch, CancelToken cancelToken) async {
+    final book = _ctrl.book;
+    if (book == null) return;
+    final pipeline = ref.read(pipelineSettingsProvider);
+    final apiSettings = pipeline.memoryBookApi;
+    final customOwner = apiSettings.generationSource == 'custom'
+        ? ref.read(memoryCustomApiCredentialOwnerProvider)
+        : null;
+    final revisionEpoch = ref.read(memoryBookRevisionProvider);
+    final bookSettings = book.settings;
+    bool isCurrent() =>
+        _packageFlowCurrent(epoch, cancelToken) &&
+        ref.read(pipelineSettingsProvider).memoryBookApi == apiSettings &&
+        ref.read(memoryBookRevisionProvider) == revisionEpoch &&
+        _ctrl.book?.settings == bookSettings;
+    final customInvocation = customOwner?.capture(
+      apiSettings,
+      isCurrent: isCurrent,
+    );
+    final originalStamp = apiSettings.generationSource == 'custom'
+        ? null
+        : ref
+              .read(nativeProviderRuntimeProvider)
+              ?.sources
+              .captureOriginalStamp();
+    final ran = await ref
+        .read(memoryConsolidationBatchProvider)
+        .runOnce(
+          ownerId: 'package-${widget.sessionId}',
+          leaseDurationSeconds: 900,
+          sessionId: widget.sessionId,
+          settings: apiSettings,
+          apiResolver: _apiResolver(apiSettings, isCurrent),
+          originalStamp: originalStamp,
+          originalCustomApi: customInvocation,
+          isCurrent: isCurrent,
+          cancelToken: cancelToken,
+        );
+    if (!isCurrent()) return;
+    if (!ran) {
+      if (mounted) {
+        GlazeToast.show(context, 'memory_consolidation_unavailable'.tr());
+      }
+      return;
+    }
+    await _reviewPackageCore(epoch);
+  }
+
+  Future<void> _reviewPackageCore(int epoch) async {
+    final batch = ref.read(memoryConsolidationBatchProvider);
+    final review = await batch.loadSessionReview(widget.sessionId);
+    if (!mounted || epoch != _packageEpoch) return;
+    if (review == null) {
+      GlazeToast.show(context, 'memory_consolidation_unavailable'.tr());
+      return;
+    }
+    final accepted = await _reviewPackageSheet(review);
+    if (accepted == null || !mounted || epoch != _packageEpoch) return;
+    if (accepted == true) {
+      final saved = await batch.acceptReviewed(
+        jobId: review.jobId,
+        isCurrent: () => mounted && epoch == _packageEpoch,
+      );
+      if (!mounted || epoch != _packageEpoch) return;
+      GlazeToast.show(
+        context,
+        saved
+            ? 'memory_consolidation_accepted'.tr()
+            : 'memory_consolidation_stale'.tr(),
+      );
+    } else {
+      await batch.reject(review.jobId);
+    }
+  }
+
+  Future<bool?> _reviewPackageSheet(MemoryConsolidationPackageReview review) =>
+      GlazeBottomSheet.show<bool>(
+        context,
+        title: 'memory_consolidation_package_review_title'.tr(),
+        child: _MemoryConsolidationPackageReview(review: review),
+        items: [
+          if (review.response.outcome != 'unable_to_verify')
+            BottomSheetItem(
+              icon: Icons.check_rounded,
+              label: 'memory_consolidation_accept'.tr(),
+              centered: true,
+              onTap: () => Navigator.of(context, rootNavigator: true).pop(true),
+            ),
+          BottomSheetItem(
+            icon: Icons.close_rounded,
+            label: 'memory_consolidation_reject'.tr(),
+            centered: true,
+            onTap: () => Navigator.of(context, rootNavigator: true).pop(false),
+          ),
+        ],
+      );
+
+  /// Fencing for the package flow: no per-entry snapshot check here — the job
+  /// rows carry their own immutable snapshots and the acceptance transaction
+  /// re-verifies live provenance. What can invalidate a run is the tab's
+  /// context itself: session, book revision epoch, API slot, settings, mode.
+  bool _packageFlowCurrent(int epoch, CancelToken cancelToken) {
+    final settings = _ctrl.book?.settings;
+    return mounted &&
+        epoch == _packageEpoch &&
+        !cancelToken.isCancelled &&
+        settings != null &&
+        MemoryRetrievalMode.fromValue(settings.memoryMode).isConsolidationMode;
+  }
+
+  void _packageFinish(int epoch) {
+    if (mounted && epoch == _packageEpoch) {
+      setState(() {
+        _packageCancelToken = null;
+        _packageJobId = null;
+      });
+    }
   }
 
   Future<bool?> _reviewConsolidation(MemoryConsolidationDraft draft) =>
@@ -1262,6 +1624,121 @@ class _MemoryConsolidationReview extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Widget _sectionTitle(BuildContext context, String title) => Text(
+    title,
+    style: TextStyle(
+      fontSize: 14,
+      fontWeight: FontWeight.w700,
+      color: context.cs.primary,
+    ),
+  );
+}
+
+class _MemoryConsolidationPackageReview extends StatelessWidget {
+  const _MemoryConsolidationPackageReview({required this.review});
+
+  final MemoryConsolidationPackageReview review;
+
+  @override
+  Widget build(BuildContext context) {
+    final response = review.response;
+    final outcomeKey = switch (response.outcome) {
+      'confirmed' => 'memory_consolidation_outcome_confirmed',
+      'independent_similarity' =>
+        'memory_consolidation_outcome_independent_similarity',
+      _ => 'memory_consolidation_outcome_unable',
+    };
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(response.outcome == 'unable_to_verify' ? '⚠' : '●'),
+          const SizedBox(height: 8),
+          Text(outcomeKey.tr()),
+          if (response.events.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            _sectionTitle(context, 'memory_consolidation_package_events'.tr()),
+            for (final event in response.events) ...[
+              const SizedBox(height: 12),
+              Text(
+                '${event.kind} · ${event.state}',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 4),
+              Text(event.description),
+              if (event.boundaryMessageId != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Boundary: ${event.boundaryMessageId} · '
+                  'swipe ${event.boundarySwipeId} · '
+                  'agent swipe ${event.boundaryAgentSwipeId} · '
+                  'ordinal ${event.boundaryOrdinal}',
+                ),
+              ],
+            ],
+          ],
+          if (response.links.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            _sectionTitle(context, 'memory_consolidation_links'.tr()),
+            const SizedBox(height: 6),
+            for (final link in response.links)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  '${link.fromEventId} — ${link.relation} → ${link.toEventId}',
+                ),
+              ),
+          ],
+          const SizedBox(height: 20),
+          _sectionTitle(context, 'memory_consolidation_sources'.tr()),
+          for (final source in review.pack.sources) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    source.title.isEmpty ? source.memoryEntryId : source.title,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Text(
+                  _sourceStatus(source),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: response.unverifiedSourceRefs.contains(source.ref)
+                        ? context.cs.error
+                        : context.cs.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            SelectableText(source.content),
+          ],
+          if (review.pack.unexaminedOpenObligationIds.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            Text(
+              'Unexamined: '
+              '${review.pack.unexaminedOpenObligationIds.join(', ')}',
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _sourceStatus(MemoryConsolidationSource source) {
+    final response = review.response;
+    if (response.unverifiedSourceRefs.contains(source.ref)) {
+      return 'Unverified';
+    }
+    final citedBy = response.events
+        .where((event) => event.sourceRefs.contains(source.ref))
+        .length;
+    return citedBy == 0 ? 'Context' : 'Cited';
   }
 
   Widget _sectionTitle(BuildContext context, String title) => Text(

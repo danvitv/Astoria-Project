@@ -57,8 +57,11 @@ class MemoryConsolidationBatchService {
   final MemoryConsolidationAcceptanceService acceptance;
 
   /// Snapshots active eligible entries into a durable, idempotent package
-  /// job. Re-enqueuing the same sources returns the existing job; the
-  /// repository rejects a request key bound to a different snapshot.
+  /// job. A cancelled package with the same snapshot is revived: enqueueing
+  /// the same sources again means the caller wants them drafted, not that the
+  /// old rejection should stand forever. Re-enqueuing live sources returns the
+  /// existing job; the repository rejects a request key bound to a different
+  /// snapshot.
   Future<MemoryConsolidationJobRow> enqueue({
     required String sessionId,
     required String branchId,
@@ -91,18 +94,107 @@ class MemoryConsolidationBatchService {
         ),
       );
     }
-    return jobRepo.createOrGet(
+    final job = await jobRepo.createOrGet(
       sessionId: sessionId,
       branchId: branchId,
       requestKey: _requestKey(sessionId, branchId, items),
       items: items,
     );
+    if (job.status == 'cancelled') {
+      return jobRepo.revive(job.id);
+    }
+    return job;
+  }
+
+  /// Enqueues one package for the eligible entries that are not already
+  /// covered by a current accepted event, gated by [minCount] (the
+  /// consolidation threshold; 1 for manual runs). Returns null when there is
+  /// nothing new to consolidate.
+  Future<MemoryConsolidationJobRow?> enqueuePending({
+    required String sessionId,
+    required String branchId,
+    required List<MemoryEntry> entries,
+    int minCount = 1,
+  }) async {
+    if (minCount < 1) {
+      throw ArgumentError.value(minCount, 'minCount', 'must be at least 1');
+    }
+    final covered = await coveredEntryIds(
+      sessionId: sessionId,
+      branchId: branchId,
+    );
+    final pending = entries
+        .where(
+          (entry) =>
+              entry.status == 'active' &&
+              isEligibleSource(entry, sessionId) &&
+              !covered.contains(entry.id),
+        )
+        .toList();
+    if (pending.length < minCount) return null;
+    return enqueue(sessionId: sessionId, branchId: branchId, entries: pending);
+  }
+
+  /// Memory-entry IDs that already participate in a current, non-invalidated
+  /// accepted event. Such entries are consolidated; re-drafting them would
+  /// only duplicate the registry.
+  Future<Set<String>> coveredEntryIds({
+    required String sessionId,
+    required String branchId,
+  }) async {
+    final registry = MemoryEventRegistryRepo(db);
+    final events = await registry.getActiveEvents(
+      sessionId: sessionId,
+      branchId: branchId,
+    );
+    if (events.isEmpty) return const <String>{};
+    final rows =
+        await (db.select(db.memoryEventSourceRows)..where(
+              (row) =>
+                  row.sessionId.equals(sessionId) &
+                  row.branchId.equals(branchId) &
+                  row.eventId.isIn(events.map((event) => event.id)),
+            ))
+            .get();
+    return rows.map((row) => row.memoryEntryId).toSet();
+  }
+
+  /// Whether the entry's active revision carries a complete, non-invalidated
+  /// provenance manifest rooted in [sessionId] — the same bar the single-entry
+  /// manual review applies before it lets a source into a pack.
+  static bool isEligibleSource(MemoryEntry entry, String sessionId) {
+    final revisionId = entry.activeRevisionId;
+    if (revisionId == null) return false;
+    MemoryEntryRevision? activeRevision;
+    for (final revision in entry.revisions) {
+      if (revision.id == revisionId) {
+        activeRevision = revision;
+        break;
+      }
+    }
+    if (activeRevision == null) return false;
+    final manifest = activeRevision.sourceManifest;
+    return manifest != null &&
+        !manifest.invalidated &&
+        manifest.version == 1 &&
+        manifest.originSessionId == sessionId &&
+        activeRevision.messageIds.isNotEmpty &&
+        manifest.messages.length == activeRevision.messageIds.length &&
+        activeRevision.messageIds.asMap().entries.every(
+          (item) => manifest.messages[item.key].messageId == item.value,
+        ) &&
+        entry.messageIds.length == activeRevision.messageIds.length &&
+        entry.messageIds.asMap().entries.every(
+          (item) => activeRevision!.messageIds[item.key] == item.value,
+        );
   }
 
   /// Claims the oldest pending package and runs its whole generation: claims
   /// every source item, builds one bounded pack, makes exactly one network
   /// call, and persists the reviewed envelope. Returns true when a package
-  /// reached review; false when no pending job was claimable.
+  /// reached review; false when no pending job was claimable. [sessionId]
+  /// restricts the claim to that session's queue — a UI run must execute the
+  /// package the user is looking at.
   Future<bool> runOnce({
     required String ownerId,
     required int leaseDurationSeconds,
@@ -112,11 +204,13 @@ class MemoryConsolidationBatchService {
     MemoryCustomApiInvocation? originalCustomApi,
     required bool Function() isCurrent,
     CancelToken? cancelToken,
+    String? sessionId,
   }) async {
     await jobRepo.recoverExpiredLeases();
     final job = await jobRepo.claimNext(
       ownerId: ownerId,
       leaseDurationSeconds: leaseDurationSeconds,
+      sessionId: sessionId,
     );
     if (job == null) return false;
     final items = await jobRepo.getItems(job.id);
@@ -198,6 +292,31 @@ class MemoryConsolidationBatchService {
                   row.status.equals('review_pending') &
                   row.packageDraftJson.isNotNull(),
             ))
+            .getSingleOrNull();
+    if (job == null) return null;
+    final review = _decodeEnvelope(job.id, job.packageDraftJson!);
+    return MemoryConsolidationPackageReview(
+      jobId: job.id,
+      pack: review.pack,
+      response: review.response,
+    );
+  }
+
+  /// Loads the newest review-pending package of a session, so a UI run can
+  /// open the package it just drafted even when the queue held an older one.
+  Future<MemoryConsolidationPackageReview?> loadSessionReview(
+    String sessionId,
+  ) async {
+    final job =
+        await (db.select(db.memoryConsolidationJobRows)
+              ..where(
+                (row) =>
+                    row.sessionId.equals(sessionId) &
+                    row.status.equals('review_pending') &
+                    row.packageDraftJson.isNotNull(),
+              )
+              ..orderBy([(row) => OrderingTerm.desc(row.createdAt)])
+              ..limit(1))
             .getSingleOrNull();
     if (job == null) return null;
     final review = _decodeEnvelope(job.id, job.packageDraftJson!);

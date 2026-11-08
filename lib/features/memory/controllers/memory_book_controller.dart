@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/llm/memory_injection_service.dart';
 import '../../../core/llm/memory_draft_planner.dart';
+import '../../../core/llm/memory_retrieval_mode.dart';
 import '../../../core/models/memory_book.dart';
 import '../../../core/models/memory_entry_revisions.dart';
 import '../../../core/models/pipeline_settings.dart';
@@ -357,6 +360,37 @@ class MemoryBookController {
       );
     });
     if (entry != null) await _autoIndexEntry(entry!);
+    if (entry != null) {
+      // The package itself only enqueues a durable job — no network, no
+      // autoaccept. The user runs and reviews it from the memory books tab.
+      unawaited(_maybeEnqueueConsolidationPackage());
+    }
+  }
+
+  /// Enqueues one consolidation package when the book's mode is Memory+links
+  /// and the number of new, uncovered eligible memories reached the threshold.
+  /// Failures never break approval itself.
+  Future<void> _maybeEnqueueConsolidationPackage() async {
+    final book = _book;
+    if (book == null || _disposed) return;
+    final settings = book.settings;
+    if (!MemoryRetrievalMode.fromValue(
+      settings.memoryMode,
+    ).isConsolidationMode) {
+      return;
+    }
+    try {
+      await _ref
+          .read(memoryConsolidationBatchProvider)
+          .enqueuePending(
+            sessionId: _sessionId,
+            branchId: _sessionId,
+            entries: book.entries,
+            minCount: settings.consolidationThreshold,
+          );
+    } catch (error) {
+      debugPrint('Consolidation package enqueue failed: $error');
+    }
   }
 
   Future<void> deleteDraft(String draftId) async {
