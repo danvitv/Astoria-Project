@@ -501,4 +501,41 @@ void main() {
     expect(items.last, hasLength(2));
     expect(items.last.map((item) => item.status), everyElement('pending'));
   });
+
+  test('getSessionJobs lists one session newest first', () async {
+    final first = await createJob();
+    now += 10;
+    await repo.createOrGet(
+      sessionId: 'session-1',
+      branchId: 'session-1',
+      requestKey: 'second-package',
+      items: [
+        MemoryConsolidationJobItemInput(
+          memoryEntryId: 'entry-3',
+          revisionId: 'entry-3:r1',
+          fingerprint: 'c' * 64,
+          proposedEventId: 'event-3',
+        ),
+      ],
+    );
+    await repo.createOrGet(
+      sessionId: 'session-2',
+      branchId: 'session-2',
+      requestKey: 'other-session-package',
+      items: [
+        MemoryConsolidationJobItemInput(
+          memoryEntryId: 'entry-4',
+          revisionId: 'entry-4:r1',
+          fingerprint: 'd' * 64,
+          proposedEventId: 'event-4',
+        ),
+      ],
+    );
+
+    final jobs = await repo.getSessionJobs('session-1');
+
+    expect(jobs, hasLength(2));
+    expect(jobs.first.requestKey, 'second-package');
+    expect(jobs.last.id, first.id);
+  });
 }

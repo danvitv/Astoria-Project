@@ -35,6 +35,37 @@ final class MemoryConsolidationPackageReview {
   final MemoryConsolidationPackageResponse response;
 }
 
+/// One bounded slice of the initial book scan: the entries that would be
+/// consolidated together in a single package job.
+final class MemoryConsolidationScanPackage {
+  const MemoryConsolidationScanPackage({
+    required this.entries,
+    required this.estimatedChars,
+  });
+
+  final List<MemoryEntry> entries;
+  final int estimatedChars;
+}
+
+/// Dry-run plan for the one-time initial pass over an existing book: which
+/// eligible, uncovered entries would be consolidated and how they split into
+/// bounded packages. [MemoryConsolidationBatchService.planScan] writes
+/// nothing; [MemoryConsolidationBatchService.enqueueScan] turns a confirmed
+/// plan into durable, idempotent jobs.
+final class MemoryConsolidationScanPlan {
+  const MemoryConsolidationScanPlan({
+    required this.packages,
+    required this.eligibleCount,
+    required this.coveredCount,
+    required this.ineligibleCount,
+  });
+
+  final List<MemoryConsolidationScanPackage> packages;
+  final int eligibleCount;
+  final int coveredCount;
+  final int ineligibleCount;
+}
+
 /// Connects durable consolidation jobs to generation and reviewed acceptance.
 ///
 /// One package job makes exactly one network call for all of its sources.
@@ -187,6 +218,118 @@ class MemoryConsolidationBatchService {
         entry.messageIds.asMap().entries.every(
           (item) => activeRevision!.messageIds[item.key] == item.value,
         );
+  }
+
+  /// Computes the deterministic, bounded plan for the initial pass over an
+  /// existing book. This is the saved-before-launch dry run: nothing is
+  /// enqueued or generated until the caller confirms the estimate through
+  /// [enqueueScan]. Slicing is stable (oldest entries first), so re-planning
+  /// an unchanged book reproduces the same packages — and therefore the same
+  /// idempotent request keys. A single entry larger than [maxPackageChars]
+  /// still becomes its own package instead of being silently dropped; it will
+  /// fail honestly at pack-build time if it truly cannot fit.
+  Future<MemoryConsolidationScanPlan> planScan({
+    required String sessionId,
+    required String branchId,
+    required List<MemoryEntry> entries,
+    int maxEntriesPerPackage = 10,
+    int maxPackageChars = 90000,
+  }) async {
+    if (maxEntriesPerPackage < 1) {
+      throw ArgumentError.value(
+        maxEntriesPerPackage,
+        'maxEntriesPerPackage',
+        'must be at least 1',
+      );
+    }
+    if (maxPackageChars < 1000) {
+      throw ArgumentError.value(
+        maxPackageChars,
+        'maxPackageChars',
+        'must be at least 1000',
+      );
+    }
+    final covered = await coveredEntryIds(
+      sessionId: sessionId,
+      branchId: branchId,
+    );
+    var coveredCount = 0;
+    var ineligibleCount = 0;
+    final eligible = <MemoryEntry>[];
+    for (final entry in entries) {
+      if (covered.contains(entry.id)) {
+        coveredCount++;
+        continue;
+      }
+      if (entry.status == 'active' && isEligibleSource(entry, sessionId)) {
+        eligible.add(entry);
+      } else {
+        ineligibleCount++;
+      }
+    }
+    eligible.sort((a, b) {
+      final byCreated = (a.createdAt ?? 0).compareTo(b.createdAt ?? 0);
+      return byCreated != 0 ? byCreated : a.id.compareTo(b.id);
+    });
+    final packages = <MemoryConsolidationScanPackage>[];
+    var current = <MemoryEntry>[];
+    var chars = 0;
+    for (final entry in eligible) {
+      final estimate = estimatedEntryChars(entry);
+      if (current.isNotEmpty &&
+          (current.length >= maxEntriesPerPackage ||
+              chars + estimate > maxPackageChars)) {
+        packages.add(
+          MemoryConsolidationScanPackage(
+            entries: current,
+            estimatedChars: chars,
+          ),
+        );
+        current = <MemoryEntry>[];
+        chars = 0;
+      }
+      current.add(entry);
+      chars += estimate;
+    }
+    if (current.isNotEmpty) {
+      packages.add(
+        MemoryConsolidationScanPackage(entries: current, estimatedChars: chars),
+      );
+    }
+    return MemoryConsolidationScanPlan(
+      packages: List.unmodifiable(packages),
+      eligibleCount: eligible.length,
+      coveredCount: coveredCount,
+      ineligibleCount: ineligibleCount,
+    );
+  }
+
+  /// Conservative serialized-size estimate of one entry inside a source pack:
+  /// the pack ships the full revision text plus the provenance manifest, so
+  /// roughly double the plain title and content, plus fixed metadata.
+  static int estimatedEntryChars(MemoryEntry entry) =>
+      (entry.title.length + entry.content.length) * 2 + 400;
+
+  /// Turns a confirmed scan plan into durable package jobs, oldest package
+  /// first. Idempotent per package: re-enqueueing an unchanged plan returns
+  /// the existing jobs, and a rejected package with the same snapshot is
+  /// revived for redrafting instead of duplicating.
+  Future<List<MemoryConsolidationJobRow>> enqueueScan({
+    required String sessionId,
+    required String branchId,
+    required MemoryConsolidationScanPlan plan,
+  }) async {
+    final rows = <MemoryConsolidationJobRow>[];
+    for (final package in plan.packages) {
+      rows.add(
+        await enqueue(
+          sessionId: sessionId,
+          branchId: branchId,
+          entries: package.entries,
+        ),
+      );
+    }
+    return rows;
   }
 
   /// Claims the oldest pending package and runs its whole generation: claims

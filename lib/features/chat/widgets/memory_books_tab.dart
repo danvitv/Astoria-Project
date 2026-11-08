@@ -10,6 +10,7 @@ import '../../../core/models/memory_book.dart';
 import '../../../core/models/memory_book_api_settings.dart';
 import '../../../core/models/memory_consolidation.dart';
 import '../../../core/credentials/memory_custom_api_credential_owner.dart';
+import '../../../core/credentials/native_provider_credentials.dart';
 import '../../../core/db/app_db.dart';
 import '../../../core/llm/memory_retrieval_mode.dart';
 import '../../../core/services/memory_consolidation_batch_service.dart';
@@ -157,6 +158,17 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   CancelToken? _packageCancelToken;
   String? _packageJobId;
 
+  /// The one-time initial book scan runs many durable packages sequentially.
+  /// Its own epoch/token fence it independently of the single-package flow;
+  /// counters are per-run progress for the panel, not persisted state (the
+  /// job rows are the durable progress).
+  int _scanEpoch = 0;
+  CancelToken? _scanCancelToken;
+  bool _scanRunning = false;
+  int _scanDone = 0;
+  int _scanTotal = 0;
+  int _scanFailed = 0;
+
   @override
   void initState() {
     super.initState();
@@ -215,6 +227,8 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
     _consolidationCancelToken?.cancel('Memory Books tab disposed');
     _packageEpoch++;
     _packageCancelToken?.cancel('Memory Books tab disposed');
+    _scanEpoch++;
+    _scanCancelToken?.cancel('Memory Books tab disposed');
     _ctrl.dispose();
     _searchCtrl.dispose();
     _searchFocus.dispose();
@@ -234,6 +248,13 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
       _packageCancelToken?.cancel('Memory Books context changed');
       _packageCancelToken = null;
       _packageJobId = null;
+      _scanEpoch++;
+      _scanCancelToken?.cancel('Memory Books context changed');
+      _scanCancelToken = null;
+      _scanRunning = false;
+      _scanDone = 0;
+      _scanTotal = 0;
+      _scanFailed = 0;
       // This State owns a final controller. A -> B -> A cannot resurrect it.
       _ctrl.dispose();
     }
@@ -1026,6 +1047,34 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
         ),
       );
     }
+    if (_scanRunning) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                'memory_consolidation_scan_running'.tr(
+                  namedArgs: {'done': '$_scanDone', 'total': '$_scanTotal'},
+                ),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: context.cs.onSurfaceVariant,
+                ),
+              ),
+            ),
+            GlazeActionButton(
+              tone: GlazeActionTone.neutral,
+              icon: Icons.close_rounded,
+              label: 'memory_consolidation_scan_stop'.tr(),
+              onTap: () => _scanCancelToken?.cancel('Cancelled by user'),
+            ),
+          ],
+        ),
+      );
+    }
     final jobs =
         ref
             .watch(memoryConsolidationSessionJobsProvider(widget.sessionId))
@@ -1052,7 +1101,7 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
         key: const ValueKey('package-run'),
         icon: Icons.hub_outlined,
         label: 'memory_consolidation_package_count'.tr(
-          args: ['${_packageItemCount(job!.id)}'],
+          namedArgs: {'count': '${_packageItemCount(job!.id)}'},
         ),
         onTap: () => _runPackage(job!),
       ),
@@ -1076,7 +1125,18 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
         onTap: _startPackageFlow,
       ),
     };
-    return Padding(padding: const EdgeInsets.only(bottom: 8), child: action);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(padding: const EdgeInsets.only(bottom: 8), child: action),
+        GlazeActionButton(
+          key: const ValueKey('package-scan'),
+          icon: Icons.travel_explore_rounded,
+          label: 'memory_consolidation_scan'.tr(),
+          onTap: _startBookScan,
+        ),
+      ],
+    );
   }
 
   int _packageItemCount(String jobId) =>
@@ -1104,7 +1164,8 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
     final book = _ctrl.book;
     if (book == null ||
         _packageJobId != null ||
-        _consolidatingEntryId != null) {
+        _consolidatingEntryId != null ||
+        _scanRunning) {
       return;
     }
     final epoch = ++_packageEpoch;
@@ -1147,7 +1208,11 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   }
 
   Future<void> _runPackage(MemoryConsolidationJobRow job) async {
-    if (_packageJobId != null || _consolidatingEntryId != null) return;
+    if (_packageJobId != null ||
+        _consolidatingEntryId != null ||
+        _scanRunning) {
+      return;
+    }
     final epoch = ++_packageEpoch;
     final cancelToken = CancelToken();
     _packageCancelToken = cancelToken;
@@ -1169,7 +1234,11 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   }
 
   Future<void> _retryPackage(MemoryConsolidationJobRow job) async {
-    if (_packageJobId != null || _consolidatingEntryId != null) return;
+    if (_packageJobId != null ||
+        _consolidatingEntryId != null ||
+        _scanRunning) {
+      return;
+    }
     final epoch = ++_packageEpoch;
     final cancelToken = CancelToken();
     _packageCancelToken = cancelToken;
@@ -1192,7 +1261,11 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
   }
 
   Future<void> _openPendingPackageReview(MemoryConsolidationJobRow job) async {
-    if (_packageJobId != null || _consolidatingEntryId != null) return;
+    if (_packageJobId != null ||
+        _consolidatingEntryId != null ||
+        _scanRunning) {
+      return;
+    }
     final epoch = ++_packageEpoch;
     setState(() => _packageJobId = job.id);
     try {
@@ -1211,9 +1284,18 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
     }
   }
 
-  Future<void> _runPackageCore(int epoch, CancelToken cancelToken) async {
+  /// Shared per-run context for every durable package execution path (the
+  /// single-package flow and the book scan): the API slot, the captured
+  /// custom credential, the original connection stamp and the fenced
+  /// resolver. The returned [isCurrent] layers the same
+  /// settings/revision-epoch immutability checks the single-entry review
+  /// uses on top of the caller's flow fence, so a mid-run settings or book
+  /// change aborts the package before its result is persisted.
+  _PackageRunContext _packageRunContext(bool Function() flowCurrent) {
     final book = _ctrl.book;
-    if (book == null) return;
+    if (book == null) {
+      throw StateError('The book disappeared while starting a package run.');
+    }
     final pipeline = ref.read(pipelineSettingsProvider);
     final apiSettings = pipeline.memoryBookApi;
     final customOwner = apiSettings.generationSource == 'custom'
@@ -1222,7 +1304,7 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
     final revisionEpoch = ref.read(memoryBookRevisionProvider);
     final bookSettings = book.settings;
     bool isCurrent() =>
-        _packageFlowCurrent(epoch, cancelToken) &&
+        flowCurrent() &&
         ref.read(pipelineSettingsProvider).memoryBookApi == apiSettings &&
         ref.read(memoryBookRevisionProvider) == revisionEpoch &&
         _ctrl.book?.settings == bookSettings;
@@ -1236,20 +1318,41 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
               .read(nativeProviderRuntimeProvider)
               ?.sources
               .captureOriginalStamp();
-    final ran = await ref
-        .read(memoryConsolidationBatchProvider)
-        .runOnce(
-          ownerId: 'package-${widget.sessionId}',
-          leaseDurationSeconds: 900,
-          sessionId: widget.sessionId,
-          settings: apiSettings,
-          apiResolver: _apiResolver(apiSettings, isCurrent),
-          originalStamp: originalStamp,
-          originalCustomApi: customInvocation,
-          isCurrent: isCurrent,
-          cancelToken: cancelToken,
-        );
-    if (!isCurrent()) return;
+    return (
+      apiSettings: apiSettings,
+      customInvocation: customInvocation,
+      originalStamp: originalStamp,
+      apiResolver: _apiResolver(apiSettings, isCurrent),
+      isCurrent: isCurrent,
+    );
+  }
+
+  /// Executes the oldest claimable package of this session with the shared
+  /// run context. One call = at most one model request.
+  Future<bool> _executeOldestPackage(
+    _PackageRunContext context,
+    CancelToken cancelToken,
+  ) => ref
+      .read(memoryConsolidationBatchProvider)
+      .runOnce(
+        ownerId: 'package-${widget.sessionId}',
+        leaseDurationSeconds: 900,
+        sessionId: widget.sessionId,
+        settings: context.apiSettings,
+        apiResolver: context.apiResolver,
+        originalStamp: context.originalStamp,
+        originalCustomApi: context.customInvocation,
+        isCurrent: context.isCurrent,
+        cancelToken: cancelToken,
+      );
+
+  Future<void> _runPackageCore(int epoch, CancelToken cancelToken) async {
+    if (_ctrl.book == null) return;
+    final runContext = _packageRunContext(
+      () => _packageFlowCurrent(epoch, cancelToken),
+    );
+    final ran = await _executeOldestPackage(runContext, cancelToken);
+    if (!runContext.isCurrent()) return;
     if (!ran) {
       if (mounted) {
         GlazeToast.show(context, 'memory_consolidation_unavailable'.tr());
@@ -1328,6 +1431,175 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
         _packageJobId = null;
       });
     }
+  }
+
+  // ─── Initial book scan (resumable, no autoaccept) ────────────────
+
+  /// The one-time pass over an existing book: a dry-run plan is computed and
+  /// confirmed first, then its packages become durable jobs and run one by
+  /// one. Nothing is accepted here — every package lands in review, and a
+  /// stop leaves the remaining packages pending for a later resume.
+  Future<void> _startBookScan() async {
+    if (_scanRunning ||
+        _packageJobId != null ||
+        _consolidatingEntryId != null) {
+      return;
+    }
+    final book = _ctrl.book;
+    if (book == null) return;
+    final epoch = ++_scanEpoch;
+    try {
+      final batch = ref.read(memoryConsolidationBatchProvider);
+      final plan = await batch.planScan(
+        sessionId: widget.sessionId,
+        branchId: widget.sessionId,
+        entries: book.entries,
+      );
+      final jobs = await ref
+          .read(memoryConsolidationJobRepoProvider)
+          .getSessionJobs(widget.sessionId);
+      final failedJobs = jobs.where((job) => job.status == 'failed').toList();
+      final pendingCount = jobs.where((job) => job.status == 'pending').length;
+      if (!mounted || epoch != _scanEpoch) return;
+      if (plan.packages.isEmpty && failedJobs.isEmpty && pendingCount == 0) {
+        GlazeToast.show(context, 'memory_consolidation_package_no_new'.tr());
+        return;
+      }
+      final started = await _scanConfirmSheet(
+        eligibleCount: plan.eligibleCount,
+        packageCount: plan.packages.length,
+        failedCount: failedJobs.length,
+        pendingCount: pendingCount,
+      );
+      if (started != true || !mounted || epoch != _scanEpoch) return;
+      await _runBookScan(epoch, plan, failedJobs);
+    } catch (error) {
+      if (mounted && epoch == _scanEpoch) {
+        GlazeToast.show(
+          context,
+          'memory_consolidation_failed'.tr(
+            namedArgs: {'error': formatError(error)},
+          ),
+        );
+      }
+    }
+  }
+
+  Future<bool?> _scanConfirmSheet({
+    required int eligibleCount,
+    required int packageCount,
+    required int failedCount,
+    required int pendingCount,
+  }) => GlazeBottomSheet.show<bool>(
+    context,
+    title: 'memory_consolidation_scan_title'.tr(),
+    child: _MemoryConsolidationScanConfirm(
+      eligibleCount: eligibleCount,
+      packageCount: packageCount,
+      failedCount: failedCount,
+      pendingCount: pendingCount,
+    ),
+    items: [
+      BottomSheetItem(
+        icon: Icons.play_arrow_rounded,
+        label: 'memory_consolidation_scan_start'.tr(),
+        centered: true,
+        onTap: () => Navigator.of(context, rootNavigator: true).pop(true),
+      ),
+      BottomSheetItem(
+        icon: Icons.close_rounded,
+        label: 'common_cancel'.tr(),
+        centered: true,
+        onTap: () => Navigator.of(context, rootNavigator: true).pop(false),
+      ),
+    ],
+  );
+
+  Future<void> _runBookScan(
+    int epoch,
+    MemoryConsolidationScanPlan plan,
+    List<MemoryConsolidationJobRow> failedJobs,
+  ) async {
+    if (_ctrl.book == null) return;
+    final cancelToken = CancelToken();
+    _scanCancelToken = cancelToken;
+    setState(() {
+      _scanRunning = true;
+      _scanDone = 0;
+      _scanFailed = 0;
+      _scanTotal = 0;
+    });
+    try {
+      final batch = ref.read(memoryConsolidationBatchProvider);
+      final jobRepo = ref.read(memoryConsolidationJobRepoProvider);
+      // The confirmed plan becomes durable package rows before any model
+      // call, so a crash or restart resumes from the queue itself.
+      await batch.enqueueScan(
+        sessionId: widget.sessionId,
+        branchId: widget.sessionId,
+        plan: plan,
+      );
+      for (final job in failedJobs) {
+        await jobRepo.retryFailed(job.id);
+      }
+      final queued = await jobRepo.getSessionJobs(widget.sessionId);
+      if (!mounted || epoch != _scanEpoch) return;
+      setState(
+        () =>
+            _scanTotal = queued.where((job) => job.status == 'pending').length,
+      );
+      while (_scanCurrent(epoch, cancelToken)) {
+        bool ran;
+        try {
+          final runContext = _packageRunContext(
+            () => _scanCurrent(epoch, cancelToken),
+          );
+          ran = await _executeOldestPackage(runContext, cancelToken);
+        } catch (_) {
+          // The failed package keeps its own error in its job row; the scan
+          // records the failure and moves on instead of stalling the pass.
+          if (!mounted || epoch != _scanEpoch) return;
+          setState(() {
+            _scanDone++;
+            _scanFailed++;
+          });
+          continue;
+        }
+        if (!ran) break;
+        if (!mounted || epoch != _scanEpoch) return;
+        setState(() => _scanDone++);
+      }
+      if (mounted && epoch == _scanEpoch) {
+        GlazeToast.show(
+          context,
+          'memory_consolidation_scan_done'.tr(
+            namedArgs: {
+              'drafted': '${_scanDone - _scanFailed}',
+              'failed': '$_scanFailed',
+            },
+          ),
+        );
+      }
+    } finally {
+      if (mounted && epoch == _scanEpoch) {
+        setState(() {
+          _scanRunning = false;
+          _scanCancelToken = null;
+        });
+      }
+    }
+  }
+
+  /// Fencing for the scan: the same context invariants as the package flow.
+  /// Per-package snapshot checks are the job rows' own immutability plus the
+  /// acceptance transaction's re-verification.
+  bool _scanCurrent(int epoch, CancelToken cancelToken) {
+    final settings = _ctrl.book?.settings;
+    return mounted &&
+        epoch == _scanEpoch &&
+        !cancelToken.isCancelled &&
+        settings != null &&
+        MemoryRetrievalMode.fromValue(settings.memoryMode).isConsolidationMode;
   }
 
   Future<bool?> _reviewConsolidation(MemoryConsolidationDraft draft) =>
@@ -1749,4 +2021,67 @@ class _MemoryConsolidationPackageReview extends StatelessWidget {
       color: context.cs.primary,
     ),
   );
+}
+
+/// Everything one durable package run needs from the app state, resolved
+/// once and fenced for the whole run. See
+/// `_MemoryBooksTabState._packageRunContext`.
+typedef _PackageRunContext = ({
+  MemoryBookApiSettings apiSettings,
+  MemoryCustomApiInvocation? customInvocation,
+  NativeConnectionStamp? originalStamp,
+  MemoryDraftApiSourceResolver apiResolver,
+  bool Function() isCurrent,
+});
+
+/// The dry-run estimate the scan asks the reader to confirm before any
+/// package is created: sources, packages, expected model calls — and how
+/// many previously failed packages would be retried.
+class _MemoryConsolidationScanConfirm extends StatelessWidget {
+  const _MemoryConsolidationScanConfirm({
+    required this.eligibleCount,
+    required this.packageCount,
+    required this.failedCount,
+    required this.pendingCount,
+  });
+
+  final int eligibleCount;
+  final int packageCount;
+  final int failedCount;
+  final int pendingCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final calls = packageCount + pendingCount + failedCount;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'memory_consolidation_scan_estimate'.tr(
+              namedArgs: {
+                'sources': '$eligibleCount',
+                'packages': '$packageCount',
+                'calls': '$calls',
+              },
+            ),
+            style: TextStyle(color: context.cs.onSurface),
+          ),
+          if (failedCount > 0) ...[
+            const SizedBox(height: 8),
+            Text(
+              'memory_consolidation_scan_retry_failed'.tr(
+                namedArgs: {'failed': '$failedCount'},
+              ),
+              style: TextStyle(
+                fontSize: 12,
+                color: context.cs.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }

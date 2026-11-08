@@ -61,6 +61,7 @@ class _Harness {
 Future<_Harness> _makeHarness({
   Completer<void>? requestGate,
   bool package = false,
+  int entryCount = 1,
 }) async {
   final db = AppDatabase.forTesting(NativeDatabase.memory());
   late final _Harness harness;
@@ -75,13 +76,41 @@ Future<_Harness> _makeHarness({
     harness.transportCalls++;
     harness.lastCancelToken = cancelToken;
     expect(config.model, 'test-model');
-    expect(messages.last['content'], contains('The key was returned.'));
+    if (package) {
+      expect(messages.last['content'], contains('"proposedEventIds"'));
+    } else {
+      expect(messages.last['content'], contains('The key was returned.'));
+    }
     if (requestGate != null) await requestGate.future;
     if (package) {
+      // Cite the first selected source in one event and classify every
+      // other selected source as unverified, as the strict v2 parser
+      // demands: each selected ref appears exactly once.
+      final content = messages.last['content']!;
       final eventId = RegExp(
         r'"proposedEventIds":\["([^"]+)"\]',
-      ).firstMatch(messages.last['content']!)!.group(1)!;
-      return _packageResponse.replaceAll('event-reviewed', eventId);
+      ).firstMatch(content)!.group(1)!;
+      final refs = RegExp(
+        r'"ref":"entry:([^"]+)"',
+      ).allMatches(content).map((match) => 'entry:${match.group(1)}').toList();
+      return jsonEncode({
+        'contract': 'memory_event_consolidation',
+        'version': 2,
+        'outcome': 'confirmed',
+        'events': [
+          {
+            'eventId': eventId,
+            'kind': 'result',
+            'description': 'The key was returned.',
+            'state': 'completed',
+            'sourceRefs': [refs.first],
+            'boundary': null,
+          },
+        ],
+        'links': <Object>[],
+        'unverifiedSourceRefs': refs.skip(1).toList(),
+        'unexaminedOpenObligationIds': <Object>[],
+      });
     }
     final proposedEventId = RegExp(
       r'"proposedEventId":"([^"]+)"',
@@ -117,13 +146,16 @@ Future<_Harness> _makeHarness({
   );
   harness = _Harness(db, container, requestGate);
   await container.read(apiConfigRepoProvider).put(_config);
-  const sourceMessage = ChatMessage(
-    id: 'message-1',
-    role: 'assistant',
-    content: 'The key was returned.',
-    swipeId: 1,
-    agentSwipeId: 2,
-  );
+  final sourceMessages = [
+    for (var i = 1; i <= entryCount; i++)
+      ChatMessage(
+        id: 'message-$i',
+        role: 'assistant',
+        content: 'The key was returned.',
+        swipeId: 1,
+        agentSwipeId: 2,
+      ),
+  ];
   await db
       .into(db.chatSessions)
       .insert(
@@ -131,23 +163,43 @@ Future<_Harness> _makeHarness({
           sessionId: _sessionId,
           characterId: _characterId,
           sessionIndex: 0,
-          messagesJson: jsonEncode([sourceMessage.toJson()]),
+          messagesJson: jsonEncode([
+            for (final message in sourceMessages) message.toJson(),
+          ]),
         ),
       );
-  final manifest = MemorySourceManifest.capture(
-    _sessionId,
-    const [sourceMessage],
-    const ['message-1'],
-  );
-  final revision = MemoryEntryRevision(
-    id: 'memory-entry:r1',
-    version: 1,
-    title: 'The key',
-    content: 'The key was returned.',
-    messageIds: const ['message-1'],
-    sourceManifest: manifest,
-    createdAt: 1,
-  );
+  final entries = <MemoryEntry>[];
+  for (var i = 1; i <= entryCount; i++) {
+    final message = sourceMessages[i - 1];
+    final entryId = entryCount == 1 ? _entryId : 'memory-entry-$i';
+    final manifest = MemorySourceManifest.capture(
+      _sessionId,
+      [message],
+      [message.id],
+    );
+    final revision = MemoryEntryRevision(
+      id: '$entryId:r1',
+      version: 1,
+      title: 'The key',
+      content: 'The key was returned.',
+      messageIds: [message.id],
+      sourceManifest: manifest,
+      createdAt: 1,
+    );
+    entries.add(
+      MemoryEntry(
+        id: entryId,
+        title: 'The key',
+        content: 'The key was returned.',
+        messageIds: [message.id],
+        sourceSwipeId: 1,
+        sourceAgentSwipeId: 2,
+        sourceManifest: manifest,
+        activeRevisionId: revision.id,
+        revisions: [revision],
+      ),
+    );
+  }
   await container
       .read(memoryBookRepoProvider)
       .put(
@@ -159,19 +211,7 @@ Future<_Harness> _makeHarness({
             autoCreateEnabled: false,
             autoGenerateEnabled: false,
           ),
-          entries: [
-            MemoryEntry(
-              id: _entryId,
-              title: 'The key',
-              content: 'The key was returned.',
-              messageIds: const ['message-1'],
-              sourceSwipeId: 1,
-              sourceAgentSwipeId: 2,
-              sourceManifest: manifest,
-              activeRevisionId: revision.id,
-              revisions: [revision],
-            ),
-          ],
+          entries: entries,
         ),
       );
   return harness;
@@ -189,18 +229,6 @@ const _response = '''{
     "sourceRefs":["entry:memory-entry"],
     "boundary":null
   },
-  "links":[],
-  "unverifiedSourceRefs":[],
-  "unexaminedOpenObligationIds":[]
-}''';
-
-const _packageResponse = '''{
-  "contract":"memory_event_consolidation",
-  "version":2,
-  "outcome":"confirmed",
-  "events":[
-    {"eventId":"event-reviewed","kind":"result","description":"The key was returned.","state":"completed","sourceRefs":["entry:memory-entry"],"boundary":null}
-  ],
   "links":[],
   "unverifiedSourceRefs":[],
   "unexaminedOpenObligationIds":[]
@@ -247,7 +275,7 @@ Future<void> _pumpTab(WidgetTester tester, _Harness harness) async {
       if (find.byTooltip('The key').evaluate().isNotEmpty) break;
     }
   });
-  expect(find.text('The key'), findsOneWidget);
+  expect(find.text('The key'), findsWidgets);
 }
 
 Future<void> _startReview(WidgetTester tester) async {
@@ -380,5 +408,40 @@ void main() {
     // The queue holds only the completed package, so the panel offers a
     // fresh start instead of a review or retry.
     expect(find.text('Consolidate new memories'), findsOneWidget);
+  });
+
+  testWidgets('initial scan drafts every bounded package and stays in review', (
+    tester,
+  ) async {
+    final harness = await _makeHarness(package: true, entryCount: 11);
+    addTearDown(harness.dispose);
+    await _pumpTab(tester, harness);
+
+    expect(find.text('Scan book for event links'), findsOneWidget);
+    await tester.tap(find.text('Scan book for event links'));
+    for (var i = 0; i < 128; i++) {
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      if (find.text('Start scan').evaluate().isNotEmpty) break;
+    }
+    // Let the sheet's opening animation finish before tapping its item.
+    await tester.pumpAndSettle();
+    expect(find.text('Start scan'), findsOneWidget);
+    await tester.tap(find.text('Start scan'));
+    for (var i = 0; i < 256; i++) {
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      if (harness.transportCalls >= 2 &&
+          find.text('Review package').evaluate().isNotEmpty) {
+        break;
+      }
+    }
+    await tester.pumpAndSettle();
+
+    // Eleven sources at the default bound make two packages, each with
+    // exactly one model call; everything stays a draft for review.
+    expect(harness.transportCalls, 2);
+    expect(find.text('Review package'), findsOneWidget);
+    expect(await harness.activeEventCount(), 0);
   });
 }

@@ -151,14 +151,23 @@ Future<_Harness> _makeHarness({int Function()? clock}) async {
   return _Harness(db, container, repo, batch, jobRepo, transport);
 }
 
-Future<MemoryBook> _seedBook(_Harness harness) async {
+Future<MemoryBook> _seedBook(
+  _Harness harness, {
+  int count = 2,
+  int contentSize = 0,
+}) async {
   final entries = <MemoryEntry>[];
-  for (var i = 1; i <= 2; i++) {
+  for (var i = 1; i <= count; i++) {
     final messageId = 'batch-message-$i';
     final entryId = 'batch-entry-$i';
-    final content = i == 1
+    final baseContent = i == 1
         ? 'Mira promised to return the brass key.'
-        : 'Mira returned the brass key.';
+        : (i == 2
+              ? 'Mira returned the brass key.'
+              : 'Mira noted the brass key again.');
+    final content = contentSize > 0
+        ? '$baseContent${'x' * contentSize}'
+        : baseContent;
     final manifest = MemorySourceManifest.capture(
       _sessionId,
       [
@@ -175,7 +184,7 @@ Future<MemoryBook> _seedBook(_Harness harness) async {
     final revision = MemoryEntryRevision(
       id: '$entryId:r1',
       version: 1,
-      title: i == 1 ? 'The promise' : 'The return',
+      title: i == 1 ? 'The promise' : (i == 2 ? 'The return' : 'Memory $i'),
       content: content,
       messageIds: [messageId],
       sourceManifest: manifest,
@@ -601,5 +610,151 @@ void main() {
     // The revived package redrafts and reaches review again.
     expect(await _run(harness, 'runner-2'), isTrue);
     expect((await harness.job(job.id))!.status, 'review_pending');
+  });
+
+  test('planScan slices eligible sources into bounded packages', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness, count: 5);
+
+    final plan = await harness.batch.planScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+      maxEntriesPerPackage: 2,
+    );
+
+    expect(plan.eligibleCount, 5);
+    expect(plan.coveredCount, 0);
+    expect(plan.ineligibleCount, 0);
+    expect(plan.packages, hasLength(3));
+    expect(plan.packages.map((p) => p.entries.map((e) => e.id).toList()), [
+      ['batch-entry-1', 'batch-entry-2'],
+      ['batch-entry-3', 'batch-entry-4'],
+      ['batch-entry-5'],
+    ]);
+    expect(plan.packages.every((p) => p.estimatedChars > 0), isTrue);
+  });
+
+  test(
+    'planScan respects the character budget without dropping sources',
+    () async {
+      final harness = await _makeHarness();
+      final book = await _seedBook(harness, count: 3, contentSize: 3000);
+
+      final plan = await harness.batch.planScan(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries,
+        maxPackageChars: 5000,
+      );
+
+      expect(plan.packages, hasLength(3));
+      expect(
+        plan.packages.every((package) => package.entries.length == 1),
+        isTrue,
+      );
+      expect(
+        plan.packages
+            .expand((package) => package.entries)
+            .map((entry) => entry.id)
+            .toSet(),
+        {'batch-entry-1', 'batch-entry-2', 'batch-entry-3'},
+      );
+    },
+  );
+
+  test('planScan treats accepted sources as covered', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness);
+
+    final job = await harness.batch.enqueue(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+    );
+    expect(await _run(harness, 'runner-1'), isTrue);
+    expect(
+      await harness.batch.acceptReviewed(
+        jobId: job.id,
+        isCurrent: _alwaysCurrent,
+      ),
+      isTrue,
+    );
+
+    final plan = await harness.batch.planScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+    );
+
+    expect(plan.eligibleCount, 0);
+    expect(plan.coveredCount, 2);
+    expect(plan.packages, isEmpty);
+  });
+
+  test('enqueueScan is idempotent and revives cancelled packages', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness, count: 4);
+
+    Future<MemoryConsolidationScanPlan> plan() => harness.batch.planScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+      maxEntriesPerPackage: 2,
+    );
+
+    final rows = await harness.batch.enqueueScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      plan: await plan(),
+    );
+    expect(rows, hasLength(2));
+    expect(rows.every((row) => row.status == 'pending'), isTrue);
+
+    final again = await harness.batch.enqueueScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      plan: await plan(),
+    );
+    expect(
+      again.map((row) => row.id).toSet(),
+      rows.map((row) => row.id).toSet(),
+    );
+    expect(await harness.jobRepo.getSessionJobs(_sessionId), hasLength(2));
+
+    // A rejected package is revived by the next scan of the same sources.
+    expect(await harness.batch.reject(rows.first.id), isTrue);
+    final revived = await harness.batch.enqueueScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      plan: await plan(),
+    );
+    expect(revived.first.id, rows.first.id);
+    expect(revived.first.status, 'pending');
+    expect(await harness.jobRepo.getSessionJobs(_sessionId), hasLength(2));
+  });
+
+  test('planScan validates its bounds', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness);
+
+    await expectLater(
+      harness.batch.planScan(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries,
+        maxEntriesPerPackage: 0,
+      ),
+      throwsArgumentError,
+    );
+    await expectLater(
+      harness.batch.planScan(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries,
+        maxPackageChars: 999,
+      ),
+      throwsArgumentError,
+    );
   });
 }

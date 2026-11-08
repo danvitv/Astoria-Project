@@ -762,6 +762,18 @@ class MemoryConsolidationJobRepo {
             ]))
           .watch();
 
+  /// One-shot read of this session's package jobs, newest first — the same
+  /// ordering [watchSessionJobs] streams, for callers that need a snapshot
+  /// (for example a scan dry run counting failed packages).
+  Future<List<MemoryConsolidationJobRow>> getSessionJobs(String sessionId) =>
+      (db.select(db.memoryConsolidationJobRows)
+            ..where((row) => row.sessionId.equals(sessionId))
+            ..orderBy([
+              (row) => OrderingTerm.desc(row.createdAt),
+              (row) => OrderingTerm.desc(row.id),
+            ]))
+          .get();
+
   Stream<List<MemoryConsolidationJobItemRow>> watchItems(String jobId) =>
       (db.select(db.memoryConsolidationJobItemRows)
             ..where((row) => row.jobId.equals(jobId))
