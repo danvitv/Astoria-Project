@@ -3,6 +3,13 @@ import 'package:drift/drift.dart';
 import '../../utils/id_generator.dart';
 import '../../utils/time_helpers.dart';
 import '../app_db.dart';
+import 'memory_event_registry_repo.dart';
+
+typedef MemoryConsolidationSourceIdentity = ({
+  String memoryEntryId,
+  String revisionId,
+  String fingerprint,
+});
 
 class MemoryConsolidationJobItemInput {
   const MemoryConsolidationJobItemInput({
@@ -16,6 +23,12 @@ class MemoryConsolidationJobItemInput {
   final String revisionId;
   final String fingerprint;
   final String proposedEventId;
+
+  MemoryConsolidationSourceIdentity get sourceIdentity => (
+    memoryEntryId: memoryEntryId,
+    revisionId: revisionId,
+    fingerprint: fingerprint,
+  );
 }
 
 class MemoryConsolidationJobRepo {
@@ -24,6 +37,83 @@ class MemoryConsolidationJobRepo {
   final AppDatabase db;
   final int Function()? _clock;
   int get _now => _clock?.call() ?? currentTimestampSeconds();
+
+  /// Failed packages retain their sources for failed-only retry. Cancelled
+  /// packages release them; another revision or branch is a different source.
+  Future<Set<MemoryConsolidationSourceIdentity>> getReservedSources({
+    required String sessionId,
+    required String branchId,
+  }) async {
+    final jobs = db.memoryConsolidationJobRows;
+    final items = db.memoryConsolidationJobItemRows;
+    final query = db.selectOnly(items)
+      ..addColumns([items.memoryEntryId, items.revisionId, items.fingerprint])
+      ..join([innerJoin(jobs, jobs.id.equalsExp(items.jobId))])
+      ..where(
+        jobs.sessionId.equals(sessionId) &
+            jobs.branchId.equals(branchId) &
+            jobs.status.isIn([
+              'pending',
+              'running',
+              'review_pending',
+              'failed',
+            ]),
+      );
+    return {
+      for (final row in await query.get())
+        (
+          memoryEntryId: row.read(items.memoryEntryId)!,
+          revisionId: row.read(items.revisionId)!,
+          fingerprint: row.read(items.fingerprint)!,
+        ),
+    };
+  }
+
+  /// Rechecks accepted coverage and queue reservations in the same transaction
+  /// that creates the jobs. A stale dry run or a simultaneous threshold enqueue
+  /// can only claim the still-unreserved snapshots, never duplicate a package.
+  /// [requestKeyForItems] must be a pure identity calculation (no I/O).
+  Future<List<MemoryConsolidationJobRow>> createUnreservedPackages({
+    required String sessionId,
+    required String branchId,
+    required List<List<MemoryConsolidationJobItemInput>> packages,
+    required String Function(List<MemoryConsolidationJobItemInput>)
+    requestKeyForItems,
+    int minCount = 1,
+  }) {
+    if (minCount < 1) {
+      throw ArgumentError.value(minCount, 'minCount', 'must be at least 1');
+    }
+    return db.transaction(() async {
+      final covered = await MemoryEventRegistryRepo(
+        db,
+      ).getCoveredEntryIds(sessionId: sessionId, branchId: branchId);
+      final reserved = await getReservedSources(
+        sessionId: sessionId,
+        branchId: branchId,
+      );
+      final rows = <MemoryConsolidationJobRow>[];
+      for (final package in packages) {
+        final available = package
+            .where(
+              (item) =>
+                  !covered.contains(item.memoryEntryId) &&
+                  !reserved.contains(item.sourceIdentity),
+            )
+            .toList();
+        if (available.length < minCount) continue;
+        final job = await createOrGet(
+          sessionId: sessionId,
+          branchId: branchId,
+          requestKey: requestKeyForItems(available),
+          items: available,
+        );
+        rows.add(job.status == 'cancelled' ? await revive(job.id) : job);
+        reserved.addAll(available.map((item) => item.sourceIdentity));
+      }
+      return rows;
+    });
+  }
 
   Future<MemoryConsolidationJobRow> createOrGet({
     required String sessionId,

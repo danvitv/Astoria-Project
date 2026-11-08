@@ -58,12 +58,14 @@ final class MemoryConsolidationScanPlan {
     required this.eligibleCount,
     required this.coveredCount,
     required this.ineligibleCount,
+    this.reservedCount = 0,
   });
 
   final List<MemoryConsolidationScanPackage> packages;
   final int eligibleCount;
   final int coveredCount;
   final int ineligibleCount;
+  final int reservedCount;
 }
 
 /// Connects durable consolidation jobs to generation and reviewed acceptance.
@@ -101,6 +103,24 @@ class MemoryConsolidationBatchService {
     if (entries.isEmpty) {
       throw ArgumentError('A consolidation package needs at least one source.');
     }
+    final items = _sourceItems(sessionId, branchId, entries);
+    final job = await jobRepo.createOrGet(
+      sessionId: sessionId,
+      branchId: branchId,
+      requestKey: _requestKey(sessionId, branchId, items),
+      items: items,
+    );
+    if (job.status == 'cancelled') {
+      return jobRepo.revive(job.id);
+    }
+    return job;
+  }
+
+  List<MemoryConsolidationJobItemInput> _sourceItems(
+    String sessionId,
+    String branchId,
+    List<MemoryEntry> entries,
+  ) {
     final items = <MemoryConsolidationJobItemInput>[];
     for (final entry in entries) {
       final revision = _activeRevision(entry);
@@ -125,22 +145,13 @@ class MemoryConsolidationBatchService {
         ),
       );
     }
-    final job = await jobRepo.createOrGet(
-      sessionId: sessionId,
-      branchId: branchId,
-      requestKey: _requestKey(sessionId, branchId, items),
-      items: items,
-    );
-    if (job.status == 'cancelled') {
-      return jobRepo.revive(job.id);
-    }
-    return job;
+    return items;
   }
 
   /// Enqueues one package for the eligible entries that are not already
-  /// covered by a current accepted event, gated by [minCount] (the
-  /// consolidation threshold; 1 for manual runs). Returns null when there is
-  /// nothing new to consolidate.
+  /// covered by an accepted event or reserved by a durable job, gated by
+  /// [minCount] (the consolidation threshold; 1 for manual runs). Returns null
+  /// when there is nothing new to consolidate.
   Future<MemoryConsolidationJobRow?> enqueuePending({
     required String sessionId,
     required String branchId,
@@ -150,20 +161,20 @@ class MemoryConsolidationBatchService {
     if (minCount < 1) {
       throw ArgumentError.value(minCount, 'minCount', 'must be at least 1');
     }
-    final covered = await coveredEntryIds(
-      sessionId: sessionId,
-      branchId: branchId,
-    );
     final pending = entries
         .where(
           (entry) =>
-              entry.status == 'active' &&
-              isEligibleSource(entry, sessionId) &&
-              !covered.contains(entry.id),
+              entry.status == 'active' && isEligibleSource(entry, sessionId),
         )
         .toList();
-    if (pending.length < minCount) return null;
-    return enqueue(sessionId: sessionId, branchId: branchId, entries: pending);
+    final rows = await jobRepo.createUnreservedPackages(
+      sessionId: sessionId,
+      branchId: branchId,
+      packages: [_sourceItems(sessionId, branchId, pending)],
+      minCount: minCount,
+      requestKeyForItems: (items) => _requestKey(sessionId, branchId, items),
+    );
+    return rows.isEmpty ? null : rows.single;
   }
 
   /// Memory-entry IDs that already participate in a current, non-invalidated
@@ -172,23 +183,9 @@ class MemoryConsolidationBatchService {
   Future<Set<String>> coveredEntryIds({
     required String sessionId,
     required String branchId,
-  }) async {
-    final registry = MemoryEventRegistryRepo(db);
-    final events = await registry.getActiveEvents(
-      sessionId: sessionId,
-      branchId: branchId,
-    );
-    if (events.isEmpty) return const <String>{};
-    final rows =
-        await (db.select(db.memoryEventSourceRows)..where(
-              (row) =>
-                  row.sessionId.equals(sessionId) &
-                  row.branchId.equals(branchId) &
-                  row.eventId.isIn(events.map((event) => event.id)),
-            ))
-            .get();
-    return rows.map((row) => row.memoryEntryId).toSet();
-  }
+  }) => MemoryEventRegistryRepo(
+    db,
+  ).getCoveredEntryIds(sessionId: sessionId, branchId: branchId);
 
   /// Whether the entry's active revision carries a complete, non-invalidated
   /// provenance manifest rooted in [sessionId] — the same bar the single-entry
@@ -253,8 +250,13 @@ class MemoryConsolidationBatchService {
       sessionId: sessionId,
       branchId: branchId,
     );
+    final reserved = await jobRepo.getReservedSources(
+      sessionId: sessionId,
+      branchId: branchId,
+    );
     var coveredCount = 0;
     var ineligibleCount = 0;
+    var reservedCount = 0;
     final eligible = <MemoryEntry>[];
     for (final entry in entries) {
       if (covered.contains(entry.id)) {
@@ -262,7 +264,14 @@ class MemoryConsolidationBatchService {
         continue;
       }
       if (entry.status == 'active' && isEligibleSource(entry, sessionId)) {
-        eligible.add(entry);
+        final identity = _sourceItems(sessionId, branchId, [
+          entry,
+        ]).single.sourceIdentity;
+        if (reserved.contains(identity)) {
+          reservedCount++;
+        } else {
+          eligible.add(entry);
+        }
       } else {
         ineligibleCount++;
       }
@@ -301,6 +310,7 @@ class MemoryConsolidationBatchService {
       eligibleCount: eligible.length,
       coveredCount: coveredCount,
       ineligibleCount: ineligibleCount,
+      reservedCount: reservedCount,
     );
   }
 
@@ -311,26 +321,22 @@ class MemoryConsolidationBatchService {
       (entry.title.length + entry.content.length) * 2 + 400;
 
   /// Turns a confirmed scan plan into durable package jobs, oldest package
-  /// first. Idempotent per package: re-enqueueing an unchanged plan returns
-  /// the existing jobs, and a rejected package with the same snapshot is
-  /// revived for redrafting instead of duplicating.
+  /// first. Only still-unreserved sources are enqueued: confirmation may race
+  /// with threshold enqueue or reviewed acceptance. Existing jobs stay intact;
+  /// a cancelled package with the same snapshot can be revived for redrafting.
   Future<List<MemoryConsolidationJobRow>> enqueueScan({
     required String sessionId,
     required String branchId,
     required MemoryConsolidationScanPlan plan,
-  }) async {
-    final rows = <MemoryConsolidationJobRow>[];
-    for (final package in plan.packages) {
-      rows.add(
-        await enqueue(
-          sessionId: sessionId,
-          branchId: branchId,
-          entries: package.entries,
-        ),
-      );
-    }
-    return rows;
-  }
+  }) => jobRepo.createUnreservedPackages(
+    sessionId: sessionId,
+    branchId: branchId,
+    packages: [
+      for (final package in plan.packages)
+        _sourceItems(sessionId, branchId, package.entries),
+    ],
+    requestKeyForItems: (items) => _requestKey(sessionId, branchId, items),
+  );
 
   /// Claims the oldest pending package and runs its whole generation: claims
   /// every source item, builds one bounded pack, makes exactly one network

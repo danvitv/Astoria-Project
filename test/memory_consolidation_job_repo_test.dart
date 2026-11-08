@@ -38,6 +38,53 @@ void main() {
     items: sourceItems(),
   );
 
+  test(
+    'reservations are scoped to branch and exact revision fingerprint',
+    () async {
+      await createJob();
+      final sources = await repo.getReservedSources(
+        sessionId: 'session-1',
+        branchId: 'session-1',
+      );
+      expect(sources, hasLength(2));
+      expect(sources, contains(sourceItems().first.sourceIdentity));
+      expect(
+        sources,
+        isNot(
+          contains((
+            memoryEntryId: 'entry-1',
+            revisionId: 'entry-1:r2',
+            fingerprint: 'a' * 64,
+          )),
+        ),
+      );
+      expect(
+        sources,
+        isNot(
+          contains((
+            memoryEntryId: 'entry-1',
+            revisionId: 'entry-1:r1',
+            fingerprint: 'c' * 64,
+          )),
+        ),
+      );
+      expect(
+        await repo.getReservedSources(
+          sessionId: 'session-1',
+          branchId: 'other-branch',
+        ),
+        isEmpty,
+      );
+      expect(
+        await repo.getReservedSources(
+          sessionId: 'other-session',
+          branchId: 'session-1',
+        ),
+        isEmpty,
+      );
+    },
+  );
+
   test('request key creates one immutable source snapshot', () async {
     final first = await createJob();
     final repeated = await repo.createOrGet(

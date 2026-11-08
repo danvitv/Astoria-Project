@@ -126,6 +126,27 @@ class MemoryEventRegistryRepo {
     return rows.where((row) => !invalidated.contains(row.id)).toList();
   }
 
+  /// Accepted coverage excludes invalidated events, just like retrieval.
+  Future<Set<String>> getCoveredEntryIds({
+    required String sessionId,
+    required String branchId,
+  }) async {
+    final events = await getActiveEvents(
+      sessionId: sessionId,
+      branchId: branchId,
+    );
+    if (events.isEmpty) return const <String>{};
+    final rows =
+        await (db.select(db.memoryEventSourceRows)..where(
+              (row) =>
+                  row.sessionId.equals(sessionId) &
+                  row.branchId.equals(branchId) &
+                  row.eventId.isIn(events.map((event) => event.id)),
+            ))
+            .get();
+    return rows.map((row) => row.memoryEntryId).toSet();
+  }
+
   Future<List<MemoryEventLinkRow>> getActiveLinks({
     required String sessionId,
     required String branchId,

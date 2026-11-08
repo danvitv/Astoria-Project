@@ -716,10 +716,8 @@ void main() {
       branchId: _sessionId,
       plan: await plan(),
     );
-    expect(
-      again.map((row) => row.id).toSet(),
-      rows.map((row) => row.id).toSet(),
-    );
+    // The existing queue owns these snapshots; the repeated scan adds no jobs.
+    expect(again, isEmpty);
     expect(await harness.jobRepo.getSessionJobs(_sessionId), hasLength(2));
 
     // A rejected package is revived by the next scan of the same sources.
@@ -733,6 +731,180 @@ void main() {
     expect(revived.first.status, 'pending');
     expect(await harness.jobRepo.getSessionJobs(_sessionId), hasLength(2));
   });
+
+  test('threshold counts only sources not already queued', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness, count: 4);
+    Future<MemoryConsolidationJobRow?> enqueue(int count) =>
+        harness.batch.enqueuePending(
+          sessionId: _sessionId,
+          branchId: _sessionId,
+          entries: book.entries.take(count).toList(),
+          minCount: 2,
+        );
+
+    final first = await enqueue(2);
+    expect(first, isNotNull);
+    expect(await enqueue(3), isNull);
+    final second = await enqueue(4);
+    expect(second, isNotNull);
+    expect(second!.id, isNot(first!.id));
+    expect(
+      (await harness.jobRepo.getItems(
+        second.id,
+      )).map((item) => item.memoryEntryId),
+      ['batch-entry-3', 'batch-entry-4'],
+    );
+    final plan = await harness.batch.planScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+    );
+    expect(plan.reservedCount, 4);
+    expect(plan.eligibleCount, 0);
+    expect(plan.packages, isEmpty);
+  });
+
+  test('stale scan drops only snapshots reserved after its dry run', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness, count: 4);
+    final plan = await harness.batch.planScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+      maxEntriesPerPackage: 2,
+    );
+    await harness.batch.enqueuePending(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries.take(3).toList(),
+    );
+    final rows = await harness.batch.enqueueScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      plan: plan,
+    );
+    expect(rows, hasLength(1));
+    expect(
+      (await harness.jobRepo.getItems(rows.single.id)).single.memoryEntryId,
+      'batch-entry-4',
+    );
+    expect(
+      await harness.batch.enqueueScan(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        plan: plan,
+      ),
+      isEmpty,
+    );
+    expect(await harness.jobRepo.getSessionJobs(_sessionId), hasLength(2));
+  });
+
+  test('concurrent threshold and scan reserve each snapshot once', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness, count: 4);
+    final plan = await harness.batch.planScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+      maxEntriesPerPackage: 2,
+    );
+    await Future.wait<Object?>([
+      harness.batch.enqueuePending(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries,
+      ),
+      harness.batch.enqueueScan(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        plan: plan,
+      ),
+    ]);
+    final items = <MemoryConsolidationJobItemRow>[];
+    for (final job in await harness.jobRepo.getSessionJobs(_sessionId)) {
+      items.addAll(await harness.jobRepo.getItems(job.id));
+    }
+    expect(items, hasLength(4));
+    expect(items.map((item) => item.memoryEntryId).toSet(), hasLength(4));
+  });
+
+  test('stale scan rechecks coverage after reviewed acceptance', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness);
+    final plan = await harness.batch.planScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+    );
+    final job = await harness.batch.enqueuePending(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+    );
+    await _run(harness, 'runner-1');
+    await harness.batch.acceptReviewed(
+      jobId: job!.id,
+      isCurrent: _alwaysCurrent,
+    );
+    expect(
+      await harness.batch.enqueueScan(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        plan: plan,
+      ),
+      isEmpty,
+    );
+    expect(await harness.jobRepo.getSessionJobs(_sessionId), hasLength(1));
+  });
+
+  for (final status in ['running', 'review_pending', 'failed']) {
+    test('$status sources stay reserved until cancellation', () async {
+      final harness = await _makeHarness();
+      final book = await _seedBook(harness);
+      final job = await harness.batch.enqueuePending(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries,
+      );
+      if (status == 'running') {
+        await harness.jobRepo.claimNext(
+          ownerId: 'runner-1',
+          leaseDurationSeconds: 60,
+        );
+      } else if (status == 'failed') {
+        harness.transport.failNext = true;
+        await expectLater(_run(harness, 'runner-1'), throwsException);
+      } else {
+        await _run(harness, 'runner-1');
+      }
+      expect((await harness.job(job!.id))!.status, status);
+      expect(
+        await harness.batch.enqueuePending(
+          sessionId: _sessionId,
+          branchId: _sessionId,
+          entries: book.entries,
+        ),
+        isNull,
+      );
+      expect(
+        (await harness.batch.planScan(
+          sessionId: _sessionId,
+          branchId: _sessionId,
+          entries: book.entries,
+        )).reservedCount,
+        2,
+      );
+      await harness.batch.reject(job.id);
+      final revived = await harness.batch.enqueuePending(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries,
+      );
+      expect(revived?.id, job.id);
+      expect(revived?.status, 'pending');
+    });
+  }
 
   test('planScan validates its bounds', () async {
     final harness = await _makeHarness();
