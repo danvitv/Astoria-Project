@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:collection/collection.dart';
 import 'package:drift/drift.dart';
 
+import '../../llm/vector_math.dart';
 import '../app_db.dart';
 import '../../models/memory_book.dart';
 import '../../models/chat_message.dart';
@@ -10,14 +11,17 @@ import '../../models/memory_consolidation.dart';
 import '../../models/memory_entry_revisions.dart';
 import '../../models/memory_source_manifest.dart';
 import '../../models/session_branch_identity.dart';
+import 'embedding_repo.dart';
 import 'memory_event_registry_repo.dart';
 
 /// Builds the bounded, immutable input for one consolidation request.
 ///
-/// Selection is deliberately conservative in this first vertical: requested
-/// active MemoryBook entries are always included, then active event sources
-/// are included for a bounded set of open obligations and neighbouring event
-/// cards. Anything that could not fit or could not be verified is explicit in
+/// Candidates are gathered through five independent channels, in plan
+/// priority: direct registry links, participant/subject overlap between the
+/// requested entry keys and event source entry keys, open obligations,
+/// key/full-text hits, and vector similarity of the underlying memory
+/// embeddings. Requested active MemoryBook entries are always included, and
+/// anything that could not fit or could not be verified is explicit in
 /// [MemoryConsolidationSourcePack.unexaminedOpenObligationIds].
 class MemoryConsolidationPackBuilder {
   final AppDatabase db;
@@ -32,6 +36,7 @@ class MemoryConsolidationPackBuilder {
     required List<String> memoryEntryIds,
     int maxCandidates = 12,
     int maxContextCharacters = 120000,
+    double vectorSimilarityThreshold = 0.4,
   }) async {
     if (sessionId.isEmpty ||
         branchId.isEmpty ||
@@ -39,7 +44,8 @@ class MemoryConsolidationPackBuilder {
         proposedEventId.isEmpty ||
         proposedEventId != proposedEventId.trim() ||
         maxCandidates < 1 ||
-        maxContextCharacters < 1) {
+        maxContextCharacters < 1 ||
+        !(vectorSimilarityThreshold >= 0 && vectorSimilarityThreshold <= 1)) {
       throw ArgumentError('Invalid consolidation pack bounds.');
     }
     final eventIds = proposedEventIds ?? [proposedEventId];
@@ -147,11 +153,47 @@ class MemoryConsolidationPackBuilder {
         ..add(link.fromEventId)
         ..add(link.toEventId);
     }
-    final ordered = <MemoryEventRow>[
-      ...open.where((event) => directIds.contains(event.id)),
-      ...open.where((event) => !directIds.contains(event.id)),
-      ...events.where((event) => !_isOpenObligation(event)),
-    ];
+    final scoresByEvent = await _channelScores(
+      memoryEntryIds: memoryEntryIds,
+      entries: entries,
+      sourceByEvent: sourceByEvent,
+      vectorSimilarityThreshold: vectorSimilarityThreshold,
+    );
+    final baseOrder = <String, int>{
+      for (var i = 0; i < events.length; i++) events[i].id: i,
+    };
+    int channelRank(MemoryEventRow event) {
+      final score = scoresByEvent[event.id];
+      if (directIds.contains(event.id)) return 0;
+      if (score != null && score.sharedKeys > 0) return 1;
+      if (_isOpenObligation(event)) return 2;
+      if (score != null && score.fullTextHit) return 3;
+      if (score != null && score.vectorScore >= vectorSimilarityThreshold) {
+        return 4;
+      }
+      return 5;
+    }
+
+    final ordered = [...events]
+      ..sort((a, b) {
+        final rankA = channelRank(a);
+        final rankB = channelRank(b);
+        if (rankA != rankB) return rankA.compareTo(rankB);
+        final scoreA = scoresByEvent[a.id];
+        final scoreB = scoresByEvent[b.id];
+        if (rankA == 1) {
+          return (scoreB?.sharedKeys ?? 0).compareTo(scoreA?.sharedKeys ?? 0);
+        }
+        if (rankA == 2) {
+          final byDate = a.createdAt.compareTo(b.createdAt);
+          if (byDate != 0) return byDate;
+          return (baseOrder[a.id] ?? 0).compareTo(baseOrder[b.id] ?? 0);
+        }
+        if (rankA == 4) {
+          return (scoreB?.vectorScore ?? 0).compareTo(scoreA?.vectorScore ?? 0);
+        }
+        return (baseOrder[a.id] ?? 0).compareTo(baseOrder[b.id] ?? 0);
+      });
     final candidates = <MemoryConsolidationEventCandidate>[];
     final selectedEventIds = <String>{};
     for (final event in ordered) {
@@ -261,6 +303,91 @@ class MemoryConsolidationPackBuilder {
       unexaminedOpenObligationIds: unexaminedIds,
     );
   }
+
+  /// Scores every event through the participant/subject, full-text and vector
+  /// channels. Direct links and open obligations are ranked separately in
+  /// [build]; this method only computes the overlap-driven channels.
+  Future<Map<String, _ChannelScore>> _channelScores({
+    required List<String> memoryEntryIds,
+    required Map<String, MemoryEntry> entries,
+    required Map<String, List<MemoryConsolidationSource>> sourceByEvent,
+    required double vectorSimilarityThreshold,
+  }) async {
+    final selectedKeys = <String>{};
+    final selectedTokens = <String>{};
+    for (final entryId in memoryEntryIds) {
+      final entry = entries[entryId];
+      if (entry == null) continue;
+      for (final key in entry.keys) {
+        final normalized = _normalizeText(key);
+        if (normalized.isEmpty) continue;
+        if (normalized.length >= 3) selectedKeys.add(normalized);
+        for (final word in normalized.split(RegExp(r'[^a-z0-9а-яё]+'))) {
+          if (word.length >= 4) selectedTokens.add(word);
+        }
+      }
+    }
+    final embeddingRepo = EmbeddingRepo(db);
+    final selectedVectors = <List<List<double>>>[];
+    for (final entryId in memoryEntryIds) {
+      final row = await embeddingRepo.getByEntryId(entryId);
+      final vectors = row == null ? null : embeddingRepo.decodeVectors(row);
+      if (vectors != null && vectors.isNotEmpty) selectedVectors.add(vectors);
+    }
+    final vectorsByEntryId = <String, List<List<double>>?>{};
+
+    Future<List<List<double>>?> entryVectors(String entryId) async {
+      if (vectorsByEntryId.containsKey(entryId)) {
+        return vectorsByEntryId[entryId];
+      }
+      final row = await embeddingRepo.getByEntryId(entryId);
+      final vectors = row == null ? null : embeddingRepo.decodeVectors(row);
+      final result = vectors == null || vectors.isEmpty ? null : vectors;
+      vectorsByEntryId[entryId] = result;
+      return result;
+    }
+
+    final scores = <String, _ChannelScore>{};
+    for (final entry in sourceByEvent.entries) {
+      var sharedKeys = 0;
+      var fullTextHit = false;
+      var vectorScore = 0.0;
+      for (final source in entry.value) {
+        final eventEntry = entries[source.memoryEntryId];
+        if (eventEntry == null) continue;
+        sharedKeys += eventEntry.keys
+            .map(_normalizeText)
+            .where(selectedKeys.contains)
+            .length;
+        if (!fullTextHit) {
+          final haystack = '${eventEntry.title}\n${eventEntry.content}'
+              .toLowerCase();
+          fullTextHit = selectedTokens.any(haystack.contains);
+        }
+        if (selectedVectors.isNotEmpty) {
+          final vectors = await entryVectors(source.memoryEntryId);
+          if (vectors != null) {
+            for (final selected in selectedVectors) {
+              for (final query in selected) {
+                for (final candidate in vectors) {
+                  final score = cosineSimilarity(query, candidate);
+                  if (score > vectorScore) vectorScore = score;
+                }
+              }
+            }
+          }
+        }
+      }
+      scores[entry.key] = _ChannelScore(
+        sharedKeys: sharedKeys,
+        fullTextHit: fullTextHit,
+        vectorScore: vectorScore,
+      );
+    }
+    return scores;
+  }
+
+  static String _normalizeText(String value) => value.trim().toLowerCase();
 
   static Map<String, MemoryEntry>? _decodeEntries(String json) {
     try {
@@ -456,4 +583,16 @@ class MemoryConsolidationPackBuilder {
   static bool _isOpenObligation(MemoryEventRow event) =>
       (event.kind == 'promise' || event.kind == 'agreement') &&
       (event.state == 'open' || event.state == 'continuing');
+}
+
+class _ChannelScore {
+  final int sharedKeys;
+  final bool fullTextHit;
+  final double vectorScore;
+
+  const _ChannelScore({
+    required this.sharedKeys,
+    required this.fullTextHit,
+    required this.vectorScore,
+  });
 }

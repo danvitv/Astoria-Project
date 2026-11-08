@@ -4,6 +4,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
+import 'package:glaze_flutter/core/db/repositories/embedding_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/memory_consolidation_pack_builder.dart';
 import 'package:glaze_flutter/core/db/repositories/memory_event_registry_repo.dart';
 import 'package:glaze_flutter/core/models/memory_book.dart';
@@ -58,7 +59,11 @@ void main() {
         );
   }
 
-  MemoryEntry entry(String id, {String content = 'A verified memory.'}) {
+  MemoryEntry entry(
+    String id, {
+    String content = 'A verified memory.',
+    List<String> keys = const [],
+  }) {
     final messageId = 'message-$id';
     final sourceMessage = ChatMessage(
       id: messageId,
@@ -77,6 +82,7 @@ void main() {
       version: 1,
       title: 'Memory $id',
       content: content,
+      keys: keys,
       messageIds: [messageId],
       sourceManifest: manifest,
       createdAt: 1,
@@ -85,6 +91,7 @@ void main() {
       id: id,
       title: revision.title,
       content: revision.content,
+      keys: keys,
       messageIds: revision.messageIds,
       sourceSwipeId: 2,
       sourceAgentSwipeId: 3,
@@ -127,6 +134,35 @@ void main() {
         isCurrent: () => true,
       ),
       isTrue,
+    );
+  }
+
+  Future<void> acceptCompletedEvent(MemoryEntry value, String eventId) async {
+    final source = sourceFor(value, eventId);
+    expect(
+      await registry.accept(
+        event: MemoryEventInput(
+          id: eventId,
+          sessionId: 'session-1',
+          branchId: 'session-1',
+          kind: 'result',
+          description: 'Completed event $eventId.',
+          state: 'completed',
+          sources: [source],
+        ),
+        isCurrent: () => true,
+      ),
+      isTrue,
+    );
+  }
+
+  Future<void> seedVector(MemoryEntry value, List<double> vector) async {
+    await EmbeddingRepo(db).putEmbeddingVector(
+      entryId: value.id,
+      sourceType: 'memory_entry',
+      sourceId: 'memorybook_character-1_session-1',
+      vectors: [vector],
+      textHash: 'hash-${value.id}',
     );
   }
 
@@ -236,4 +272,102 @@ void main() {
 
     expect(pack, isNull);
   });
+
+  test('participant overlap outranks unrelated open obligations', () async {
+    final requested = entry('requested', keys: const ['Mira', 'brass key']);
+    final obligation = entry('obligation');
+    final participant = entry('participant', keys: const ['Mira']);
+    await seedBook([requested, obligation, participant]);
+    await acceptOpenEvent(obligation, 'event-open');
+    await acceptCompletedEvent(participant, 'event-participant');
+
+    final pack = await builder.build(
+      sessionId: 'session-1',
+      branchId: 'session-1',
+      proposedEventId: 'event-new',
+      memoryEntryIds: [requested.id],
+      maxCandidates: 1,
+    );
+
+    expect(pack, isNotNull);
+    expect(pack!.candidates.map((candidate) => candidate.id), [
+      'event-participant',
+    ]);
+    expect(pack.unexaminedOpenObligationIds, ['event-open']);
+  });
+
+  test('full-text overlap promotes an otherwise unrelated event', () async {
+    final requested = entry('requested', keys: const ['brass key']);
+    final textHit = entry(
+      'text-hit',
+      content: 'The brass key was polished and returned.',
+    );
+    final quiet = entry('quiet', content: 'A calm evening by the fire.');
+    await seedBook([requested, textHit, quiet]);
+    await acceptCompletedEvent(textHit, 'event-text-hit');
+    await acceptCompletedEvent(quiet, 'event-quiet');
+
+    final pack = await builder.build(
+      sessionId: 'session-1',
+      branchId: 'session-1',
+      proposedEventId: 'event-new',
+      memoryEntryIds: [requested.id],
+      maxCandidates: 1,
+    );
+
+    expect(pack, isNotNull);
+    expect(pack!.candidates.map((candidate) => candidate.id), [
+      'event-text-hit',
+    ]);
+  });
+
+  test('vector similarity promotes events with close embeddings', () async {
+    final requested = entry('requested', content: 'The key was returned.');
+    final similar = entry('similar', content: 'The key came back to us.');
+    final distant = entry('distant', content: 'A distant harvest report.');
+    await seedBook([requested, similar, distant]);
+    await seedVector(requested, [1.0, 0.0]);
+    await seedVector(similar, [0.99, 0.14]);
+    await seedVector(distant, [0.0, 1.0]);
+    await acceptCompletedEvent(similar, 'event-similar');
+    await acceptCompletedEvent(distant, 'event-distant');
+
+    final pack = await builder.build(
+      sessionId: 'session-1',
+      branchId: 'session-1',
+      proposedEventId: 'event-new',
+      memoryEntryIds: [requested.id],
+      maxCandidates: 1,
+    );
+
+    expect(pack, isNotNull);
+    expect(pack!.candidates.map((candidate) => candidate.id), [
+      'event-similar',
+    ]);
+  });
+
+  test(
+    'events below the vector threshold remain low-priority candidates',
+    () async {
+      final requested = entry('requested', content: 'The key was returned.');
+      final distant = entry('distant', content: 'A distant harvest report.');
+      await seedBook([requested, distant]);
+      await seedVector(requested, [1.0, 0.0]);
+      await seedVector(distant, [0.0, 1.0]);
+      await acceptCompletedEvent(distant, 'event-distant');
+
+      final pack = await builder.build(
+        sessionId: 'session-1',
+        branchId: 'session-1',
+        proposedEventId: 'event-new',
+        memoryEntryIds: [requested.id],
+        maxCandidates: 1,
+      );
+
+      expect(pack, isNotNull);
+      expect(pack!.candidates.map((candidate) => candidate.id), [
+        'event-distant',
+      ]);
+    },
+  );
 }
