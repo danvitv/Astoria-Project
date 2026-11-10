@@ -11,6 +11,7 @@ import 'package:glaze_flutter/core/db/repositories/memory_consolidation_pack_bui
 import 'package:glaze_flutter/core/db/repositories/memory_event_registry_repo.dart';
 import 'package:glaze_flutter/core/llm/aux_llm_client.dart';
 import 'package:glaze_flutter/core/llm/memory_draft_api_source.dart';
+import 'package:glaze_flutter/core/llm/memory_consolidation_batch_planner.dart';
 import 'package:glaze_flutter/core/models/api_config.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/memory_book.dart';
@@ -254,10 +255,11 @@ MemoryEntry _foreignEntry() {
   );
 }
 
-MemoryDraftApiSourceResolver _resolver() => MemoryDraftApiSourceResolver(
-  loadApiConfigs: () async => [_config],
-  readActiveApiConfig: () => _config,
-);
+MemoryDraftApiSourceResolver _resolver([ApiConfig config = _config]) =>
+    MemoryDraftApiSourceResolver(
+      loadApiConfigs: () async => [config],
+      readActiveApiConfig: () => config,
+    );
 
 Future<bool> _run(_Harness harness, String ownerId) => harness.batch.runOnce(
   ownerId: ownerId,
@@ -430,7 +432,9 @@ void main() {
 
       harness.transport.failNext = true;
       await expectLater(_run(harness, 'runner-1'), throwsException);
-      expect((await harness.job(job.id))!.status, 'failed');
+      final failed = (await harness.job(job.id))!;
+      expect(failed.status, 'failed');
+      expect(failed.packageDraftJson, contains('"sources"'));
       expect(
         (await harness.jobRepo.getItems(
           job.id,
@@ -463,7 +467,7 @@ void main() {
         originalStamp: null,
         isCurrent: () => false,
       ),
-      throwsException,
+      throwsStateError,
     );
     expect(harness.transport.calls, 0);
     final stored = (await harness.job(job.id))!;
@@ -475,6 +479,65 @@ void main() {
       )).every((item) => item.status == 'failed'),
       isTrue,
     );
+  });
+
+  test('source guard runs after claim and before transport', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness);
+    final job = await harness.batch.enqueue(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+    );
+
+    var guardCalls = 0;
+    await expectLater(
+      harness.batch.runOnce(
+        ownerId: 'runner-1',
+        leaseDurationSeconds: 60,
+        settings: const MemoryBookApiSettings(),
+        apiResolver: _resolver(),
+        originalStamp: null,
+        isCurrent: _alwaysCurrent,
+        beforeRequest: () async {
+          guardCalls++;
+          return false;
+        },
+      ),
+      throwsStateError,
+    );
+
+    expect(guardCalls, 1);
+    expect(harness.transport.calls, 0);
+    expect((await harness.job(job.id))!.status, 'failed');
+  });
+
+  test('source guard rechecks immediately before transport', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness);
+    final job = await harness.batch.enqueue(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+    );
+
+    var guardCalls = 0;
+    await expectLater(
+      harness.batch.runOnce(
+        ownerId: 'runner-1',
+        leaseDurationSeconds: 60,
+        settings: const MemoryBookApiSettings(),
+        apiResolver: _resolver(),
+        originalStamp: null,
+        isCurrent: _alwaysCurrent,
+        beforeRequest: () async => ++guardCalls == 1,
+      ),
+      throwsStateError,
+    );
+
+    expect(guardCalls, 2);
+    expect(harness.transport.calls, 0);
+    expect((await harness.job(job.id))!.status, 'failed');
   });
 
   test('enqueuePending is gated by threshold and covered sources', () async {
@@ -612,6 +675,34 @@ void main() {
     expect((await harness.job(job.id))!.status, 'review_pending');
   });
 
+  test(
+    'automatic enqueue does not revive a rejected package or call transport',
+    () async {
+      final harness = await _makeHarness();
+      final book = await _seedBook(harness);
+      final job = await harness.batch.enqueuePending(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries,
+      );
+      expect(await _run(harness, 'runner-1'), isTrue);
+      expect(harness.transport.calls, 1);
+      expect(await harness.batch.reject(job!.id), isTrue);
+
+      expect(
+        await harness.batch.enqueuePending(
+          sessionId: _sessionId,
+          branchId: _sessionId,
+          entries: book.entries,
+        ),
+        isNull,
+      );
+      expect(await _run(harness, 'runner-2'), isFalse);
+      expect(harness.transport.calls, 1);
+      expect((await harness.job(job.id))!.status, 'cancelled');
+    },
+  );
+
   test('planScan slices eligible sources into bounded packages', () async {
     final harness = await _makeHarness();
     final book = await _seedBook(harness, count: 5);
@@ -662,6 +753,132 @@ void main() {
       );
     },
   );
+
+  test(
+    'threshold and scan share deterministic oldest-first boundaries',
+    () async {
+      final harness = await _makeHarness();
+      final book = await _seedBook(harness, count: 5);
+      final firstPairTokens = book.entries
+          .take(2)
+          .map(MemoryConsolidationBatchPlanner.estimatedEntryTokens)
+          .fold<int>(0, (sum, tokens) => sum + tokens);
+      final budget = MemoryConsolidationRequestBudget(
+        contextTokens:
+            firstPairTokens + kMemoryConsolidationFramingReserveTokens + 4096,
+        outputReserveTokens: 4096,
+      );
+      final scan = await harness.batch.planScan(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries.reversed.toList(),
+        budget: budget,
+      );
+      expect(
+        scan.packages.map(
+          (package) => package.entries.map((e) => e.id).toList(),
+        ),
+        [
+          ['batch-entry-1', 'batch-entry-2'],
+          ['batch-entry-3', 'batch-entry-4'],
+          ['batch-entry-5'],
+        ],
+      );
+
+      await harness.batch.enqueuePending(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries.reversed.toList(),
+        budget: budget,
+      );
+      final jobs = (await harness.jobRepo.getSessionJobs(_sessionId)).reversed;
+      final actual = <List<String>>[];
+      for (final job in jobs) {
+        actual.add(
+          (await harness.jobRepo.getItems(
+            job.id,
+          )).map((item) => item.memoryEntryId).toList(),
+        );
+      }
+      expect(actual, [
+        ['batch-entry-1', 'batch-entry-2'],
+        ['batch-entry-3', 'batch-entry-4'],
+        ['batch-entry-5'],
+      ]);
+    },
+  );
+
+  test(
+    'API budget reserves output and custom endpoints use bounded fallback',
+    () {
+      final selected = MemoryConsolidationRequestBudget.forApi(
+        settings: const MemoryBookApiSettings(),
+        config: _config.copyWith(contextSize: 10000, maxTokens: 2000),
+      );
+      expect(selected.contextTokens, 10000);
+      expect(selected.outputReserveTokens, 2000);
+      expect(selected.packTokenLimit, 6976);
+
+      final custom = MemoryConsolidationRequestBudget.forApi(
+        settings: const MemoryBookApiSettings(
+          generationSource: 'custom',
+          generationMaxTokens: 3000,
+        ),
+        config: null,
+      );
+      expect(custom.contextTokens, kMemoryConsolidationCustomContextFallback);
+      expect(custom.packTokenLimit, 12360);
+    },
+  );
+
+  test('oversized source fails durably before transport', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness, count: 1, contentSize: 12000);
+    await harness.container
+        .read(chatRepoProvider)
+        .put(
+          ChatSession(
+            id: _sessionId,
+            characterId: _characterId,
+            sessionIndex: 0,
+            messages: [
+              ChatMessage(
+                id: 'batch-message-1',
+                role: 'assistant',
+                content: book.entries.single.content,
+                swipeId: 1,
+                agentSwipeId: 2,
+              ),
+            ],
+          ),
+        );
+    final job = await harness.batch.enqueuePending(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+    );
+    final constrained = _config.copyWith(contextSize: 2048, maxTokens: 1024);
+
+    await expectLater(
+      harness.batch.runOnce(
+        ownerId: 'runner-oversized',
+        leaseDurationSeconds: 60,
+        settings: const MemoryBookApiSettings(),
+        apiResolver: _resolver(constrained),
+        originalStamp: null,
+        isCurrent: _alwaysCurrent,
+      ),
+      throwsA(isA<MemoryConsolidationPackTooLargeException>()),
+    );
+    expect(harness.transport.calls, 0);
+    final stored = (await harness.job(job!.id))!;
+    expect(stored.status, 'failed');
+    expect(stored.lastError, 'source_pack_exceeds_context_budget');
+    expect(
+      (await harness.jobRepo.getItems(job.id)).single.lastError,
+      'source_pack_exceeds_context_budget',
+    );
+  });
 
   test('planScan treats accepted sources as covered', () async {
     final harness = await _makeHarness();
@@ -859,51 +1076,54 @@ void main() {
   });
 
   for (final status in ['running', 'review_pending', 'failed']) {
-    test('$status sources stay reserved until cancellation', () async {
-      final harness = await _makeHarness();
-      final book = await _seedBook(harness);
-      final job = await harness.batch.enqueuePending(
-        sessionId: _sessionId,
-        branchId: _sessionId,
-        entries: book.entries,
-      );
-      if (status == 'running') {
-        await harness.jobRepo.claimNext(
-          ownerId: 'runner-1',
-          leaseDurationSeconds: 60,
+    test(
+      '$status sources are not automatically revived after cancellation',
+      () async {
+        final harness = await _makeHarness();
+        final book = await _seedBook(harness);
+        final job = await harness.batch.enqueuePending(
+          sessionId: _sessionId,
+          branchId: _sessionId,
+          entries: book.entries,
         );
-      } else if (status == 'failed') {
-        harness.transport.failNext = true;
-        await expectLater(_run(harness, 'runner-1'), throwsException);
-      } else {
-        await _run(harness, 'runner-1');
-      }
-      expect((await harness.job(job!.id))!.status, status);
-      expect(
-        await harness.batch.enqueuePending(
+        if (status == 'running') {
+          await harness.jobRepo.claimNext(
+            ownerId: 'runner-1',
+            leaseDurationSeconds: 60,
+          );
+        } else if (status == 'failed') {
+          harness.transport.failNext = true;
+          await expectLater(_run(harness, 'runner-1'), throwsException);
+        } else {
+          await _run(harness, 'runner-1');
+        }
+        expect((await harness.job(job!.id))!.status, status);
+        expect(
+          await harness.batch.enqueuePending(
+            sessionId: _sessionId,
+            branchId: _sessionId,
+            entries: book.entries,
+          ),
+          isNull,
+        );
+        expect(
+          (await harness.batch.planScan(
+            sessionId: _sessionId,
+            branchId: _sessionId,
+            entries: book.entries,
+          )).reservedCount,
+          2,
+        );
+        await harness.batch.reject(job.id);
+        final automatic = await harness.batch.enqueuePending(
           sessionId: _sessionId,
           branchId: _sessionId,
           entries: book.entries,
-        ),
-        isNull,
-      );
-      expect(
-        (await harness.batch.planScan(
-          sessionId: _sessionId,
-          branchId: _sessionId,
-          entries: book.entries,
-        )).reservedCount,
-        2,
-      );
-      await harness.batch.reject(job.id);
-      final revived = await harness.batch.enqueuePending(
-        sessionId: _sessionId,
-        branchId: _sessionId,
-        entries: book.entries,
-      );
-      expect(revived?.id, job.id);
-      expect(revived?.status, 'pending');
-    });
+        );
+        expect(automatic, isNull);
+        expect((await harness.job(job.id))!.status, 'cancelled');
+      },
+    );
   }
 
   test('planScan validates its bounds', () async {

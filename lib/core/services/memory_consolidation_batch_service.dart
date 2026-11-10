@@ -9,6 +9,7 @@ import '../db/repositories/memory_consolidation_job_repo.dart';
 import '../db/repositories/memory_consolidation_pack_builder.dart';
 import '../db/repositories/memory_event_registry_repo.dart';
 import '../llm/memory_book_api_config_resolver.dart';
+import '../llm/memory_consolidation_batch_planner.dart';
 import '../llm/memory_consolidation_package_parser.dart';
 import '../llm/memory_draft_api_source.dart';
 import '../models/memory_book.dart';
@@ -41,10 +42,12 @@ final class MemoryConsolidationScanPackage {
   const MemoryConsolidationScanPackage({
     required this.entries,
     required this.estimatedChars,
+    this.oversized = false,
   });
 
   final List<MemoryEntry> entries;
   final int estimatedChars;
+  final bool oversized;
 }
 
 /// Dry-run plan for the one-time initial pass over an existing book: which
@@ -81,6 +84,7 @@ class MemoryConsolidationBatchService {
     required this.packBuilder,
     required this.service,
     required this.acceptance,
+    this.planner = const MemoryConsolidationBatchPlanner(),
   });
 
   final AppDatabase db;
@@ -88,6 +92,7 @@ class MemoryConsolidationBatchService {
   final MemoryConsolidationPackBuilder packBuilder;
   final MemoryConsolidationService service;
   final MemoryConsolidationAcceptanceService acceptance;
+  final MemoryConsolidationBatchPlanner planner;
 
   /// Snapshots active eligible entries into a durable, idempotent package
   /// job. A cancelled package with the same snapshot is revived: enqueueing
@@ -157,6 +162,8 @@ class MemoryConsolidationBatchService {
     required String branchId,
     required List<MemoryEntry> entries,
     int minCount = 1,
+    MemoryConsolidationRequestBudget? budget,
+    int maxEntriesPerPackage = 10,
   }) async {
     if (minCount < 1) {
       throw ArgumentError.value(minCount, 'minCount', 'must be at least 1');
@@ -167,14 +174,23 @@ class MemoryConsolidationBatchService {
               entry.status == 'active' && isEligibleSource(entry, sessionId),
         )
         .toList();
+    final packages = planner.plan(
+      entries: pending,
+      budget: budget ?? _fallbackBudget,
+      maxEntriesPerPackage: maxEntriesPerPackage,
+    );
     final rows = await jobRepo.createUnreservedPackages(
       sessionId: sessionId,
       branchId: branchId,
-      packages: [_sourceItems(sessionId, branchId, pending)],
+      packages: [
+        for (final package in packages)
+          _sourceItems(sessionId, branchId, package.entries),
+      ],
       minCount: minCount,
+      reviveCancelled: false,
       requestKeyForItems: (items) => _requestKey(sessionId, branchId, items),
     );
-    return rows.isEmpty ? null : rows.single;
+    return rows.isEmpty ? null : rows.first;
   }
 
   /// Memory-entry IDs that already participate in a current, non-invalidated
@@ -230,7 +246,8 @@ class MemoryConsolidationBatchService {
     required String branchId,
     required List<MemoryEntry> entries,
     int maxEntriesPerPackage = 10,
-    int maxPackageChars = 90000,
+    int? maxPackageChars,
+    MemoryConsolidationRequestBudget? budget,
   }) async {
     if (maxEntriesPerPackage < 1) {
       throw ArgumentError.value(
@@ -239,7 +256,7 @@ class MemoryConsolidationBatchService {
         'must be at least 1',
       );
     }
-    if (maxPackageChars < 1000) {
+    if (maxPackageChars != null && maxPackageChars < 1000) {
       throw ArgumentError.value(
         maxPackageChars,
         'maxPackageChars',
@@ -276,35 +293,30 @@ class MemoryConsolidationBatchService {
         ineligibleCount++;
       }
     }
-    eligible.sort((a, b) {
-      final byCreated = (a.createdAt ?? 0).compareTo(b.createdAt ?? 0);
-      return byCreated != 0 ? byCreated : a.id.compareTo(b.id);
-    });
-    final packages = <MemoryConsolidationScanPackage>[];
-    var current = <MemoryEntry>[];
-    var chars = 0;
-    for (final entry in eligible) {
-      final estimate = estimatedEntryChars(entry);
-      if (current.isNotEmpty &&
-          (current.length >= maxEntriesPerPackage ||
-              chars + estimate > maxPackageChars)) {
-        packages.add(
-          MemoryConsolidationScanPackage(
-            entries: current,
-            estimatedChars: chars,
-          ),
-        );
-        current = <MemoryEntry>[];
-        chars = 0;
-      }
-      current.add(entry);
-      chars += estimate;
-    }
-    if (current.isNotEmpty) {
-      packages.add(
-        MemoryConsolidationScanPackage(entries: current, estimatedChars: chars),
-      );
-    }
+    final effectiveBudget =
+        budget ??
+        (maxPackageChars == null
+            ? _fallbackBudget
+            : MemoryConsolidationRequestBudget(
+                contextTokens:
+                    (maxPackageChars ~/ 4) +
+                    kMemoryConsolidationFramingReserveTokens +
+                    1,
+                outputReserveTokens: 1,
+              ));
+    final planned = planner.plan(
+      entries: eligible,
+      budget: effectiveBudget,
+      maxEntriesPerPackage: maxEntriesPerPackage,
+    );
+    final packages = [
+      for (final package in planned)
+        MemoryConsolidationScanPackage(
+          entries: package.entries,
+          estimatedChars: package.estimatedTokens * 4,
+          oversized: package.oversized,
+        ),
+    ];
     return MemoryConsolidationScanPlan(
       packages: List.unmodifiable(packages),
       eligibleCount: eligible.length,
@@ -318,7 +330,7 @@ class MemoryConsolidationBatchService {
   /// the pack ships the full revision text plus the provenance manifest, so
   /// roughly double the plain title and content, plus fixed metadata.
   static int estimatedEntryChars(MemoryEntry entry) =>
-      (entry.title.length + entry.content.length) * 2 + 400;
+      MemoryConsolidationBatchPlanner.estimatedEntryTokens(entry) * 4;
 
   /// Turns a confirmed scan plan into durable package jobs, oldest package
   /// first. Only still-unreserved sources are enqueued: confirmation may race
@@ -354,6 +366,9 @@ class MemoryConsolidationBatchService {
     required bool Function() isCurrent,
     CancelToken? cancelToken,
     String? sessionId,
+    void Function(String jobId)? onClaimed,
+    Future<bool> Function()? beforeRequest,
+    Future<bool> Function()? beforeSave,
   }) async {
     await jobRepo.recoverExpiredLeases();
     final job = await jobRepo.claimNext(
@@ -362,6 +377,7 @@ class MemoryConsolidationBatchService {
       sessionId: sessionId,
     );
     if (job == null) return false;
+    onClaimed?.call(job.id);
     final items = await jobRepo.getItems(job.id);
     try {
       for (final _ in items) {
@@ -375,6 +391,21 @@ class MemoryConsolidationBatchService {
           );
         }
       }
+      if (!isCurrent() || (beforeRequest != null && !await beforeRequest())) {
+        throw StateError(
+          'Package sources changed before the model request started.',
+        );
+      }
+      final resolved = await apiResolver.resolve(
+        settings: settings,
+        originalStamp: originalStamp,
+        originalCustomApi: originalCustomApi,
+        isCurrent: () => isCurrent() && cancelToken?.isCancelled != true,
+      );
+      final requestBudget = MemoryConsolidationRequestBudget.forApi(
+        settings: settings,
+        config: resolved.configuration,
+      );
       final memoryEntryIds = [for (final item in items) item.memoryEntryId];
       final proposedEventIds = [for (final item in items) item.proposedEventId];
       final pack = await packBuilder.build(
@@ -383,16 +414,24 @@ class MemoryConsolidationBatchService {
         proposedEventId: proposedEventIds.first,
         proposedEventIds: proposedEventIds,
         memoryEntryIds: memoryEntryIds,
+        maxContextTokens: requestBudget.packTokenLimit,
       );
       if (pack == null) {
         throw StateError('Package sources are not eligible for a source pack.');
       }
-      final resolved = await apiResolver.resolve(
-        settings: settings,
-        originalStamp: originalStamp,
-        originalCustomApi: originalCustomApi,
-        isCurrent: () => isCurrent() && cancelToken?.isCancelled != true,
+      final frozen = await jobRepo.saveFrozenPackage(
+        jobId: job.id,
+        ownerId: ownerId,
+        packJson: pack.toJsonString(),
       );
+      if (!frozen) {
+        throw StateError('Lease was lost while freezing the source pack.');
+      }
+      if (!isCurrent() || (beforeRequest != null && !await beforeRequest())) {
+        throw StateError(
+          'Package sources changed before the model request started.',
+        );
+      }
       final response = await service.generatePackageDraft(
         pack: pack,
         config: resolved.config,
@@ -405,6 +444,11 @@ class MemoryConsolidationBatchService {
         isCurrent: isCurrent,
         cancelToken: cancelToken,
       );
+      if (!isCurrent() || (beforeSave != null && !await beforeSave())) {
+        throw StateError(
+          'Package context changed before the review draft was saved.',
+        );
+      }
       final saved = await jobRepo.savePackageDraft(
         jobId: job.id,
         ownerId: ownerId,
@@ -414,6 +458,13 @@ class MemoryConsolidationBatchService {
         throw StateError('Lease was lost while saving the package draft.');
       }
       return true;
+    } on MemoryConsolidationPackTooLargeException {
+      await jobRepo.failRunningPackage(
+        jobId: job.id,
+        ownerId: ownerId,
+        reason: 'source_pack_exceeds_context_budget',
+      );
+      rethrow;
     } catch (error) {
       // The package lease still belongs to this run, so every remaining
       // running item is marked failed and the job becomes retryable.
@@ -430,6 +481,11 @@ class MemoryConsolidationBatchService {
       rethrow;
     }
   }
+
+  static const _fallbackBudget = MemoryConsolidationRequestBudget(
+    contextTokens: kMemoryConsolidationCustomContextFallback,
+    outputReserveTokens: kMemoryDraftFallbackMaxTokens,
+  );
 
   /// Loads the stored review envelope for UI display. Returns null unless the
   /// job is in the review-pending state with a persisted draft.

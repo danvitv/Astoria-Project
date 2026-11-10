@@ -24,6 +24,7 @@ import 'core/services/preset_seeder.dart';
 import 'features/chat_history/chat_history_provider.dart';
 import 'features/settings/api_list_provider.dart';
 import 'features/settings/app_settings_provider.dart';
+import 'features/memory/state/memory_consolidation_worker_provider.dart';
 import 'features/catalog/services/datacat_provider.dart';
 import 'shared/widgets/desktop_popup.dart';
 import 'shared/theme/theme_font_provider.dart';
@@ -78,6 +79,7 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
   StreamSubscription<NotificationNavigationData>? _navSub;
   final List<ProviderSubscription> _warmSubs = [];
   late bool _startupReady;
+  late final Future<void> _activeSelectionsReady;
   bool _startupHooksAttached = false;
 
   @override
@@ -88,7 +90,11 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
     GlazeApp._restart = widget.restart;
     WidgetsBinding.instance.addObserver(this);
     ref.read(llmRequestCaptureInstallationProvider);
-    _initInBackground(loadActiveSelections(ref), 'active selections');
+    ref.read(memoryConsolidationWorkerProvider);
+    _activeSelectionsReady = _initInBackground(
+      loadActiveSelections(ref),
+      'active selections',
+    );
     _initInBackground(loadLorebookActivations(ref), 'lorebook activations');
     _initInBackground(loadLorebookSettings(ref), 'lorebook settings');
     _initInBackground(loadAgentOpsTab(ref), 'agent ops tab');
@@ -119,12 +125,12 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
   /// None of these tasks is needed for the first frame — they hydrate state
   /// that the UI already renders empty — so a failure is logged and dropped
   /// rather than escalated.
-  void _initInBackground(Future<void> work, String what) {
-    unawaited(
-      work.catchError((Object e) {
-        debugPrint('Glaze init: $what failed — $e');
-      }),
-    );
+  Future<void> _initInBackground(Future<void> work, String what) {
+    final guarded = work.catchError((Object e) {
+      debugPrint('Glaze init: $what failed — $e');
+    });
+    unawaited(guarded);
+    return guarded;
   }
 
   /// Starts the DB-backed providers behind the initial routes now, concurrently
@@ -170,6 +176,7 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
     GenerationNotificationService.instance.updateLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
       unawaited(ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
+      unawaited(_recoverMemoryConsolidation());
       final service = ref.read(syncServiceProvider).value;
       if (service != null && service.status != SyncStatus.syncing) {
         ref.read(syncStatusProvider.notifier).state = service.status;
@@ -243,6 +250,13 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
     unawaited(
       ref.read(sessionLorebookEmbeddingWorkerProvider).recoverAndDrain(),
     );
+    unawaited(_recoverMemoryConsolidation());
+  }
+
+  Future<void> _recoverMemoryConsolidation() async {
+    await _activeSelectionsReady;
+    if (!mounted) return;
+    await ref.read(memoryConsolidationWorkerProvider).recoverAndDrain();
   }
 
   void _listenNotificationNavigation() {

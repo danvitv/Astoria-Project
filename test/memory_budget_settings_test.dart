@@ -12,6 +12,7 @@ import 'package:glaze_flutter/core/models/memory_pipeline_settings.dart';
 import 'package:glaze_flutter/core/models/pipeline_settings.dart';
 import 'package:glaze_flutter/core/state/db_provider.dart';
 import 'package:glaze_flutter/core/state/memory_settings_provider.dart';
+import 'package:glaze_flutter/core/state/shared_prefs_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -55,6 +56,7 @@ void main() {
 
       // First "session": user configures + saves.
       final container1 = ProviderContainer();
+      await container1.read(sharedPreferencesProvider.future);
       await container1
           .read(pipelineSettingsProvider.notifier)
           .save(
@@ -126,6 +128,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final container = ProviderContainer();
     addTearDown(container.dispose);
+    await container.read(sharedPreferencesProvider.future);
 
     await container
         .read(memoryGlobalSettingsProvider.notifier)
@@ -158,7 +161,6 @@ void main() {
               apiConfigId: 'memory-api',
               generationModel: 'mem-mini',
               generationEndpoint: 'https://mem.example/v1',
-              generationApiKey: 'mem-key',
             ),
           ),
         );
@@ -192,7 +194,7 @@ void main() {
     expect(pipelineMb['apiConfigId'], 'memory-api');
     expect(pipelineMb['generationModel'], 'mem-mini');
     expect(pipelineMb['generationEndpoint'], 'https://mem.example/v1');
-    expect(pipelineMb['generationApiKey'], 'mem-key');
+    expect(pipelineMb.containsKey('generationApiKey'), isFalse);
   });
 
   test('new memory books inherit advanced selector tuning', () async {
@@ -203,6 +205,7 @@ void main() {
     );
     addTearDown(container.dispose);
     addTearDown(db.close);
+    await container.read(sharedPreferencesProvider.future);
 
     await container
         .read(memoryGlobalSettingsProvider.notifier)

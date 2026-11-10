@@ -262,15 +262,16 @@ void main() {
   test('rejects a requested source that exceeds the context budget', () async {
     await seedBook([entry('requested', content: '0123456789')]);
 
-    final pack = await builder.build(
-      sessionId: 'session-1',
-      branchId: 'session-1',
-      proposedEventId: 'event-new',
-      memoryEntryIds: ['requested'],
-      maxContextCharacters: 5,
+    await expectLater(
+      builder.build(
+        sessionId: 'session-1',
+        branchId: 'session-1',
+        proposedEventId: 'event-new',
+        memoryEntryIds: ['requested'],
+        maxContextCharacters: 5,
+      ),
+      throwsA(isA<MemoryConsolidationPackTooLargeException>()),
     );
-
-    expect(pack, isNull);
   });
 
   test('participant overlap outranks unrelated open obligations', () async {

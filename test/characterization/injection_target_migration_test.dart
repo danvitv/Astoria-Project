@@ -127,11 +127,15 @@ void main() {
 
     test('settings mapper derives the compatibility flag from memory mode', () {
       const mapper = MemorySettingsMapper();
-      const global = MemoryGlobalSettings(memoryMode: memoryLinksMode);
+      const global = MemoryGlobalSettings(
+        memoryMode: memoryLinksMode,
+        consolidationThreshold: 17,
+      );
 
       final book = mapper.globalToBook(global);
       expect(book.memoryMode, memoryLinksMode);
       expect(book.consolidationEnabled, isTrue);
+      expect(book.consolidationThreshold, 17);
 
       final ordinary = mapper.bookToGlobal(
         const MemoryBookSettings(

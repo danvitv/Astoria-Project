@@ -4,6 +4,7 @@ import 'package:collection/collection.dart';
 import 'package:drift/drift.dart';
 
 import '../../llm/vector_math.dart';
+import '../../llm/tokenizer.dart';
 import '../app_db.dart';
 import '../../models/memory_book.dart';
 import '../../models/chat_message.dart';
@@ -36,6 +37,7 @@ class MemoryConsolidationPackBuilder {
     required List<String> memoryEntryIds,
     int maxCandidates = 12,
     int maxContextCharacters = 120000,
+    int? maxContextTokens,
     double vectorSimilarityThreshold = 0.4,
   }) async {
     if (sessionId.isEmpty ||
@@ -90,18 +92,19 @@ class MemoryConsolidationPackBuilder {
     if (selectedSources.isEmpty) return null;
     final contextPackId =
         'consolidation:$sessionId:${DateTime.now().microsecondsSinceEpoch}';
-    if (_serializedContextCharacters(
-          packId: contextPackId,
-          sessionId: sessionId,
-          branchId: branchId,
-          proposedEventId: proposedEventId,
-          proposedEventIds: eventIds,
-          sources: selectedSources,
-          candidates: const [],
-          unexaminedOpenObligationIds: const [],
-        ) >
-        maxContextCharacters) {
-      return null;
+    if (_exceedsContext(
+      packId: contextPackId,
+      sessionId: sessionId,
+      branchId: branchId,
+      proposedEventId: proposedEventId,
+      proposedEventIds: eventIds,
+      sources: selectedSources,
+      candidates: const [],
+      unexaminedOpenObligationIds: const [],
+      maxContextCharacters: maxContextCharacters,
+      maxContextTokens: maxContextTokens,
+    )) {
+      throw const MemoryConsolidationPackTooLargeException();
     }
 
     final events = await MemoryEventRegistryRepo(
@@ -242,17 +245,18 @@ class MemoryConsolidationPackBuilder {
         ...unavailableOpenObligations,
         ...allOpenIds.difference(prospectiveSelectedOpenIds),
       }.toList()..sort();
-      if (_serializedContextCharacters(
-            packId: contextPackId,
-            sessionId: sessionId,
-            branchId: branchId,
-            proposedEventId: proposedEventId,
-            proposedEventIds: eventIds,
-            sources: prospectiveSources,
-            candidates: prospectiveCandidates,
-            unexaminedOpenObligationIds: prospectiveUnexamined,
-          ) >
-          maxContextCharacters) {
+      if (_exceedsContext(
+        packId: contextPackId,
+        sessionId: sessionId,
+        branchId: branchId,
+        proposedEventId: proposedEventId,
+        proposedEventIds: eventIds,
+        sources: prospectiveSources,
+        candidates: prospectiveCandidates,
+        unexaminedOpenObligationIds: prospectiveUnexamined,
+        maxContextCharacters: maxContextCharacters,
+        maxContextTokens: maxContextTokens,
+      )) {
         if (_isOpenObligation(event)) unavailableOpenObligations.add(event.id);
         continue;
       }
@@ -279,18 +283,19 @@ class MemoryConsolidationPackBuilder {
       ...allOpenIds.difference(selectedOpenIds),
     };
     final unexaminedIds = unexamined.toList()..sort();
-    if (_serializedContextCharacters(
-          packId: contextPackId,
-          sessionId: sessionId,
-          branchId: branchId,
-          proposedEventId: proposedEventId,
-          proposedEventIds: eventIds,
-          sources: selectedSources,
-          candidates: candidates,
-          unexaminedOpenObligationIds: unexaminedIds,
-        ) >
-        maxContextCharacters) {
-      return null;
+    if (_exceedsContext(
+      packId: contextPackId,
+      sessionId: sessionId,
+      branchId: branchId,
+      proposedEventId: proposedEventId,
+      proposedEventIds: eventIds,
+      sources: selectedSources,
+      candidates: candidates,
+      unexaminedOpenObligationIds: unexaminedIds,
+      maxContextCharacters: maxContextCharacters,
+      maxContextTokens: maxContextTokens,
+    )) {
+      throw const MemoryConsolidationPackTooLargeException();
     }
     return MemoryConsolidationSourcePack(
       packId: contextPackId,
@@ -560,6 +565,43 @@ class MemoryConsolidationPackBuilder {
     'unexaminedOpenObligationIds': unexaminedOpenObligationIds,
   }).length;
 
+  static bool _exceedsContext({
+    required String packId,
+    required String sessionId,
+    required String branchId,
+    required String proposedEventId,
+    required List<String> proposedEventIds,
+    required List<MemoryConsolidationSource> sources,
+    required List<MemoryConsolidationEventCandidate> candidates,
+    required List<String> unexaminedOpenObligationIds,
+    required int maxContextCharacters,
+    required int? maxContextTokens,
+  }) {
+    final chars = _serializedContextCharacters(
+      packId: packId,
+      sessionId: sessionId,
+      branchId: branchId,
+      proposedEventId: proposedEventId,
+      proposedEventIds: proposedEventIds,
+      sources: sources,
+      candidates: candidates,
+      unexaminedOpenObligationIds: unexaminedOpenObligationIds,
+    );
+    if (chars > maxContextCharacters) return true;
+    if (maxContextTokens == null) return false;
+    final json = jsonEncode({
+      'packId': packId,
+      'sessionId': sessionId,
+      'branchId': branchId,
+      'proposedEventId': proposedEventId,
+      'proposedEventIds': proposedEventIds,
+      'sources': sources.map((source) => source.toJson()).toList(),
+      'candidates': candidates.map((candidate) => candidate.toJson()).toList(),
+      'unexaminedOpenObligationIds': unexaminedOpenObligationIds,
+    });
+    return estimateTokens(json) > maxContextTokens;
+  }
+
   static List<String>? _decodeStringList(String json) {
     try {
       final value = jsonDecode(json);
@@ -583,6 +625,14 @@ class MemoryConsolidationPackBuilder {
   static bool _isOpenObligation(MemoryEventRow event) =>
       (event.kind == 'promise' || event.kind == 'agreement') &&
       (event.state == 'open' || event.state == 'continuing');
+}
+
+final class MemoryConsolidationPackTooLargeException implements Exception {
+  const MemoryConsolidationPackTooLargeException();
+
+  @override
+  String toString() =>
+      'A complete memory source does not fit the selected API context budget.';
 }
 
 class _ChannelScore {

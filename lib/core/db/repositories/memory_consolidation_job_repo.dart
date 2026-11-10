@@ -43,6 +43,7 @@ class MemoryConsolidationJobRepo {
   Future<Set<MemoryConsolidationSourceIdentity>> getReservedSources({
     required String sessionId,
     required String branchId,
+    bool includeCancelled = false,
   }) async {
     final jobs = db.memoryConsolidationJobRows;
     final items = db.memoryConsolidationJobItemRows;
@@ -57,6 +58,7 @@ class MemoryConsolidationJobRepo {
               'running',
               'review_pending',
               'failed',
+              if (includeCancelled) 'cancelled',
             ]),
       );
     return {
@@ -80,6 +82,7 @@ class MemoryConsolidationJobRepo {
     required String Function(List<MemoryConsolidationJobItemInput>)
     requestKeyForItems,
     int minCount = 1,
+    bool reviveCancelled = true,
   }) {
     if (minCount < 1) {
       throw ArgumentError.value(minCount, 'minCount', 'must be at least 1');
@@ -91,8 +94,10 @@ class MemoryConsolidationJobRepo {
       final reserved = await getReservedSources(
         sessionId: sessionId,
         branchId: branchId,
+        includeCancelled: !reviveCancelled,
       );
       final rows = <MemoryConsolidationJobRow>[];
+      final availableByPackage = <List<MemoryConsolidationJobItemInput>>[];
       for (final package in packages) {
         final available = package
             .where(
@@ -101,14 +106,23 @@ class MemoryConsolidationJobRepo {
                   !reserved.contains(item.sourceIdentity),
             )
             .toList();
-        if (available.length < minCount) continue;
+        availableByPackage.add(available);
+      }
+      if (availableByPackage.fold<int>(0, (sum, value) => sum + value.length) <
+          minCount) {
+        return rows;
+      }
+      for (final available in availableByPackage) {
+        if (available.isEmpty) continue;
         final job = await createOrGet(
           sessionId: sessionId,
           branchId: branchId,
           requestKey: requestKeyForItems(available),
           items: available,
         );
-        rows.add(job.status == 'cancelled' ? await revive(job.id) : job);
+        if (job.status == 'cancelled' && !reviveCancelled) continue;
+        final active = job.status == 'cancelled' ? await revive(job.id) : job;
+        rows.add(active);
         reserved.addAll(available.map((item) => item.sourceIdentity));
       }
       return rows;
@@ -289,6 +303,38 @@ class MemoryConsolidationJobRepo {
             ..orderBy([(row) => OrderingTerm.asc(row.createdAt)]))
           .get();
 
+  /// Freezes the exact candidate-enriched source pack before transport using
+  /// the existing local-only package payload column. A successful response
+  /// replaces it with the review envelope; a failed/ambiguous call leaves the
+  /// exact attempted input available for diagnosis and explicit retry.
+  Future<bool> saveFrozenPackage({
+    required String jobId,
+    required String ownerId,
+    required String packJson,
+  }) async {
+    if (packJson.trim().isEmpty) {
+      throw ArgumentError.value(packJson, 'packJson', 'must not be empty');
+    }
+    final now = _now;
+    final job = await _ownedLease(jobId, ownerId, now);
+    if (job == null) return false;
+    final changed =
+        await (db.update(db.memoryConsolidationJobRows)..where(
+              (row) =>
+                  row.id.equals(jobId) &
+                  row.version.equals(job.version) &
+                  row.status.equals('running') &
+                  row.leaseOwnerId.equals(ownerId),
+            ))
+            .write(
+              MemoryConsolidationJobRowsCompanion(
+                packageDraftJson: Value(packJson),
+                updatedAt: Value(now),
+              ),
+            );
+    return changed == 1;
+  }
+
   /// Persists the single response for a source package. Item rows remain the
   /// immutable source snapshot; no per-source model calls are implied.
   Future<bool> savePackageDraft({
@@ -309,7 +355,7 @@ class MemoryConsolidationJobRepo {
                   row.id.equals(jobId) &
                   row.version.equals(job.version) &
                   row.status.equals('running') &
-                  row.packageDraftJson.isNull(),
+                  row.leaseOwnerId.equals(ownerId),
             ))
             .write(
               MemoryConsolidationJobRowsCompanion(
@@ -322,15 +368,19 @@ class MemoryConsolidationJobRepo {
               ),
             );
     if (changed != 1) return false;
-    await (db.update(db.memoryConsolidationJobItemRows)..where(
-          (row) => row.jobId.equals(jobId) & row.status.equals('running'),
-        ))
-        .write(
-          MemoryConsolidationJobItemRowsCompanion(
-            status: const Value('review_pending'),
-            updatedAt: Value(now),
-          ),
-        );
+    final changedItems =
+        await (db.update(db.memoryConsolidationJobItemRows)..where(
+              (row) => row.jobId.equals(jobId) & row.status.equals('running'),
+            ))
+            .write(
+              MemoryConsolidationJobItemRowsCompanion(
+                status: const Value('review_pending'),
+                updatedAt: Value(now),
+              ),
+            );
+    if (changedItems == 0) {
+      throw StateError('Pre-network package failure has no running sources.');
+    }
     return true;
   });
 
@@ -514,6 +564,50 @@ class MemoryConsolidationJobRepo {
               ),
             );
     if (changed == 1) await _refreshJobStatus(job, ownerId, now);
+    return changed == 1;
+  });
+
+  /// Records a planner/pack failure before transport while retaining the
+  /// immutable source reservation for an explicit failed-only retry.
+  Future<bool> failRunningPackage({
+    required String jobId,
+    required String ownerId,
+    required String reason,
+  }) => db.transaction(() async {
+    if (reason.trim().isEmpty) {
+      throw ArgumentError.value(reason, 'reason', 'must not be empty');
+    }
+    final now = _now;
+    final job = await _ownedLease(jobId, ownerId, now);
+    if (job == null) return false;
+    await (db.update(db.memoryConsolidationJobItemRows)..where(
+          (row) => row.jobId.equals(jobId) & row.status.equals('running'),
+        ))
+        .write(
+          MemoryConsolidationJobItemRowsCompanion(
+            status: const Value('failed'),
+            lastError: Value(reason),
+            updatedAt: Value(now),
+          ),
+        );
+    final changed =
+        await (db.update(db.memoryConsolidationJobRows)..where(
+              (row) =>
+                  row.id.equals(jobId) &
+                  row.version.equals(job.version) &
+                  row.status.equals('running') &
+                  row.leaseOwnerId.equals(ownerId),
+            ))
+            .write(
+              MemoryConsolidationJobRowsCompanion(
+                status: const Value('failed'),
+                leaseOwnerId: const Value(null),
+                leaseExpiresAt: const Value(null),
+                lastError: Value(reason),
+                version: Value(job.version + 1),
+                updatedAt: Value(now),
+              ),
+            );
     return changed == 1;
   });
 

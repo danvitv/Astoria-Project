@@ -50,6 +50,7 @@ class MemorySettingsMapper {
       queryRecentTurns: g.queryRecentTurns,
       queryMaxChars: g.queryMaxChars,
       consolidationEnabled: isMemoryLinksMode(g.memoryMode),
+      consolidationThreshold: g.consolidationThreshold,
     );
   }
 

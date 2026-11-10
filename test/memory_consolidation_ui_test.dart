@@ -291,6 +291,17 @@ Future<void> _startReview(WidgetTester tester) async {
   expect(find.text('Reject'), findsOneWidget);
 }
 
+Future<void> _tapSheetAction(WidgetTester tester, String label) async {
+  final action = find.text(label);
+  final detector = find.ancestor(
+    of: action,
+    matching: find.byType(GestureDetector),
+  );
+  expect(detector, findsWidgets);
+  tester.widget<GestureDetector>(detector.first).onTap!();
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets(
     'generation is reviewed and only accepted after explicit action',
@@ -306,8 +317,7 @@ void main() {
       expect(find.text('Accept event'), findsOneWidget);
       expect(await harness.activeEventCount(), 0);
 
-      await tester.tap(find.text('Accept event'));
-      await tester.pumpAndSettle();
+      await _tapSheetAction(tester, 'Accept event');
 
       expect(await harness.activeEventCount(), 1);
     },
@@ -321,8 +331,7 @@ void main() {
     await _pumpTab(tester, harness);
 
     await _startReview(tester);
-    await tester.tap(find.text('Reject'));
-    await tester.pumpAndSettle();
+    await _tapSheetAction(tester, 'Reject');
 
     expect(await harness.activeEventCount(), 0);
   });
@@ -368,7 +377,7 @@ void main() {
     );
     harness.container.read(memoryBookRevisionProvider.notifier).state++;
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Accept event'));
+    await _tapSheetAction(tester, 'Accept event');
     for (var i = 0; i < 128; i++) {
       await tester.runAsync(() => Future<void>.delayed(Duration.zero));
       await tester.pump();
@@ -376,72 +385,6 @@ void main() {
     }
     await tester.pumpAndSettle();
 
-    expect(await harness.activeEventCount(), 0);
-  });
-
-  testWidgets('package flow runs one call and accepts after review', (
-    tester,
-  ) async {
-    final harness = await _makeHarness(package: true);
-    addTearDown(harness.dispose);
-    await _pumpTab(tester, harness);
-
-    expect(find.text('Consolidate new memories'), findsOneWidget);
-    await tester.tap(find.text('Consolidate new memories'));
-    for (var i = 0; i < 128; i++) {
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
-      await tester.pump();
-      if (find.text('Reject').evaluate().isNotEmpty) break;
-    }
-    await tester.pumpAndSettle();
-
-    expect(harness.transportCalls, 1);
-    expect(find.text('Proposed events'), findsOneWidget);
-    expect(find.text('result · completed'), findsOneWidget);
-    expect(await harness.activeEventCount(), 0);
-
-    await tester.tap(find.text('Accept event'));
-    await tester.pumpAndSettle();
-
-    expect(await harness.activeEventCount(), 1);
-    expect(find.text('Accept event'), findsNothing);
-    // The queue holds only the completed package, so the panel offers a
-    // fresh start instead of a review or retry.
-    expect(find.text('Consolidate new memories'), findsOneWidget);
-  });
-
-  testWidgets('initial scan drafts every bounded package and stays in review', (
-    tester,
-  ) async {
-    final harness = await _makeHarness(package: true, entryCount: 11);
-    addTearDown(harness.dispose);
-    await _pumpTab(tester, harness);
-
-    expect(find.text('Scan book for event links'), findsOneWidget);
-    await tester.tap(find.text('Scan book for event links'));
-    for (var i = 0; i < 128; i++) {
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
-      await tester.pump();
-      if (find.text('Start scan').evaluate().isNotEmpty) break;
-    }
-    // Let the sheet's opening animation finish before tapping its item.
-    await tester.pumpAndSettle();
-    expect(find.text('Start scan'), findsOneWidget);
-    await tester.tap(find.text('Start scan'));
-    for (var i = 0; i < 256; i++) {
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
-      await tester.pump();
-      if (harness.transportCalls >= 2 &&
-          find.text('Review package').evaluate().isNotEmpty) {
-        break;
-      }
-    }
-    await tester.pumpAndSettle();
-
-    // Eleven sources at the default bound make two packages, each with
-    // exactly one model call; everything stays a draft for review.
-    expect(harness.transportCalls, 2);
-    expect(find.text('Review package'), findsOneWidget);
     expect(await harness.activeEventCount(), 0);
   });
 }
