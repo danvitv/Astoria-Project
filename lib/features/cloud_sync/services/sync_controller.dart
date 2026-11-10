@@ -14,6 +14,7 @@ import '../../../core/state/lorebook_embedding_provider.dart';
 import '../../../core/state/global_regex_provider.dart';
 import '../../../core/state/shared_prefs_provider.dart';
 import '../../../core/state/studio_regex_provider.dart';
+import '../../../core/utils/error_format.dart';
 import '../../../shared/theme/theme_provider.dart';
 import '../../personas/persona_list_provider.dart';
 import '../../presets/preset_list_provider.dart';
@@ -28,6 +29,7 @@ import '../../chat_history/chat_history_provider.dart';
 import '../sync_provider.dart';
 import '../sync_models.dart';
 import 'sync_engine.dart';
+import 'sync_queue.dart';
 import 'sync_service.dart';
 import 'sync_conflict.dart';
 import '../../chat/composer_pins_provider.dart';
@@ -299,10 +301,11 @@ class SyncController {
       return '${mode == 'push' ? 'Push' : 'Pull'} completed ($itemsCount items)';
     } catch (e) {
       if (!current()) return 'Cloud sync owner retired';
-      lastErrorNotifier.state = e.toString();
+      final message = _formatSyncError(e);
+      lastErrorNotifier.state = message;
       statusNotifier.state = service!.status;
       conflictsNotifier.state = List.of(service.conflicts);
-      return 'Sync failed: $e';
+      return 'Sync failed: $message';
     } finally {
       if (current()) progressNotifier.state = null;
     }
@@ -348,9 +351,10 @@ class SyncController {
       if (!current()) return 'Cloud sync owner retired';
       // Roll back optimistic removal on error.
       conflictsNotifier.state = List.from(service.conflicts);
-      errorNotifier.state = e.toString();
+      final message = _formatSyncError(e);
+      errorNotifier.state = message;
       statusNotifier.state = service.status;
-      return 'Could not resolve conflict: $e';
+      return 'Could not resolve conflict: $message';
     }
   }
 
@@ -384,10 +388,11 @@ class SyncController {
       return 'Sync complete';
     } catch (e) {
       if (!current()) return 'Cloud sync owner retired';
-      errorNotifier.state = e.toString();
+      final message = _formatSyncError(e);
+      errorNotifier.state = message;
       conflictsNotifier.state = List.from(service.conflicts);
       statusNotifier.state = service.status;
-      return 'Could not resolve conflicts: $e';
+      return 'Could not resolve conflicts: $message';
     } finally {
       _isResolvingConflicts = false;
       if (current()) {
@@ -422,14 +427,24 @@ class SyncController {
       return 'Sync complete';
     } catch (e) {
       if (!current()) return 'Cloud sync owner retired';
-      setError(e.toString());
-      return 'Sync failed: $e';
+      final message = _formatSyncError(e);
+      setError(message);
+      return 'Sync failed: $message';
     } finally {
       if (current()) {
         setStatus(service.status);
         setProgress(null);
       }
     }
+  }
+
+  String _formatSyncError(Object error) {
+    if (error is! SyncQueueAggregateError || error.errors.isEmpty) {
+      return formatError(error);
+    }
+    final first = formatError(error.errors.first);
+    final remaining = error.errors.length - 1;
+    return remaining == 0 ? first : '$first (+$remaining more errors)';
   }
 
   Future<void> refreshDataProvidersAfterPull({

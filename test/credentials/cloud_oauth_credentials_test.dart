@@ -40,6 +40,9 @@ const _late = 'SYNTHETIC_CLOUD_STALE_ACCESS_CANARY';
 const _code = 'SYNTHETIC_CLOUD_CODE_CANARY';
 const _key = CloudOAuthPreferences.tokens;
 
+bool Function() _captureCurrentAdmission() =>
+    () => true;
+
 Map<String, dynamic> _legacyPair({int? expiry, bool google = false}) => {
   'access_token': _access,
   'refresh_token': _refresh,
@@ -78,6 +81,26 @@ final class _Adapter implements HttpClientAdapter {
       },
     );
   }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+final class _FailingAdapter implements HttpClientAdapter {
+  _FailingAdapter(this.type);
+  final DioExceptionType type;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) => throw DioException(
+    requestOptions: options,
+    type: type,
+    error: StateError(_access),
+    message: 'transport failed with $_refresh',
+  );
 
   @override
   void close({bool force = false}) {}
@@ -774,6 +797,76 @@ void main() {
       },
     );
   }
+
+  for (final type in [
+    DioExceptionType.connectionTimeout,
+    DioExceptionType.sendTimeout,
+    DioExceptionType.receiveTimeout,
+    DioExceptionType.connectionError,
+    DioExceptionType.badCertificate,
+    DioExceptionType.cancel,
+  ]) {
+    test('response-less cloud failure preserves safe $type category', () async {
+      final requests = CloudOAuthRequestScope(
+        _captureCurrentAdmission,
+        fixture.redaction,
+      );
+      final dio = Dio()..httpClientAdapter = _FailingAdapter(type);
+      requests.protect(dio, CloudOAuthProvider.gdrive);
+
+      DioException? captured;
+      try {
+        await dio.post<void>(
+          'https://www.googleapis.com/drive/v3/files?token=$_next',
+          data: {'secret': _refresh},
+          options: Options(headers: {'Authorization': 'Bearer $_access'}),
+        );
+      } on DioException catch (error) {
+        captured = error;
+      }
+
+      expect(captured, isNotNull);
+      expect(captured!.type, type);
+      expect(captured.response, isNull);
+      expect(captured.error, isNull);
+      expect(captured.requestOptions.path, 'cloud-sync');
+      final text = captured.toString();
+      expect(text, isNot(contains(_access)));
+      expect(text, isNot(contains(_refresh)));
+      expect(text, isNot(contains(_next)));
+      expect(text, isNot(contains('HTTP 0')));
+    });
+  }
+
+  test(
+    'genuine cloud HTTP failure keeps status with sanitized request',
+    () async {
+      final requests = CloudOAuthRequestScope(
+        _captureCurrentAdmission,
+        fixture.redaction,
+      );
+      final dio = _dio(_Adapter((_) => (status: 503, body: {'echo': _access})));
+      requests.protect(dio, CloudOAuthProvider.gdrive);
+
+      DioException? captured;
+      try {
+        await dio.get<void>(
+          'https://www.googleapis.com/drive/v3/files?token=$_next',
+          options: Options(headers: {'Authorization': 'Bearer $_access'}),
+        );
+      } on DioException catch (error) {
+        captured = error;
+      }
+
+      expect(captured, isNotNull);
+      expect(captured!.type, DioExceptionType.badResponse);
+      expect(captured.response?.statusCode, 503);
+      expect(captured.response?.data, isNull);
+      expect(captured.requestOptions.path, 'cloud-sync');
+      expect(captured.toString(), isNot(contains(_access)));
+      expect(captured.toString(), isNot(contains(_next)));
+    },
+  );
 
   test(
     'native mobile metadata refuses token-bearing legacy rather than copying or cleaning',

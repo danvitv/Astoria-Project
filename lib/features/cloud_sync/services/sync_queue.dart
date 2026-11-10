@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:dio/dio.dart';
+
 class SyncQueue {
   static const _maxRetries = 3;
   static const _baseDelayMs = 1000;
@@ -97,7 +99,7 @@ class SyncQueue {
         return result;
       } catch (e) {
         attempt++;
-        if (attempt >= _maxRetries || !_isRetryableError(e)) {
+        if (attempt >= _maxRetries || !isRetryableError(e)) {
           rethrow;
         }
         checkActive();
@@ -115,8 +117,22 @@ class SyncQueue {
     return (capped + jitter).clamp(0, _maxDelayMs);
   }
 
-  bool _isRetryableError(dynamic e) {
-    final msg = e.toString();
+  static bool isRetryableError(Object error) {
+    if (error is DioException) {
+      final status = error.response?.statusCode;
+      return switch (error.type) {
+        DioExceptionType.connectionTimeout ||
+        DioExceptionType.sendTimeout ||
+        DioExceptionType.receiveTimeout ||
+        DioExceptionType.connectionError => true,
+        DioExceptionType.badResponse =>
+          status == 429 || (status != null && status >= 500 && status < 600),
+        DioExceptionType.cancel || DioExceptionType.badCertificate => false,
+        _ => false,
+      };
+    }
+
+    final msg = error.toString();
     if (msg.contains('429')) return true;
     if (msg.contains('5') && RegExp(r'5\d\d').hasMatch(msg)) return true;
     if (msg.contains('SocketException') || msg.contains('TimeoutException')) {

@@ -1,9 +1,78 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/features/cloud_sync/services/sync_queue.dart';
 
 void main() {
+  DioException dioError(DioExceptionType type, {int? status}) {
+    final request = RequestOptions(path: 'cloud-sync');
+    return DioException(
+      requestOptions: request,
+      response: status == null
+          ? null
+          : Response(requestOptions: request, statusCode: status),
+      type: type,
+    );
+  }
+
+  test('retry classification uses Dio transport type and HTTP status', () {
+    for (final type in [
+      DioExceptionType.connectionTimeout,
+      DioExceptionType.sendTimeout,
+      DioExceptionType.receiveTimeout,
+      DioExceptionType.connectionError,
+    ]) {
+      expect(SyncQueue.isRetryableError(dioError(type)), isTrue);
+    }
+    expect(
+      SyncQueue.isRetryableError(
+        dioError(DioExceptionType.badResponse, status: 429),
+      ),
+      isTrue,
+    );
+    expect(
+      SyncQueue.isRetryableError(
+        dioError(DioExceptionType.badResponse, status: 503),
+      ),
+      isTrue,
+    );
+    expect(
+      SyncQueue.isRetryableError(dioError(DioExceptionType.cancel)),
+      isFalse,
+    );
+    expect(
+      SyncQueue.isRetryableError(dioError(DioExceptionType.badCertificate)),
+      isFalse,
+    );
+    expect(
+      SyncQueue.isRetryableError(
+        dioError(DioExceptionType.badResponse, status: 401),
+      ),
+      isFalse,
+    );
+  });
+
+  test(
+    'queue retries a typed connection failure three times',
+    () async {
+      final queue = SyncQueue();
+      var calls = 0;
+
+      await expectLater(
+        queue.enqueue<void>(() async {
+          calls++;
+          throw dioError(DioExceptionType.connectionError);
+        }),
+        throwsA(isA<DioException>()),
+      );
+
+      expect(calls, 3);
+      expect(queue.pendingCount, 0);
+    },
+    timeout: const Timeout(Duration(seconds: 10)),
+  );
+
   test('Abort/Reset cannot give a retry the newer queue generation', () async {
     final queue = SyncQueue();
     final attempted = Completer<void>();

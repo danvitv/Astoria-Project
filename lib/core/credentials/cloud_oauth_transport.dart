@@ -125,7 +125,7 @@ final class CloudOAuthRequestScope {
               uri.port != 443 ||
               uri.fragment.isNotEmpty ||
               !_allowedRoute(uri, provider)) {
-            handler.reject(_safeError(0, admitted: false));
+            handler.reject(_retiredError());
             return;
           }
           options.followRedirects = false;
@@ -138,7 +138,7 @@ final class CloudOAuthRequestScope {
           final current =
               response.requestOptions.extra[_guardKey] as bool Function()?;
           if (current?.call() != true) {
-            handler.reject(_safeError(0, admitted: false));
+            handler.reject(_retiredError());
             return;
           }
           // Successful OAuth token responses stay native. Consumers register and
@@ -151,8 +151,13 @@ final class CloudOAuthRequestScope {
           final current =
               error.requestOptions.extra[_guardKey] as bool Function()?;
           final admitted = current?.call() == true;
-          // Preserve the status and Dropbox missing-file classification, never the
-          // request/header/body/cause. Existing consumers still catch DioException.
+          if (!admitted) {
+            handler.next(_retiredError());
+            return;
+          }
+          // Preserve the status and Dropbox missing-file classification, never
+          // the request/header/body/cause. Response-less transport failures keep
+          // their safe Dio category instead of becoming a fictitious HTTP 0.
           Object? safeBody;
           if (parsed is Map &&
               parsed['error_summary'] is String &&
@@ -161,12 +166,11 @@ final class CloudOAuthRequestScope {
               )) {
             safeBody = {'error_summary': 'path/not_found'};
           }
+          final status = error.response?.statusCode;
           handler.next(
-            _safeError(
-              error.response?.statusCode ?? 0,
-              admitted: admitted,
-              body: safeBody,
-            ),
+            status == null
+                ? _transportError(error.type)
+                : _httpError(status, body: safeBody),
           );
         },
       ),
@@ -214,8 +218,20 @@ final class CloudOAuthRequestScope {
     return parsed;
   }
 
-  DioException _safeError(int status, {required bool admitted, Object? body}) {
-    final request = RequestOptions(path: 'cloud-sync');
+  RequestOptions _safeRequest() => RequestOptions(path: 'cloud-sync');
+
+  DioException _retiredError() {
+    final request = _safeRequest();
+    return DioException(
+      requestOptions: request,
+      error: const CredentialVaultAdmissionDenied(),
+      message: 'Cloud operation retired',
+      type: DioExceptionType.unknown,
+    );
+  }
+
+  DioException _httpError(int status, {Object? body}) {
+    final request = _safeRequest();
     return DioException(
       requestOptions: request,
       response: Response(
@@ -223,11 +239,25 @@ final class CloudOAuthRequestScope {
         statusCode: status,
         data: body,
       ),
-      error: admitted ? null : const CredentialVaultAdmissionDenied(),
-      message: admitted
-          ? 'Cloud request failed (HTTP $status)'
-          : 'Cloud operation retired',
+      message: 'Cloud request failed (HTTP $status)',
       type: DioExceptionType.badResponse,
+    );
+  }
+
+  DioException _transportError(DioExceptionType type) {
+    final request = _safeRequest();
+    return DioException(
+      requestOptions: request,
+      message: switch (type) {
+        DioExceptionType.connectionTimeout => 'Cloud connection timed out',
+        DioExceptionType.sendTimeout => 'Cloud upload timed out',
+        DioExceptionType.receiveTimeout => 'Cloud response timed out',
+        DioExceptionType.connectionError => 'Cloud connection failed',
+        DioExceptionType.badCertificate => 'Cloud TLS certificate error',
+        DioExceptionType.cancel => 'Cloud request cancelled',
+        _ => 'Cloud request failed',
+      },
+      type: type,
     );
   }
 
