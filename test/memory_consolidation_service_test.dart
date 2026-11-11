@@ -157,6 +157,37 @@ void main() {
     );
   });
 
+  test('preserves a raw package response rejected by the parser', () async {
+    const rejected = '```json\n{"contract":"wrong"}\n```';
+    final service = MemoryConsolidationService(
+      call:
+          ({
+            required AuxApiConfig config,
+            required List<Map<String, String>> messages,
+            required int maxTokens,
+            required double temperature,
+            required int timeoutMs,
+            CancelToken? cancelToken,
+          }) async => rejected,
+    );
+
+    await expectLater(
+      service.generatePackageDraft(
+        pack: pack,
+        config: config,
+        maxTokens: 512,
+        temperature: 0.1,
+        timeoutMs: 30000,
+        isCurrent: () => true,
+      ),
+      throwsA(
+        isA<MemoryConsolidationPackageParseFailure>()
+            .having((error) => error.rawResponse, 'rawResponse', rejected)
+            .having((error) => error.cause, 'cause', isA<FormatException>()),
+      ),
+    );
+  });
+
   test('rejects invalid request bounds before calling transport', () async {
     var called = false;
     final service = MemoryConsolidationService(

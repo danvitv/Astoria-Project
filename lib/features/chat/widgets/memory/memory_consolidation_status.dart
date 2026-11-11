@@ -36,6 +36,7 @@ class MemoryConsolidationStatus extends StatelessWidget {
     this.completedCount = 0,
     this.onReview,
     this.onRetry,
+    this.onCopyDiagnostics,
     this.onCancel,
   });
 
@@ -43,6 +44,7 @@ class MemoryConsolidationStatus extends StatelessWidget {
   final int completedCount;
   final void Function(String jobId)? onReview;
   final void Function(String jobId)? onRetry;
+  final void Function(String jobId)? onCopyDiagnostics;
   final void Function(String jobId)? onCancel;
 
   static String? _statusLabel(String status) => switch (status) {
@@ -79,11 +81,23 @@ class MemoryConsolidationStatus extends StatelessWidget {
       label: 'memory_consolidation_queue_review'.tr(),
       onTap: onReview == null ? null : () => onReview!(item.jobId),
     ),
-    'failed' => GlazeActionButton(
-      key: ValueKey('package-retry-${item.jobId}'),
-      icon: Icons.refresh_rounded,
-      label: 'memory_consolidation_queue_retry'.tr(),
-      onTap: onRetry == null ? null : () => onRetry!(item.jobId),
+    'failed' => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (onCopyDiagnostics != null)
+          IconButton(
+            key: ValueKey('package-diagnostics-${item.jobId}'),
+            tooltip: 'memory_consolidation_queue_diagnostics'.tr(),
+            icon: const Icon(Icons.bug_report_outlined, size: 18),
+            onPressed: () => onCopyDiagnostics!(item.jobId),
+          ),
+        GlazeActionButton(
+          key: ValueKey('package-retry-${item.jobId}'),
+          icon: Icons.refresh_rounded,
+          label: 'memory_consolidation_queue_retry'.tr(),
+          onTap: onRetry == null ? null : () => onRetry!(item.jobId),
+        ),
+      ],
     ),
     'pending' || 'running' => GlazeActionButton(
       key: ValueKey('package-cancel-${item.jobId}'),

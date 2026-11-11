@@ -75,6 +75,7 @@ void main() {
     // attempt count after retries, completed summary, and per-row actions.
     String? reviewed;
     String? retried;
+    String? diagnosed;
     String? cancelled;
     await _pump(
       tester,
@@ -101,6 +102,7 @@ void main() {
           completedCount: 1,
           onReview: (id) => reviewed = id,
           onRetry: (id) => retried = id,
+          onCopyDiagnostics: (id) => diagnosed = id,
           onCancel: (id) => cancelled = id,
         ),
       ),
@@ -138,6 +140,10 @@ void main() {
       findsOneWidget,
     );
     expect(
+      find.byKey(const ValueKey('package-diagnostics-job-failed')),
+      findsOneWidget,
+    );
+    expect(
       find.byKey(const ValueKey('package-cancel-job-running')),
       findsOneWidget,
     );
@@ -151,6 +157,10 @@ void main() {
     expect(reviewed, 'job-review');
     await tester.tap(find.byKey(const ValueKey('package-retry-job-failed')));
     expect(retried, 'job-failed');
+    await tester.tap(
+      find.byKey(const ValueKey('package-diagnostics-job-failed')),
+    );
+    expect(diagnosed, 'job-failed');
     await tester.tap(find.byKey(const ValueKey('package-cancel-job-running')));
     expect(cancelled, 'job-running');
 

@@ -41,6 +41,7 @@ bool _alwaysCurrent() => true;
 class _Transport {
   int calls = 0;
   bool failNext = false;
+  String? responseOverride;
   List<Map<String, String>>? lastMessages;
 
   Future<String> call({
@@ -57,6 +58,7 @@ class _Transport {
       failNext = false;
       throw Exception('synthetic transport failure');
     }
+    if (responseOverride case final response?) return response;
     final ids = RegExp(
       r'"proposedEventIds":\["([^"]+)","([^"]+)"\]',
     ).firstMatch(messages.last['content']!)!;
@@ -453,6 +455,10 @@ void main() {
       expect(failed.status, 'failed');
       expect(failed.packageDraftJson, contains('"sources"'));
       expect(
+        await harness.batch.loadFailureDiagnostics(job.id),
+        contains('frozen_request_only'),
+      );
+      expect(
         (await harness.jobRepo.getItems(
           job.id,
         )).every((item) => item.status == 'failed'),
@@ -463,6 +469,37 @@ void main() {
       expect(await _run(harness, 'runner-2'), isTrue);
       expect(harness.transport.calls, 2);
       expect((await harness.job(job.id))!.status, 'review_pending');
+    },
+  );
+
+  test(
+    'persists the rejected response and exact request for diagnostics',
+    () async {
+      final harness = await _makeHarness();
+      final book = await _seedBook(harness);
+      final job = await harness.batch.enqueue(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries,
+      );
+      harness.transport.responseOverride = '{"contract":"wrong"}';
+
+      await expectLater(
+        _run(harness, 'runner-1'),
+        throwsA(isA<MemoryConsolidationPackageParseFailure>()),
+      );
+
+      final failed = (await harness.job(job.id))!;
+      expect(failed.status, 'failed');
+      final report = await harness.batch.loadFailureDiagnostics(job.id);
+      expect(report, contains('memory_consolidation_package_failure'));
+      expect(report, contains('response_parse'));
+      expect(report, contains('requestMessages'));
+      expect(report, contains('requestParameters'));
+      expect(report, contains('test-model'));
+      expect(report, contains('rawResponse'));
+      expect(report, contains(r'{\"contract\":\"wrong\"}'));
+      expect(report, contains('FormatException'));
     },
   );
 

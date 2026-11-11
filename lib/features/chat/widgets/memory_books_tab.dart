@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/models/chat_message.dart';
@@ -1096,11 +1097,44 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
         final job = rowJob(jobId);
         if (job != null) _retryPackage(job);
       },
+      onCopyDiagnostics: _copyPackageDiagnostics,
       onCancel: (jobId) {
         final job = rowJob(jobId);
         if (job != null) _cancelPackage(job);
       },
     );
+  }
+
+  Future<void> _copyPackageDiagnostics(String jobId) async {
+    try {
+      final report = await ref
+          .read(memoryConsolidationBatchProvider)
+          .loadFailureDiagnostics(jobId);
+      if (!mounted) return;
+      if (report == null) {
+        GlazeToast.show(
+          context,
+          'memory_consolidation_diagnostics_unavailable'.tr(),
+        );
+        return;
+      }
+      await Clipboard.setData(ClipboardData(text: report));
+      if (mounted) {
+        GlazeToast.show(
+          context,
+          'memory_consolidation_diagnostics_copied'.tr(),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        GlazeToast.show(
+          context,
+          'memory_consolidation_failed'.tr(
+            namedArgs: {'error': formatError(error)},
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _retryPackage(MemoryConsolidationJobRow job) async {

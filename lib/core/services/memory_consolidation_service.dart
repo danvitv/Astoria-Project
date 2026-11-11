@@ -17,6 +17,24 @@ typedef MemoryConsolidationCall =
       CancelToken? cancelToken,
     });
 
+/// Preserves a provider response that reached the strict v2 parser but could
+/// not satisfy its contract. [toString] deliberately omits [rawResponse] so
+/// ordinary logs do not echo Memory Book content; the batch service stores it
+/// only in the local diagnostic envelope attached to the failed job.
+final class MemoryConsolidationPackageParseFailure implements Exception {
+  const MemoryConsolidationPackageParseFailure({
+    required this.rawResponse,
+    required this.cause,
+  });
+
+  final String rawResponse;
+  final Object cause;
+
+  @override
+  String toString() =>
+      'MemoryConsolidationPackageParseFailure(${cause.runtimeType})';
+}
+
 /// Network boundary for one consolidation draft.
 ///
 /// The caller resolves [AuxApiConfig] through the existing memory/API source
@@ -103,7 +121,14 @@ class MemoryConsolidationService {
       cancelToken: cancelToken,
     );
     _requireCurrent(isCurrent, cancelToken);
-    return MemoryConsolidationPackageParser.parse(raw, pack);
+    try {
+      return MemoryConsolidationPackageParser.parse(raw, pack);
+    } catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        MemoryConsolidationPackageParseFailure(rawResponse: raw, cause: error),
+        stackTrace,
+      );
+    }
   }
 
   static List<Map<String, String>> buildPackageMessages(

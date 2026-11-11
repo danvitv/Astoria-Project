@@ -381,6 +381,13 @@ class MemoryConsolidationBatchService {
     if (job == null) return false;
     onClaimed?.call(job.id);
     final items = await jobRepo.getItems(job.id);
+    MemoryConsolidationSourcePack? requestedPack;
+    GameTimeState? requestedGameTime;
+    String? requestedModel;
+    String? requestedProtocol;
+    int? requestedMaxTokens;
+    double? requestedTemperature;
+    int? requestedTimeoutMs;
     try {
       for (final _ in items) {
         final claimed = await jobRepo.claimNextItem(
@@ -404,6 +411,17 @@ class MemoryConsolidationBatchService {
         originalCustomApi: originalCustomApi,
         isCurrent: () => isCurrent() && cancelToken?.isCancelled != true,
       );
+      requestedModel = resolved.config.model;
+      requestedProtocol = resolved.config.protocol;
+      final maxTokens = MemoryBookApiConfigResolver.maxTokensFor(
+        settings,
+        resolved.configuration,
+      );
+      final temperature = MemoryBookApiConfigResolver.temperatureFor(settings);
+      final timeoutMs = resolved.receiveTimeoutMs ?? 0;
+      requestedMaxTokens = maxTokens;
+      requestedTemperature = temperature;
+      requestedTimeoutMs = timeoutMs;
       final requestBudget = MemoryConsolidationRequestBudget.forApi(
         settings: settings,
         config: resolved.configuration,
@@ -421,6 +439,7 @@ class MemoryConsolidationBatchService {
       if (pack == null) {
         throw StateError('Package sources are not eligible for a source pack.');
       }
+      requestedPack = pack;
       final frozen = await jobRepo.saveFrozenPackage(
         jobId: job.id,
         ownerId: ownerId,
@@ -432,6 +451,7 @@ class MemoryConsolidationBatchService {
       final gameTime = GameTimeState.fromTrackers(
         await TrackerRepo(db).getBySessionId(job.sessionId),
       );
+      requestedGameTime = gameTime;
       if (!isCurrent() || (beforeRequest != null && !await beforeRequest())) {
         throw StateError(
           'Package sources changed before the model request started.',
@@ -441,12 +461,9 @@ class MemoryConsolidationBatchService {
         pack: pack,
         gameTime: gameTime,
         config: resolved.config,
-        maxTokens: MemoryBookApiConfigResolver.maxTokensFor(
-          settings,
-          resolved.configuration,
-        ),
-        temperature: MemoryBookApiConfigResolver.temperatureFor(settings),
-        timeoutMs: resolved.receiveTimeoutMs ?? 0,
+        maxTokens: maxTokens,
+        temperature: temperature,
+        timeoutMs: timeoutMs,
         isCurrent: isCurrent,
         cancelToken: cancelToken,
       );
@@ -472,6 +489,24 @@ class MemoryConsolidationBatchService {
       );
       rethrow;
     } catch (error) {
+      if (error is MemoryConsolidationPackageParseFailure &&
+          requestedPack != null &&
+          requestedGameTime != null) {
+        await jobRepo.saveFrozenPackage(
+          jobId: job.id,
+          ownerId: ownerId,
+          packJson: _encodeFailureDiagnostics(
+            requestedPack,
+            requestedGameTime,
+            error,
+            model: requestedModel,
+            protocol: requestedProtocol,
+            maxTokens: requestedMaxTokens,
+            temperature: requestedTemperature,
+            timeoutMs: requestedTimeoutMs,
+          ),
+        );
+      }
       // The package lease still belongs to this run, so every remaining
       // running item is marked failed and the job becomes retryable.
       for (final item in await jobRepo.getItems(job.id)) {
@@ -511,6 +546,49 @@ class MemoryConsolidationBatchService {
       pack: review.pack,
       response: review.response,
     );
+  }
+
+  /// Returns a portable local-only diagnostic report for a failed package.
+  /// New parser failures include the exact request and raw response. Older
+  /// failures still expose their frozen source pack and explicitly report that
+  /// the provider response was not retained by that app version.
+  Future<String?> loadFailureDiagnostics(String jobId) async {
+    final job =
+        await (db.select(db.memoryConsolidationJobRows)..where(
+              (row) =>
+                  row.id.equals(jobId) &
+                  row.status.equals('failed') &
+                  row.packageDraftJson.isNotNull(),
+            ))
+            .getSingleOrNull();
+    if (job == null) return null;
+    final Object? stored;
+    try {
+      stored = jsonDecode(job.packageDraftJson!);
+    } on Object {
+      return null;
+    }
+    final isDiagnostic =
+        stored is Map &&
+        stored['kind'] == 'memory_consolidation_package_failure';
+    return const JsonEncoder.withIndent('  ').convert({
+      'kind': 'memory_consolidation_failure_export',
+      'version': 1,
+      'job': {
+        'id': job.id,
+        'status': job.status,
+        'attemptCount': job.attemptCount,
+        'lastError': job.lastError,
+      },
+      'capture': isDiagnostic
+          ? stored
+          : {
+              'kind': 'frozen_request_only',
+              'note':
+                  'This app version did not retain the rejected provider response.',
+              'pack': stored,
+            },
+    });
   }
 
   /// Loads the newest review-pending package of a session, so a UI run can
@@ -617,6 +695,39 @@ class MemoryConsolidationBatchService {
     MemoryConsolidationSourcePack pack,
     MemoryConsolidationPackageResponse response,
   ) => jsonEncode({'pack': pack.toJson(), 'response': response.toStrictJson()});
+
+  static String _encodeFailureDiagnostics(
+    MemoryConsolidationSourcePack pack,
+    GameTimeState gameTime,
+    MemoryConsolidationPackageParseFailure failure, {
+    required String? model,
+    required String? protocol,
+    required int? maxTokens,
+    required double? temperature,
+    required int? timeoutMs,
+  }) => jsonEncode({
+    'kind': 'memory_consolidation_package_failure',
+    'version': 1,
+    'capturedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    'stage': 'response_parse',
+    'requestParameters': {
+      'model': model,
+      'protocol': protocol,
+      'maxTokens': maxTokens,
+      'temperature': temperature,
+      'timeoutMs': timeoutMs,
+    },
+    'requestMessages': MemoryConsolidationService.buildPackageMessages(
+      pack,
+      gameTime: gameTime,
+    ),
+    'pack': pack.toJson(),
+    'rawResponse': failure.rawResponse,
+    'error': {
+      'type': failure.cause.runtimeType.toString(),
+      'message': failure.cause.toString(),
+    },
+  });
 
   static MemoryConsolidationPackageReview _decodeEnvelope(
     String jobId,
