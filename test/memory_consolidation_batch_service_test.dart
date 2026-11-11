@@ -9,6 +9,7 @@ import 'package:glaze_flutter/core/db/repositories/memory_book_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/memory_consolidation_job_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/memory_consolidation_pack_builder.dart';
 import 'package:glaze_flutter/core/db/repositories/memory_event_registry_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/tracker_repo.dart';
 import 'package:glaze_flutter/core/llm/aux_llm_client.dart';
 import 'package:glaze_flutter/core/llm/memory_draft_api_source.dart';
 import 'package:glaze_flutter/core/llm/memory_consolidation_batch_planner.dart';
@@ -40,6 +41,7 @@ bool _alwaysCurrent() => true;
 class _Transport {
   int calls = 0;
   bool failNext = false;
+  List<Map<String, String>>? lastMessages;
 
   Future<String> call({
     required AuxApiConfig config,
@@ -50,6 +52,7 @@ class _Transport {
     CancelToken? cancelToken,
   }) async {
     calls++;
+    lastMessages = messages;
     if (failNext) {
       failNext = false;
       throw Exception('synthetic transport failure');
@@ -133,6 +136,7 @@ Future<_Harness> _makeHarness({int Function()? clock}) async {
                     : 'Mira returned the brass key.',
                 swipeId: 1,
                 agentSwipeId: 2,
+                time: '13.04.2026 · RP_Day 3 · 21:54',
               ),
           ],
         ),
@@ -178,6 +182,7 @@ Future<MemoryBook> _seedBook(
           content: content,
           swipeId: 1,
           agentSwipeId: 2,
+          time: '13.04.2026 · RP_Day 3 · 21:54',
         ),
       ],
       [messageId],
@@ -274,6 +279,10 @@ void main() {
   test('package makes one network call and reaches explicit review', () async {
     final harness = await _makeHarness();
     final book = await _seedBook(harness);
+    final trackers = TrackerRepo(harness.db);
+    await trackers.upsertValue(_sessionId, 'world:time', '17:52');
+    await trackers.upsertValue(_sessionId, 'world:date', '23.04.2026');
+    await trackers.upsertValue(_sessionId, 'world:day', '13');
 
     final job = await harness.batch.enqueue(
       sessionId: _sessionId,
@@ -284,6 +293,14 @@ void main() {
 
     expect(await _run(harness, 'runner-1'), isTrue);
     expect(harness.transport.calls, 1);
+    expect(
+      harness.transport.lastMessages!.first['content'],
+      contains('Current story point: day 13 | 23.04.2026 | 17:52'),
+    );
+    expect(
+      harness.transport.lastMessages!.last['content'],
+      contains('13.04.2026 · RP_Day 3 · 21:54'),
+    );
 
     final stored = (await harness.job(job.id))!;
     expect(stored.status, 'review_pending');
@@ -848,6 +865,7 @@ void main() {
                 content: book.entries.single.content,
                 swipeId: 1,
                 agentSwipeId: 2,
+                time: '13.04.2026 · RP_Day 3 · 21:54',
               ),
             ],
           ),

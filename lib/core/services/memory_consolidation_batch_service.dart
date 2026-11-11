@@ -8,6 +8,8 @@ import '../db/app_db.dart';
 import '../db/repositories/memory_consolidation_job_repo.dart';
 import '../db/repositories/memory_consolidation_pack_builder.dart';
 import '../db/repositories/memory_event_registry_repo.dart';
+import '../db/repositories/tracker_repo.dart';
+import '../llm/game_time.dart';
 import '../llm/memory_book_api_config_resolver.dart';
 import '../llm/memory_consolidation_batch_planner.dart';
 import '../llm/memory_consolidation_package_parser.dart';
@@ -427,6 +429,9 @@ class MemoryConsolidationBatchService {
       if (!frozen) {
         throw StateError('Lease was lost while freezing the source pack.');
       }
+      final gameTime = GameTimeState.fromTrackers(
+        await TrackerRepo(db).getBySessionId(job.sessionId),
+      );
       if (!isCurrent() || (beforeRequest != null && !await beforeRequest())) {
         throw StateError(
           'Package sources changed before the model request started.',
@@ -434,6 +439,7 @@ class MemoryConsolidationBatchService {
       }
       final response = await service.generatePackageDraft(
         pack: pack,
+        gameTime: gameTime,
         config: resolved.config,
         maxTokens: MemoryBookApiConfigResolver.maxTokensFor(
           settings,

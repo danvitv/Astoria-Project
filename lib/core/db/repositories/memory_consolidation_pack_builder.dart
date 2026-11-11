@@ -442,6 +442,7 @@ class MemoryConsolidationPackBuilder {
       title: revision.title,
       content: revision.content,
       messageIds: revision.messageIds,
+      sceneTime: _sceneTime(revision.messageIds, history),
       sourceSwipeId: entry.sourceSwipeId,
       sourceAgentSwipeId: entry.sourceAgentSwipeId,
       sourceManifest: manifest,
@@ -494,10 +495,27 @@ class MemoryConsolidationPackBuilder {
       title: revision.title,
       content: revision.content,
       messageIds: messageIds,
+      sceneTime: _sceneTime(messageIds, history),
       sourceSwipeId: row.sourceSwipeId,
       sourceAgentSwipeId: row.sourceAgentSwipeId,
       sourceManifest: manifest,
     );
+  }
+
+  /// The first durable Ledger clock stamp in story order is the source's scene
+  /// point. Message IDs are opaque identifiers, so chronology comes from the
+  /// session history rather than from parsing the IDs themselves.
+  static String? _sceneTime(
+    Iterable<String> messageIds,
+    List<ChatMessage> history,
+  ) {
+    final selected = messageIds.toSet();
+    for (final message in history) {
+      if (!selected.contains(message.id)) continue;
+      final time = message.time?.trim();
+      if (time?.isNotEmpty == true) return time;
+    }
+    return null;
   }
 
   static MemoryEntryRevision? _activeRevision(MemoryEntry entry) {

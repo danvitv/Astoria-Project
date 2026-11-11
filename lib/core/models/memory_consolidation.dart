@@ -17,6 +17,7 @@ class MemoryConsolidationSource {
   final String title;
   final String content;
   final List<String> messageIds;
+  final String? sceneTime;
   final int sourceSwipeId;
   final int sourceAgentSwipeId;
   final MemorySourceManifest sourceManifest;
@@ -31,6 +32,7 @@ class MemoryConsolidationSource {
     required this.title,
     required this.content,
     required List<String> messageIds,
+    this.sceneTime,
     required this.sourceSwipeId,
     required this.sourceAgentSwipeId,
     required this.sourceManifest,
@@ -61,6 +63,7 @@ class MemoryConsolidationSource {
           for (final id in (json['messageIds'] as List).cast<String>())
             _requiredString({'id': id}, 'id'),
         ],
+        sceneTime: json['sceneTime'] as String?,
         sourceSwipeId: json['sourceSwipeId'] as int,
         sourceAgentSwipeId: json['sourceAgentSwipeId'] as int,
         sourceManifest: MemorySourceManifest.fromJson(
@@ -78,6 +81,7 @@ class MemoryConsolidationSource {
     'title': title,
     'content': content,
     'messageIds': messageIds,
+    if (sceneTime != null) 'sceneTime': sceneTime,
     'sourceSwipeId': sourceSwipeId,
     'sourceAgentSwipeId': sourceAgentSwipeId,
     'sourceManifest': sourceManifest.toJson(),

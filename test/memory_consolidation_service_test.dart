@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/llm/aux_llm_client.dart';
+import 'package:glaze_flutter/core/llm/game_time.dart';
 import 'package:glaze_flutter/core/models/memory_consolidation.dart';
 import 'package:glaze_flutter/core/models/memory_source_manifest.dart';
 import 'package:glaze_flutter/core/services/memory_consolidation_service.dart';
@@ -16,6 +17,7 @@ void main() {
     title: 'Return promise',
     content: 'The key was promised and later returned.',
     messageIds: const ['message-1'],
+    sceneTime: '13.04.2026 · RP_Day 3 · 16:38',
     sourceSwipeId: 1,
     sourceAgentSwipeId: 2,
     sourceManifest: MemorySourceManifest(
@@ -47,6 +49,21 @@ void main() {
     model: 'test-model',
     protocol: 'custom_chat_completion',
   );
+
+  test('package prompt fences scene-scoped conditions in story time', () {
+    final messages = MemoryConsolidationService.buildPackageMessages(
+      pack,
+      gameTime: const GameTimeState(time: '17:52', date: '23.04.2026', day: 13),
+    );
+
+    expect(
+      messages.first['content'],
+      contains('Current story point: day 13 | 23.04.2026 | 17:52'),
+    );
+    expect(messages.first['content'], contains('scene-scoped condition'));
+    expect(messages.first['content'], contains('similarity alone is not'));
+    expect(messages.last['content'], contains('13.04.2026 · RP_Day 3 · 16:38'));
+  });
 
   String validResponse() => '''{
     "contract":"memory_event_consolidation",

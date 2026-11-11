@@ -21,6 +21,7 @@ class MemoryBooksActionsFab extends StatelessWidget {
   final VoidCallback onReindex;
   final VoidCallback onDeleteIndexes;
   final VoidCallback? onScanBook;
+  final VoidCallback? onShowRegistry;
 
   /// Bulk draft deletion, offered only while there is more than one draft to
   /// delete. It used to sit inline in the drafts section header, where a long
@@ -35,6 +36,7 @@ class MemoryBooksActionsFab extends StatelessWidget {
     required this.onReindex,
     required this.onDeleteIndexes,
     this.onScanBook,
+    this.onShowRegistry,
     this.onDeleteAllDrafts,
   });
 
@@ -105,6 +107,16 @@ class MemoryBooksActionsFab extends StatelessWidget {
             onTap: () {
               close();
               onScanBook!();
+            },
+          ),
+        if (onShowRegistry != null)
+          BottomSheetItem(
+            icon: Icons.hub_rounded,
+            label: 'memory_consolidation_registry_title'.tr(),
+            hint: 'memory_consolidation_registry_menu_hint'.tr(),
+            onTap: () {
+              close();
+              onShowRegistry!();
             },
           ),
         if (onDeleteAllDrafts != null)

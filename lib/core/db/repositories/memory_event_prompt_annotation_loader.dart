@@ -226,6 +226,9 @@ class MemoryEventPromptAnnotationLoader {
       // this first injection path. Keep the event out rather than guessing.
       if (validRelations.length != 1) continue;
       final relation = validRelations.single;
+      final eventSources =
+          sourcesByEvent[event.id] ?? const <MemoryEventSourceRow>[];
+      final sceneTime = _sceneTime(eventSources, verifiedHistory);
       byEntry
           .putIfAbsent(sourceRow.memoryEntryId, () => {})
           .putIfAbsent(
@@ -236,6 +239,7 @@ class MemoryEventPromptAnnotationLoader {
               description: event.description,
               state: event.state,
               relation: relation,
+              sceneTime: sceneTime,
             ),
           );
     }
@@ -247,6 +251,33 @@ class MemoryEventPromptAnnotationLoader {
               .take(3),
         ),
     };
+  }
+
+  /// Ledger clock stamp of the scene the event belongs to: the game time
+  /// recorded on the event's first source message that carries one, in
+  /// story order. The clock only moves forward, so the first stamp is when
+  /// the event was given; later stamps describe later scenes. Null when no
+  /// source message carries a stamp — the consumer must not invent one.
+  static String? _sceneTime(
+    List<MemoryEventSourceRow> sources,
+    List<ChatMessage> history,
+  ) {
+    if (sources.isEmpty) return null;
+    final timeById = {
+      for (final message in history)
+        if (message.id.isNotEmpty && (message.time?.isNotEmpty ?? false))
+          message.id: message.time!,
+    };
+    if (timeById.isEmpty) return null;
+    final orderedIds = [
+      for (final source in sources)
+        ...(_decodeStringList(source.messageIdsJson) ?? const <String>[]),
+    ];
+    for (final id in orderedIds) {
+      final time = timeById[id];
+      if (time != null) return time;
+    }
+    return null;
   }
 
   Future<void> _recordInvalidation({

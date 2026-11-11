@@ -198,6 +198,7 @@ class _MemorySheetState extends ConsumerState<MemorySheet> {
               onReindex: _booksActions!.reindex,
               onDeleteIndexes: _booksActions!.deleteIndexes,
               onScanBook: _booksActions!.scanBook,
+              onShowRegistry: _booksActions!.showRegistry,
               onDeleteAllDrafts: _booksActions!.deleteAllDrafts,
             )
           : null,

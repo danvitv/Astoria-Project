@@ -140,6 +140,8 @@ Allowed eventState: planned, suggested, threatened, attempted, completed, failed
 
 ${StudioLedgerPrompt.gameClockRules}
 
+${StudioLedgerPrompt.sceneConditionLifecycleRules}
+
 ${CanonEvidenceRules.sourceAndRelationships}''';
 
     return const StudioAuxPromptAssembler().assemble(

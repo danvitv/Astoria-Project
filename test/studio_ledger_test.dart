@@ -205,6 +205,10 @@ void main() {
         expect(prompt, contains(StudioLedgerPrompt.gameClockRules));
         expect(
           prompt,
+          contains(StudioLedgerPrompt.sceneConditionLifecycleRules),
+        );
+        expect(
+          prompt,
           contains(
             'Every per-turn response MUST include exactly one set operation for world:time',
           ),
@@ -345,6 +349,26 @@ void main() {
       expect(result.rejectedOps, hasLength(2));
       expect(result.rejectedOps.join('\n'), contains('append_unique'));
       expect(result.rejectedOps.join('\n'), contains('npc:Lucy.knowledge'));
+    });
+
+    test('accepts explicit lifecycle operations for scene conditions', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[
+  {"op":"delete","key":"npc:Mika.persistent_condition","evidence":"The dated return condition was explicitly fulfilled."},
+  {"op":"set","key":"npc:Mika.boundaries","value":"Keep decorum in the public room.","evidence":"The fulfilled deadline clause was removed; the durable boundary remains."}
+],"knowledgeFacts":[]}
+</glaze_memory_export>
+''';
+
+      final result = parser.parse(raw);
+
+      expect(result.rejectedOps, isEmpty);
+      expect(result.export, isNotNull);
+      expect(result.export!.ops.map((op) => (op.op, op.key, op.value)), [
+        ('delete', 'npc:Mika.persistent_condition', ''),
+        ('set', 'npc:Mika.boundaries', 'Keep decorum in the public room.'),
+      ]);
     });
 
     test('legacy per-turn compatibility profile is parser-compatible', () {

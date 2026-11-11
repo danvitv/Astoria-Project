@@ -147,6 +147,33 @@ class MemoryEventRegistryRepo {
     return rows.map((row) => row.memoryEntryId).toSet();
   }
 
+  /// Accepted events keep no message timeline of their own: their sources do.
+  /// This groups the source rows by event so a read-only viewer can caption
+  /// each event with the message range it was consolidated from. Coverage
+  /// questions stay with [getCoveredEntryIds]; this is display data.
+  Future<Map<String, List<MemoryEventSourceRow>>> getActiveEventSources({
+    required String sessionId,
+    required String branchId,
+  }) async {
+    final events = await getActiveEvents(
+      sessionId: sessionId,
+      branchId: branchId,
+    );
+    if (events.isEmpty) return const {};
+    final rows =
+        await (db.select(db.memoryEventSourceRows)..where(
+              (row) =>
+                  row.sessionId.equals(sessionId) &
+                  row.branchId.equals(branchId) &
+                  row.eventId.isIn(events.map((event) => event.id)),
+            ))
+            .get();
+    return {
+      for (final event in events)
+        event.id: rows.where((row) => row.eventId == event.id).toList(),
+    };
+  }
+
   Future<List<MemoryEventLinkRow>> getActiveLinks({
     required String sessionId,
     required String branchId,

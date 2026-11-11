@@ -27,6 +27,7 @@ import '../../../shared/theme/app_colors.dart';
 import '../../../shared/widgets/glass_surface.dart';
 import '../../../shared/widgets/glaze_bottom_sheet.dart';
 import '../../../shared/widgets/glaze_action_button.dart';
+import '../../../shared/widgets/glaze_expansion_tile.dart';
 import '../../../shared/widgets/glaze_error_dialog.dart';
 import '../../../shared/widgets/glaze_filter_chip_bar.dart';
 import '../../../shared/widgets/glaze_spinner.dart';
@@ -46,6 +47,7 @@ import 'memory/memory_books_toolbar.dart';
 import 'memory/memory_consolidation_status.dart';
 import 'memory/memory_draft_card.dart';
 import 'memory/memory_entry_card.dart';
+import 'memory/memory_event_registry_view.dart';
 import 'memory/memory_tab_store.dart';
 import 'memory_entry_editor_sheet.dart';
 import 'memory_generation_settings_sheet.dart';
@@ -58,35 +60,11 @@ enum _EntryFilter { all, active, needsRebuild }
 /// The same for drafts — the three states a draft is actually triaged by.
 enum _DraftFilter { all, ready, needsGeneration, failed }
 
-String _eventKindLabel(String value) => switch (value) {
-  'promise' => 'memory_consolidation_kind_promise'.tr(),
-  'agreement' => 'memory_consolidation_kind_agreement'.tr(),
-  'action' => 'memory_consolidation_kind_action'.tr(),
-  'result' => 'memory_consolidation_kind_result'.tr(),
-  'cancellation' => 'memory_consolidation_kind_cancellation'.tr(),
-  'change' => 'memory_consolidation_kind_change'.tr(),
-  _ => value,
-};
+String _eventKindLabel(String value) => memoryEventKindLabel(value);
 
-String _eventStateLabel(String value) => switch (value) {
-  'open' => 'memory_consolidation_state_open'.tr(),
-  'completed' => 'memory_consolidation_state_completed'.tr(),
-  'cancelled' => 'memory_consolidation_state_cancelled'.tr(),
-  'continuing' => 'memory_consolidation_state_continuing'.tr(),
-  'contradiction' => 'memory_consolidation_state_contradiction'.tr(),
-  _ => value,
-};
+String _eventStateLabel(String value) => memoryEventStateLabel(value);
 
-String _relationLabel(String value) => switch (value) {
-  'continues' => 'memory_consolidation_relation_continues'.tr(),
-  'fulfills' => 'memory_consolidation_relation_fulfills'.tr(),
-  'cancels' => 'memory_consolidation_relation_cancels'.tr(),
-  'contradicts' => 'memory_consolidation_relation_contradicts'.tr(),
-  'confirms' => 'memory_consolidation_relation_confirms'.tr(),
-  'independent_similarity' =>
-    'memory_consolidation_relation_independent_similarity'.tr(),
-  _ => value,
-};
+String _relationLabel(String value) => memoryEventRelationLabel(value);
 
 /// What the host sheet drives from its own chrome: header actions and the
 /// extended FAB over the list. The tab owns the controller, so
@@ -99,6 +77,7 @@ class MemoryBooksActions {
   final VoidCallback reindex;
   final VoidCallback deleteIndexes;
   final VoidCallback? scanBook;
+  final VoidCallback? showRegistry;
   final VoidCallback? deleteAllDrafts;
   final bool isReindexing;
 
@@ -109,6 +88,7 @@ class MemoryBooksActions {
     required this.reindex,
     required this.deleteIndexes,
     required this.scanBook,
+    required this.showRegistry,
     required this.deleteAllDrafts,
     required this.isReindexing,
   });
@@ -120,6 +100,7 @@ class MemoryBooksActions {
   bool sameChrome(MemoryBooksActions other) =>
       isReindexing == other.isReindexing &&
       (scanBook == null) == (other.scanBook == null) &&
+      (showRegistry == null) == (other.showRegistry == null) &&
       (deleteAllDrafts == null) == (other.deleteAllDrafts == null);
 }
 
@@ -387,6 +368,12 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
             _ctrl.book?.settings.memoryMode ?? 'fast',
           ).isConsolidationMode
           ? _startBookScan
+          : null,
+      showRegistry:
+          MemoryRetrievalMode.fromValue(
+            _ctrl.book?.settings.memoryMode ?? 'fast',
+          ).isConsolidationMode
+          ? _showEventRegistry
           : null,
       deleteAllDrafts: draftCount > 1 ? _deleteAllDrafts : null,
       isReindexing: _reindexRequested,
@@ -1246,6 +1233,22 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
 
   // ─── Initial book scan (resumable, no autoaccept) ────────────────
 
+  /// Read-only browser of the session's accepted events and links — the
+  /// durable memory consolidation has already confirmed. Nothing here
+  /// mutates the registry; acceptance stays an explicit review action.
+  Future<void> _showEventRegistry() async {
+    await GlazeBottomSheet.show<void>(
+      context,
+      title: 'memory_consolidation_registry_title'.tr(),
+      child: MemoryEventRegistryView(
+        sessionId: widget.sessionId,
+        branchId: widget.sessionId,
+        repo: ref.read(memoryEventRegistryRepoProvider),
+        messages: widget.messages,
+      ),
+    );
+  }
+
   /// The one-time pass over an existing book: a model-aware dry-run plan is
   /// confirmed first, then its packages become durable jobs. The app-scoped
   /// worker executes them, so closing this sheet cannot cancel the scan.
@@ -1586,34 +1589,34 @@ class _MemoryConsolidationReview extends StatelessWidget {
           const SizedBox(height: 20),
           _sectionTitle(context, 'memory_consolidation_sources'.tr()),
           for (final source in draft.pack.sources) ...[
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    source.title.isEmpty
-                        ? 'memory_consolidation_untitled_source'.tr()
-                        : source.title,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
+            const SizedBox(height: 8),
+            GlazeExpansionTile(
+              showDivider: true,
+              title: Text(
+                source.title.isEmpty
+                    ? 'memory_consolidation_untitled_source'.tr()
+                    : source.title,
+              ),
+              subtitle: Text(
+                response.unverifiedSourceRefs.contains(source.ref)
+                    ? 'memory_consolidation_source_unverified'.tr()
+                    : event?.sourceRefs.contains(source.ref) == true
+                    ? 'memory_consolidation_source_cited'.tr()
+                    : 'memory_consolidation_source_context'.tr(),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: response.unverifiedSourceRefs.contains(source.ref)
+                      ? context.cs.error
+                      : context.cs.onSurfaceVariant,
                 ),
-                Text(
-                  response.unverifiedSourceRefs.contains(source.ref)
-                      ? 'memory_consolidation_source_unverified'.tr()
-                      : event?.sourceRefs.contains(source.ref) == true
-                      ? 'memory_consolidation_source_cited'.tr()
-                      : 'memory_consolidation_source_context'.tr(),
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: response.unverifiedSourceRefs.contains(source.ref)
-                        ? context.cs.error
-                        : context.cs.onSurfaceVariant,
-                  ),
+              ),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: SelectableText(source.content),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            SelectableText(source.content),
           ],
           if (draft.pack.unexaminedOpenObligationIds.isNotEmpty) ...[
             const SizedBox(height: 20),
@@ -1664,14 +1667,20 @@ class _MemoryConsolidationPackageReview extends StatelessWidget {
             const SizedBox(height: 20),
             _sectionTitle(context, 'memory_consolidation_package_events'.tr()),
             for (final event in response.events) ...[
-              const SizedBox(height: 12),
-              Text(
-                '${_eventKindLabel(event.kind)} · '
-                '${_eventStateLabel(event.state)}',
-                style: const TextStyle(fontWeight: FontWeight.w600),
+              const SizedBox(height: 8),
+              GlazeExpansionTile(
+                showDivider: true,
+                title: Text(
+                  '${_eventKindLabel(event.kind)} · '
+                  '${_eventStateLabel(event.state)}',
+                ),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: SelectableText(event.description),
+                  ),
+                ],
               ),
-              const SizedBox(height: 4),
-              Text(event.description),
             ],
           ],
           if (response.links.isNotEmpty) ...[
@@ -1687,30 +1696,30 @@ class _MemoryConsolidationPackageReview extends StatelessWidget {
           const SizedBox(height: 20),
           _sectionTitle(context, 'memory_consolidation_sources'.tr()),
           for (final source in review.pack.sources) ...[
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    source.title.isEmpty
-                        ? 'memory_consolidation_untitled_source'.tr()
-                        : source.title,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
+            const SizedBox(height: 8),
+            GlazeExpansionTile(
+              showDivider: true,
+              title: Text(
+                source.title.isEmpty
+                    ? 'memory_consolidation_untitled_source'.tr()
+                    : source.title,
+              ),
+              subtitle: Text(
+                _sourceStatus(source),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: response.unverifiedSourceRefs.contains(source.ref)
+                      ? context.cs.error
+                      : context.cs.onSurfaceVariant,
                 ),
-                Text(
-                  _sourceStatus(source),
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: response.unverifiedSourceRefs.contains(source.ref)
-                        ? context.cs.error
-                        : context.cs.onSurfaceVariant,
-                  ),
+              ),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: SelectableText(source.content),
                 ),
               ],
             ),
-            const SizedBox(height: 4),
-            SelectableText(source.content),
           ],
           if (review.pack.unexaminedOpenObligationIds.isNotEmpty) ...[
             const SizedBox(height: 20),

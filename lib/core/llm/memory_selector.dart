@@ -13,12 +13,19 @@ class MemoryEventPromptAnnotation {
   final String state;
   final String relation;
 
+  /// Ledger clock stamp of the scene the event belongs to, e.g.
+  /// `12.06.2025 · RP_Day 3 · 14:30` — the game-time recorded on the
+  /// event's first source message that carries one. Null when no source
+  /// message carries a clock: the prompt then must not invent one.
+  final String? sceneTime;
+
   const MemoryEventPromptAnnotation({
     required this.eventId,
     required this.kind,
     required this.description,
     required this.state,
     required this.relation,
+    this.sceneTime,
   });
 
   Map<String, dynamic> toJson() => {
@@ -27,6 +34,7 @@ class MemoryEventPromptAnnotation {
     'description': description,
     'state': state,
     'relation': relation,
+    if (sceneTime != null) 'sceneTime': sceneTime,
   };
 
   factory MemoryEventPromptAnnotation.fromJson(Map<String, dynamic> json) =>
@@ -36,6 +44,7 @@ class MemoryEventPromptAnnotation {
         description: json['description'] as String? ?? '',
         state: json['state'] as String? ?? '',
         relation: json['relation'] as String? ?? '',
+        sceneTime: json['sceneTime'] as String?,
       );
 }
 

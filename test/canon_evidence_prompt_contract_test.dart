@@ -161,6 +161,10 @@ void main() {
         expect(prompt, contains(finalAssistantText));
         expect(prompt, contains('relationship:Квинн:Данви.trust'));
         expect(prompt, contains(StudioLedgerPrompt.gameClockRules));
+        expect(
+          prompt,
+          contains(StudioLedgerPrompt.sceneConditionLifecycleRules),
+        );
         expect(prompt, contains(StudioLedgerPrompt.turnExportTemplate));
       });
     }

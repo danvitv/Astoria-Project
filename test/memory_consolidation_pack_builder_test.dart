@@ -33,6 +33,7 @@ void main() {
           content: 'Source for ${entry.id}',
           swipeId: 2,
           agentSwipeId: 3,
+          time: '05.04.2026 · RP_Day 0 · 19:45',
         ),
     ];
     await db
@@ -71,6 +72,7 @@ void main() {
       content: 'Source for $id',
       swipeId: 2,
       agentSwipeId: 3,
+      time: '05.04.2026 · RP_Day 0 · 19:45',
     );
     final manifest = MemorySourceManifest.capture(
       'session-1',
@@ -189,6 +191,9 @@ void main() {
       expect(pack.candidates.map((candidate) => candidate.id), ['event-open']);
       expect(pack.unexaminedOpenObligationIds, isEmpty);
       expect(pack.proposedEventId, 'event-new');
+      expect(pack.sources.map((source) => source.sceneTime).toSet(), {
+        '05.04.2026 · RP_Day 0 · 19:45',
+      });
     },
   );
 

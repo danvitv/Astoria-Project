@@ -193,6 +193,7 @@ $finalAssistantText
 
 ${buildCurrentUserTurnBlock(currentUserText)}
 $gameClockRules
+$sceneConditionLifecycleRules
 
 Now produce the Studio Ledger output. You MUST return BOTH blocks below.
 The <glaze_memory_export> block is MANDATORY, including the current clock
@@ -302,6 +303,31 @@ knowledgeFacts rules:
   ordinal bells do not automatically map to real-world clock hours.
 - Crossing midnight must advance world:date and world:day together by the same
   number of days. Keep all clock components consistent.''';
+
+  /// Code-owned lifecycle contract shared by every live extraction path,
+  /// including DB-backed user presets. Reconciliation is deliberately not a
+  /// semantic garbage collector: closure must be evidenced by the accepted
+  /// turn and expressed as an explicit durable operation here.
+  static const String sceneConditionLifecycleRules =
+      '''Scene-scoped condition lifecycle:
+- Distinguish durable boundaries from conditions tied to one scene, deadline,
+  permission, restriction, or obligation. Prefer a separate
+  npc:Name.persistent_condition tracker for active scene-scoped conditions;
+  keep separate conditions as separate clauses in its complete value. Include
+  the established scene clock/date or explicit deadline when available.
+- If the accepted user/assistant turn explicitly proves that an existing
+  scene-scoped condition was fulfilled, withdrawn/cancelled, or expired at its
+  explicitly established deadline, this response MUST emit an explicit tracker
+  operation. Never leave it unchanged for reconciliation to clean up later.
+- For a dedicated persistent_condition, emit delete. For a legacy clause inside
+  boundaries, emit set with the complete remaining boundary value after removing
+  only the closed clause; emit delete only when nothing valid remains.
+- Do NOT close or delete a condition merely because the scene changed, time
+  passed without a proven deadline, it was not mentioned, or a later episode is
+  similar. A similar condition in a later scene is new state unless the later
+  evidence explicitly extends or re-establishes the earlier condition.
+- set replaces the full tracker value. There is no durable mark operation, and
+  eventState alone does not close or mutate an existing tracker.''';
 
   bool _isRelevantTracker(Tracker tracker, String turnContext) {
     if (tracker.name.startsWith('world:') ||
@@ -474,6 +500,7 @@ Rules:
 - Arc keys: arc:id.status, arc:id.summary, arc:id.do_not_reopen, arc:id.card_override
 - World/scene keys: world:location, world:time, world:date, world:day, world:active_threats, scene.present_entities, scene.absent_backstory_entities
 $gameClockRules
+$sceneConditionLifecycleRules
 
 ${CanonEvidenceRules.sourceAndRelationships}''';
 
