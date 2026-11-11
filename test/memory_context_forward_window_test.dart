@@ -402,6 +402,47 @@ void main() {
     },
   );
 
+  for (final mode in ['hybrid', 'chunk_first']) {
+    test('$mode scopes a catalog-matched knowledge key to its paragraph', () {
+      const relevant =
+          'Данви самостоятельно вычислил адрес штаба и договорился ждать в двух кварталах.';
+      final entry = MemoryEntry(
+        id: 'headquarters-memory',
+        title: '826-840',
+        content: [
+          'Длинный разговор о машине и лекции.',
+          'Обсуждение старой фотографии.',
+          'Поездка в кофейню.',
+          'Страйкбольный винчестер и папарацци.',
+          'Разговор в подсобке.',
+          relevant,
+        ].join('\n\n'),
+        keys: const ['машина', 'лекция', 'штаб', 'геолокация'],
+        keyParagraphs: const {
+          'машина': [0],
+          'лекция': [0],
+          'штаб': [5],
+          'геолокация': [5],
+        },
+      );
+      final result = _select(
+        mode,
+        entry,
+        scores: [
+          MemoryCandidateScore(
+            entry: entry,
+            score: 10,
+            catalogMatchedTerms: const ['штаб'],
+          ),
+        ],
+      );
+
+      expect(result.items.single.text, relevant);
+      expect(result.items.single.text, isNot(contains('машине')));
+      expect(result.items.single.chunkIndexes, [5]);
+    });
+  }
+
   test(
     'partial memory framing never turns omissions into negative evidence',
     () {

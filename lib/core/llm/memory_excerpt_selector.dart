@@ -397,7 +397,8 @@ class MemoryExcerptSelector {
   }
 
   static Set<int>? _scopedParagraphs(MemoryCandidateScore score) {
-    if (score.matchedKeys.isEmpty || score.entry.keyParagraphs.isEmpty) {
+    if ((score.matchedKeys.isEmpty && score.catalogMatchedTerms.isEmpty) ||
+        score.entry.keyParagraphs.isEmpty) {
       return null;
     }
     final normalized = {
@@ -409,6 +410,13 @@ class MemoryExcerptSelector {
       final indexes = normalized[key.trim().toLowerCase()];
       if (indexes == null || indexes.isEmpty) return null;
       resolved.addAll(indexes);
+    }
+    // Catalog terms may be entities, locations, or topics rather than entry
+    // keys. Use the ones that have paragraph provenance without allowing an
+    // unrelated catalog term to disable valid key scoping.
+    for (final term in score.catalogMatchedTerms) {
+      final indexes = normalized[term.trim().toLowerCase()];
+      if (indexes != null) resolved.addAll(indexes);
     }
     final paragraphCount = MemoryChunker.paragraphs(score.entry.content).length;
     resolved.removeWhere((index) => index < 0 || index >= paragraphCount);

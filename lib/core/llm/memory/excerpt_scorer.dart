@@ -58,13 +58,16 @@ class ExcerptScorer {
   /// Extract all relevant terms (keys, catalog terms, title, arc) from a
   /// candidate score, lowercased and tokenized (min 3 chars).
   static Set<String> termsFor(MemoryCandidateScore score) {
-    final raw = <String>[
+    final queryMatched = <String>{
       ...score.matchedKeys,
       ...score.catalogMatchedTerms,
-      ...score.entry.keys,
-      score.entry.title,
-      score.entry.arc,
-    ];
+    };
+    // Query-derived terms must decide which paragraph is relevant. Falling
+    // back to every key lets an entry score its own key-dense paragraphs and
+    // can hide the paragraph that actually matched the current turn.
+    final raw = queryMatched.isNotEmpty
+        ? queryMatched
+        : <String>[...score.entry.keys, score.entry.title, score.entry.arc];
     final terms = <String>{};
     for (final value in raw) {
       for (final token in value.toLowerCase().split(

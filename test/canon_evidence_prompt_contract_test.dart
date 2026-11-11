@@ -114,6 +114,11 @@ void main() {
     );
     expect(prompt, contains('There is no blanket romance/harem prohibition'));
     expect(prompt, contains('no global romance toggle'));
+    expect(prompt, contains('Character knowledge is subject-specific'));
+    expect(prompt, contains('does not entail "B does not know P"'));
+    expect(prompt, contains('learned or derived P independently'));
+    expect(prompt, contains('preserve explicit ignorance when established'));
+    expect(prompt, contains('leave the Ledger state unresolved'));
   }
 
   final ledgerPaths = <String, String Function()>{

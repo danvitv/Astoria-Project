@@ -56,16 +56,23 @@ class RetrievalQueryBuilder {
     if (maxChars <= 0) return currentText.trim();
     final buffer = StringBuffer();
     var used = 0;
+    final includedHistoryIds = <String>{};
 
-    void append(String chunk) {
-      if (chunk.isEmpty) return;
-      if (used + chunk.length > maxChars) return;
+    bool append(String chunk) {
+      chunk = chunk.trim();
+      if (chunk.isEmpty) return false;
+      final separatorLength = used == 0 ? 0 : 1;
+      final available = maxChars - used - separatorLength;
+      if (available <= 0) return false;
+      final fitted = _fitChunk(chunk, available);
+      if (fitted.isEmpty) return false;
       if (used == 0) {
-        buffer.write(chunk);
+        buffer.write(fitted);
       } else {
-        buffer.write('\n$chunk');
+        buffer.write('\n$fitted');
       }
-      used += chunk.length + (used == 0 ? 0 : 1);
+      used += fitted.length + separatorLength;
+      return true;
     }
 
     append(currentText.trim());
@@ -76,7 +83,7 @@ class RetrievalQueryBuilder {
         if (msg.isHidden || msg.isTyping) continue;
         if (msg.role != 'assistant') continue;
         if (msg.content.trim().isEmpty) continue;
-        append(msg.content.trim());
+        if (append(msg.content)) includedHistoryIds.add(msg.id);
         break;
       }
     }
@@ -87,17 +94,34 @@ class RetrievalQueryBuilder {
         if (turns >= recentTurns) break;
         final msg = history[i];
         if (msg.isHidden || msg.isTyping) continue;
+        if (includedHistoryIds.contains(msg.id)) continue;
         // When includeAssistant is false, restrict the recent window to
         // user turns only — the assistant was already a noisy signal in
         // the current build's vector search.
         if (!includeAssistant && msg.role != 'user') continue;
         if (msg.role != 'user' && msg.role != 'assistant') continue;
         if (msg.content.trim().isEmpty) continue;
-        append(msg.content.trim());
+        if (append(msg.content)) includedHistoryIds.add(msg.id);
         turns++;
       }
     }
 
     return buffer.toString().trim();
+  }
+
+  /// Fits an oversized turn without dropping it entirely. Keeping both ends
+  /// preserves the setup and the latest conclusions, which commonly contain
+  /// the entities and state changes needed by retrieval.
+  static String _fitChunk(String chunk, int available) {
+    if (available <= 0) return '';
+    if (chunk.length <= available) return chunk;
+    if (available < 7) return chunk.substring(0, available);
+
+    const separator = ' … ';
+    final payload = available - separator.length;
+    final headLength = (payload + 1) ~/ 2;
+    final tailLength = payload - headLength;
+    return '${chunk.substring(0, headLength)}$separator'
+        '${chunk.substring(chunk.length - tailLength)}';
   }
 }

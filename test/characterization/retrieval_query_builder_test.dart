@@ -9,14 +9,13 @@ ChatMessage _msg({
   required String content,
   bool hidden = false,
   bool typing = false,
-}) =>
-    ChatMessage(
-      id: id,
-      role: role,
-      content: content,
-      isHidden: hidden,
-      isTyping: typing,
-    );
+}) => ChatMessage(
+  id: id,
+  role: role,
+  content: content,
+  isHidden: hidden,
+  isTyping: typing,
+);
 
 void main() {
   group('RetrievalQueryBuilder.build', () {
@@ -78,6 +77,45 @@ void main() {
         includeAssistant: true,
       );
       expect(q.length, lessThanOrEqualTo(60));
+    });
+
+    test('keeps both ends of an oversized latest assistant turn', () {
+      final history = [
+        _msg(
+          id: 'a1',
+          role: 'assistant',
+          content: 'HEAD-${'x' * 120}-TAIL headquarters address',
+        ),
+      ];
+
+      final q = RetrievalQueryBuilder.build(
+        currentText: 'I am leaving now',
+        history: history,
+        includeAssistant: true,
+        maxChars: 80,
+      );
+
+      expect(q.length, lessThanOrEqualTo(80));
+      expect(q, startsWith('I am leaving now\nHEAD-'));
+      expect(q, contains('headquarters address'));
+      expect(q, contains(' … '));
+    });
+
+    test('does not duplicate the latest assistant in the recent walk', () {
+      final history = [
+        _msg(id: 'u1', role: 'user', content: 'earlier'),
+        _msg(id: 'a1', role: 'assistant', content: 'latest assistant'),
+      ];
+
+      final q = RetrievalQueryBuilder.build(
+        currentText: 'now',
+        history: history,
+        includeAssistant: true,
+        maxChars: 500,
+      );
+
+      expect('latest assistant'.allMatches(q), hasLength(1));
+      expect(q, contains('earlier'));
     });
 
     test('includeAssistant=false omits assistant turns', () {
