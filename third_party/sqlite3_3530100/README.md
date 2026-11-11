@@ -22,11 +22,11 @@ this unmodified official amalgamation and defines
 does not receive that declaration. No package cache or global SDK configuration
 is modified.
 
-Ordinary `flutter build apk --release`, Windows builds and native checks use
-the same checked-in hook configuration. **No target selection or restoration is
-required.** To verify the pin and restore its marked configuration if necessary,
-use the installed Dart executable directly (not `dart run`, which may build
-native assets):
+The ARM64 Android wrapper (`scripts/build_android_arm64.ps1`), Windows builds
+and native checks use the same checked-in hook configuration. **No SQLite hook
+target selection or restoration is required.** To verify the pin and restore its
+marked configuration if necessary, use the installed Dart executable directly
+(not `dart run`, which may build native assets):
 
 ```powershell
 & 'Z:/GlazeProject/flutter/bin/cache/dart-sdk/bin/dart.exe' --packages=.dart_tool/package_config.json tool/configure_source_sqlite.dart

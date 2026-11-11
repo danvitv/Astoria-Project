@@ -95,8 +95,8 @@ flutter run -d windows   # or: -d android, -d ios, -d macos, -d linux
 
 ### 🏭 Builds
 
-```bash
-flutter build apk        # Android
+```powershell
+.\scripts\build_android_arm64.ps1  # Android release, ARM64 only
 flutter build windows    # Windows
 flutter build ios        # iOS
 ```

@@ -34,6 +34,10 @@ val channelAppLabel = when (buildChannel) {
     else -> "Astoria Nightly"
 }
 
+// The distributable/default APK remains ARM64-only. The explicit opt-in is
+// reserved for the local x86_64 Android emulator used for performance checks.
+val emulatorX64Build = System.getenv("ASTORIA_EMULATOR_X64") == "1"
+
 // CI signing: the keystore is passed in as base64 through KEYSTORE_BASE64.
 // An *unset* secret still reaches Gradle as an empty string, so blank must be
 // treated exactly like "no CI keystore" — otherwise we write a 0-byte file and
@@ -127,6 +131,12 @@ android {
 
     defaultConfig {
         applicationId = "app.astoria.flutter$channelApplicationIdSuffix"
+        // Keep dependency AARs from making an ARM64-only APK appear compatible
+        // with 32-bit devices. Native-asset compilation is constrained by the
+        // explicit Flutter target in scripts/build_android_arm64.ps1 and CI.
+        ndk {
+            abiFilters += if (emulatorX64Build) "x86_64" else "arm64-v8a"
+        }
         resValue("string", "recovery_launcher_package", "app.astoria.flutter$channelApplicationIdSuffix")
         manifestPlaceholders["appLabel"] = channelAppLabel
         val dropboxKey = rootProject.file("../.env").takeIf { it.exists() }
@@ -148,6 +158,19 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // Some dependency AARs bundle extra ABIs even when Flutter itself
+            // targets ARM64. Strip them so Android cannot install this APK on
+            // a device for which libflutter.so/libapp.so are unavailable.
+            excludes += setOf(
+                "lib/armeabi-v7a/**",
+                "lib/x86/**",
+                if (emulatorX64Build) "lib/arm64-v8a/**" else "lib/x86_64/**",
+            )
         }
     }
 
