@@ -78,25 +78,29 @@ class TrackerSnapshotRepo {
     String sessionId,
     HistoricalMessageWindow window,
   ) async {
-    final snapshots = await getBySessionId(sessionId);
-    final byMessage = {
-      for (final snapshot in snapshots)
-        if (snapshot.committed &&
-            window.containsAnchor(
-              snapshot.messageId,
-              snapshot.swipeId,
-              snapshot.agentSwipeId,
+    // Keep the stored JSON opaque until the winning historical anchor is
+    // known. Large sessions can hold dozens of 60+ tracker snapshots; decoding
+    // every losing row here made each regeneration reconstruct megabytes of
+    // state that it immediately discarded.
+    final rows =
+        await (db.select(db.trackerSnapshots)..where(
+              (row) =>
+                  row.sessionId.equals(sessionId) & row.committed.equals(1),
             ))
-          snapshot.messageId: snapshot,
+            .get();
+    final byMessage = {
+      for (final row in rows)
+        if (row.messageId.isNotEmpty &&
+            window.containsAnchor(row.messageId, row.swipeId, row.agentSwipeId))
+          row.messageId: row,
     };
     for (final message in window.messages.reversed) {
-      final snapshot = byMessage[message.id];
-      if (snapshot != null) return snapshot;
+      final row = byMessage[message.id];
+      if (row != null) return _rowToModel(row);
     }
     // Empty anchors are migration/bootstrap snapshots, never a future turn.
-    return snapshots
-        .where((s) => s.committed && s.messageId.isEmpty)
-        .firstOrNull;
+    final bootstrap = rows.where((row) => row.messageId.isEmpty).firstOrNull;
+    return bootstrap == null ? null : _rowToModel(bootstrap);
   }
 
   /// Upsert a snapshot for the anchor `(sessionId, messageId, swipeId,

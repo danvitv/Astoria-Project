@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/applied_canon_transition_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/canon_transition_fact_ref_repo.dart';
@@ -180,6 +181,7 @@ class EffectiveCanonReadRepository {
     Character source,
     String targetId,
   ) async {
+    final watch = Stopwatch()..start();
     final session = await ChatRepo(db).getById(sessionId);
     if (session == null) {
       throw const EffectiveCanonAssemblyUnavailable(
@@ -187,13 +189,25 @@ class EffectiveCanonReadRepository {
       );
     }
     final window = HistoricalMessageWindow.before(session.messages, targetId);
+    debugPrint(
+      '[effective-canon-read] session=$sessionId '
+      't+${watch.elapsedMilliseconds}ms historical window',
+    );
     final checkpoint = await SessionCanonCheckpointRepo(
       db,
     ).getForHistoricalWindow(sessionId, window);
+    debugPrint(
+      '[effective-canon-read] session=$sessionId '
+      't+${watch.elapsedMilliseconds}ms checkpoint',
+    );
     var lineage = await revisionRepo.getForCharacter(
       checkpoint?.characterId ?? source.id,
     );
     final baseline = await baselineRepo.getBySessionId(sessionId);
+    debugPrint(
+      '[effective-canon-read] session=$sessionId '
+      't+${watch.elapsedMilliseconds}ms lineage',
+    );
     // Without a checkpoint or a baseline nothing binds an earlier revision to
     // this window, so the session follows the source card exactly as the live
     // read does. A card edited outside canon leaves that state, and failing
@@ -235,7 +249,15 @@ class EffectiveCanonReadRepository {
       sessionId,
       historicalWindow: window,
     );
+    debugPrint(
+      '[effective-canon-read] session=$sessionId '
+      't+${watch.elapsedMilliseconds}ms trackers=${raw.committedTrackers.length}',
+    );
     final facts = await factRepo.getForHistoricalWindow(sessionId, window);
+    debugPrint(
+      '[effective-canon-read] session=$sessionId '
+      't+${watch.elapsedMilliseconds}ms facts=${facts.length}',
+    );
     final transitions =
         (await transitionRepo.getForContext(
               characterId: historicalCharacter.id,
@@ -249,6 +271,17 @@ class EffectiveCanonReadRepository {
               ),
             )
             .toList();
+    debugPrint(
+      '[effective-canon-read] session=$sessionId '
+      't+${watch.elapsedMilliseconds}ms transitions=${transitions.length}',
+    );
+    final refs = await transitionFactRefRepo.getForTransitionIds(
+      transitions.map((t) => t.id),
+    );
+    debugPrint(
+      '[effective-canon-read] session=$sessionId '
+      't+${watch.elapsedMilliseconds}ms refs=${refs.length}',
+    );
     return EffectiveCanonAssemblyInput(
       sourceCharacter: historicalCharacter,
       lineage: lineage,
@@ -257,9 +290,7 @@ class EffectiveCanonReadRepository {
       committedTrackers: raw.committedTrackers,
       manualControls: raw.manualControls,
       transitions: transitions,
-      transitionFactRefs: await transitionFactRefRepo.getForTransitionIds(
-        transitions.map((t) => t.id),
-      ),
+      transitionFactRefs: refs,
     );
   }
 }

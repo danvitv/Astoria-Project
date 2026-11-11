@@ -129,6 +129,60 @@ void main() {
     expect(await revisions.getForCharacter('c'), isEmpty);
   });
 
+  test(
+    'database-backed stamp skips unchanged reread and falls back on writes',
+    () async {
+      var rawReads = 0;
+      final fastLoader = EffectiveCanonContextLoader(
+        characterRevisionRepo: revisions,
+        db: db,
+        characterRepo: characters,
+        baselineRepo: baselines,
+        factRepo: facts,
+        transitionRepo: transitions,
+        transitionFactRefRepo: refs,
+        loadRawTrackerState: (_) async {
+          rawReads++;
+          return raw;
+        },
+        rawTrackerStateCoveredByDatabaseStamp: true,
+      );
+      final source = _character('one');
+      final context = await fastLoader.loadReadOnly(
+        sessionId: 's',
+        sourceCharacter: source,
+      );
+      expect(rawReads, 1);
+
+      expect(
+        await fastLoader.isStillCurrentReadOnly(
+          sessionId: 's',
+          sourceCharacter: source,
+          stamp: context.stamp,
+        ),
+        isTrue,
+      );
+      expect(rawReads, 1);
+
+      raw = LedgerRawTrackerState(
+        committedTrackers: const [
+          Tracker(sessionId: 's', name: 'world:weather', value: 'rain'),
+        ],
+        manualControls: const [],
+      );
+      await characters.put(source);
+      expect(
+        await fastLoader.isStillCurrentReadOnly(
+          sessionId: 's',
+          sourceCharacter: source,
+          stamp: context.stamp,
+        ),
+        isFalse,
+      );
+      expect(rawReads, 2);
+    },
+  );
+
   test('regen exclusion removes target snapshot and target facts', () async {
     await ChatRepo(db).put(
       const ChatSession(

@@ -503,6 +503,7 @@ final effectiveCanonContextLoaderProvider =
         loadRawTrackerState: ref
             .watch(ledgerRawTrackerStateReaderProvider)
             .read,
+        rawTrackerStateCoveredByDatabaseStamp: true,
       );
     });
 

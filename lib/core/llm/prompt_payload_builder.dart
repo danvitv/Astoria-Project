@@ -164,6 +164,14 @@ class PromptPayloadBuilder {
     CancelToken? cancelToken,
     void Function(GenerationPhase)? onPhase,
   }) async {
+    final collectionWatch = Stopwatch()..start();
+    void traceCollection(String stage) {
+      debugPrint(
+        '[context-collection] session=${session?.id ?? '-'} '
+        't+${collectionWatch.elapsedMilliseconds}ms $stage',
+      );
+    }
+
     void throwIfAborted() {
       if (shouldAbort?.call() == true) {
         throw const _GenerationAbortedException();
@@ -178,6 +186,7 @@ class PromptPayloadBuilder {
 
     final effectiveCharId = session?.characterId ?? charId;
     final sourceCharacter = await charRepo.getById(effectiveCharId);
+    traceCollection('source character loaded');
     throwIfAborted();
     if (sourceCharacter == null) {
       throw StateError('Character not found: $effectiveCharId');
@@ -192,6 +201,7 @@ class PromptPayloadBuilder {
         excludeSnapshotMessageId,
       );
       session = session.copyWith(messages: historicalWindow.messages);
+      traceCollection('historical window loaded');
     }
     final effectiveContext =
         session == null || (!includeEffectiveCanon && historicalWindow == null)
@@ -211,14 +221,17 @@ class PromptPayloadBuilder {
                 sourceCharacter: sourceCharacter,
                 excludeSnapshotMessageId: excludeSnapshotMessageId,
               );
+    traceCollection('effective canon loaded');
     final character = effectiveContext?.character ?? sourceCharacter;
     throwIfAborted();
     final effectiveProjection =
         effectiveContext == null || !includeEffectiveCanon
         ? null
         : EffectiveCanonPromptProjection.fromContext(effectiveContext);
+    traceCollection('effective canon projected');
 
     await _initializeApiConfigs();
+    traceCollection('api configs initialized');
     throwIfAborted();
     final chatApi = apiConfigOverride ?? _readActiveApiConfig();
     if (chatApi == null || chatApi.mode == 'embedding') {
@@ -226,6 +239,7 @@ class PromptPayloadBuilder {
     }
 
     final personas = await personaRepo.getAll();
+    traceCollection('personas loaded');
     throwIfAborted();
     final connections = _ref.read(personaConnectionsProvider);
     final activePersonaId = _ref.read(activePersonaIdProvider);
@@ -253,6 +267,7 @@ class PromptPayloadBuilder {
                 historicalWindow: historicalWindow,
               );
     final lorebooks = effectiveLorebooks.lorebooks;
+    traceCollection('lorebooks loaded');
     throwIfAborted();
     final lorebookSettings = _ref.read(lorebookSettingsProvider);
     final lorebookActivations = _ref.read(lorebookActivationsProvider);
@@ -276,6 +291,7 @@ class PromptPayloadBuilder {
       memoryBook = await _ref
           .read(memoryBookRepoProvider)
           .getBySessionId(sessionId);
+      traceCollection('memory book loaded');
       throwIfAborted();
       memoryGraphEnabled = memoryBook?.settings.enabled ?? true;
     }
@@ -292,6 +308,7 @@ class PromptPayloadBuilder {
 
     if (session != null) {
       history = await _injectHistory(sessionId: session.id, messages: history);
+      traceCollection('history injected');
       throwIfAborted();
       runtimePromptBlocks = _readRuntimePromptBlocks(session.id);
 
@@ -299,6 +316,7 @@ class PromptPayloadBuilder {
       summaryContent = historicalWindow == null
           ? await summaryService.getSummary(session.id)
           : null;
+      traceCollection('summary loaded');
       throwIfAborted();
 
       final memoryService = _ref.read(memoryInjectionServiceProvider);
@@ -390,6 +408,7 @@ class PromptPayloadBuilder {
               ),
             );
 
+      traceCollection('retrieval launched');
       throwIfAborted();
       onPhase?.call(GenerationPhase.retrieving);
       final timedLorebookFuture = lorebookFuture.then((result) {
