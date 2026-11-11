@@ -1,4 +1,5 @@
 import '../../models/tracker.dart';
+import '../tokenizer.dart';
 
 /// Test-accessible alias for [compileStudioSessionState].
 /// Only use in test code — production code calls [compileStudioSessionState]
@@ -9,11 +10,15 @@ String? kCompileStudioSessionStateForTest(
   String sessionId, {
   String latestUserText = '',
   String latestAssistantText = '',
+  int maxTokens = 2000,
+  int Function(String) tokenCounter = estimateTokens,
 }) => compileStudioSessionState(
   trackers,
   sessionId,
   latestUserText: latestUserText,
   latestAssistantText: latestAssistantText,
+  maxTokens: maxTokens,
+  tokenCounter: tokenCounter,
 );
 
 /// Compile ledger tracker rows into a `<studio_session_state>` system block.
@@ -49,6 +54,8 @@ String? compileStudioSessionState(
   String sessionId, {
   String latestUserText = '',
   String latestAssistantText = '',
+  int maxTokens = 2000,
+  int Function(String) tokenCounter = estimateTokens,
 }) {
   // Build a name→value map with override support. Keys:
   //   npc:Name.field, relationship:A:B.field, arc:id.field, world:key, scene.key
@@ -363,7 +370,11 @@ String? compileStudioSessionState(
   }
 
   buf.write('</studio_session_state>');
-  final result = _dedupeAndCapStudioState(buf.toString()).trim();
+  final result = _dedupeAndCapStudioState(
+    buf.toString(),
+    maxTokens: maxTokens,
+    tokenCounter: tokenCounter,
+  ).trim();
   // If we only wrote the header and footer with no content, skip injection.
   final onlyHeader =
       result ==
@@ -373,7 +384,7 @@ String? compileStudioSessionState(
   return result.isEmpty ? null : result;
 }
 
-/// Dedupes repeated rendered canon lines and caps the block to a bounded size.
+/// Dedupes repeated rendered canon lines and caps the block by estimated tokens.
 ///
 /// This is the MVP implementation of plan §Prompt Dedupe / Prompt Budget:
 /// it prevents duplicate canon claims inside the high-authority Studio state
@@ -382,8 +393,11 @@ String? compileStudioSessionState(
 /// manual overrides, presence, and resolved do_not_reopen arcs before lower-
 /// priority world/scene details, so tail trimming preserves conflict-preventing
 /// canon first.
-String _dedupeAndCapStudioState(String raw) {
-  const maxChars = 6000;
+String _dedupeAndCapStudioState(
+  String raw, {
+  required int maxTokens,
+  required int Function(String) tokenCounter,
+}) {
   final seen = <String>{};
   final lines = <String>[];
   for (final line in raw.split('\n')) {
@@ -405,19 +419,20 @@ String _dedupeAndCapStudioState(String raw) {
     lines.add(line);
   }
   var out = lines.join('\n');
-  if (out.length <= maxChars) return out;
+  if (tokenCounter(out) <= maxTokens) return out;
   final close = '</studio_session_state>';
   final trimNotice = '[trimmed lower-priority canon details]';
-  final budget = maxChars - close.length - trimNotice.length - 2;
-  if (budget <= 0) return out.substring(0, maxChars);
   final packed = <String>[];
-  var used = 0;
   for (final line in lines) {
-    final cost = line.length + 1;
-    if (used + cost > budget) break;
+    if (line == close) continue;
+    final candidate =
+        '${[...packed, line].join('\n').trimRight()}\n'
+        '$trimNotice\n$close';
+    if (tokenCounter(candidate) > maxTokens) break;
     packed.add(line);
-    used += cost;
   }
   out = packed.join('\n').trimRight();
-  return '$out\n$trimNotice\n$close';
+  final bounded = '$out\n$trimNotice\n$close';
+  if (tokenCounter(bounded) > maxTokens) return '';
+  return bounded;
 }

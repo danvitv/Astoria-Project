@@ -33,7 +33,6 @@ import 'message_recall_query.dart';
 import 'memory_selector.dart';
 import 'generation_context_inputs.dart';
 import 'prompt_builder.dart';
-import 'prompt/arc_state_builder.dart';
 import 'prompt/ledger_tracker_loader.dart';
 import 'prompt/lorebook_vector_searcher.dart';
 import 'prompt_inputs.dart';
@@ -433,14 +432,15 @@ class PromptPayloadBuilder {
           MemoryRetrievalMode.fromValue(
             memorySettings.memoryMode,
           ).isConsolidationMode) {
-        final annotations = await MemoryEventPromptAnnotationLoader(
-          _ref.read(appDbProvider),
-        ).load(
-          sessionId: session.id,
-          branchId: session.id,
-          entries: memorySelection.entries,
-          history: session.messages,
-        );
+        final annotations =
+            await MemoryEventPromptAnnotationLoader(
+              _ref.read(appDbProvider),
+            ).load(
+              sessionId: session.id,
+              branchId: session.id,
+              entries: memorySelection.entries,
+              history: session.messages,
+            );
         memorySelection = memorySelection.withEventAnnotations(annotations);
       }
       memoryInjectionTarget = memorySettings.injectionTarget == 'macro'
@@ -522,28 +522,10 @@ class PromptPayloadBuilder {
       memoryCoverage['memoryInjectionFingerprint'] = memoryInjectionFingerprint;
     }
 
-    // Load committed Studio Ledger canon state from tracker_rows and compile
-    // the <studio_session_state> injection block. Loaded whenever Studio Ledger
-    // is enabled, regardless of memoryMode. Falls back to null on any error.
-    // Rationale: inject committed canon state (entity/relationship/arc/world)
-    // as hidden/system prompt so the LLM sees session canon overriding
-    // character-card baseline. Priority-based budget: manual overrides/locks
-    // and conflict-preventing canon overrides are never trimmed before raw
-    // recall or optional InfBlocks.
-    String? studioSessionStateContent;
-    String? characterKnowledgeContent;
-    List<Tracker>? ledgerTrackers;
-    if (effectiveProjection != null && sessionId != null) {
-      final canon = EffectiveCanonPromptFormatter.format(
-        effectiveProjection,
-        sessionId: sessionId,
-        latestUserText: latestUserTextFromHistory(history),
-        latestAssistantText: latestAssistantTextFromHistory(history),
-      );
-      characterKnowledgeContent = canon.characterKnowledge;
-      studioSessionStateContent = canon.sessionState;
-      ledgerTrackers = effectiveProjection.trackers;
-    }
+    // Carry the immutable projection forward without eagerly materializing it.
+    // Ordinary and Studio compilers both own a later final-visible-window
+    // boundary. Packing here duplicated the largest synchronous CPU cost before
+    // the responder window was even known.
 
     // Load {{arc}} macro content from Studio Canon arc:* tracker rows.
     // Falls back to null when Studio Ledger has not written any arc state yet
@@ -561,15 +543,6 @@ class PromptPayloadBuilder {
           memorySettings.memoryMode,
         ).supports(MemoryRetrievalCapability.extendedPromptContext) &&
         sessionId != null) {
-      try {
-        if (ledgerTrackers != null) {
-          arcContent = buildArcContent(
-            ledgerTrackers,
-            latestUserText: latestUserTextFromHistory(history),
-            latestAssistantText: latestAssistantTextFromHistory(history),
-          );
-        }
-      } catch (_) {}
       if (historicalWindow == null) {
         try {
           final entities = await _ref
@@ -645,11 +618,11 @@ class PromptPayloadBuilder {
       chunkFirstTopChunks: memorySettings.chunkFirstTopChunks,
       arcContent: arcContent,
       entitiesContent: entitiesContent,
-      studioSessionStateContent: studioSessionStateContent,
+      studioSessionStateContent: null,
       gameTime: gameTimeState.time,
       gameDate: gameTimeState.date,
       gameDay: gameTimeState.day?.toString(),
-      characterKnowledgeContent: characterKnowledgeContent,
+      characterKnowledgeContent: null,
       recalledMessagesContent: recalledMessagesContent,
       recalledMessageChunks: recalledMessageChunks,
       effectiveCanonProjection: effectiveProjection,
@@ -773,6 +746,8 @@ class PromptPayloadBuilder {
             sessionId: session.id,
             latestUserText: latestUserTextFromHistory(history),
             latestAssistantText: latestAssistantTextFromHistory(history),
+            contextSize: chatApi.contextSize,
+            maxTokens: chatApi.maxTokens,
           );
     String? arcContent = materialized?.arcContent;
     String? entitiesContent;
@@ -910,3 +885,17 @@ class PromptPayloadBuilder {
 class _GenerationAbortedException implements Exception {
   const _GenerationAbortedException();
 }
+
+String latestUserTextFromHistory(List<ChatMessage> history) =>
+    _latestRoleText(history, 'user');
+
+String latestAssistantTextFromHistory(List<ChatMessage> history) =>
+    _latestRoleText(history, 'assistant');
+
+String _latestRoleText(List<ChatMessage> history, String role) => history
+    .lastWhere(
+      (message) =>
+          message.role == role && !message.isHidden && !message.isTyping,
+      orElse: () => const ChatMessage(id: '', role: '', content: ''),
+    )
+    .content;

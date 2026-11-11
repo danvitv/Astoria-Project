@@ -85,6 +85,8 @@ PromptResult buildPrompt(PromptPayload payload) {
         sessionId: payload.sessionId ?? '',
         latestUserText: _latestLedgerText(payload.history, 'user'),
         latestAssistantText: _latestLedgerText(payload.history, 'assistant'),
+        contextSize: payload.apiConfig.contextSize,
+        maxTokens: payload.apiConfig.maxTokens,
       );
   final baselinePayload = payload.withLedgerMaterialization(
     baselineMaterialization,
@@ -130,6 +132,8 @@ PromptResult buildPrompt(PromptPayload payload) {
     sessionId: payload.sessionId ?? '',
     latestUserText: _latestLedgerText(clamped, 'user'),
     latestAssistantText: _latestLedgerText(clamped, 'assistant'),
+    contextSize: payload.apiConfig.contextSize,
+    maxTokens: payload.apiConfig.maxTokens,
   );
   final rebuilt = _buildPromptOnce(payload.withLedgerMaterialization(selected));
   // Legacy uses relevance only, so it cannot suppress based on source
@@ -872,6 +876,7 @@ PromptResult _assembleMessages({
         fallbackContent: payload.recalledMessagesContent,
         disableSourceWindowExclusion: payload.disableSourceWindowExclusion,
         gameTime: requestClock,
+        maxTokens: payload.recalledMessagesMaxTokens,
       );
   final recalledMessagesContent = recallResolution.content;
   if (recalledMessagesContent != null && recalledMessagesContent.isNotEmpty) {
@@ -1084,6 +1089,7 @@ String? effectiveRecalledMessagesContent(
     date: payload.gameDate,
     day: int.tryParse(payload.gameDay ?? ''),
   ),
+  maxTokens: payload.recalledMessagesMaxTokens,
 );
 
 /// Appends the contents of preset blocks with `appendToLastMessage = true` to

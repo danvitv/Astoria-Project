@@ -425,7 +425,11 @@ void main() {
         final result = _select(
           _projection(
             trackers: [
-              _tracker('scene.location', 'the bath', provenance: 'message=mold'),
+              _tracker(
+                'scene.location',
+                'the bath',
+                provenance: 'message=mold',
+              ),
               _tracker(
                 'relationship:a:b.trust',
                 'fragile',
@@ -440,14 +444,11 @@ void main() {
           ),
           visible: [_message('mnew', 'recent exchange')],
         );
-        expect(
-          result.projection.trackers.map((t) => t.name),
-          [
-            'scene.location',
-            'relationship:a:b.trust',
-            'npc:gilda.current_goal',
-          ],
-        );
+        expect(result.projection.trackers.map((t) => t.name), [
+          'scene.location',
+          'relationship:a:b.trust',
+          'npc:gilda.current_goal',
+        ]);
       },
     );
 
@@ -605,17 +606,11 @@ void main() {
       expect(transition.claim, 'Trust is established.');
     });
 
-    test('legacy materialization is byte-equivalent to existing formatter', () {
+    test('legacy relevance output is packed under the shared token budget', () {
       final projection = _projection(
         facts: [_fact()],
         trackers: [_tracker('world:weather', 'rain')],
         claims: ['The old conflict is over.'],
-      );
-      final old = EffectiveCanonPromptFormatter.format(
-        projection,
-        sessionId: 's',
-        latestUserText: '',
-        latestAssistantText: '',
       );
       final materialized = EffectiveCanonPromptMaterializer.materialize(
         _input(
@@ -627,13 +622,16 @@ void main() {
         ),
         sessionId: 's',
       );
-      expect(materialized.characterKnowledgeContent, old.characterKnowledge);
+      expect(materialized.characterKnowledgeContent, contains('the truth'));
+      expect(materialized.studioSessionStateContent, contains('rain'));
       expect(
-        [
-          materialized.studioSessionStateContent,
-          materialized.transitionContent,
-        ].whereType<String>().join('\n\n'),
-        old.sessionState,
+        materialized.studioSessionStateContent,
+        contains('The old conflict is over.'),
+      );
+      expect(materialized.transitionContent, isNull);
+      expect(
+        materialized.packingDiagnostics.usedTokens,
+        lessThanOrEqualTo(materialized.packingDiagnostics.nominalTokens),
       );
     });
 

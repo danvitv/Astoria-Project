@@ -16,7 +16,7 @@ import 'runtime_prompt_block.dart';
 import 'recalled_message_chunk.dart';
 import 'effective_canon_prompt_formatter.dart';
 import 'effective_canon_prompt_materializer.dart';
-import 'selective_ledger_projection_filter.dart';
+import 'effective_canon_token_packer.dart';
 import '../generation_context_inputs.dart';
 
 class PromptPayload {
@@ -132,6 +132,11 @@ class PromptPayload {
   final LedgerPromptInjectionPolicy ledgerPromptInjectionPolicy;
   final String ledgerInjectionCacheIdentity;
   final bool ledgerProjectionFreshnessProvenCurrent;
+  final EffectiveCanonPackingDiagnostics? effectiveCanonPackingDiagnostics;
+
+  /// Raw recall is lower priority than mandatory effective canon. Mandatory
+  /// canon overflow reduces this cap before borrowing from Memory selection.
+  final int recalledMessagesMaxTokens;
 
   const PromptPayload({
     required this.character,
@@ -191,6 +196,8 @@ class PromptPayload {
     ),
     this.ledgerInjectionCacheIdentity = '',
     this.ledgerProjectionFreshnessProvenCurrent = false,
+    this.effectiveCanonPackingDiagnostics,
+    this.recalledMessagesMaxTokens = 5000,
   });
 
   factory PromptPayload.fromGenerationContext(
@@ -200,37 +207,15 @@ class PromptPayload {
     Set<String> sourceWindowVisibleMessageIds = const {},
     LedgerPromptInjectionPolicy? ledgerPromptInjectionPolicy,
     String consumerPath = 'ordinary',
+    int? responderContextSize,
+    int? responderMaxTokens,
   }) {
-    final projection = inputs.effectiveCanonProjection;
     final policy =
         ledgerPromptInjectionPolicy ?? inputs.ledgerPromptInjectionPolicy;
     // Do not run history-dependent Ledger selection here. This factory is also
     // used by prefetched/raw-input paths, where [inputs.history] is not yet the
     // token-trimmed responder context. buildPrompt owns the frozen-baseline
     // materialization boundary.
-    final materialized = projection == null
-        ? null
-        : EffectiveCanonPromptMaterializer.materializeSafely(
-            SelectiveLedgerProjectionInput(
-              policy: LedgerPromptInjectionPolicy(
-                presetOptIn: policy.presetOptIn,
-                mode: policy.effectiveMode == LedgerPromptInjectionMode.disabled
-                    ? LedgerPromptInjectionMode.disabled
-                    : LedgerPromptInjectionMode.legacy,
-                algorithmVersion: policy.algorithmVersion,
-                reverseScanDepth: policy.reverseScanDepth,
-              ),
-              consumerPath: consumerPath,
-              projection: projection,
-              visibleMessages: const [],
-              selectedSwipeByMessageId: const {},
-              focalUserName: inputs.persona?.name ?? '',
-              structuredContinuitySourceIds: const {},
-            ),
-            sessionId: inputs.sessionId ?? '',
-            latestUserText: _latestText(inputs.history, 'user'),
-            latestAssistantText: _latestText(inputs.history, 'assistant'),
-          );
     final disabled = policy.effectiveMode == LedgerPromptInjectionMode.disabled;
     return PromptPayload(
       character: inputs.character,
@@ -268,19 +253,17 @@ class PromptPayload {
       memoryExcerptChunksPerEntry: inputs.memoryExcerptChunksPerEntry,
       chunkFirstTopEntries: inputs.chunkFirstTopEntries,
       chunkFirstTopChunks: inputs.chunkFirstTopChunks,
-      arcContent: materialized != null
-          ? materialized.arcContent
-          : (disabled ? null : inputs.arcContent),
+      arcContent: disabled ? null : inputs.arcContent,
       entitiesContent: inputs.entitiesContent,
-      studioSessionStateContent: materialized != null
-          ? materialized.studioSessionStateContent
-          : (disabled ? null : inputs.studioSessionStateContent),
+      studioSessionStateContent: disabled
+          ? null
+          : inputs.studioSessionStateContent,
       gameTime: inputs.gameTime,
       gameDate: inputs.gameDate,
       gameDay: inputs.gameDay,
-      characterKnowledgeContent: materialized != null
-          ? materialized.characterKnowledgeContent
-          : (disabled ? null : inputs.characterKnowledgeContent),
+      characterKnowledgeContent: disabled
+          ? null
+          : inputs.characterKnowledgeContent,
       recalledMessagesContent: inputs.recalledMessagesContent,
       recalledMessageChunks: inputs.recalledMessageChunks,
       disableSourceWindowExclusion: disableSourceWindowExclusion,
@@ -291,78 +274,143 @@ class PromptPayload {
       effectiveCanonRevisionHash: inputs.effectiveCanonRevisionHash,
       effectiveCanonCacheIdentity: inputs.effectiveCanonCacheIdentity,
       ledgerPromptInjectionPolicy: policy,
-      ledgerInjectionCacheIdentity:
-          materialized?.injectionCacheIdentity ??
-          inputs.ledgerInjectionCacheIdentity,
+      ledgerInjectionCacheIdentity: inputs.ledgerInjectionCacheIdentity,
       ledgerProjectionFreshnessProvenCurrent:
           inputs.ledgerProjectionFreshnessProvenCurrent,
+      effectiveCanonPackingDiagnostics: null,
+      recalledMessagesMaxTokens: 5000,
     );
   }
 
   PromptPayload withLedgerMaterialization(
     EffectiveCanonPromptMaterialization materialization,
-  ) => PromptPayload(
-    character: character,
-    persona: persona,
-    preset: preset,
-    history: history,
-    sessionId: sessionId,
-    apiConfig: apiConfig,
-    sessionVars: sessionVars,
-    globalVars: globalVars,
-    summaryContent: summaryContent,
-    summaryPrefix: summaryPrefix,
-    memoryContent: memoryContent,
-    memoryMacroContent: memoryMacroContent,
-    memoryInjectionTarget: memoryInjectionTarget,
-    guidanceText: guidanceText,
-    continueInstruction: continueInstruction,
-    lorebooks: lorebooks,
-    lorebookSettings: lorebookSettings,
-    lorebookActivations: lorebookActivations,
-    vectorEntries: vectorEntries,
-    authorsNote: authorsNote,
-    characterDepthPrompt: characterDepthPrompt,
-    characterDepthPromptDepth: characterDepthPromptDepth,
-    characterDepthPromptRole: characterDepthPromptRole,
-    memoryCoverage: memoryCoverage,
-    globalRegexes: globalRegexes,
-    preScannedEntries: preScannedEntries,
-    triggeredMemories: triggeredMemories,
-    runtimePromptBlocks: runtimePromptBlocks,
-    memorySelection: memorySelection,
-    memoryExcerptingEnabled: memoryExcerptingEnabled,
-    memoryPackingMode: memoryPackingMode,
-    memoryExcerptTokensPerChunk: memoryExcerptTokensPerChunk,
-    memoryExcerptChunksPerEntry: memoryExcerptChunksPerEntry,
-    chunkFirstTopEntries: chunkFirstTopEntries,
-    chunkFirstTopChunks: chunkFirstTopChunks,
-    arcContent: materialization.arcContent,
-    entitiesContent: entitiesContent,
-    studioSessionStateContent: materialization.studioSessionStateContent,
-    gameTime: gameTime,
-    gameDate: gameDate,
-    gameDay: gameDay,
-    characterKnowledgeContent: materialization.characterKnowledgeContent,
-    recalledMessagesContent: recalledMessagesContent,
-    recalledMessageChunks: recalledMessageChunks,
-    disableSourceWindowExclusion: disableSourceWindowExclusion,
-    sourceWindowVisibleMessageIds: sourceWindowVisibleMessageIds,
-    memoryInjectionFingerprint: memoryInjectionFingerprint,
-    effectiveCanonProjection: effectiveCanonProjection,
-    effectiveCanonRevisionNumber: effectiveCanonRevisionNumber,
-    effectiveCanonRevisionHash: effectiveCanonRevisionHash,
-    effectiveCanonCacheIdentity: effectiveCanonCacheIdentity,
-    ledgerPromptInjectionPolicy: ledgerPromptInjectionPolicy,
-    ledgerInjectionCacheIdentity: materialization.injectionCacheIdentity,
-    ledgerProjectionFreshnessProvenCurrent:
-        ledgerProjectionFreshnessProvenCurrent,
+  ) {
+    final overflow = materialization.packingDiagnostics.requiredOverflowTokens;
+    final priorMemoryBudget = memorySelection == null
+        ? null
+        : memorySelection!.budgetTokens ?? memorySelection!.totalTokens;
+    final allocation = EffectiveCanonOverflowAllocation.allocate(
+      requiredOverflowTokens: overflow,
+      recallBudgetTokens: recalledMessagesMaxTokens,
+      memoryBudgetTokens: priorMemoryBudget,
+    );
+    final reclaimedMemorySelection = _reclaimMemoryBudget(
+      memorySelection,
+      allocation.reclaimedMemoryTokens,
+    );
+    return PromptPayload(
+      character: character,
+      persona: persona,
+      preset: preset,
+      history: history,
+      sessionId: sessionId,
+      apiConfig: apiConfig,
+      sessionVars: sessionVars,
+      globalVars: globalVars,
+      summaryContent: summaryContent,
+      summaryPrefix: summaryPrefix,
+      memoryContent: memoryContent,
+      memoryMacroContent: memoryMacroContent,
+      memoryInjectionTarget: memoryInjectionTarget,
+      guidanceText: guidanceText,
+      continueInstruction: continueInstruction,
+      lorebooks: lorebooks,
+      lorebookSettings: lorebookSettings,
+      lorebookActivations: lorebookActivations,
+      vectorEntries: vectorEntries,
+      authorsNote: authorsNote,
+      characterDepthPrompt: characterDepthPrompt,
+      characterDepthPromptDepth: characterDepthPromptDepth,
+      characterDepthPromptRole: characterDepthPromptRole,
+      memoryCoverage: {
+        ...memoryCoverage,
+        'effectiveCanonPacking': _packingDiagnostics(
+          materialization.packingDiagnostics,
+          recallBudget: allocation.recallBudgetTokens,
+          memoryBudget: reclaimedMemorySelection?.budgetTokens,
+        ),
+      },
+      globalRegexes: globalRegexes,
+      preScannedEntries: preScannedEntries,
+      triggeredMemories: triggeredMemories,
+      runtimePromptBlocks: runtimePromptBlocks,
+      memorySelection: reclaimedMemorySelection,
+      memoryExcerptingEnabled: memoryExcerptingEnabled,
+      memoryPackingMode: memoryPackingMode,
+      memoryExcerptTokensPerChunk: memoryExcerptTokensPerChunk,
+      memoryExcerptChunksPerEntry: memoryExcerptChunksPerEntry,
+      chunkFirstTopEntries: chunkFirstTopEntries,
+      chunkFirstTopChunks: chunkFirstTopChunks,
+      arcContent: materialization.arcContent,
+      entitiesContent: entitiesContent,
+      studioSessionStateContent: materialization.studioSessionStateContent,
+      gameTime: gameTime,
+      gameDate: gameDate,
+      gameDay: gameDay,
+      characterKnowledgeContent: materialization.characterKnowledgeContent,
+      recalledMessagesContent: recalledMessagesContent,
+      recalledMessageChunks: recalledMessageChunks,
+      disableSourceWindowExclusion: disableSourceWindowExclusion,
+      sourceWindowVisibleMessageIds: sourceWindowVisibleMessageIds,
+      memoryInjectionFingerprint: memoryInjectionFingerprint,
+      effectiveCanonProjection: effectiveCanonProjection,
+      effectiveCanonRevisionNumber: effectiveCanonRevisionNumber,
+      effectiveCanonRevisionHash: effectiveCanonRevisionHash,
+      effectiveCanonCacheIdentity: effectiveCanonCacheIdentity,
+      ledgerPromptInjectionPolicy: ledgerPromptInjectionPolicy,
+      ledgerInjectionCacheIdentity: materialization.injectionCacheIdentity,
+      ledgerProjectionFreshnessProvenCurrent:
+          ledgerProjectionFreshnessProvenCurrent,
+      effectiveCanonPackingDiagnostics: materialization.packingDiagnostics,
+      recalledMessagesMaxTokens: allocation.recallBudgetTokens,
+    );
+  }
+}
+
+MemorySelection? _reclaimMemoryBudget(
+  MemorySelection? selection,
+  int reclaimTokens,
+) {
+  if (selection == null || reclaimTokens <= 0) return selection;
+  final priorBudget = selection.budgetTokens ?? selection.totalTokens;
+  final budget = (priorBudget - reclaimTokens).clamp(0, priorBudget);
+  return MemorySelection(
+    selectionMode: selection.selectionMode,
+    entries: selection.entries,
+    allScores: selection.allScores,
+    totalTokens: selection.totalTokens,
+    budgetTokens: budget,
+    entryCap: selection.entryCap,
+    budgetTrimmed: selection.budgetTrimmed || budget < selection.totalTokens,
+    excludedBySourceWindow: selection.excludedBySourceWindow,
+    eventAnnotationsByEntryId: selection.eventAnnotationsByEntryId,
   );
 }
 
-String _latestText(List<ChatMessage> history, String role) => history
-    .lastWhere(
-      (message) => message.role == role,
-      orElse: () => const ChatMessage(id: '', role: '', content: ''),
-    )
-    .content;
+Map<String, dynamic> _packingDiagnostics(
+  EffectiveCanonPackingDiagnostics diagnostics, {
+  required int recallBudget,
+  required int? memoryBudget,
+}) => {
+  'nominalTokens': diagnostics.nominalTokens,
+  'hardCeilingTokens': diagnostics.hardCeilingTokens,
+  'mandatoryReserveTokens': diagnostics.mandatoryReserveTokens,
+  'usedTokens': diagnostics.usedTokens,
+  'channelTokens': diagnostics.channelTokens,
+  'presentEntityCount': diagnostics.presentEntityCount,
+  'spotlightEntityIds': diagnostics.spotlightEntityIds,
+  'requiredOverflowTokens': diagnostics.requiredOverflowTokens,
+  'tokenizerMode': diagnostics.tokenizerMode,
+  'selectionIdentity': diagnostics.selectionIdentity,
+  'reclaimedRecallBudgetTokens': 5000 - recallBudget,
+  'memoryBudgetTokens': ?memoryBudget,
+  'decisions': [
+    for (final decision in diagnostics.decisions)
+      {
+        'itemId': decision.itemId,
+        'channel': decision.channel,
+        'reason': decision.reason.name,
+        'tokenCost': decision.tokenCost,
+      },
+  ],
+};

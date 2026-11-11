@@ -30,6 +30,15 @@ final class MemoryPromptPacker {
     GameTimeState gameTime = const GameTimeState(),
     String? summaryExcerpt,
   }) {
+    final budget = selection.budgetTokens;
+    if (budget != null && budget <= 0) {
+      return MemoryExcerptSelection(
+        items: const [],
+        totalTokens: 0,
+        budgetTrimmed: selection.budgetTrimmed || selection.entries.isNotEmpty,
+      );
+    }
+
     MemoryExcerptSelection select(MemorySelection input) {
       final selected = !excerptingEnabled && packingMode != 'chunk_first'
           ? MemoryExcerptSelector.fullEntries(input)
@@ -84,7 +93,6 @@ final class MemoryPromptPacker {
           );
 
     var packed = select(selection);
-    final budget = selection.budgetTokens;
     var bodyBudget = budget ?? 0;
     var trimmed = packed.budgetTrimmed;
     if (budget != null && budget > 0) {

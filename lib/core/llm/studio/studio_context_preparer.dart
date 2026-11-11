@@ -19,6 +19,7 @@ import '../prompt/memory_context_resolver.dart';
 import '../prompt/recalled_messages_resolver.dart';
 import '../prompt/effective_canon_prompt_materializer.dart';
 import '../prompt/effective_canon_prompt_formatter.dart';
+import '../prompt/effective_canon_token_packer.dart';
 import '../prompt/exact_lorebook_manifest.dart';
 import '../prompt/recalled_message_chunk.dart';
 import '../prompt/selective_ledger_projection_filter.dart';
@@ -55,6 +56,8 @@ final class StudioContextPreparer {
     String? reasoningTagStartOverride,
     String? reasoningTagEndOverride,
     StudioPreset? studioPreset,
+    int? responderContextSize,
+    int? responderMaxTokens,
     PromptWorker? worker,
   }) async {
     final useO200k = o200kBaseLoaded;
@@ -69,6 +72,8 @@ final class StudioContextPreparer {
       reasoningTagStartOverride: reasoningTagStartOverride,
       reasoningTagEndOverride: reasoningTagEndOverride,
       studioPreset: studioPreset,
+      responderContextSize: responderContextSize,
+      responderMaxTokens: responderMaxTokens,
     );
     final sw = Stopwatch()..start();
     final promptWorker = worker ?? await PromptWorker.ensureInitialized();
@@ -114,6 +119,8 @@ final class StudioContextPreparer {
     String? reasoningTagStartOverride,
     String? reasoningTagEndOverride,
     StudioPreset? studioPreset,
+    int? responderContextSize,
+    int? responderMaxTokens,
   }) {
     final visibleLedgerMessages = inputs.history
         .where(
@@ -136,6 +143,8 @@ final class StudioContextPreparer {
       policy: ledgerPromptInjectionPolicy,
       consumerPath: consumerPath,
       visibleMessages: selectionWindow,
+      responderContextSize: responderContextSize,
+      responderMaxTokens: responderMaxTokens,
     );
     final disabled =
         ledgerPromptInjectionPolicy.effectiveMode ==
@@ -155,6 +164,22 @@ final class StudioContextPreparer {
         : ledger == null
         ? inputs.arcContent
         : ledger.arcContent;
+    final canonOverflow =
+        ledger?.packingDiagnostics.requiredOverflowTokens ?? 0;
+    final priorMemoryBudget = inputs.memorySelection == null
+        ? null
+        : inputs.memorySelection!.budgetTokens ??
+              inputs.memorySelection!.totalTokens;
+    final overflowAllocation = EffectiveCanonOverflowAllocation.allocate(
+      requiredOverflowTokens: canonOverflow,
+      recallBudgetTokens: 5000,
+      memoryBudgetTokens: priorMemoryBudget,
+    );
+    final recallBudget = overflowAllocation.recallBudgetTokens;
+    final memorySelection = _reclaimMemoryBudget(
+      inputs.memorySelection,
+      overflowAllocation.reclaimedMemoryTokens,
+    );
     final baseMacroContext = MacroContext(
       charName: inputs.character.name,
       charDescription: inputs.character.description,
@@ -240,10 +265,10 @@ final class StudioContextPreparer {
       date: inputs.gameDate,
       day: int.tryParse(inputs.gameDay ?? ''),
     );
-    final memory = inputs.memorySelection == null
+    final memory = memorySelection == null
         ? null
         : const MemoryContextResolver().resolve(
-            selection: inputs.memorySelection!,
+            selection: memorySelection,
             visibleMessageIds: visibleMessageIds,
             disableSourceWindowExclusion: disableSourceWindowExclusion,
             excerptingEnabled: inputs.memoryExcerptingEnabled,
@@ -288,6 +313,7 @@ final class StudioContextPreparer {
       fallbackContent: inputs.recalledMessagesContent,
       disableSourceWindowExclusion: disableSourceWindowExclusion,
       gameTime: gameTimeState,
+      maxTokens: recallBudget,
     );
 
     final slots = <StudioContextSlot, List<PromptMessage>>{
@@ -383,7 +409,7 @@ Do not reapply an older timeskip or treat future plans as elapsed time.
       );
     }
 
-    final memoryCoverage = !includeMemoryDiagnostics
+    final baseMemoryCoverage = !includeMemoryDiagnostics
         ? _lightweightMemoryCoverage(inputs, memory)
         : memory == null
         ? inputs.memoryCoverage
@@ -392,6 +418,15 @@ Do not reapply an older timeskip or treat future plans as elapsed time.
             memory.selection,
             memory.excerptSelection,
           );
+    final memoryCoverage = {
+      ...baseMemoryCoverage,
+      if (ledger != null)
+        'effectiveCanonPacking': _packingDiagnostics(
+          ledger.packingDiagnostics,
+          recallBudget: recallBudget,
+          memoryBudget: memorySelection?.budgetTokens,
+        ),
+    };
     return StudioContext(
       slots: {
         for (final entry in slots.entries)
@@ -455,6 +490,8 @@ Do not reapply an older timeskip or treat future plans as elapsed time.
     required LedgerPromptInjectionPolicy policy,
     required String consumerPath,
     required List<ChatMessage> visibleMessages,
+    int? responderContextSize,
+    int? responderMaxTokens,
   }) {
     final projection = inputs.effectiveCanonProjection;
     if (projection == null) return null;
@@ -474,6 +511,10 @@ Do not reapply an older timeskip or treat future plans as elapsed time.
             : LedgerProjectionFreshness.unknown,
       ),
       sessionId: inputs.sessionId ?? '',
+      latestUserText: _latestVisibleText(visibleMessages, 'user'),
+      latestAssistantText: _latestVisibleText(visibleMessages, 'assistant'),
+      contextSize: responderContextSize ?? inputs.apiConfig.contextSize,
+      maxTokens: responderMaxTokens ?? inputs.apiConfig.maxTokens,
     );
   }
 
@@ -483,6 +524,61 @@ Do not reapply an older timeskip or treat future plans as elapsed time.
     return value?.trim().isNotEmpty == true ? '$prefix\n\n$value' : prefix;
   }
 }
+
+String _latestVisibleText(List<ChatMessage> messages, String role) => messages
+    .lastWhere(
+      (message) => message.role == role,
+      orElse: () => const ChatMessage(id: '', role: '', content: ''),
+    )
+    .content;
+
+MemorySelection? _reclaimMemoryBudget(
+  MemorySelection? selection,
+  int reclaimTokens,
+) {
+  if (selection == null || reclaimTokens <= 0) return selection;
+  final priorBudget = selection.budgetTokens ?? selection.totalTokens;
+  final budget = (priorBudget - reclaimTokens).clamp(0, priorBudget);
+  return MemorySelection(
+    selectionMode: selection.selectionMode,
+    entries: selection.entries,
+    allScores: selection.allScores,
+    totalTokens: selection.totalTokens,
+    budgetTokens: budget,
+    entryCap: selection.entryCap,
+    budgetTrimmed: selection.budgetTrimmed || budget < selection.totalTokens,
+    excludedBySourceWindow: selection.excludedBySourceWindow,
+    eventAnnotationsByEntryId: selection.eventAnnotationsByEntryId,
+  );
+}
+
+Map<String, dynamic> _packingDiagnostics(
+  EffectiveCanonPackingDiagnostics diagnostics, {
+  required int recallBudget,
+  required int? memoryBudget,
+}) => {
+  'nominalTokens': diagnostics.nominalTokens,
+  'hardCeilingTokens': diagnostics.hardCeilingTokens,
+  'mandatoryReserveTokens': diagnostics.mandatoryReserveTokens,
+  'usedTokens': diagnostics.usedTokens,
+  'channelTokens': diagnostics.channelTokens,
+  'presentEntityCount': diagnostics.presentEntityCount,
+  'spotlightEntityIds': diagnostics.spotlightEntityIds,
+  'requiredOverflowTokens': diagnostics.requiredOverflowTokens,
+  'tokenizerMode': diagnostics.tokenizerMode,
+  'selectionIdentity': diagnostics.selectionIdentity,
+  'reclaimedRecallBudgetTokens': 5000 - recallBudget,
+  'memoryBudgetTokens': ?memoryBudget,
+  'decisions': [
+    for (final decision in diagnostics.decisions)
+      {
+        'itemId': decision.itemId,
+        'channel': decision.channel,
+        'reason': decision.reason.name,
+        'tokenCost': decision.tokenCost,
+      },
+  ],
+};
 
 final class _StudioContextJob {
   const _StudioContextJob({
@@ -495,6 +591,8 @@ final class _StudioContextJob {
     this.reasoningTagStartOverride,
     this.reasoningTagEndOverride,
     this.studioPreset,
+    this.responderContextSize,
+    this.responderMaxTokens,
   });
 
   final GenerationContextInputs inputs;
@@ -506,6 +604,8 @@ final class _StudioContextJob {
   final String? reasoningTagStartOverride;
   final String? reasoningTagEndOverride;
   final StudioPreset? studioPreset;
+  final int? responderContextSize;
+  final int? responderMaxTokens;
 
   // Size hint for the existing bounded deadline, without encoding the graph.
   int get payloadBytes =>
@@ -548,6 +648,8 @@ StudioContext _prepareStudioContext(Object? input) {
     reasoningTagStartOverride: job.reasoningTagStartOverride,
     reasoningTagEndOverride: job.reasoningTagEndOverride,
     studioPreset: job.studioPreset,
+    responderContextSize: job.responderContextSize,
+    responderMaxTokens: job.responderMaxTokens,
   );
 }
 
@@ -577,6 +679,8 @@ GenerationContextInputs _snapshotInputs(
   sessionId: inputs.sessionId,
   apiConfig: ApiConfig(
     id: inputs.apiConfig.id,
+    contextSize: inputs.apiConfig.contextSize,
+    maxTokens: inputs.apiConfig.maxTokens,
     reasoningTagStart: inputs.apiConfig.reasoningTagStart,
     reasoningTagEnd: inputs.apiConfig.reasoningTagEnd,
   ),
@@ -608,12 +712,12 @@ GenerationContextInputs _snapshotInputs(
           totalTokens: inputs.memorySelection!.totalTokens,
           budgetTokens: inputs.memorySelection!.budgetTokens,
           entryCap: inputs.memorySelection!.entryCap,
-           budgetTrimmed: inputs.memorySelection!.budgetTrimmed,
-           excludedBySourceWindow:
-               inputs.memorySelection!.excludedBySourceWindow,
-           eventAnnotationsByEntryId:
-               inputs.memorySelection!.eventAnnotationsByEntryId,
-         ),
+          budgetTrimmed: inputs.memorySelection!.budgetTrimmed,
+          excludedBySourceWindow:
+              inputs.memorySelection!.excludedBySourceWindow,
+          eventAnnotationsByEntryId:
+              inputs.memorySelection!.eventAnnotationsByEntryId,
+        ),
   memoryExcerptingEnabled: inputs.memoryExcerptingEnabled,
   memoryPackingMode: inputs.memoryPackingMode,
   memoryExcerptTokensPerChunk: inputs.memoryExcerptTokensPerChunk,

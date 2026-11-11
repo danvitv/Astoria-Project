@@ -2097,7 +2097,12 @@ Ledger text.
         for (var i = 0; i < 220; i++)
           'world:fact_$i': 'long canon fact ${'x' * 80} $i',
       });
-      final compiled = kCompileStudioSessionStateForTest(trackers, 's1')!;
+      final compiled = kCompileStudioSessionStateForTest(
+        trackers,
+        's1',
+        maxTokens: 6000,
+        tokenCounter: (text) => text.length,
+      )!;
       expect(compiled.length, lessThanOrEqualTo(6000));
       expect(compiled, endsWith('</studio_session_state>'));
       expect(compiled, contains('[trimmed lower-priority canon details]'));

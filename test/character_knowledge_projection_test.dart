@@ -65,64 +65,55 @@ void main() {
     expect(content, contains('override conflicting base-card traits'));
   });
 
-  test(
-    'exempts persistent_condition, commitment, and identity_development from cap',
-    () {
-      final content = compileCharacterKnowledgeProjection([
-        fact(
-          id: 'boundary',
-          subject: 'Danvi',
-          importance: 0.9,
-          factClass: CharacterKnowledgeFactClass.persistentCondition,
-          predicate: 'has_hard_boundary',
-          object: 'no anal on him',
-        ),
-        fact(
-          id: 'promise',
-          subject: 'Maisie',
-          importance: 0.9,
-          factClass: CharacterKnowledgeFactClass.commitment,
-          predicate: 'committed_to',
-          object: 'directly express desires',
-        ),
-        fact(
-          id: 'arc',
-          subject: 'Maisie',
-          importance: 0.9,
-          factClass: CharacterKnowledgeFactClass.identityDevelopment,
-          predicate: 'aroused_by',
-          object: 'rough scenarios',
-        ),
-        for (var i = 0; i < 10; i++)
-          fact(
-            id: 'rel$i',
-            subject: 'NPC$i',
-            importance: 0.5,
-          ),
-      ], maxFacts: 2);
+  test('prioritizes canon-critical facts without bypassing the bound', () {
+    final content = compileCharacterKnowledgeProjection([
+      fact(
+        id: 'boundary',
+        subject: 'Danvi',
+        importance: 0.9,
+        factClass: CharacterKnowledgeFactClass.persistentCondition,
+        predicate: 'has_hard_boundary',
+        object: 'no anal on him',
+      ),
+      fact(
+        id: 'promise',
+        subject: 'Maisie',
+        importance: 0.9,
+        factClass: CharacterKnowledgeFactClass.commitment,
+        predicate: 'committed_to',
+        object: 'directly express desires',
+      ),
+      fact(
+        id: 'arc',
+        subject: 'Maisie',
+        importance: 0.9,
+        factClass: CharacterKnowledgeFactClass.identityDevelopment,
+        predicate: 'aroused_by',
+        object: 'rough scenarios',
+      ),
+      for (var i = 0; i < 10; i++)
+        fact(id: 'rel$i', subject: 'NPC$i', importance: 0.5),
+    ], maxFacts: 2);
 
-      // All three canon-critical facts survive despite maxFacts=2.
-      expect(content, contains('[persistent_condition:danvi]'));
-      expect(content, contains('[commitment:maisie]'));
-      expect(content, contains('[identity_development:maisie]'));
-      // Only top 2 of 10 relationship facts fit the cap.
-      final relMatches =
-          RegExp(r'\[relationship:npc\d+\]').allMatches(content ?? '');
-      expect(relMatches.length, 2);
-    },
-  );
+    // Canon-critical facts win selection order, but do not bypass the bound.
+    expect(content, contains('[persistent_condition:danvi]'));
+    expect(content, contains('[commitment:maisie]'));
+    expect(content, isNot(contains('[identity_development:maisie]')));
+    final relMatches = RegExp(
+      r'\[relationship:npc\d+\]',
+    ).allMatches(content ?? '');
+    expect(relMatches, isEmpty);
+  });
 
   test('subjects relationship facts to the cap when no tier A is present', () {
     final content = compileCharacterKnowledgeProjection([
       for (var i = 0; i < 5; i++)
-        fact(
-          id: 'rel$i',
-          subject: 'NPC$i',
-          importance: 0.5 + i * 0.05,
-        ),
+        fact(id: 'rel$i', subject: 'NPC$i', importance: 0.5 + i * 0.05),
     ], maxFacts: 2);
 
-    final matches = RegExp(r'\[relationship:npc\d+\]').allMatches(content ?? '');
+    final matches = RegExp(
+      r'\[relationship:npc\d+\]',
+    ).allMatches(content ?? '');
     expect(matches.length, 2);
     // Highest-importance two win.
     expect(content, contains('[relationship:npc4]'));
@@ -130,4 +121,3 @@ void main() {
     expect(content, isNot(contains('[relationship:npc0]')));
   });
 }
-

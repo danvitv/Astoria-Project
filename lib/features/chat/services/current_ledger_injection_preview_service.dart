@@ -116,6 +116,20 @@ final class CurrentLedgerInjectionPreviewService {
     );
     final history = await _injectHistory(sessionId, session.messages);
     final settings = turnConfig.pipelineSettings.studioAgent;
+    var responderConfig = turnConfig.activeApiConfig;
+    final responderConfigId = preset.expensiveApiConfigId;
+    if (responderConfigId.isNotEmpty) {
+      for (final config in turnConfig.apiConfigs) {
+        if (config.id == responderConfigId) {
+          responderConfig = config;
+          break;
+        }
+      }
+    }
+    final responderContextTokens = responderConfig?.contextSize ?? 32000;
+    final responderOutputTokens = settings.studioFinalMaxTokensOverride
+        ? settings.studioFinalMaxTokens
+        : (responderConfig?.maxTokens ?? 8000);
     final finalContextSize = settings.studioFinalContextSize > 0
         ? settings.studioFinalContextSize
         : preset.maxFinalHistoryMessages;
@@ -182,6 +196,10 @@ final class CurrentLedgerInjectionPreviewService {
             freshness: LedgerProjectionFreshness.provenCurrent,
           ),
           sessionId: sessionId,
+          latestUserText: _latestText(selectionWindow, 'user'),
+          latestAssistantText: _latestText(selectionWindow, 'assistant'),
+          contextSize: responderContextTokens,
+          maxTokens: responderOutputTokens,
         ),
       );
     }
@@ -200,6 +218,13 @@ final class CurrentLedgerInjectionPreviewService {
     );
   }
 }
+
+String _latestText(List<ChatMessage> history, String role) => history
+    .lastWhere(
+      (message) => message.role == role,
+      orElse: () => const ChatMessage(id: '', role: '', content: ''),
+    )
+    .content;
 
 final class _PreviewChanged implements Exception {
   const _PreviewChanged();
