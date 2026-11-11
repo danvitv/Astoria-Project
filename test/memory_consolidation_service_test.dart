@@ -62,7 +62,14 @@ void main() {
     );
     expect(messages.first['content'], contains('scene-scoped condition'));
     expect(messages.first['content'], contains('similarity alone is not'));
+    expect(messages.first['content'], contains('proposedEventAllocations'));
+    expect(
+      messages.first['content'],
+      contains('Create a unique linkId yourself'),
+    );
+    expect(messages.first['content'], contains('promise|agreement|action'));
     expect(messages.last['content'], contains('13.04.2026 · RP_Day 3 · 16:38'));
+    expect(messages.last['content'], contains('"proposedEventAllocations"'));
   });
 
   String validResponse() => '''{

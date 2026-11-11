@@ -32,9 +32,12 @@ specific slice.
   also includes honest queue cancellation/status handling and scene-time / Ledger
   anti-transfer safeguards. Focused tests, scoped analysis and race review passed.
 - This is locally delivery-ready, not device/provider quality proof. A live scan
-  confirmed the worker and safety fences but also exposed model-contract failures.
-  Rejected consolidation responses are not yet captured for diagnosis. AVD and
-  a complete real-device scenario remain unrun; do not restart AVD implicitly.
+  confirmed the worker and safety fences and exposed a v2 prompt/allocation bug:
+  the response schema was underspecified and event IDs were not bound to their
+  allocated sources. Both are now corrected, including collision-safe retry packs,
+  but live provider re-validation remains pending. Rejected raw responses are not
+  yet captured for diagnosis. AVD and a complete real-device scenario remain
+  unrun; do not restart AVD implicitly.
 - Event-registry cloud sync, cross-branch lineage, structured witness/language
   semantics and richer revision history remain later work. See the local
   `docs/untracked/MEMORY_CONSOLIDATION_PLAN.md` for the exact evidence and limits.

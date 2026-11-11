@@ -41,16 +41,16 @@ class MemoryConsolidationPackageParser {
       throw const FormatException('Package changed obligation boundary.');
     }
     final unverified = _strings(root['unverifiedSourceRefs']);
-    final selectedRefs = pack.sources
+    final selectedSources = pack.sources
         .where((source) => source.ref.startsWith('entry:'))
-        .map((source) => source.ref)
-        .toSet();
+        .toList(growable: false);
+    final selectedRefs = selectedSources.map((source) => source.ref).toSet();
     if (unverified.toSet().length != unverified.length ||
         !unverified.every(selectedRefs.contains)) {
       throw const FormatException('Invalid unverified source refs.');
     }
     if (selectedRefs.isEmpty ||
-        selectedRefs.length > pack.proposedEventIds.length) {
+        selectedRefs.length != pack.proposedEventIds.length) {
       throw const FormatException(
         'Pack must allocate an event ID for every selected source.',
       );
@@ -94,6 +94,13 @@ class MemoryConsolidationPackageParser {
           refs.toSet().length != refs.length ||
           refs.any((ref) => !sourcesByRef.containsKey(ref))) {
         throw const FormatException('Event has invalid or reused sources.');
+      }
+      final allocationIndex = pack.proposedEventIds.indexOf(eventId);
+      final allocatedSourceRef = selectedSources[allocationIndex].ref;
+      if (!refs.contains(allocatedSourceRef)) {
+        throw const FormatException(
+          'Event does not cite the source allocated to its ID.',
+        );
       }
       for (final ref in refs.where(selectedRefs.contains)) {
         if (!usedRefs.add(ref)) {

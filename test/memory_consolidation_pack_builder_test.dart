@@ -228,6 +228,28 @@ void main() {
     },
   );
 
+  test('reallocates a proposed ID that already belongs to an event', () async {
+    final requested = entry('requested');
+    final existing = entry('existing');
+    await seedBook([requested, existing]);
+    await acceptCompletedEvent(existing, 'event-new');
+
+    final pack = await builder.build(
+      sessionId: 'session-1',
+      branchId: 'session-1',
+      proposedEventId: 'event-new',
+      memoryEntryIds: [requested.id],
+    );
+
+    expect(pack, isNotNull);
+    expect(pack!.proposedEventId, 'event-new-r1');
+    expect(pack.proposedEventIds, ['event-new-r1']);
+    expect(pack.candidates.map((candidate) => candidate.id), ['event-new']);
+    expect(pack.toJson()['proposedEventAllocations'], [
+      {'eventId': 'event-new-r1', 'sourceRef': 'entry:requested'},
+    ]);
+  });
+
   test('does not include an obligation whose source became stale', () async {
     final requested = entry('requested');
     final obligation = entry('obligation');

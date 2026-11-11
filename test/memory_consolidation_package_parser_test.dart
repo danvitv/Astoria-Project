@@ -102,6 +102,19 @@ void main() {
     );
   });
 
+  test('requires an event ID to cite its allocated selected source', () {
+    final swapped = response(
+      events: [
+        _event('event-one', 'entry:two', 'message-two'),
+        _event('event-two', 'entry:one', 'message-one'),
+      ],
+    );
+    expect(
+      () => MemoryConsolidationPackageParser.parse(jsonEncode(swapped), pack),
+      throwsFormatException,
+    );
+  });
+
   test('requires every selected source to be classified exactly once', () {
     final missing = response(
       events: [_event('event-one', 'entry:one', 'message-one')],

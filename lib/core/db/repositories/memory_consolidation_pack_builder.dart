@@ -110,6 +110,10 @@ class MemoryConsolidationPackBuilder {
     final events = await MemoryEventRegistryRepo(
       db,
     ).getActiveEvents(sessionId: sessionId, branchId: branchId);
+    final allocatedEventIds = _allocateEventIds(
+      eventIds,
+      existingIds: events.map((event) => event.id).toSet(),
+    );
     final links = await MemoryEventRegistryRepo(
       db,
     ).getActiveLinks(sessionId: sessionId, branchId: branchId);
@@ -250,7 +254,7 @@ class MemoryConsolidationPackBuilder {
         sessionId: sessionId,
         branchId: branchId,
         proposedEventId: proposedEventId,
-        proposedEventIds: eventIds,
+        proposedEventIds: allocatedEventIds,
         sources: prospectiveSources,
         candidates: prospectiveCandidates,
         unexaminedOpenObligationIds: prospectiveUnexamined,
@@ -288,7 +292,7 @@ class MemoryConsolidationPackBuilder {
       sessionId: sessionId,
       branchId: branchId,
       proposedEventId: proposedEventId,
-      proposedEventIds: eventIds,
+      proposedEventIds: allocatedEventIds,
       sources: selectedSources,
       candidates: candidates,
       unexaminedOpenObligationIds: unexaminedIds,
@@ -301,12 +305,38 @@ class MemoryConsolidationPackBuilder {
       packId: contextPackId,
       sessionId: sessionId,
       branchId: branchId,
-      proposedEventId: proposedEventId,
-      proposedEventIds: eventIds,
+      proposedEventId: allocatedEventIds.first,
+      proposedEventIds: allocatedEventIds,
       sources: selectedSources,
       candidates: candidates,
       unexaminedOpenObligationIds: unexaminedIds,
     );
+  }
+
+  static List<String> _allocateEventIds(
+    List<String> proposedIds, {
+    required Set<String> existingIds,
+  }) {
+    final reserved = {...existingIds};
+    return [
+      for (final proposedId in proposedIds)
+        _allocateEventId(proposedId, reserved),
+    ];
+  }
+
+  static String _allocateEventId(String proposedId, Set<String> reserved) {
+    if (reserved.add(proposedId)) return proposedId;
+    var suffix = 1;
+    while (true) {
+      final ending = '-r$suffix';
+      final maxBaseLength = 128 - ending.length;
+      final base = proposedId.length <= maxBaseLength
+          ? proposedId
+          : proposedId.substring(0, maxBaseLength);
+      final candidate = '$base$ending';
+      if (reserved.add(candidate)) return candidate;
+      suffix++;
+    }
   }
 
   /// Scores every event through the participant/subject, full-text and vector
@@ -578,6 +608,10 @@ class MemoryConsolidationPackBuilder {
     'branchId': branchId,
     'proposedEventId': proposedEventId,
     'proposedEventIds': proposedEventIds,
+    'proposedEventAllocations': [
+      for (var i = 0; i < proposedEventIds.length; i++)
+        {'eventId': proposedEventIds[i], 'sourceRef': sources[i].ref},
+    ],
     'sources': sources.map((source) => source.toJson()).toList(),
     'candidates': candidates.map((candidate) => candidate.toJson()).toList(),
     'unexaminedOpenObligationIds': unexaminedOpenObligationIds,
@@ -613,6 +647,10 @@ class MemoryConsolidationPackBuilder {
       'branchId': branchId,
       'proposedEventId': proposedEventId,
       'proposedEventIds': proposedEventIds,
+      'proposedEventAllocations': [
+        for (var i = 0; i < proposedEventIds.length; i++)
+          {'eventId': proposedEventIds[i], 'sourceRef': sources[i].ref},
+      ],
       'sources': sources.map((source) => source.toJson()).toList(),
       'candidates': candidates.map((candidate) => candidate.toJson()).toList(),
       'unexaminedOpenObligationIds': unexaminedOpenObligationIds,

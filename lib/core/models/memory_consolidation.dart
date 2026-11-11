@@ -188,6 +188,10 @@ class MemoryConsolidationSourcePack {
     'branchId': branchId,
     'proposedEventId': proposedEventId,
     'proposedEventIds': proposedEventIds,
+    'proposedEventAllocations': [
+      for (var i = 0; i < proposedEventIds.length; i++)
+        {'eventId': proposedEventIds[i], 'sourceRef': sources[i].ref},
+    ],
     'sources': sources.map((source) => source.toJson()).toList(),
     'candidates': candidates.map((candidate) => candidate.toJson()).toList(),
     'unexaminedOpenObligationIds': unexaminedOpenObligationIds,
