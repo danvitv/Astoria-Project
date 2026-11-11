@@ -833,55 +833,60 @@ class MemoryConsolidationJobRepo {
     return true;
   });
 
-  Future<bool> cancel(String jobId) => db.transaction(() async {
-    final now = _now;
-    final job = await (db.select(
-      db.memoryConsolidationJobRows,
-    )..where((row) => row.id.equals(jobId))).getSingleOrNull();
-    if (job == null) return false;
-    final changed =
-        await (db.update(db.memoryConsolidationJobRows)..where(
-              (row) =>
-                  row.id.equals(jobId) &
-                  row.version.equals(job.version) &
-                  row.status.isIn(const [
-                    'pending',
-                    'running',
-                    'review_pending',
-                    'failed',
-                  ]),
-            ))
-            .write(
-              MemoryConsolidationJobRowsCompanion(
-                status: const Value('cancelled'),
-                leaseOwnerId: const Value(null),
-                leaseExpiresAt: const Value(null),
-                version: Value(job.version + 1),
-                lastError: const Value('cancelled_by_user'),
-                updatedAt: Value(now),
-              ),
-            );
-    if (changed == 1) {
-      await (db.update(db.memoryConsolidationJobItemRows)..where(
-            (row) =>
-                row.jobId.equals(jobId) &
-                row.status.isIn(const [
-                  'pending',
-                  'running',
-                  'failed',
-                  'review_pending',
-                ]),
-          ))
-          .write(
-            MemoryConsolidationJobItemRowsCompanion(
-              status: const Value('cancelled'),
-              lastError: const Value('cancelled_by_user'),
-              updatedAt: Value(now),
-            ),
-          );
-    }
-    return changed == 1;
-  });
+  /// Cancels a job and its open items. [reason] is a machine-readable durable
+  /// cause ('cancelled_by_user', 'source_context_changed', 'mode_disabled',
+  /// 'rejected_by_user', ...); the UI localizes it, it never invents state.
+  /// A real user cancellation is the default so existing callers stay honest.
+  Future<bool> cancel(String jobId, {String reason = 'cancelled_by_user'}) =>
+      db.transaction(() async {
+        final now = _now;
+        final job = await (db.select(
+          db.memoryConsolidationJobRows,
+        )..where((row) => row.id.equals(jobId))).getSingleOrNull();
+        if (job == null) return false;
+        final changed =
+            await (db.update(db.memoryConsolidationJobRows)..where(
+                  (row) =>
+                      row.id.equals(jobId) &
+                      row.version.equals(job.version) &
+                      row.status.isIn(const [
+                        'pending',
+                        'running',
+                        'review_pending',
+                        'failed',
+                      ]),
+                ))
+                .write(
+                  MemoryConsolidationJobRowsCompanion(
+                    status: const Value('cancelled'),
+                    leaseOwnerId: const Value(null),
+                    leaseExpiresAt: const Value(null),
+                    version: Value(job.version + 1),
+                    lastError: Value(reason),
+                    updatedAt: Value(now),
+                  ),
+                );
+        if (changed == 1) {
+          await (db.update(db.memoryConsolidationJobItemRows)..where(
+                (row) =>
+                    row.jobId.equals(jobId) &
+                    row.status.isIn(const [
+                      'pending',
+                      'running',
+                      'failed',
+                      'review_pending',
+                    ]),
+              ))
+              .write(
+                MemoryConsolidationJobItemRowsCompanion(
+                  status: const Value('cancelled'),
+                  lastError: Value(reason),
+                  updatedAt: Value(now),
+                ),
+              );
+        }
+        return changed == 1;
+      });
 
   /// Re-queues a cancelled package with the same immutable source snapshot.
   /// The stored draft is dropped: a revived package redrafts from the same
@@ -963,6 +968,27 @@ class MemoryConsolidationJobRepo {
             ..where((row) => row.jobId.equals(jobId))
             ..orderBy([(row) => OrderingTerm.asc(row.createdAt)]))
           .watch();
+
+  /// Watches source counts per package job of one session — the queue rows
+  /// show "Package N · K memories" without loading every item row.
+  Stream<Map<String, int>> watchSessionItemCounts(String sessionId) {
+    final items = db.memoryConsolidationJobItemRows;
+    final jobs = db.memoryConsolidationJobRows;
+    final count = items.id.count();
+    final query =
+        db.select(items).join([
+            innerJoin(jobs, jobs.id.equalsExp(items.jobId), useColumns: false),
+          ])
+          ..where(jobs.sessionId.equals(sessionId))
+          ..addColumns([count])
+          ..groupBy([items.jobId]);
+    return query.watch().map(
+      (rows) => {
+        for (final row in rows)
+          row.readTable(items).jobId: row.read(count) ?? 0,
+      },
+    );
+  }
 
   Future<MemoryConsolidationJobRow?> _ownedLease(
     String jobId,

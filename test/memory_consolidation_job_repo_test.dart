@@ -38,6 +38,38 @@ void main() {
     items: sourceItems(),
   );
 
+  test('cancel records its durable reason on the job and its items', () async {
+    final job = await createJob();
+
+    // A source-fence cancel is not a user cancel: the reason must be
+    // distinguishable, otherwise the queue UI lies about what happened.
+    expect(await repo.cancel(job.id, reason: 'source_context_changed'), isTrue);
+    final cancelled = await (db.select(
+      db.memoryConsolidationJobRows,
+    )..where((row) => row.id.equals(job.id))).getSingle();
+    expect(cancelled.status, 'cancelled');
+    expect(cancelled.lastError, 'source_context_changed');
+    final items = await repo.getItems(job.id);
+    expect(items, isNotEmpty);
+    for (final item in items) {
+      expect(item.status, 'cancelled');
+      expect(item.lastError, 'source_context_changed');
+    }
+
+    // A plain user cancel keeps its own default reason.
+    final second = await repo.createOrGet(
+      sessionId: 'session-2',
+      branchId: 'session-2',
+      requestKey: 'package-sha256-2',
+      items: sourceItems(),
+    );
+    expect(await repo.cancel(second.id), isTrue);
+    final userCancelled = await (db.select(
+      db.memoryConsolidationJobRows,
+    )..where((row) => row.id.equals(second.id))).getSingle();
+    expect(userCancelled.lastError, 'cancelled_by_user');
+  });
+
   test(
     'reservations are scoped to branch and exact revision fingerprint',
     () async {

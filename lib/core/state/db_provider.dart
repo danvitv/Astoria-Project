@@ -390,6 +390,15 @@ final memoryConsolidationJobItemsProvider = StreamProvider.autoDispose
       return ref.watch(memoryConsolidationJobRepoProvider).watchItems(jobId);
     });
 
+/// Source counts per package job of one session — the queue panel shows
+/// "Package N · K memories" per row without streaming every item.
+final memoryConsolidationSessionItemCountsProvider = StreamProvider.autoDispose
+    .family<Map<String, int>, String>((ref, sessionId) {
+      return ref
+          .watch(memoryConsolidationJobRepoProvider)
+          .watchSessionItemCounts(sessionId);
+    });
+
 final memoryCatalogRepoProvider = Provider<MemoryCatalogRepo>((ref) {
   return MemoryCatalogRepo(ref.watch(appDbProvider));
 });

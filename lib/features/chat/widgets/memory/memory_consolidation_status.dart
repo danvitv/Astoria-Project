@@ -4,66 +4,191 @@ import 'package:flutter/material.dart';
 import '../../../../shared/theme/app_colors.dart';
 import '../../../../shared/widgets/glaze_action_button.dart';
 
-/// Compact user-facing state for one durable consolidation package.
+/// One durable package row in the session queue — status, source count,
+/// machine-readable failure cause, and the attempt number after retries.
+class MemoryConsolidationQueueItem {
+  const MemoryConsolidationQueueItem({
+    required this.jobId,
+    required this.status,
+    required this.index,
+    this.sourceCount = 0,
+    this.lastError,
+    this.attemptCount = 0,
+  });
+
+  final String jobId;
+  final String status;
+  final int index;
+  final int sourceCount;
+  final String? lastError;
+  final int attemptCount;
+}
+
+/// Compact queue of durable consolidation packages for one session.
 ///
-/// It deliberately exposes no job identity or execution control beyond the
-/// actions that are safe for the current durable state.
+/// Every package is visible with its state and localized cause; actions are
+/// offered per row and only for the states where they are safe. Internal
+/// job ids stay hidden — rows are numbered by package order.
 class MemoryConsolidationStatus extends StatelessWidget {
   const MemoryConsolidationStatus({
     super.key,
-    required this.status,
+    required this.items,
+    this.completedCount = 0,
     this.onReview,
     this.onRetry,
     this.onCancel,
   });
 
-  final String? status;
-  final VoidCallback? onReview;
-  final VoidCallback? onRetry;
-  final VoidCallback? onCancel;
+  final List<MemoryConsolidationQueueItem> items;
+  final int completedCount;
+  final void Function(String jobId)? onReview;
+  final void Function(String jobId)? onRetry;
+  final void Function(String jobId)? onCancel;
+
+  static String? _statusLabel(String status) => switch (status) {
+    'pending' => 'memory_consolidation_queue_status_pending'.tr(),
+    'running' => 'memory_consolidation_queue_status_running'.tr(),
+    'review_pending' => 'memory_consolidation_queue_status_review'.tr(),
+    'failed' => 'memory_consolidation_queue_status_failed'.tr(),
+    'cancelled' => 'memory_consolidation_queue_status_cancelled'.tr(),
+    'completed' => 'memory_consolidation_queue_status_completed'.tr(),
+    _ => null,
+  };
+
+  /// Durable machine reasons → localized explanations. Unknown reasons stay
+  /// hidden rather than leaking internal strings into the UI.
+  static String? _reasonLabel(String? reason) => switch (reason) {
+    'cancelled_by_user' => 'memory_consolidation_reason_user'.tr(),
+    'rejected_by_user' => 'memory_consolidation_reason_rejected'.tr(),
+    'source_context_changed' =>
+      'memory_consolidation_reason_source_changed'.tr(),
+    'mode_disabled' => 'memory_consolidation_reason_mode'.tr(),
+    'context_changed' => 'memory_consolidation_reason_context'.tr(),
+    'worker_stopped' => 'memory_consolidation_reason_worker'.tr(),
+    'item_failed' ||
+    'package_generation_failed' => 'memory_consolidation_reason_model'.tr(),
+    'source_pack_exceeds_context_budget' =>
+      'memory_consolidation_reason_budget'.tr(),
+    _ => null,
+  };
+
+  Widget _rowAction(MemoryConsolidationQueueItem item) => switch (item.status) {
+    'review_pending' => GlazeActionButton(
+      key: ValueKey('package-review-${item.jobId}'),
+      icon: Icons.fact_check_outlined,
+      label: 'memory_consolidation_queue_review'.tr(),
+      onTap: onReview == null ? null : () => onReview!(item.jobId),
+    ),
+    'failed' => GlazeActionButton(
+      key: ValueKey('package-retry-${item.jobId}'),
+      icon: Icons.refresh_rounded,
+      label: 'memory_consolidation_queue_retry'.tr(),
+      onTap: onRetry == null ? null : () => onRetry!(item.jobId),
+    ),
+    'pending' || 'running' => GlazeActionButton(
+      key: ValueKey('package-cancel-${item.jobId}'),
+      tone: GlazeActionTone.neutral,
+      icon: Icons.close_rounded,
+      label: 'memory_consolidation_queue_cancel'.tr(),
+      onTap: onCancel == null ? null : () => onCancel!(item.jobId),
+    ),
+    _ => const SizedBox.shrink(),
+  };
 
   @override
   Widget build(BuildContext context) {
-    final action = switch (status) {
-      'review_pending' => GlazeActionButton(
-        key: const ValueKey('package-review'),
-        icon: Icons.fact_check_outlined,
-        label: 'memory_consolidation_package_review'.tr(),
-        onTap: onReview,
-      ),
-      'failed' => GlazeActionButton(
-        key: const ValueKey('package-retry'),
-        icon: Icons.refresh_rounded,
-        label: 'memory_consolidation_package_retry'.tr(),
-        onTap: onRetry,
-      ),
-      'pending' || 'running' => Column(
+    if (items.isEmpty && completedCount == 0) return const SizedBox.shrink();
+    final hasRepeatedFailure = items.any(
+      (item) => item.status == 'failed' && item.attemptCount >= 2,
+    );
+    final trailing = <Widget>[
+      for (final item in items)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'memory_consolidation_queue_row'.tr(
+                        namedArgs: {
+                          'index': '${item.index}',
+                          'count': '${item.sourceCount}',
+                        },
+                      ),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: context.cs.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      [
+                            _statusLabel(item.status),
+                            if (item.status == 'failed' &&
+                                item.attemptCount >= 2)
+                              'memory_consolidation_queue_attempt'.tr(
+                                namedArgs: {'count': '${item.attemptCount}'},
+                              ),
+                            _reasonLabel(item.lastError),
+                          ]
+                          .whereType<String>()
+                          .where((t) => t.isNotEmpty)
+                          .join(' · '),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: context.cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              _rowAction(item),
+            ],
+          ),
+        ),
+      if (completedCount > 0)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Text(
+            'memory_consolidation_queue_completed'.tr(
+              namedArgs: {'count': '$completedCount'},
+            ),
+            style: TextStyle(fontSize: 11, color: context.cs.onSurfaceVariant),
+          ),
+        ),
+      if (hasRepeatedFailure)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Text(
+            'memory_consolidation_queue_model_hint'.tr(),
+            style: TextStyle(fontSize: 11, color: context.cs.onSurfaceVariant),
+          ),
+        ),
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.only(bottom: 4),
+            padding: const EdgeInsets.only(bottom: 6),
             child: Text(
-              'memory_consolidation_package_processing'.tr(),
+              'memory_consolidation_queue_title'.tr(),
               style: TextStyle(
                 fontSize: 12,
-                color: context.cs.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+                color: context.cs.onSurface,
               ),
             ),
           ),
-          GlazeActionButton(
-            key: const ValueKey('package-cancel'),
-            tone: GlazeActionTone.neutral,
-            icon: Icons.close_rounded,
-            label: 'memory_consolidation_package_cancel'.tr(),
-            onTap: onCancel,
-          ),
+          ...trailing,
         ],
       ),
-      _ => const SizedBox.shrink(),
-    };
-    return Padding(
-      padding: EdgeInsets.only(bottom: status == null ? 0 : 8),
-      child: action,
     );
   }
 }

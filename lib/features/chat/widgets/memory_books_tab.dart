@@ -1035,9 +1035,10 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
 
   // ─── Package consolidation (durable jobs) ────────────────────────
 
-  /// One compact view of the durable package state. Package execution belongs
-  /// to the app-scoped runner; this widget only offers state-appropriate
-  /// review, retry, or cancellation actions.
+  /// The durable package queue. Every package of the session is visible with
+  /// its state, source count and localized cause; per-row actions are only
+  /// the ones safe for that state. Package execution belongs to the
+  /// app-scoped runner; this widget never owns transport.
   Widget _buildPackagePanel() {
     final settings = _ctrl.book?.settings;
     if (settings == null ||
@@ -1060,21 +1061,58 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
             .watch(memoryConsolidationSessionJobsProvider(widget.sessionId))
             .value ??
         const <MemoryConsolidationJobRow>[];
-    MemoryConsolidationJobRow? job;
-    for (final status in const [
-      'review_pending',
-      'pending',
-      'failed',
-      'running',
-    ]) {
-      job = jobs.where((row) => row.status == status).firstOrNull;
-      if (job != null) break;
+    if (jobs.isEmpty) return const SizedBox.shrink();
+    final counts =
+        ref
+            .watch(
+              memoryConsolidationSessionItemCountsProvider(widget.sessionId),
+            )
+            .value ??
+        const <String, int>{};
+    // Oldest first, so package numbers follow creation order and stay stable.
+    final ordered = [...jobs]
+      ..sort(
+        (a, b) => a.createdAt == b.createdAt
+            ? a.id.compareTo(b.id)
+            : a.createdAt.compareTo(b.createdAt),
+      );
+    var completed = 0;
+    final rows = <MemoryConsolidationQueueItem>[];
+    for (final job in ordered) {
+      if (job.status == 'completed') {
+        completed++;
+        continue;
+      }
+      rows.add(
+        MemoryConsolidationQueueItem(
+          jobId: job.id,
+          status: job.status,
+          index: rows.length + completed + 1,
+          sourceCount: counts[job.id] ?? 0,
+          lastError: job.lastError,
+          attemptCount: job.attemptCount,
+        ),
+      );
     }
+    if (rows.isEmpty && completed == 0) return const SizedBox.shrink();
+
+    MemoryConsolidationJobRow? rowJob(String jobId) =>
+        jobs.where((row) => row.id == jobId).firstOrNull;
     return MemoryConsolidationStatus(
-      status: job?.status,
-      onReview: job == null ? null : () => _openPendingPackageReview(job!),
-      onRetry: job == null ? null : () => _retryPackage(job!),
-      onCancel: job == null ? null : () => _cancelPackage(job!),
+      items: rows,
+      completedCount: completed,
+      onReview: (jobId) {
+        final job = rowJob(jobId);
+        if (job != null) _openPendingPackageReview(job);
+      },
+      onRetry: (jobId) {
+        final job = rowJob(jobId);
+        if (job != null) _retryPackage(job);
+      },
+      onCancel: (jobId) {
+        final job = rowJob(jobId);
+        if (job != null) _cancelPackage(job);
+      },
     );
   }
 

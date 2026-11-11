@@ -560,7 +560,10 @@ class MemoryConsolidationBatchService {
   /// Rejects a reviewed package: the draft stays diagnosable in the row until
   /// cancellation clears it from the active flow, and nothing is written to
   /// the registry.
-  Future<bool> reject(String jobId) => jobRepo.cancel(jobId);
+  /// A rejected review is also a user decision, but distinct from a plain
+  /// cancel so the queue can tell "отклонено при проверке" from "отменено".
+  Future<bool> reject(String jobId) =>
+      jobRepo.cancel(jobId, reason: 'rejected_by_user');
 
   MemoryEntryRevision _activeRevision(MemoryEntry entry) {
     final revisionId = entry.activeRevisionId;

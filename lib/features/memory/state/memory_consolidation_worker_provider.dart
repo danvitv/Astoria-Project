@@ -134,11 +134,19 @@ final class MemoryConsolidationWorker {
   /// Invalidates transport and durable ownership after mode/API/source changes.
   void invalidateContexts() {
     for (final sessionId in _sessions.keys.toList()) {
-      cancelSession(sessionId, reason: 'Memory consolidation context changed');
+      cancelSession(
+        sessionId,
+        reason: 'Memory consolidation context changed',
+        durableReason: 'context_changed',
+      );
     }
   }
 
-  void cancelSession(String sessionId, {String reason = 'Cancelled'}) {
+  void cancelSession(
+    String sessionId, {
+    String reason = 'Cancelled',
+    String durableReason = 'cancelled_by_user',
+  }) {
     final session = _sessions[sessionId];
     if (session == null) return;
     session.epoch++;
@@ -150,18 +158,23 @@ final class MemoryConsolidationWorker {
     final jobId = session.claimedJobId;
     if (jobId != null && _ref.mounted) {
       unawaited(
-        _ref.read(memoryConsolidationJobRepoProvider).cancel(jobId).catchError((
-          Object error,
-        ) {
-          debugPrint('Memory consolidation durable cancel failed: $error');
-          return false;
-        }),
+        _ref
+            .read(memoryConsolidationJobRepoProvider)
+            .cancel(jobId, reason: durableReason)
+            .catchError((Object error) {
+              debugPrint('Memory consolidation durable cancel failed: $error');
+              return false;
+            }),
       );
     }
   }
 
   void bookContextChanged(String sessionId) {
-    cancelSession(sessionId, reason: 'MemoryBook source context changed');
+    cancelSession(
+      sessionId,
+      reason: 'MemoryBook source context changed',
+      durableReason: 'source_context_changed',
+    );
   }
 
   Future<void> _drain(String sessionId, _SessionDrain session) async {
@@ -182,7 +195,11 @@ final class MemoryConsolidationWorker {
         final book = await repo.getBySessionId(sessionId);
         if (_disposed || !_ref.mounted) return;
         if (book == null || !_consolidationEnabled(book.settings)) {
-          cancelSession(sessionId, reason: 'Memory consolidation mode is off');
+          cancelSession(
+            sessionId,
+            reason: 'Memory consolidation mode is off',
+            durableReason: 'mode_disabled',
+          );
           return;
         }
 
@@ -200,6 +217,7 @@ final class MemoryConsolidationWorker {
             cancelSession(
               sessionId,
               reason: 'Memory consolidation mode is off',
+              durableReason: 'mode_disabled',
             );
             return;
           }
@@ -208,9 +226,16 @@ final class MemoryConsolidationWorker {
         }
       }
     } catch (error, stackTrace) {
-      // The durable job records its own failed state. Automatic work stops here;
-      // only an explicit retry may make that job pending again.
-      debugPrint('Memory consolidation worker failed: $error\n$stackTrace');
+      // A cancellation of our own session token (source fence, mode flip,
+      // dispose) is expected control flow, not a failure: the durable cancel
+      // already recorded its own machine-readable reason.
+      if (error is DioException && error.type == DioExceptionType.cancel) {
+        debugPrint('Memory consolidation worker stopped: $error');
+      } else {
+        // The durable job records its own failed state. Automatic work stops
+        // here; only an explicit retry may make that job pending again.
+        debugPrint('Memory consolidation worker failed: $error\n$stackTrace');
+      }
     } finally {
       session.running = false;
       session.token = null;
@@ -356,7 +381,9 @@ final class MemoryConsolidationWorker {
         .read(memoryBookRepoProvider)
         .getBySessionId(sessionId);
     if (book == null || !_consolidationEnabled(book.settings)) {
-      await _ref.read(memoryConsolidationJobRepoProvider).cancel(jobId);
+      await _ref
+          .read(memoryConsolidationJobRepoProvider)
+          .cancel(jobId, reason: 'mode_disabled');
       return false;
     }
     final entries = {for (final entry in book.entries) entry.id: entry};
@@ -368,7 +395,9 @@ final class MemoryConsolidationWorker {
       if (entry == null ||
           entry.status != 'active' ||
           entry.activeRevisionId != item.revisionId) {
-        await _ref.read(memoryConsolidationJobRepoProvider).cancel(jobId);
+        await _ref
+            .read(memoryConsolidationJobRepoProvider)
+            .cancel(jobId, reason: 'source_context_changed');
         return false;
       }
       final revision = entry.revisions
@@ -381,7 +410,9 @@ final class MemoryConsolidationWorker {
                 sourceAgentSwipeId: entry.sourceAgentSwipeId,
               ) !=
               item.fingerprint) {
-        await _ref.read(memoryConsolidationJobRepoProvider).cancel(jobId);
+        await _ref
+            .read(memoryConsolidationJobRepoProvider)
+            .cancel(jobId, reason: 'source_context_changed');
         return false;
       }
     }
@@ -452,7 +483,11 @@ final class MemoryConsolidationWorker {
   void dispose() {
     _disposed = true;
     for (final sessionId in _sessions.keys.toList()) {
-      cancelSession(sessionId, reason: 'Memory consolidation worker disposed');
+      cancelSession(
+        sessionId,
+        reason: 'Memory consolidation worker disposed',
+        durableReason: 'worker_stopped',
+      );
       final session = _sessions[sessionId];
       if (session != null) unawaited(session.dispose());
     }
