@@ -69,7 +69,7 @@ on:
         default: ''
         type: string
       announcement_ru:
-        description: 'Optional RU preview note for Discord and Telegram'
+        description: 'Optional RU preview note for Discord'
         required: false
         default: ''
         type: string
@@ -791,11 +791,8 @@ jobs:
   notify:
     needs: [metadata, build-android, build-windows, build-ios, build-linux]
     runs-on: ubuntu-latest
-    # Run when either delivery toggle is on: the group post and/or the direct
-    # messages to developers. Each individual step is gated on its own toggle.
-    # A reuse run downloads artifacts from the named completed build instead of
-    # compiling them again.
-    if: ${{ always() && !cancelled() && (github.event.inputs.post_to_telegram == 'true' || github.event.inputs.dm_developers == 'true') && needs.metadata.result == 'success' && needs.build-android.result != 'failure' && needs.build-windows.result != 'failure' && needs.build-ios.result != 'failure' && needs.build-linux.result != 'failure' && (github.event.inputs.reuse_run_id != '' || needs.build-android.result == 'success' || needs.build-windows.result == 'success' || needs.build-ios.result == 'success' || needs.build-linux.result == 'success') }}
+    # Telegram delivery is intentionally disabled for Astoria.
+    if: ${{ false }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -809,8 +806,6 @@ jobs:
           pattern: Astoria-release-*
           merge-multiple: true
           path: artifacts/
-          run-id: ${{ github.event.inputs.reuse_run_id != '' && github.event.inputs.reuse_run_id || github.run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compose announcement
         id: text
@@ -821,16 +816,10 @@ jobs:
           BUILD_DATE:   ${{ needs.metadata.outputs.build_date }}
           BUILD_BRANCH: ${{ needs.metadata.outputs.build_branch }}
           COMMITS:      ${{ needs.metadata.outputs.commits }}
-          ANNOUNCEMENT_RU: ${{ github.event.inputs.announcement_ru }}
         run: |
           COMMITS_SECTION=""
           if [ -n "$COMMITS" ]; then
             COMMITS_SECTION=$(printf '\n\n%s' "$COMMITS")
-          fi
-
-          ANNOUNCEMENT_SECTION=""
-          if [ -n "$ANNOUNCEMENT_RU" ]; then
-            ANNOUNCEMENT_SECTION=$(printf '\n\n%s' "$ANNOUNCEMENT_RU")
           fi
 
           MENTIONS_SECTION=""
@@ -842,14 +831,13 @@ jobs:
           # its only reader is already the person being notified.
           {
             echo "group<<DELIM"
-            printf 'Новый дев-билд:\n\n%s\n%s\n%s%s%s%s\n' \
+            printf 'Новый дев-билд:\n\n%s\n%s\n%s%s%s\n' \
               "$VERSION" "$BUILD_DATE" "$BUILD_BRANCH" \
-              "$ANNOUNCEMENT_SECTION" "$COMMITS_SECTION" "$MENTIONS_SECTION"
+              "$COMMITS_SECTION" "$MENTIONS_SECTION"
             echo "DELIM"
             echo "dm<<DELIM"
-            printf 'Новый дев-билд (в ЛС):\n\n%s\n%s\n%s%s%s\n' \
-              "$VERSION" "$BUILD_DATE" "$BUILD_BRANCH" \
-              "$ANNOUNCEMENT_SECTION" "$COMMITS_SECTION"
+            printf 'Новый дев-билд (в ЛС):\n\n%s\n%s\n%s%s\n' \
+              "$VERSION" "$BUILD_DATE" "$BUILD_BRANCH" "$COMMITS_SECTION"
             echo "DELIM"
           } >> $GITHUB_OUTPUT
 
