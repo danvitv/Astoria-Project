@@ -373,6 +373,20 @@ class PromptPayloadBuilder {
       // Rationale (patch #3): raw-message recall is a lossless backstop for
       // the lossy MemoryBook compression — chunk=5 messages → cosine search →
       // `<recalled_messages>` injection (Marinara memory-recall analog).
+      final recallParticipantAliases = <String>{
+        character.name,
+        if (persona != null) persona.name,
+      };
+      for (final tracker
+          in effectiveContext?.committedTrackers ?? const <Tracker>[]) {
+        if (tracker.name != 'scene.present_entities') continue;
+        recallParticipantAliases.addAll(
+          tracker.value
+              .split(RegExp(r'[;,\n]+'))
+              .map((String name) => name.trim())
+              .where((String name) => name.isNotEmpty),
+        );
+      }
       final recallFuture = allowRemoteRetrieval
           ? _ref
                 .read(messageRecallServiceProvider)
@@ -387,6 +401,7 @@ class PromptPayloadBuilder {
                   sourceMessages: {
                     for (final message in session.messages) message.id: message,
                   },
+                  participantAliases: recallParticipantAliases,
                 )
                 .timeout(
                   const Duration(seconds: 30),

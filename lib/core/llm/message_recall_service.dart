@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 
 import '../db/repositories/embedding_repo.dart';
 import '../models/chat_message.dart';
+import 'chat_message_embedding_service.dart';
 import 'embedding_service.dart';
 import 'message_recall_compute.dart';
 import 'message_recall_query.dart';
@@ -42,6 +43,7 @@ class MessageRecallService {
     Map<String, ChatMessage>? sourceMessages,
     CancelToken? cancelToken,
     bool Function()? shouldAbort,
+    Set<String> participantAliases = const {},
   }) async {
     final query = MessageRecallQuery.build(
       currentText: currentText,
@@ -126,6 +128,8 @@ class MessageRecallService {
           queryChunks.map((chunk) => chunk.vector).toList(),
           threshold,
           counters,
+          queryText: MessageRecallQuery.project('user', currentText),
+          participantAliases: participantAliases,
         ),
       );
       // Worker completion never owns publication: cancellation/source ownership
@@ -133,7 +137,17 @@ class MessageRecallService {
       if (aborted()) return finish(MessageRecallReason.cancelled);
       counters.addAll(ranked.counters);
       if (ranked.matches.isNotEmpty) {
-        return finish(MessageRecallReason.success, ranked.matches);
+        return finish(
+          MessageRecallReason.success,
+          _withContinuityPair(
+            ranked.matches,
+            sourceMessages,
+            allowedSourceMessageIds,
+            hasExplicitParticipantAlias: participantAliases.any(
+              (alias) => _containsWhole(currentText, alias),
+            ),
+          ),
+        );
       }
       if (counters['dimensionMismatch'] == prepared.candidates.length) {
         return finish(MessageRecallReason.dimensionMismatch);
@@ -155,5 +169,116 @@ class MessageRecallService {
         aborted() ? MessageRecallReason.cancelled : MessageRecallReason.error,
       );
     }
+  }
+
+  List<MessageRecallMatch> _withContinuityPair(
+    List<MessageRecallMatch> matches,
+    Map<String, ChatMessage>? sources,
+    Set<String>? allowedIds, {
+    required bool hasExplicitParticipantAlias,
+  }) {
+    if (!hasExplicitParticipantAlias ||
+        matches.isEmpty ||
+        sources == null ||
+        sources.isEmpty) {
+      return matches;
+    }
+    final anchor = matches.firstWhere(
+      (match) => match.continuityScore >= 0.45,
+      orElse: () => matches.first,
+    );
+    if (anchor.continuityScore < 0.45 || anchor.messageIds.isEmpty) {
+      return matches;
+    }
+    final ordered = sources.values.toList(growable: false);
+    final anchorIndex = ordered.indexWhere(
+      (message) => anchor.messageIds.contains(message.id),
+    );
+    if (anchorIndex < 0) return matches;
+    final anchorMessage = ordered[anchorIndex];
+    ChatMessage? user;
+    ChatMessage? assistant;
+    if (anchorMessage.role == 'user') {
+      user = anchorMessage;
+      for (var i = anchorIndex + 1; i < ordered.length; i++) {
+        if (ordered[i].role == 'user') break;
+        if (_eligiblePairMessage(ordered[i], allowedIds) &&
+            ordered[i].role == 'assistant') {
+          assistant = ordered[i];
+          break;
+        }
+      }
+    } else if (anchorMessage.role == 'assistant') {
+      assistant = anchorMessage;
+      for (var i = anchorIndex - 1; i >= 0; i--) {
+        if (ordered[i].role == 'assistant') break;
+        if (_eligiblePairMessage(ordered[i], allowedIds) &&
+            ordered[i].role == 'user') {
+          user = ordered[i];
+          break;
+        }
+      }
+    }
+    if (user == null || assistant == null) return matches;
+    if (!_eligiblePairMessage(user, allowedIds) ||
+        !_eligiblePairMessage(assistant, allowedIds)) {
+      return matches;
+    }
+    final pair = [user, assistant];
+    final raw = ChatMessageEmbeddingService.formatChunk(pair);
+    final spans = <MessageRecallSourceSpan>[
+      MessageRecallSourceSpan(
+        messageId: user.id,
+        role: user.role,
+        sourceStart: 0,
+        sourceEnd: user.content.length,
+        excerptStart: raw.indexOf(user.content),
+        excerptEnd: raw.indexOf(user.content) + user.content.length,
+      ),
+      MessageRecallSourceSpan(
+        messageId: assistant.id,
+        role: assistant.role,
+        sourceStart: 0,
+        sourceEnd: assistant.content.length,
+        excerptStart: raw.indexOf(assistant.content),
+        excerptEnd: raw.indexOf(assistant.content) + assistant.content.length,
+      ),
+    ];
+    final pairMatch = MessageRecallMatch(
+      entryId: '${anchor.entryId}:continuity-pair',
+      chunkIndex: anchor.chunkIndex,
+      text:
+          '[Verified raw source pair: user message=${user.id}; '
+          'assistant message=${assistant.id}]\n$raw',
+      rawText: raw,
+      score: anchor.score + 1,
+      continuityScore: anchor.continuityScore,
+      messageIds: [user.id, assistant.id],
+      sourceSpans: spans,
+    );
+    return [
+      pairMatch,
+      ...matches.where(
+        (match) => !match.messageIds.any(pairMatch.messageIds.contains),
+      ),
+    ];
+  }
+
+  bool _eligiblePairMessage(ChatMessage message, Set<String>? allowedIds) =>
+      !message.isHidden &&
+      !message.isTyping &&
+      !message.isError &&
+      message.content.trim().isNotEmpty &&
+      (message.role == 'user' || message.role == 'assistant') &&
+      (allowedIds == null || allowedIds.contains(message.id));
+
+  bool _containsWhole(String text, String value) {
+    final alias = value.trim();
+    if (alias.isEmpty) return false;
+    return RegExp(
+      '(^|[^\\p{L}\\p{N}_])${RegExp.escape(alias)}([^\\p{L}\\p{N}_]|\$)',
+      caseSensitive: false,
+      unicode: true,
+    ).hasMatch(text);
   }
 }

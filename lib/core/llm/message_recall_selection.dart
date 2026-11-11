@@ -11,6 +11,7 @@ class MessageRecallCandidate {
   final List<double> vector;
   final List<String> messageIds;
   final List<MessageRecallSourceSpan> sourceSpans;
+  final int sourceOrdinal;
 
   const MessageRecallCandidate({
     required this.entryId,
@@ -19,6 +20,7 @@ class MessageRecallCandidate {
     required this.vector,
     required this.messageIds,
     this.sourceSpans = const [],
+    this.sourceOrdinal = -1,
   });
 }
 
@@ -30,19 +32,41 @@ abstract final class MessageRecallSelection {
     required List<List<double>> queryVectors,
     required double threshold,
     required Map<String, int> counters,
+    String queryText = '',
+    Set<String> participantAliases = const {},
   }) {
-    final scored = <({MessageRecallCandidate candidate, double score})>[];
+    final querySignals = _ContinuitySignals.from(queryText, participantAliases);
+    final maxOrdinal = candidates.fold<int>(
+      -1,
+      (max, candidate) => math.max(max, candidate.sourceOrdinal),
+    );
+    final scored =
+        <
+          ({MessageRecallCandidate candidate, double score, double continuity})
+        >[];
     for (final candidate in candidates) {
       if (candidate.vector.length != queryVectors.first.length) {
         counters['dimensionMismatch'] = counters['dimensionMismatch']! + 1;
         continue;
       }
-      var score = -1.0;
+      var semanticScore = -1.0;
       for (final query in queryVectors) {
-        score = math.max(score, cosineSimilarity(query, candidate.vector));
+        semanticScore = math.max(
+          semanticScore,
+          cosineSimilarity(query, candidate.vector),
+        );
       }
-      if (!score.isFinite || score < threshold) continue;
-      scored.add((candidate: candidate, score: score));
+      if (!semanticScore.isFinite) continue;
+      final continuity = querySignals.score(candidate.text);
+      if (semanticScore < threshold && continuity < 0.45) continue;
+      final recency = maxOrdinal <= 0 || candidate.sourceOrdinal < 0
+          ? 0.0
+          : candidate.sourceOrdinal / maxOrdinal;
+      // Semantic similarity remains the primary signal. Strong same-actor,
+      // same-action lexical evidence can lift a source above merely topical
+      // matches, while recency only breaks otherwise-close candidates.
+      final score = semanticScore + continuity * 0.45 + recency * 0.025;
+      scored.add((candidate: candidate, score: score, continuity: continuity));
     }
     counters['aboveThreshold'] = scored.length;
     scored.sort((a, b) {
@@ -61,6 +85,7 @@ abstract final class MessageRecallSelection {
           text: _attributedText(item.candidate),
           rawText: item.candidate.text,
           score: item.score,
+          continuityScore: item.continuity,
           messageIds: item.candidate.messageIds,
           sourceSpans: item.candidate.sourceSpans,
         ),
@@ -119,4 +144,158 @@ abstract final class MessageRecallSelection {
     }
     return spans;
   }
+
+  static final _wordPattern = RegExp(r'[\p{L}\p{N}]+', unicode: true);
+}
+
+final class _ContinuitySignals {
+  final Set<String> terms;
+  final Set<String> ngrams;
+  final Set<String> aliases;
+
+  const _ContinuitySignals(this.terms, this.ngrams, this.aliases);
+
+  factory _ContinuitySignals.from(String text, Set<String> knownAliases) {
+    final lower = text.toLowerCase();
+    final aliases = knownAliases
+        .map((alias) => alias.trim().toLowerCase())
+        .where((alias) => alias.length >= 2 && _containsWhole(lower, alias))
+        .toSet();
+    final terms = MessageRecallSelection._wordPattern
+        .allMatches(lower)
+        .map((match) => _stem(match.group(0)!))
+        .where((term) => term.length >= 4 && !_stopwords.contains(term))
+        .toSet();
+    return _ContinuitySignals(terms, _ngrams(terms), aliases);
+  }
+
+  double score(String candidateText) {
+    if (terms.isEmpty && aliases.isEmpty) return 0;
+    final lower = candidateText.toLowerCase();
+    final candidateTerms = MessageRecallSelection._wordPattern
+        .allMatches(lower)
+        .map((match) => _stem(match.group(0)!))
+        .where((term) => term.length >= 4 && !_stopwords.contains(term))
+        .toSet();
+    final termOverlap = terms.intersection(candidateTerms).length;
+    final queryNgrams = ngrams;
+    final candidateNgrams = _ngrams(candidateTerms);
+    final ngramOverlap = queryNgrams.isEmpty
+        ? 0.0
+        : queryNgrams.intersection(candidateNgrams).length / queryNgrams.length;
+    final aliasHits = aliases
+        .where((alias) => _containsWhole(lower, alias))
+        .length;
+    final aliasCoverage = aliases.isEmpty ? 0.0 : aliasHits / aliases.length;
+    final termCoverage = terms.isEmpty
+        ? 0.0
+        : termOverlap / math.min(terms.length, 6);
+    return (aliasCoverage * 0.45 +
+            termCoverage.clamp(0.0, 1.0) * 0.25 +
+            ngramOverlap.clamp(0.0, 1.0) * 0.30)
+        .clamp(0.0, 1.0);
+  }
+
+  static bool _containsWhole(String text, String value) => RegExp(
+    '(^|[^\\p{L}\\p{N}_])${RegExp.escape(value)}([^\\p{L}\\p{N}_]|\$)',
+    unicode: true,
+  ).hasMatch(text);
+
+  static String _stem(String value) {
+    var out = value.toLowerCase().replaceAll('ё', 'е');
+    // Deliberately modest normalization: enough for common Russian inflection
+    // (`шлепая`/`шлепнул`) without pretending to be a full morphological model.
+    for (final suffix in _suffixes) {
+      if (out.length - suffix.length >= 4 && out.endsWith(suffix)) {
+        out = out.substring(0, out.length - suffix.length);
+        break;
+      }
+    }
+    return out;
+  }
+
+  static Set<String> _ngrams(Set<String> terms) {
+    final result = <String>{};
+    for (final term in terms) {
+      if (term.length < 3) continue;
+      for (var i = 0; i <= term.length - 3; i++) {
+        result.add(term.substring(i, i + 3));
+      }
+    }
+    return result;
+  }
+
+  static const _suffixes = <String>[
+    'иями',
+    'ями',
+    'ами',
+    'ого',
+    'ему',
+    'ому',
+    'ыми',
+    'ими',
+    'ая',
+    'яя',
+    'ую',
+    'юю',
+    'ый',
+    'ий',
+    'ой',
+    'ое',
+    'ее',
+    'ые',
+    'ие',
+    'нул',
+    'нула',
+    'нули',
+    'ать',
+    'ять',
+    'ить',
+    'еть',
+    'ая',
+    'яя',
+    'ами',
+    'ями',
+    'ах',
+    'ях',
+    'ом',
+    'ем',
+    'ов',
+    'ев',
+    'ей',
+    'а',
+    'я',
+    'ы',
+    'и',
+    'у',
+    'ю',
+    'е',
+    'о',
+  ];
+
+  static const _stopwords = <String>{
+    'этот',
+    'того',
+    'котор',
+    'свой',
+    'тебя',
+    'меня',
+    'было',
+    'будет',
+    'просто',
+    'когда',
+    'после',
+    'тогда',
+    'здесь',
+    'очень',
+    'снова',
+    'with',
+    'that',
+    'this',
+    'from',
+    'have',
+    'were',
+    'when',
+    'then',
+  };
 }

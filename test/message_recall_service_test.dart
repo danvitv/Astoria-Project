@@ -279,6 +279,43 @@ void main() {
       },
     );
 
+    test('strong continuity match injects the original turn pair', () async {
+      const messages = [
+        ChatMessage(
+          id: 'u1',
+          role: 'user',
+          content: 'Я шлепнул Фейт по ягодице и сказал, что скучал.',
+        ),
+        ChatMessage(
+          id: 'a1',
+          role: 'assistant',
+          content: 'Фейт узнала старую привычку и рассмеялась.',
+        ),
+      ];
+      final groupText = ChatMessageEmbeddingService.formatChunk(messages);
+      const excerpt = 'user: Я шлепнул Фейт по ягодице';
+      await putChunk(
+        entryId: 'old-pair',
+        messageIds: ['u1', 'a1'],
+        text: excerpt,
+        indexedGroupText: groupText,
+        vector: [1, 0],
+      );
+
+      final result = await service.recall(
+        sessionId: 's1',
+        currentText: 'Подхожу к Фейт и снова шлепаю ее по ягодице.',
+        config: const EmbeddingConfig(endpoint: 'test'),
+        sourceMessages: {for (final message in messages) message.id: message},
+        participantAliases: const {'Фейт'},
+      );
+
+      expect(result.matches.single.entryId, endsWith(':continuity-pair'));
+      expect(result.matches.single.messageIds, ['u1', 'a1']);
+      expect(result.matches.single.text, contains(messages[0].content));
+      expect(result.matches.single.text, contains(messages[1].content));
+    });
+
     test('requires every source allowed, available and visible', () async {
       const sources = {
         'old': ChatMessage(id: 'old', role: 'user', content: 'old'),

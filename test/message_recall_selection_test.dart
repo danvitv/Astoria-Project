@@ -60,4 +60,38 @@ void main() {
     expect(spans.single.messageId, 'a');
     expect(spans.single.sourceStart, 0);
   });
+
+  test('hybrid continuity ranks same-actor inflected action above topic', () {
+    final counters = {'dimensionMismatch': 0, 'aboveThreshold': 0};
+    final selected = MessageRecallSelection.rank(
+      candidates: const [
+        MessageRecallCandidate(
+          entryId: 'recent-topic',
+          chunkIndex: 0,
+          text: 'Фейт поправила футболку и подошла к ванной.',
+          vector: [1, 0],
+          messageIds: ['recent'],
+          sourceOrdinal: 90,
+        ),
+        MessageRecallCandidate(
+          entryId: 'older-action',
+          chunkIndex: 0,
+          text: 'Он шлепнул Фейт по ягодице и рассмеялся.',
+          vector: [0.99, 0.01],
+          messageIds: ['older'],
+          sourceOrdinal: 40,
+        ),
+      ],
+      queryVectors: const [
+        [1, 0],
+      ],
+      threshold: .25,
+      counters: counters,
+      queryText: 'Подхожу к Фейт, неосознанно шлепая ее по ягодице.',
+      participantAliases: const {'Фейт'},
+    );
+
+    expect(selected.first.entryId, 'older-action');
+    expect(selected.first.continuityScore, greaterThanOrEqualTo(.45));
+  });
 }

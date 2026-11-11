@@ -1,5 +1,6 @@
 import 'dart:isolate';
 import 'dart:typed_data';
+import 'dart:math' as math;
 
 import '../db/app_db.dart';
 import '../db/repositories/embedding_repo.dart';
@@ -66,6 +67,9 @@ PreparedRecallCandidates prepareRecallCandidates(RecallPreparationInput input) {
     'aboveThreshold': 0,
   };
   final candidates = <MessageRecallCandidate>[];
+  final sourceOrdinals = input.sources == null
+      ? const <String, int>{}
+      : {for (final (index, id) in input.sources!.keys.indexed) id: index};
   for (final row in input.rows) {
     if (row.errorJson != null) {
       counters['indexErrors'] = counters['indexErrors']! + 1;
@@ -199,6 +203,9 @@ PreparedRecallCandidates prepareRecallCandidates(RecallPreparationInput input) {
           vector: Float64List.fromList(vectors[index]).asUnmodifiableView(),
           messageIds: ids,
           sourceSpans: spans,
+          sourceOrdinal: ids
+              .map((id) => sourceOrdinals[id] ?? -1)
+              .fold(-1, math.max),
         ),
       );
     }
@@ -215,12 +222,16 @@ class RecallRankingInput {
   final List<List<double>> queryVectors;
   final double threshold;
   final Map<String, int> counters;
+  final String queryText;
+  final Set<String> participantAliases;
   const RecallRankingInput(
     this.candidates,
     this.queryVectors,
     this.threshold,
-    this.counters,
-  );
+    this.counters, {
+    this.queryText = '',
+    this.participantAliases = const {},
+  });
 }
 
 class RankedRecallCandidates {
@@ -239,6 +250,8 @@ RankedRecallCandidates rankRecallCandidates(RecallRankingInput input) {
     queryVectors: input.queryVectors,
     threshold: input.threshold,
     counters: counters,
+    queryText: input.queryText,
+    participantAliases: input.participantAliases,
   );
   return RankedRecallCandidates(matches, counters);
 }

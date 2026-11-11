@@ -54,6 +54,11 @@ class MessageRecallMatch {
   final String? rawText;
   final double score;
 
+  /// Deterministic lexical/entity continuity confidence. This never replaces
+  /// vector similarity; it only identifies a strong same-action anchor that
+  /// may be expanded to its original user/assistant turn pair.
+  final double continuityScore;
+
   /// Whole indexed group, retained for conservative final-window exclusion.
   final List<String> messageIds;
   final int chunkIndex;
@@ -63,6 +68,7 @@ class MessageRecallMatch {
     required this.entryId,
     required this.text,
     required this.score,
+    this.continuityScore = 0,
     this.rawText,
     this.messageIds = const [],
     this.chunkIndex = 0,
@@ -73,6 +79,7 @@ class MessageRecallMatch {
     'entryId': entryId,
     'chunkIndex': chunkIndex,
     'score': score,
+    if (continuityScore > 0) 'continuityScore': continuityScore,
     'sourceIds': messageIds,
     'attribution': sourceSpans.isEmpty ? 'unverified' : 'exact_source_offsets',
     'sourceSpans': sourceSpans.map((span) => span.toJson()).toList(),
