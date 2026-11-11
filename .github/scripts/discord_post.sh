@@ -10,6 +10,8 @@
 #   BUILD_BRANCH         branch / channel                         [required]
 #   BUILD_CHANNEL        stable|dev                               [default: dev]
 #   COMMITS              optional markdown commit list
+#   ANNOUNCEMENT_RU      optional RU preview/release note
+#   ANNOUNCEMENT_EN      optional EN preview/release note
 #   PING_ROLE_ID         optional Discord role ID to mention
 #   LINKS_FILE           drive_upload.py output                   [default: drive_links.md]
 set -euo pipefail
@@ -78,6 +80,9 @@ RU_DESC=$(printf '**Дата сборки:** `%s UTC`\n**Ветка:** `%s` · *
 if [ -n "$LINKS" ]; then
   RU_DESC=$(printf '%s\n\n**📦 Скачать сборку (Google Drive):**\n%s' "$RU_DESC" "$LINKS")
 fi
+if [ -n "${ANNOUNCEMENT_RU:-}" ]; then
+  RU_DESC=$(printf '%s\n\n%s' "$RU_DESC" "$ANNOUNCEMENT_RU")
+fi
 if [ -n "$CLEAN_COMMITS" ]; then
   RU_DESC=$(printf '%s\n\n**📝 Список изменений:**\n%s' "$RU_DESC" "$CLEAN_COMMITS")
 fi
@@ -91,6 +96,9 @@ EN_DESC=$(printf '**Build date:** `%s UTC`\n**Branch:** `%s` · **Channel:** `%s
   "$BUILD_DATE" "$BUILD_BRANCH" "$CHANNEL_LABEL")
 if [ -n "$LINKS" ]; then
   EN_DESC=$(printf '%s\n\n**📦 Download build (Google Drive):**\n%s' "$EN_DESC" "$LINKS")
+fi
+if [ -n "${ANNOUNCEMENT_EN:-}" ]; then
+  EN_DESC=$(printf '%s\n\n%s' "$EN_DESC" "$ANNOUNCEMENT_EN")
 fi
 if [ -n "$CLEAN_COMMITS" ]; then
   EN_DESC=$(printf '%s\n\n**📝 Changelog:**\n%s' "$EN_DESC" "$CLEAN_COMMITS")
