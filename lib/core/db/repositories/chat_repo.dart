@@ -12,6 +12,7 @@ import 'session_deletion_queries.dart';
 import 'support_repo.dart';
 import '../../models/support_models.dart';
 import '../../models/chat_message.dart';
+import '../../utils/time_helpers.dart';
 import '../../application/sync_repo_interfaces.dart';
 import '../../application/session_deletion_store.dart';
 
@@ -19,13 +20,15 @@ part 'chat_native_maintenance_source.dart';
 part 'chat_native_session_title.dart';
 
 final class ChatNativeSelectionInventory {
-  ChatNativeSelectionInventory._(this._repo,
-      List<({String sessionId, String characterId, int sessionIndex})> identities,
-      this._lifetime)
-      : _identities = List.unmodifiable(identities),
-        sessions = List.unmodifiable(identities.map((s) => s.sessionId));
+  ChatNativeSelectionInventory._(
+    this._repo,
+    List<({String sessionId, String characterId, int sessionIndex})> identities,
+    this._lifetime,
+  ) : _identities = List.unmodifiable(identities),
+      sessions = List.unmodifiable(identities.map((s) => s.sessionId));
   final ChatRepo _repo;
-  final List<({String sessionId, String characterId, int sessionIndex})> _identities;
+  final List<({String sessionId, String characterId, int sessionIndex})>
+  _identities;
   final List<String> sessions;
   final bool Function() _lifetime;
   bool _retired = false;
@@ -52,8 +55,7 @@ class ChatRepo implements SyncChatStore {
 
   final AppDatabase _db;
   final SessionMutationStarted? _onMutationStarted;
-  ChatRepo(this._db, {SessionMutationStarted? onMutationStarted})
-    : _onMutationStarted = onMutationStarted;
+  ChatRepo(this._db, {this._onMutationStarted});
   bool usesDatabase(AppDatabase database) => identical(_db, database);
 
   /// Read-only native maintenance projection; not a chat/UI hydration path.
@@ -157,7 +159,8 @@ class ChatRepo implements SyncChatStore {
   /// One exact selection collateral inventory, captured before SQL and retained
   /// through final preference CAS and Undo. Never transfer message/title bodies.
   Future<ChatNativeSelectionInventory?> observeNativeSelectionInventory(
-      bool Function() isCurrent) async {
+    bool Function() isCurrent,
+  ) async {
     final lifetime = SessionDeletionQueries.captureInventoryLifetime(_db);
     if (lifetime == null || !isCurrent()) return null;
     final identities = await _selectionInventoryIdentities();
@@ -166,15 +169,16 @@ class ChatRepo implements SyncChatStore {
   }
 
   Future<List<({String sessionId, String characterId, int sessionIndex})>>
-      _selectionInventoryIdentities() async {
-    final rows = await (_db.selectOnly(_db.chatSessions)
-          ..addColumns([
-            _db.chatSessions.sessionId,
-            _db.chatSessions.characterId,
-            _db.chatSessions.sessionIndex,
-          ])
-          ..orderBy([OrderingTerm.asc(_db.chatSessions.sessionId)]))
-        .get();
+  _selectionInventoryIdentities() async {
+    final rows =
+        await (_db.selectOnly(_db.chatSessions)
+              ..addColumns([
+                _db.chatSessions.sessionId,
+                _db.chatSessions.characterId,
+                _db.chatSessions.sessionIndex,
+              ])
+              ..orderBy([OrderingTerm.asc(_db.chatSessions.sessionId)]))
+            .get();
     return [
       for (final row in rows)
         (
@@ -188,7 +192,9 @@ class ChatRepo implements SyncChatStore {
   /// Compare against the SAME original collateral, never capture/extend a later
   /// inventory. SQL catches observed untracked differences, not external ABA.
   Future<bool> revalidateNativeSelectionInventory(
-      ChatNativeSelectionInventory expected, bool Function() isCurrent) async {
+    ChatNativeSelectionInventory expected,
+    bool Function() isCurrent,
+  ) async {
     if (!identical(expected._repo, this) || !expected.current || !isCurrent()) {
       return false;
     }
@@ -366,11 +372,11 @@ ORDER BY updated_at DESC
     final inventory = SessionDeletionQueries.beginInventoryMutation(_db);
     try {
       final inserted = await _db
-        .into(_db.chatSessions)
-        .insertReturningOrNull(
-          _toCompanion(session),
-          mode: InsertMode.insertOrIgnore,
-        );
+          .into(_db.chatSessions)
+          .insertReturningOrNull(
+            _toCompanion(session),
+            mode: InsertMode.insertOrIgnore,
+          );
       return inserted != null;
     } finally {
       inventory();
@@ -1524,7 +1530,7 @@ ORDER BY updated_at DESC
       sessionId: c.sessionId,
       characterId: c.characterId,
       sessionIndex: c.sessionIndex,
-      updatedAt: c.updatedAt,
+      updatedAt: normalizeTimestampSeconds(c.updatedAt),
       messageCount: messageCount,
       lastMessageContent: lastContent,
       lastMessageTimestamp: lastTimestamp,
@@ -1553,7 +1559,7 @@ ORDER BY updated_at DESC
       sessionId: row.read<String>('session_id'),
       characterId: row.read<String>('character_id'),
       sessionIndex: row.read<int>('session_index'),
-      updatedAt: row.read<int>('updated_at'),
+      updatedAt: normalizeTimestampSeconds(row.read<int>('updated_at')),
       messageCount: row.readNullable<int>('message_count') ?? 0,
       lastMessageContent: lastContent,
       lastMessageTimestamp: row.readNullable<int>('last_timestamp') ?? 0,
@@ -1658,7 +1664,7 @@ ORDER BY updated_at DESC
             (jsonDecode(c.messagesJson) as List)
                 .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
                 .toList(),
-        updatedAt: c.updatedAt,
+        updatedAt: normalizeTimestampSeconds(c.updatedAt),
         sessionVars: _modelSessionVars(c.sessionVarsJson),
         authorsNote: _parseAuthorsNote(c.authorsNoteJson),
         draft: c.draft,
@@ -1675,7 +1681,7 @@ ORDER BY updated_at DESC
     characterId: Value(m.characterId),
     sessionIndex: Value(m.sessionIndex),
     messagesJson: Value(jsonEncode(m.messages.map((e) => e.toJson()).toList())),
-    updatedAt: Value(m.updatedAt),
+    updatedAt: Value(normalizeTimestampSeconds(m.updatedAt)),
     sessionVarsJson: Value(
       m.sessionVars.isNotEmpty ? jsonEncode(m.sessionVars) : null,
     ),

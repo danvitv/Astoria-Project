@@ -1,5 +1,7 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import '../utils/time_helpers.dart';
+
 part 'chat_message.freezed.dart';
 part 'chat_message.g.dart';
 
@@ -273,8 +275,14 @@ abstract class ChatSession with _$ChatSession {
     @Default({}) Map<String, dynamic> lastScrollAnchor,
   }) = _ChatSession;
 
-  factory ChatSession.fromJson(Map<String, dynamic> json) =>
-      _$ChatSessionFromJson(json);
+  factory ChatSession.fromJson(Map<String, dynamic> json) {
+    final normalized = Map<String, dynamic>.from(json);
+    final updatedAt = normalized['updatedAt'];
+    if (updatedAt is num) {
+      normalized['updatedAt'] = normalizeTimestampSeconds(updatedAt.toInt());
+    }
+    return _$ChatSessionFromJson(normalized);
+  }
 }
 
 class SessionMetadata {

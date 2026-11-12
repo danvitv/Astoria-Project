@@ -1040,6 +1040,20 @@ void main() {
         (p) => p.total > 0 || p.message?.contains('Nothing to push') == true,
       );
 
+  test('chat seconds are converted to manifest milliseconds', () async {
+    final world = SyncWorld();
+    world.chats.data['chat'] = const ChatSession(
+      id: 'chat',
+      characterId: 'character',
+      sessionIndex: 0,
+      updatedAt: 1787088360,
+    );
+
+    final manifest = await world.manifestProvider.buildLocalManifest();
+
+    expect(manifest.entries['chat:chat']!.updatedAt, 1787088360000);
+  });
+
   test('lorebook singleton hash is independent of repository order', () async {
     final first = SyncWorld();
     first.lorebooks.data['b'] = makeLorebook('b');

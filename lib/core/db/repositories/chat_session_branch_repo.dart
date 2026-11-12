@@ -424,7 +424,7 @@ class ChatSessionBranchRepo {
         messagesJson: jsonEncode(
           session.messages.map((message) => message.toJson()).toList(),
         ),
-        updatedAt: Value(session.updatedAt),
+        updatedAt: Value(normalizeTimestampSeconds(session.updatedAt)),
         sessionVarsJson: Value(jsonEncode(session.sessionVars)),
         authorsNoteJson: Value(
           session.authorsNote == null

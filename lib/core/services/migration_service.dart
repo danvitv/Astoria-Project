@@ -189,7 +189,9 @@ class MigrationService {
             characterId: charId,
             sessionIndex: sessionIndex,
             messages: messages,
-            updatedAt: _toInt(chatData['sessionDates']?[sessionEntry.key]) ?? 0,
+            updatedAt: normalizeTimestampSeconds(
+              _toInt(chatData['sessionDates']?[sessionEntry.key]) ?? 0,
+            ),
           );
           await _chatRepo.put(session);
           result.sessions++;
@@ -479,8 +481,7 @@ class MigrationService {
           json['created_at'],
     );
     if (raw == null) return currentTimestampSeconds();
-    if (raw > 1e12) return raw ~/ 1000;
-    return raw;
+    return normalizeTimestampSeconds(raw);
   }
 
   double? _toDouble(dynamic value) {
