@@ -94,4 +94,54 @@ void main() {
     expect(selected.first.entryId, 'older-action');
     expect(selected.first.continuityScore, greaterThanOrEqualTo(.45));
   });
+
+  test('participant aliases cannot admit an unrelated episode', () {
+    final counters = {'dimensionMismatch': 0, 'aboveThreshold': 0};
+    final selected = MessageRecallSelection.rank(
+      candidates: const [
+        MessageRecallCandidate(
+          entryId: 'unrelated-intimacy',
+          chunkIndex: 0,
+          text: 'Фейт и Чисато обсуждали ванну и прикосновения прошлой ночью.',
+          vector: [0, 1],
+          messageIds: ['old'],
+        ),
+      ],
+      queryVectors: const [
+        [1, 0],
+      ],
+      threshold: .25,
+      counters: counters,
+      queryText: 'Нужно развезти Фейт и Чисато по домам на машине.',
+      participantAliases: const {'Фейт', 'Чисато'},
+    );
+
+    expect(selected, isEmpty);
+    expect(counters['aboveThreshold'], 0);
+  });
+
+  test('same action can still lift a weak semantic match', () {
+    final counters = {'dimensionMismatch': 0, 'aboveThreshold': 0};
+    final selected = MessageRecallSelection.rank(
+      candidates: const [
+        MessageRecallCandidate(
+          entryId: 'matching-transport',
+          chunkIndex: 0,
+          text: 'В прошлый раз Данви отвёз Фейт домой на машине.',
+          vector: [0.1, 0.9],
+          messageIds: ['old'],
+        ),
+      ],
+      queryVectors: const [
+        [1, 0],
+      ],
+      threshold: .25,
+      counters: counters,
+      queryText: 'Данви отвезёт Фейт домой на машине.',
+      participantAliases: const {'Фейт'},
+    );
+
+    expect(selected.single.entryId, 'matching-transport');
+    expect(selected.single.continuityScore, greaterThan(.45));
+  });
 }

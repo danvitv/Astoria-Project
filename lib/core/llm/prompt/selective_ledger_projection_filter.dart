@@ -288,6 +288,12 @@ List<_Group> _buildGroups(
   String focalUserName = '',
 }) {
   final byId = <String, _Group>{};
+  final presentEntities = projection.trackers
+      .where((tracker) => tracker.name == 'scene.present_entities')
+      .expand((tracker) => tracker.value.split(RegExp(r'[,;\n]+')))
+      .map(_normalizeIdentity)
+      .where((entity) => entity.isNotEmpty)
+      .toSet();
   _Group get(String id) => byId.putIfAbsent(id, () => _Group(id));
   for (final fact in projection.facts) {
     final scope = fact.scopeKey.trim().isNotEmpty
@@ -339,6 +345,7 @@ List<_Group> _buildGroups(
     group.sources.addAll(_provenanceSources(tracker.provenance));
     group.entities.addAll(_trackerEntities(tracker.name, tracker.value));
     if (_isCriticalTrackerKey(tracker.name) ||
+        _isPresentRosterCapsuleTracker(tracker.name, presentEntities) ||
         _isTerminalArcTracker(tracker, projection.trackers)) {
       group.tier = LedgerProjectionDeliveryTier.critical;
     } else if (_isVolatileTrackerKey(tracker.name) &&
@@ -347,6 +354,22 @@ List<_Group> _buildGroups(
     }
   }
   return byId.values.toList(growable: false);
+}
+
+bool _isPresentRosterCapsuleTracker(String key, Set<String> presentEntities) {
+  if (!key.startsWith('npc:')) return false;
+  final separator = key.indexOf('.');
+  if (separator <= 4) return false;
+  final entity = _normalizeIdentity(key.substring(4, separator));
+  if (!presentEntities.contains(entity)) return false;
+  final field = key.substring(separator + 1).toLowerCase();
+  return const {
+    'location',
+    'ability',
+    'physical_condition',
+    'hard_boundary',
+    'boundary',
+  }.contains(field);
 }
 
 _Decision _decide(
@@ -634,14 +657,13 @@ bool isSelectableLedgerFact(CharacterKnowledgeFact fact) {
 /// prompt from duplicating the clock and avoids re-injecting a stale value.
 bool _isGameClockTrackerKey(String key) {
   final value = key.toLowerCase();
-  return value == 'world:time' ||
-      value == 'world:date' ||
-      value == 'world:day';
+  return value == 'world:time' || value == 'world:date' || value == 'world:day';
 }
 
 bool _isCriticalTrackerKey(String key) {
   final value = key.toLowerCase();
-  return value.startsWith('canon_') ||
+  return value == 'scene.present_entities' ||
+      value.startsWith('canon_') ||
       value.contains('boundar') ||
       value.contains('persistent_condition') ||
       value.contains('commitment') ||

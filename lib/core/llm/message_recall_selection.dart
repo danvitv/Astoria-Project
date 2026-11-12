@@ -58,15 +58,25 @@ abstract final class MessageRecallSelection {
       }
       if (!semanticScore.isFinite) continue;
       final continuity = querySignals.score(candidate.text);
-      if (semanticScore < threshold && continuity < 0.45) continue;
+      // Participant identity is compatibility evidence, not evidence that two
+      // scenes describe the same action or situation. It may rerank a semantic
+      // match, but cannot independently admit an otherwise unrelated episode.
+      if (semanticScore < threshold && continuity.nonAliasScore < 0.20) {
+        continue;
+      }
       final recency = maxOrdinal <= 0 || candidate.sourceOrdinal < 0
           ? 0.0
           : candidate.sourceOrdinal / maxOrdinal;
       // Semantic similarity remains the primary signal. Strong same-actor,
       // same-action lexical evidence can lift a source above merely topical
       // matches, while recency only breaks otherwise-close candidates.
-      final score = semanticScore + continuity * 0.45 + recency * 0.025;
-      scored.add((candidate: candidate, score: score, continuity: continuity));
+      final score =
+          semanticScore + continuity.totalScore * 0.45 + recency * 0.025;
+      scored.add((
+        candidate: candidate,
+        score: score,
+        continuity: continuity.totalScore,
+      ));
     }
     counters['aboveThreshold'] = scored.length;
     scored.sort((a, b) {
@@ -161,16 +171,27 @@ final class _ContinuitySignals {
         .map((alias) => alias.trim().toLowerCase())
         .where((alias) => alias.length >= 2 && _containsWhole(lower, alias))
         .toSet();
+    final aliasTerms = aliases
+        .expand(MessageRecallSelection._wordPattern.allMatches)
+        .map((match) => _stem(match.group(0)!))
+        .toSet();
     final terms = MessageRecallSelection._wordPattern
         .allMatches(lower)
         .map((match) => _stem(match.group(0)!))
-        .where((term) => term.length >= 4 && !_stopwords.contains(term))
+        .where(
+          (term) =>
+              term.length >= 4 &&
+              !_stopwords.contains(term) &&
+              !aliasTerms.contains(term),
+        )
         .toSet();
     return _ContinuitySignals(terms, _ngrams(terms), aliases);
   }
 
-  double score(String candidateText) {
-    if (terms.isEmpty && aliases.isEmpty) return 0;
+  _ContinuityScore score(String candidateText) {
+    if (terms.isEmpty && aliases.isEmpty) {
+      return const _ContinuityScore(totalScore: 0, nonAliasScore: 0);
+    }
     final lower = candidateText.toLowerCase();
     final candidateTerms = MessageRecallSelection._wordPattern
         .allMatches(lower)
@@ -190,10 +211,14 @@ final class _ContinuitySignals {
     final termCoverage = terms.isEmpty
         ? 0.0
         : termOverlap / math.min(terms.length, 6);
-    return (aliasCoverage * 0.45 +
-            termCoverage.clamp(0.0, 1.0) * 0.25 +
-            ngramOverlap.clamp(0.0, 1.0) * 0.30)
-        .clamp(0.0, 1.0);
+    final nonAliasScore =
+        (termCoverage.clamp(0.0, 1.0) * 0.25 +
+                ngramOverlap.clamp(0.0, 1.0) * 0.30)
+            .clamp(0.0, 0.55);
+    return _ContinuityScore(
+      totalScore: (aliasCoverage * 0.45 + nonAliasScore).clamp(0.0, 1.0),
+      nonAliasScore: nonAliasScore,
+    );
   }
 
   static bool _containsWhole(String text, String value) => RegExp(
@@ -298,4 +323,14 @@ final class _ContinuitySignals {
     'when',
     'then',
   };
+}
+
+final class _ContinuityScore {
+  const _ContinuityScore({
+    required this.totalScore,
+    required this.nonAliasScore,
+  });
+
+  final double totalScore;
+  final double nonAliasScore;
 }

@@ -82,10 +82,17 @@ void main() {
           .map((event) => event.sources.single.memoryEntryId),
       ['one', 'two'],
     );
-    expect(parsed.toRegistryLinks().map((link) => link.toEventId), [
+    final registryLinks = parsed.toRegistryLinks(pack);
+    expect(registryLinks.map((link) => link.toEventId), [
       'event-old',
       'event-two',
     ]);
+    expect(registryLinks.map((link) => link.id).toSet(), hasLength(2));
+    expect(registryLinks.map((link) => link.id), isNot(contains('link-1')));
+    expect(
+      parsed.toRegistryLinks(pack).map((link) => link.id),
+      registryLinks.map((link) => link.id),
+    );
   });
 
   test('rejects reusing a selected source across separate events', () {

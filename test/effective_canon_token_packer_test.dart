@@ -183,6 +183,38 @@ void main() {
       },
     );
 
+    test(
+      'default lanes protect scene capacity and durable knowledge floor',
+      () {
+        final names = [for (var i = 0; i < 12; i++) 'NPC$i'];
+        final result = _pack(
+          _projection(
+            trackers: [
+              _tracker('scene.present_entities', names.join(', ')),
+              for (var i = 0; i < names.length; i++)
+                _tracker('npc:${names[i]}.current_goal', 'STATE_$i'),
+            ],
+            facts: [
+              for (var i = 0; i < 12; i++)
+                _fact(id: 'lane-$i', object: 'FACT_$i', importance: 1),
+            ],
+          ),
+          nominal: EffectiveCanonTokenBudget.defaultNominalTokens,
+          hard: EffectiveCanonTokenBudget.defaultHardCeilingTokens,
+          tokenCounter: _laneMarkerCounter,
+        );
+
+        final stateCount = _occurrences(result.sessionState ?? '', 'STATE_');
+        final factCount = _occurrences(
+          result.characterKnowledge ?? '',
+          'FACT_',
+        );
+        expect(stateCount, lessThanOrEqualTo(7));
+        expect(factCount, 5);
+        expect(result.diagnostics.usedTokens, lessThanOrEqualTo(13000));
+      },
+    );
+
     test('relationship projection does not expand to the complete graph', () {
       final names = [for (var i = 0; i < 10; i++) 'NPC$i'];
       final trackers = <Tracker>[
@@ -382,6 +414,17 @@ void main() {
         ),
         throwsArgumentError,
       );
+
+      final normal = EffectiveCanonTokenBudget.forResponder(
+        contextSize: 128000,
+        outputTokens: 8000,
+        reservedPromptTokens: 50000,
+        presentEntityCount: 10,
+      );
+      expect(normal.nominalTokens, 13000);
+      expect(normal.hardCeilingTokens, 15000);
+      expect(EffectiveCanonTokenBudget.currentSceneLaneTokens, 8000);
+      expect(EffectiveCanonTokenBudget.durableKnowledgeFloorTokens, 5000);
     });
 
     test('selection identity includes budget and tokenizer mode', () {
@@ -532,6 +575,11 @@ int _semanticMarkerCounter(String text) {
       RegExp(
         r'\b(?:COMMITMENT|GOAL|EDGE|HARD|FLAVOR|FACT)_\w+\b',
       ).allMatches(text).length;
+}
+
+int _laneMarkerCounter(String text) {
+  if (text.isEmpty) return 0;
+  return 1 + RegExp(r'\b(?:STATE|FACT)_\w+\b').allMatches(text).length * 1000;
 }
 
 int _occurrences(String text, String marker) => marker.allMatches(text).length;

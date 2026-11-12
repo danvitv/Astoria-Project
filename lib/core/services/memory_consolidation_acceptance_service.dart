@@ -40,7 +40,7 @@ class MemoryConsolidationAcceptanceService {
     if (canonical.outcome == 'unable_to_verify') return false;
     final accepted = await registry.acceptPackage(
       events: canonical.toRegistryEvents(pack),
-      links: canonical.toRegistryLinks(),
+      links: canonical.toRegistryLinks(pack),
       isCurrent: isCurrent,
       acceptedBy: acceptedBy,
     );

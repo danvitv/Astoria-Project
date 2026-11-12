@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
+
 import '../db/repositories/memory_event_registry_repo.dart';
 import 'memory_source_manifest.dart';
 
@@ -304,15 +306,42 @@ class MemoryConsolidationPackageResponse {
     ];
   }
 
-  List<MemoryEventLinkInput> toRegistryLinks() => [
-    for (final link in links)
+  /// Model link IDs are request-local labels only. Durable IDs are derived by
+  /// the app from the frozen pack and link operation, so a model cannot collide
+  /// with an already accepted global registry ID by returning `link-1` again.
+  List<MemoryEventLinkInput> toRegistryLinks(
+    MemoryConsolidationSourcePack pack,
+  ) => [
+    for (final (index, link) in links.indexed)
       MemoryEventLinkInput(
-        id: link.linkId,
+        id: _durablePackageLinkId(pack, link, index),
         fromEventId: link.fromEventId,
         toEventId: link.toEventId,
         relation: link.relation,
       ),
   ];
+
+  static String _durablePackageLinkId(
+    MemoryConsolidationSourcePack pack,
+    MemoryConsolidationLinkOperation link,
+    int index,
+  ) {
+    final digest = sha256
+        .convert(
+          utf8.encode(
+            jsonEncode({
+              'packId': pack.packId,
+              'index': index,
+              'requestLinkId': link.linkId,
+              'fromEventId': link.fromEventId,
+              'toEventId': link.toEventId,
+              'relation': link.relation,
+            }),
+          ),
+        )
+        .toString();
+    return 'link-${digest.substring(0, 24)}';
+  }
 }
 
 /// A parsed, strict response operation that can still be displayed as a

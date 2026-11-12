@@ -181,6 +181,54 @@ void main() {
     });
 
     test(
+      'current scene roster survives visible provenance and reaches packer',
+      () {
+        final materialized = EffectiveCanonPromptMaterializer.materialize(
+          _input(
+            _projection(
+              trackers: [
+                _tracker(
+                  'scene.present_entities',
+                  'Даниил, Аква, Акане Курокава, Руби, МЕМ-тё',
+                  provenance: 'message=m1|swipe=0',
+                ),
+                _tracker(
+                  'npc:Аква.location',
+                  'в машине',
+                  provenance: 'message=m1|swipe=0',
+                ),
+              ],
+            ),
+            _gapPolicy,
+            visible: [_message('m1', 'Все садятся в машину.')],
+            swipes: const {'m1': 0},
+          ),
+          sessionId: 's',
+          latestUserText: 'Аква поедет домой.',
+        );
+
+        expect(materialized.packingDiagnostics.presentEntityCount, 5);
+        expect(materialized.packingDiagnostics.spotlightEntityIds, isNotEmpty);
+        expect(
+          materialized.studioSessionStateContent,
+          contains('Present now: Акане Курокава, Аква, Даниил, МЕМ-тё, Руби.'),
+        );
+        expect(
+          materialized.studioSessionStateContent,
+          contains('[npc:Аква.location] в машине'),
+        );
+        expect(
+          materialized.diagnostics
+              .firstWhere(
+                (item) => item.groupId.contains('scene.present_entities'),
+              )
+              .reason,
+          LedgerProjectionDecisionReason.selected,
+        );
+      },
+    );
+
+    test(
       'non-critical facts unrelated to the causal window are suppressed',
       () {
         final result = _select(

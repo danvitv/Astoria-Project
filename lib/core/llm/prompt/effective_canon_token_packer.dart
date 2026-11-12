@@ -15,6 +15,11 @@ enum CanonItemTier { mandatory, roster, spotlight, relevant, archive }
 enum CanonPackingReason { selected, budgetDeferred, deduped }
 
 final class EffectiveCanonTokenBudget {
+  static const defaultNominalTokens = 13000;
+  static const defaultHardCeilingTokens = 15000;
+  static const currentSceneLaneTokens = 8000;
+  static const durableKnowledgeFloorTokens = 5000;
+
   EffectiveCanonTokenBudget({
     required this.nominalTokens,
     required this.hardCeilingTokens,
@@ -44,11 +49,11 @@ final class EffectiveCanonTokenBudget {
     final reserve = math.min(available, math.max(192, presentEntityCount * 48));
     final nominal = math.min(
       available,
-      math.max(reserve, math.min(6000, (available * 0.10).round())),
+      math.max(reserve, defaultNominalTokens),
     );
     final hard = math.min(
       available,
-      math.max(nominal, math.min(12000, (available * 0.18).round())),
+      math.max(nominal, defaultHardCeilingTokens),
     );
     return EffectiveCanonTokenBudget(
       nominalTokens: nominal,
@@ -269,14 +274,45 @@ abstract final class EffectiveCanonTokenPacker {
         hardCeilingTokens: budget.hardCeilingTokens,
       );
     }
+    final usesDefaultLanes =
+        budget.nominalTokens >= EffectiveCanonTokenBudget.defaultNominalTokens;
+    final sceneLaneLimit = usesDefaultLanes
+        ? math.min(
+            EffectiveCanonTokenBudget.currentSceneLaneTokens,
+            budget.nominalTokens,
+          )
+        : budget.nominalTokens;
+    int sceneTokens(Iterable<CanonPromptItem> source) => tokenCounter(
+      _render(
+        source.where((item) => item.channel != 'knowledge').toList(),
+      ).combined,
+    );
+    final mandatorySceneTokens = sceneTokens(selected);
+    final sceneOverflow = math.max(0, mandatorySceneTokens - sceneLaneLimit);
+    final laneAwareNominal = math.min(
+      budget.hardCeilingTokens,
+      budget.nominalTokens + sceneOverflow,
+    );
     final overflow = math.max(0, mandatoryTokens - budget.nominalTokens);
-    final softLimit = overflow > 0 ? mandatoryTokens : budget.nominalTokens;
+    final softLimit = math.max(mandatoryTokens, laneAwareNominal);
     var estimatedUsedTokens = mandatoryTokens;
     final selectedChannels = selected.map((item) => item.channel).toSet();
+    final selectedSceneChannels = selected
+        .where((item) => item.channel != 'knowledge')
+        .map((item) => item.channel)
+        .toSet();
+    var estimatedSceneTokens = mandatorySceneTokens;
     final optionalOutcomes = <CanonPromptItem, CanonPackingReason>{};
     final selectedOptional = <CanonPromptItem>[];
+    final selectedOptionalScene = <CanonPromptItem>[];
     final useAdditiveSelection = _tokenCounterScalesWithInput(tokenCounter);
-    for (final item in ordered.where((item) => !item.hardConstraint)) {
+    final optional = ordered.where((item) => !item.hardConstraint).toList();
+    final laneOrdered = [
+      ...optional.where((item) => item.channel != 'knowledge'),
+      ...optional.where((item) => item.channel == 'knowledge'),
+    ];
+    final effectiveSceneLimit = math.max(sceneLaneLimit, mandatorySceneTokens);
+    for (final item in laneOrdered) {
       final normalized = item.renderedText
           .toLowerCase()
           .replaceAll(RegExp(r'\s+'), ' ')
@@ -287,6 +323,11 @@ abstract final class EffectiveCanonTokenPacker {
       }
       final itemTokenCost = cost(item);
       if (!useAdditiveSelection) {
+        if (item.channel != 'knowledge' &&
+            sceneTokens([...selected, item]) > effectiveSceneLimit) {
+          optionalOutcomes[item] = CanonPackingReason.budgetDeferred;
+          continue;
+        }
         final candidateUsedTokens = tokenCounter(
           _render([...selected, item]).combined,
         );
@@ -296,7 +337,12 @@ abstract final class EffectiveCanonTokenPacker {
         }
         addUnique(item);
         selectedOptional.add(item);
+        if (item.channel != 'knowledge') selectedOptionalScene.add(item);
         selectedChannels.add(item.channel);
+        if (item.channel != 'knowledge') {
+          selectedSceneChannels.add(item.channel);
+          estimatedSceneTokens = sceneTokens(selected);
+        }
         estimatedUsedTokens = candidateUsedTokens;
         optionalOutcomes[item] = CanonPackingReason.selected;
         continue;
@@ -312,13 +358,32 @@ abstract final class EffectiveCanonTokenPacker {
           tokenCounter(_render([item]).combined) - itemTokenCost,
         );
       }
+      var incrementalSceneCost = 0;
+      if (item.channel != 'knowledge') {
+        incrementalSceneCost = itemTokenCost + 1;
+        if (!selectedSceneChannels.contains(item.channel)) {
+          incrementalSceneCost += math.max(
+            0,
+            tokenCounter(_render([item]).combined) - itemTokenCost,
+          );
+        }
+        if (estimatedSceneTokens + incrementalSceneCost > effectiveSceneLimit) {
+          optionalOutcomes[item] = CanonPackingReason.budgetDeferred;
+          continue;
+        }
+      }
       if (estimatedUsedTokens + incrementalCost > softLimit) {
         optionalOutcomes[item] = CanonPackingReason.budgetDeferred;
         continue;
       }
       addUnique(item);
       selectedOptional.add(item);
+      if (item.channel != 'knowledge') selectedOptionalScene.add(item);
       selectedChannels.add(item.channel);
+      if (item.channel != 'knowledge') {
+        selectedSceneChannels.add(item.channel);
+        estimatedSceneTokens += incrementalSceneCost;
+      }
       estimatedUsedTokens += incrementalCost;
       optionalOutcomes[item] = CanonPackingReason.selected;
     }
@@ -327,6 +392,15 @@ abstract final class EffectiveCanonTokenPacker {
     // the selection pass cheap, then enforce the exact complete-prompt limit.
     // The +1 line reserve above normally makes this a single tokenization; the
     // loop is only a bounded repair for an unusual boundary expansion.
+    var exactSceneTokens = sceneTokens(selected);
+    while (exactSceneTokens > effectiveSceneLimit &&
+        selectedOptionalScene.isNotEmpty) {
+      final removed = selectedOptionalScene.removeLast();
+      selectedOptional.remove(removed);
+      selected.remove(removed);
+      optionalOutcomes[removed] = CanonPackingReason.budgetDeferred;
+      exactSceneTokens = sceneTokens(selected);
+    }
     var exactRendered = _render(selected);
     var exactUsedTokens = tokenCounter(exactRendered.combined);
     while (exactUsedTokens > softLimit && selectedOptional.isNotEmpty) {

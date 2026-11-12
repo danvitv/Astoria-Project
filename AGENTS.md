@@ -6,15 +6,6 @@ this project without separate approval. Keep delegated work within the user's
 request and project rules; delegation does not expand permissions or authorize
 otherwise restricted actions. See the delegation guidance in `CLAUDE.md`.
 
-## Local planning context
-
-At the start of new project work, read
-[`docs/untracked/MEMORY_CONSOLIDATION_PLAN.md`](./docs/untracked/MEMORY_CONSOLIDATION_PLAN.md)
-when it exists. The user wants the next agent to see this pending memory
-consolidation plan. It is intentionally untracked and may be absent in another
-checkout. Reading it does not authorize implementation or override the current
-request, accepted work, or project safety rules.
-
 ## Current delivery checkpoint (2026-11-11)
 
 Work is currently on `feat/astoria-assistant`. The immediate goal is a usable
@@ -41,8 +32,7 @@ specific slice.
   Book text. AVD and a complete real-device scenario remain unrun; do not restart
   AVD implicitly.
 - Event-registry cloud sync, cross-branch lineage, structured witness/language
-  semantics and richer revision history remain later work. See the local
-  `docs/untracked/MEMORY_CONSOLIDATION_PLAN.md` for the exact evidence and limits.
+  semantics and richer revision history remain later work.
 
 ### Astoria Assistant
 
