@@ -522,6 +522,39 @@ class CharacterKnowledgeFactRepo {
     return result;
   }
 
+  /// Bounded identity registry used to validate newly emitted fact keys.
+  ///
+  /// Unlike the prompt alias list, this includes both fact roles and historical
+  /// lifecycles. A previously superseded/retracted row may be the only durable
+  /// evidence for the canonical key after a model emits a typo on a later
+  /// swipe. Values contain display names only, never fact content.
+  Future<Map<String, String>> getEntityIdentityRegistry(
+    String sessionId, {
+    int maxEntities = 500,
+  }) async {
+    final rows =
+        await (db.select(db.characterKnowledgeFactRows)
+              ..where((row) => row.chatSessionId.equals(sessionId))
+              ..orderBy([(row) => OrderingTerm.desc(row.updatedAt)]))
+            .get();
+    final result = <String, String>{};
+    for (final row in rows) {
+      for (final identity in [
+        (key: row.knowerKey, name: row.knowerName),
+        (key: row.subjectKey, name: row.subjectName),
+      ]) {
+        if (identity.key.isEmpty ||
+            identity.name.isEmpty ||
+            result.containsKey(identity.key)) {
+          continue;
+        }
+        result[identity.key] = identity.name;
+        if (result.length >= maxEntities) return result;
+      }
+    }
+    return result;
+  }
+
   Future<int> applyReconciliationCleanup({
     required String sessionId,
     required List<KnowledgeCleanupOp> ops,

@@ -1138,6 +1138,134 @@ $_validJson
       expect(result.export!.knowledgeFacts.single.confidence, 1.0);
     });
 
+    test('canonicalizes mistyped fact keys from historical identities', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[],"knowledgeFacts":[{
+  "knowerKey":"entity:акане_курокawa",
+  "knowerName":"Акане Курокава",
+  "subjectKey":"entity:данви",
+  "subjectName":"Данви",
+  "predicate":"знает_место_работы",
+  "object":"Знает место работы Данви."
+}]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(
+        raw,
+        entityIdentityRegistry: const {
+          'entity:акане_курокава': 'Акане Курокава',
+          'entity:акане_курокawa': 'Акане Курокава',
+          'entity:данви': 'Данви',
+        },
+      );
+
+      expect(result.export, isNotNull);
+      expect(
+        result.export!.knowledgeFacts.single.knowerKey,
+        'entity:акане_курокава',
+      );
+      expect(result.export!.knowledgeFacts.single.subjectKey, 'entity:данви');
+    });
+
+    test('repairs a sole historical Unicode typo from the exact name', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[],"knowledgeFacts":[{
+  "knowerKey":"entity:акане_курова",
+  "knowerName":"Акане Курокава",
+  "subjectKey":"entity:данви",
+  "subjectName":"Данви",
+  "predicate":"знает",
+  "object":"Знает Данви."
+}]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(
+        raw,
+        entityIdentityRegistry: const {
+          'entity:акане_курова': 'Акане Курокава',
+          'entity:данви': 'Данви',
+        },
+      );
+
+      expect(
+        result.export!.knowledgeFacts.single.knowerKey,
+        'entity:акане_курокава',
+      );
+    });
+
+    test('rejects ambiguous historical identities instead of guessing', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[],"knowledgeFacts":[{
+  "knowerKey":"entity:alex",
+  "knowerName":"Alex Doe",
+  "subjectKey":"entity:danvi",
+  "subjectName":"Danvi",
+  "predicate":"knows",
+  "object":"Knows Danvi."
+}]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(
+        raw,
+        entityIdentityRegistry: const {
+          'entity:alex_one': 'Alex Doe',
+          'entity:alex_two': 'Alex Doe',
+          'entity:danvi': 'Danvi',
+        },
+      );
+
+      expect(result.export, isNull);
+      expect(result.failure, LedgerParseFailure.emptyExport);
+    });
+
+    test('rejects mixed-script legacy keys without identity names', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[],"knowledgeFacts":[{
+  "knowerKey":"entity:акане_курокawa",
+  "subjectKey":"entity:данви",
+  "predicate":"знает",
+  "object":"Знает Данви."
+}]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(raw);
+
+      expect(result.export, isNull);
+      expect(result.failure, LedgerParseFailure.emptyExport);
+    });
+
+    test('preserves an explicitly disambiguated same-name identity', () {
+      const raw = '''
+<glaze_memory_export>
+{"ops":[],"knowledgeFacts":[{
+  "knowerKey":"entity:alex_doe_2",
+  "knowerName":"Alex Doe",
+  "subjectKey":"entity:danvi",
+  "subjectName":"Danvi",
+  "predicate":"knows",
+  "object":"Knows Danvi."
+}]}
+</glaze_memory_export>''';
+
+      final result = parser.parse(
+        raw,
+        entityIdentityRegistry: const {
+          'entity:alex_doe': 'Alex Doe',
+          'entity:alex_doe_2': 'Alex Doe',
+          'entity:danvi': 'Danvi',
+        },
+      );
+
+      expect(
+        result.export!.knowledgeFacts.single.knowerKey,
+        'entity:alex_doe_2',
+      );
+    });
+
     // Test 2
     test('malformed JSON does not crash; returns null export', () {
       const bad = '<glaze_memory_export>{ not json </glaze_memory_export>';

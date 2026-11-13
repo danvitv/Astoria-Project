@@ -29,10 +29,10 @@ abstract final class LedgerWireContract {
       },
       'keys': _keys,
       'knowledgeFact': {
-        'knowerKey': 'nonblank string',
-        'knowerName': 'optional string',
-        'subjectKey': 'nonblank string',
-        'subjectName': 'optional string',
+        'knowerKey': 'entity key; must identify knowerName exactly',
+        'knowerName': 'required nonblank exact display name',
+        'subjectKey': 'entity key; must identify subjectName exactly',
+        'subjectName': 'required nonblank exact display name',
         'factClass': CharacterKnowledgeFactClass.values
             .map((value) => value.wireName)
             .toList(),

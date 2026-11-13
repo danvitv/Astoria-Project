@@ -174,6 +174,8 @@ class LedgerTurnRunner {
       final entityAliases = await _knowledgeFactRepo.getEntityAliases(
         request.sessionId,
       );
+      final entityIdentityRegistry = await _knowledgeFactRepo
+          .getEntityIdentityRegistry(request.sessionId);
 
       if (token.isCancelled ||
           await _canonAuthority.passesCurrentnessGuard(
@@ -313,6 +315,7 @@ class LedgerTurnRunner {
         effectiveResponse,
         focalUserName: request.macroCtx?.userName ?? '',
         clockPolicy: clockPolicy,
+        entityIdentityRegistry: entityIdentityRegistry,
       );
       await _runDiagnostics.recordLedgerParserVerdict(outcome, parseResult);
       trace.recordFirstResponse(
@@ -412,6 +415,7 @@ class LedgerTurnRunner {
           effectiveResponse,
           focalUserName: request.macroCtx?.userName ?? '',
           clockPolicy: clockPolicy,
+          entityIdentityRegistry: entityIdentityRegistry,
         );
         await _runDiagnostics.recordLedgerParserVerdict(repair, parseResult);
         trace.recordRepairResponse(

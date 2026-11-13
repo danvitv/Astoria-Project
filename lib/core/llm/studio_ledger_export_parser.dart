@@ -127,6 +127,7 @@ class StudioLedgerExportParser {
     String rawOutput, {
     String focalUserName = '',
     LedgerClockPolicy? clockPolicy,
+    Map<String, String> entityIdentityRegistry = const {},
   }) {
     final visibleLedger = _extractBlock(rawOutput, 'studio_ledger');
     final exportBlock = _findBlock(rawOutput, 'glaze_memory_export');
@@ -244,6 +245,7 @@ class StudioLedgerExportParser {
     final validatedFacts = _validateKnowledgeFacts(
       export.knowledgeFacts,
       focalUserName: focalUserName,
+      entityIdentityRegistry: entityIdentityRegistry,
     );
 
     // Ignore completely empty exports.
@@ -558,11 +560,20 @@ class StudioLedgerExportParser {
   List<LedgerKnowledgeFact> _validateKnowledgeFacts(
     List<LedgerKnowledgeFact> facts, {
     String focalUserName = '',
+    Map<String, String> entityIdentityRegistry = const {},
   }) {
     final accepted = <LedgerKnowledgeFact>[];
     final seen = <String>{};
     for (final fact in facts) {
-      final normalized = fact.copyWith(
+      final canonical = _canonicalizeFactIdentity(fact, entityIdentityRegistry);
+      if (canonical == null) {
+        debugPrint(
+          '[StudioLedger] rejected knowledge fact: unresolved or ambiguous '
+          'entity identity',
+        );
+        continue;
+      }
+      final normalized = canonical.copyWith(
         confidence: fact.confidence.clamp(0, 1).toDouble(),
         importance: fact.importance.clamp(0, 1).toDouble(),
       );
@@ -586,6 +597,115 @@ class StudioLedgerExportParser {
       if (seen.add(dedupeKey)) accepted.add(normalized);
     }
     return accepted;
+  }
+
+  LedgerKnowledgeFact? _canonicalizeFactIdentity(
+    LedgerKnowledgeFact fact,
+    Map<String, String> registry,
+  ) {
+    final knowerKey = _canonicalEntityKey(
+      rawKey: fact.knowerKey,
+      displayName: fact.knowerName,
+      registry: registry,
+    );
+    final subjectKey = _canonicalEntityKey(
+      rawKey: fact.subjectKey,
+      displayName: fact.subjectName,
+      registry: registry,
+    );
+    if (knowerKey == null || subjectKey == null) return null;
+    return fact.copyWith(knowerKey: knowerKey, subjectKey: subjectKey);
+  }
+
+  String? _canonicalEntityKey({
+    required String rawKey,
+    required String displayName,
+    required Map<String, String> registry,
+  }) {
+    final normalizedName = _normalizedEntityName(displayName);
+    if (normalizedName.isEmpty) {
+      return _isSafeLegacyEntityKey(rawKey) ? rawKey : null;
+    }
+    final generatedKey = _entityKeyFromName(displayName);
+    if (generatedKey == null) return null;
+
+    final generatedOwner = registry[generatedKey];
+    if (generatedOwner != null &&
+        _normalizedEntityName(generatedOwner) != normalizedName) {
+      return null;
+    }
+
+    final matchingKeys = registry.entries
+        .where((entry) => _normalizedEntityName(entry.value) == normalizedName)
+        .map((entry) => entry.key)
+        .where(_isValidEntityKey)
+        .toSet();
+
+    if (rawKey == generatedKey) return generatedKey;
+    if (matchingKeys.length > 1 &&
+        matchingKeys.contains(rawKey) &&
+        (rawKey.startsWith('${generatedKey}_') ||
+            rawKey.startsWith('$generatedKey:'))) {
+      // Explicitly disambiguated same-name identities must not collapse into
+      // the unsuffixed identity merely because their display names match.
+      return rawKey;
+    }
+    // The display-name-derived key is deterministic and wins over historical
+    // model typos when it has already appeared for this exact identity.
+    if (matchingKeys.contains(generatedKey)) return generatedKey;
+    if (matchingKeys.length == 1) {
+      final knownKey = matchingKeys.single;
+      if (_isAsciiEntityKey(knownKey) ||
+          knownKey.startsWith('${generatedKey}_') ||
+          knownKey.startsWith('$generatedKey:')) {
+        return knownKey;
+      }
+      return generatedKey;
+    }
+    if (matchingKeys.length > 1) return null;
+
+    // A new identity receives a Unicode-safe key derived from its exact name.
+    // No transliteration or fuzzy matching is used.
+    return generatedKey;
+  }
+
+  String _normalizedEntityName(String value) => value
+      .trim()
+      .toLowerCase()
+      .replaceAll('ё', 'е')
+      .replaceAll(RegExp(r'\s+', unicode: true), ' ');
+
+  String? _entityKeyFromName(String value) {
+    final body = value
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+    if (body.isEmpty) return null;
+    final key = 'entity:$body';
+    return _isValidEntityKey(key) ? key : null;
+  }
+
+  bool _isValidEntityKey(String key) =>
+      key.length <= 160 &&
+      RegExp(r'^entity:[\p{L}\p{N}_:-]+$', unicode: true).hasMatch(key);
+
+  bool _isAsciiEntityKey(String key) =>
+      RegExp(r'^entity:[a-z0-9_:-]+$').hasMatch(key);
+
+  bool _isSafeLegacyEntityKey(String key) {
+    if (key.isEmpty || key.length > 160) return false;
+    final structurallyValid =
+        _isValidEntityKey(key) || RegExp(r'^[a-z0-9_:-]+$').hasMatch(key);
+    if (!structurallyValid) return false;
+    final body = key.startsWith('entity:') ? key.substring(7) : key;
+    final hasLatin = RegExp(r'[a-z]', caseSensitive: false).hasMatch(body);
+    final hasCyrillic = RegExp(
+      r'[\u0400-\u04FF]',
+      unicode: true,
+    ).hasMatch(body);
+    return !(hasLatin && hasCyrillic);
   }
 
   String? _validateKnowledgeFact(
