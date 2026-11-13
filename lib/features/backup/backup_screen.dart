@@ -188,6 +188,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   static const List<String> _importExtensions = ['glz', 'json', 'zip'];
 
   Future<void> _triggerImport() async {
+    await _clearAndroidPickerCache();
     final result = await FilePicker.pickFiles(
       type: Platform.isIOS ? FileType.any : FileType.custom,
       allowMultiple: false,
@@ -196,9 +197,15 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     if (result == null || result.files.isEmpty) return;
 
     final path = result.files.single.path;
-    if (path == null) return;
+    if (path == null) {
+      await _clearAndroidPickerCache();
+      return;
+    }
 
-    if (!mounted) return;
+    if (!mounted) {
+      await _clearAndroidPickerCache();
+      return;
+    }
     final confirmed = await GlazeBottomSheet.show<bool>(
       context,
       title: 'confirm_restore'.tr(),
@@ -220,7 +227,10 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         ),
       ],
     );
-    if (confirmed != true) return;
+    if (confirmed != true) {
+      await _clearAndroidPickerCache();
+      return;
+    }
 
     final ext = path.split('.').last.toLowerCase();
 
@@ -282,7 +292,16 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         '$e\n\n$st',
         prefix: 'settings_err_failed'.tr(),
       );
+    } finally {
+      await _clearAndroidPickerCache();
     }
+  }
+
+  Future<void> _clearAndroidPickerCache() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await FilePicker.clearTemporaryFiles();
+    } catch (_) {}
   }
 
   Future<void> _cancelImport() async {

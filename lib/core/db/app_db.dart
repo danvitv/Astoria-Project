@@ -155,6 +155,13 @@ class AppDatabase extends _$AppDatabase {
       _commitSendFence = null,
       _stockSingleConnectionExecutor = false;
 
+  /// Borrowed Drift connection for the read-only backup isolate. It has no
+  /// native snapshot or mutation authority and never opens another DB file.
+  AppDatabase.backupReader(super.e)
+    : _nativeFile = null,
+      _commitSendFence = null,
+      _stockSingleConnectionExecutor = false;
+
   /// Original synthetic composition from first creation, not adoption of a
   /// supplied executor. No FILE identity, native ROOT or snapshot authority.
   AppDatabase.nativeMemoryForTesting({QueryInterceptor? interceptor})

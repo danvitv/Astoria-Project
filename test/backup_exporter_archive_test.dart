@@ -152,4 +152,90 @@ void main() {
       }
     },
   );
+
+  test('worker preserves images and keyless preferences', () async {
+    SharedPreferences.setMockInitialValues({
+      'theme': 'synthetic-dark',
+      'gz_sync_tokens': 'SYNTHETIC_SECRET',
+    });
+    await db
+        .into(db.characters)
+        .insert(CharactersCompanion.insert(charId: 'c1', name: 'Synthetic'));
+    await db
+        .into(db.personas)
+        .insert(
+          PersonasCompanion.insert(personaId: 'p1', name: 'Synthetic persona'),
+        );
+    for (final path in [
+      'avatars/c1.png',
+      'avatars/p1.webp',
+      'avatars/unknown.png',
+      'gallery/c1/art.webp',
+    ]) {
+      final image = File('${tempDir.path}/$path');
+      await image.parent.create(recursive: true);
+      await image.writeAsBytes([1, 2, 3, 255]);
+    }
+    final file = await BackupExporter(db, imageStorage).buildArchive(tempDir);
+    final archive = ZipDecoder().decodeStream(InputFileStream(file.path));
+    try {
+      for (final name in [
+        'avatars/characters/c1.png',
+        'avatars/personas/p1.webp',
+        'avatars/unknown.png',
+        'gallery/c1/art.webp',
+      ]) {
+        expect(archive.findFile(name)!.readBytes(), [1, 2, 3, 255]);
+      }
+      final prefs =
+          jsonDecode(
+                utf8.decode(archive.findFile('preferences.json')!.readBytes()!),
+              )
+              as Map;
+      expect(prefs['theme'], 'synthetic-dark');
+      expect(prefs.containsKey('gz_sync_tokens'), isFalse);
+      expect(
+        await db.select(db.characters).get(),
+        hasLength(1),
+        reason: 'closing the borrowed worker must not close the app DB',
+      );
+    } finally {
+      await archive.clear();
+    }
+  });
+
+  test('worker removes only interrupted backup cache artifacts', () async {
+    final staleArchive = File(
+      '${tempDir.path}/Astoria_backup_2000-01-01_00-00-00.glz',
+    );
+    final unrelated = File('${tempDir.path}/keep-me.glz');
+    final staleStaging = Directory(
+      '${tempDir.path}/glaze_backup_staging_interrupted',
+    );
+    await staleArchive.writeAsString('partial');
+    await unrelated.writeAsString('unrelated');
+    await staleStaging.create();
+    await File('${staleStaging.path}/partial.jsonl').writeAsString('partial');
+
+    final archive = await BackupExporter(
+      db,
+      imageStorage,
+    ).buildArchive(tempDir);
+
+    expect(await archive.exists(), isTrue);
+    expect(await staleArchive.exists(), isFalse);
+    expect(await staleStaging.exists(), isFalse);
+    expect(await unrelated.readAsString(), 'unrelated');
+    expect(
+      await tempDir
+          .list()
+          .where(
+            (entity) =>
+                entity is Directory &&
+                entity.path.contains('glaze_backup_staging_'),
+          )
+          .toList(),
+      isEmpty,
+    );
+  });
 }
