@@ -46,13 +46,17 @@ class _AgenticReconcilerTabState extends ConsumerState<AgenticReconcilerTab> {
   /// Held in a provider, not in this State: a Ledger rerun or a reconciliation
   /// keeps going when the sheet is closed, so reopening it has to find the
   /// same spinner and the same guard against starting it twice. Read rather
-  /// than watched — `build` watches the set once, which is what rebuilds them.
+  /// than watched — `build` subscribes only to this session's relevant flags.
   bool get _runningLedger => _jobs.isRunning(_ledgerKey);
   bool get _runningReconciliation => _jobs.isRunning(_reconciliationKey);
   bool get _regenerating => _jobs.isAnyRunning(
     AgentOpsJobKeys.reconciliationRegenScope(widget.sessionId),
   );
-  bool _isRegenerating(String runId) => _jobs.isRunning(_regenKey(runId));
+  // Used only while building a run row; individual spinners must also update
+  // when the active run changes without changing the aggregate busy flag.
+  bool _isRegenerating(String runId) => ref.watch(
+    agentOpsJobsProvider.select((jobs) => jobs.contains(_regenKey(runId))),
+  );
 
   Future<void> _refresh() async {
     final previewKey = (
@@ -266,8 +270,19 @@ class _AgenticReconcilerTabState extends ConsumerState<AgenticReconcilerTab> {
 
   @override
   Widget build(BuildContext context) {
-    // Subscribes this tab to the running-jobs set; the getters above read it.
-    ref.watch(agentOpsJobsProvider);
+    ref.watch(
+      agentOpsJobsProvider.select(
+        (jobs) => (
+          jobs.contains(_ledgerKey),
+          jobs.contains(_reconciliationKey),
+          jobs.any(
+            (key) => key.startsWith(
+              AgentOpsJobKeys.reconciliationRegenScope(widget.sessionId),
+            ),
+          ),
+        ),
+      ),
+    );
     final ledgerEnabled =
         ref.watch(studioPresetProvider).value?.agentEnabled['ledger'] != false;
     // Any Ledger work in flight — including a regeneration started from a
@@ -466,7 +481,7 @@ class _RunTile extends StatelessWidget {
           ),
         ),
         childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        children: [
+        childrenBuilder: (context) => [
           _MonoDetail(label: 'agent_ops_run_id'.tr(), value: run.row.id),
           _MonoDetail(
             label: 'agent_ops_range_hash'.tr(),
@@ -556,7 +571,7 @@ class _DebugTile extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
         ),
         childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        children: [
+        childrenBuilder: (context) => [
           _MonoDetail(label: 'agent_ops_endpoint'.tr(), value: row.messageId),
           _MonoDetail(label: 'agent_ops_parse'.tr(), value: row.parseFailure),
           const SizedBox(height: 6),

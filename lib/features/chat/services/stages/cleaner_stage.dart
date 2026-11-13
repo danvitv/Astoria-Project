@@ -65,19 +65,22 @@ class CleanerStage {
   bool get _ownsSharedState => _lease?.ownsSharedState ?? true;
 
   void _setCleanerState(PostCleanerState state) {
-    if (_ownsSharedState) {
+    if (ctx.ref.mounted && _ownsSharedState) {
       ctx.ref.read(postCleanerStateProvider.notifier).state = state;
     }
   }
 
   void _publishCancelToken(CancelToken token) {
+    ctx.abortHandler.registerOwnedToken(token);
     _lease?.registerCancelToken(token);
-    if (_ownsSharedState) {
+    if (ctx.ref.mounted && _ownsSharedState) {
       ctx.ref.read(cleanerCancelTokenProvider.notifier).state = token;
     }
   }
 
   void _clearPublishedCancelToken(CancelToken? token) {
+    if (token != null) ctx.abortHandler.unregisterOwnedToken(token);
+    if (!ctx.ref.mounted) return;
     if (ctx.ref.read(cleanerCancelTokenProvider) == token) {
       ctx.ref.read(cleanerCancelTokenProvider.notifier).state = null;
     }
@@ -415,6 +418,9 @@ class CleanerStage {
         _auditCancelToken!.cancel();
       }
       final publishedToken = _cleanerCancelToken ?? _auditCancelToken;
+      if (_auditCancelToken != null) {
+        ctx.abortHandler.unregisterOwnedToken(_auditCancelToken!);
+      }
       _auditCancelToken = null;
       _cleanerCancelToken = null;
       _clearPublishedCancelToken(publishedToken);
@@ -1194,6 +1200,9 @@ class CleanerStage {
         _auditCancelToken!.cancel();
       }
       final publishedToken = _cleanerCancelToken ?? _auditCancelToken;
+      if (_auditCancelToken != null) {
+        ctx.abortHandler.unregisterOwnedToken(_auditCancelToken!);
+      }
       _auditCancelToken = null;
       _cleanerCancelToken = null;
       _clearPublishedCancelToken(publishedToken);

@@ -1,9 +1,15 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
+import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:glaze_flutter/core/db/app_db.dart';
+import 'package:glaze_flutter/core/models/card_rewriter_settings.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
+import 'package:glaze_flutter/core/state/card_rewriter_providers.dart';
+import 'package:glaze_flutter/core/state/db_provider.dart';
 import 'package:glaze_flutter/features/chat/abort_handler.dart';
 import 'package:glaze_flutter/features/chat/chat_provider.dart';
 import 'package:glaze_flutter/features/chat/chat_state.dart';
@@ -18,6 +24,27 @@ class _RecordingExtensionPostGenService extends ExtensionPostGenService {
   void cancelBlocks() {
     cancelBlocksCalls++;
   }
+}
+
+ProviderContainer _createContainer() {
+  final db = AppDatabase.forTesting(NativeDatabase.memory());
+  final container = ProviderContainer(
+    overrides: [
+      appDbProvider.overrideWithValue(db),
+      cardRewriterSettingsProvider.overrideWithValue(
+        const CardRewriterSettings(),
+      ),
+      nativeProviderRuntimeProvider.overrideWithValue(null),
+      extensionPostGenServiceProvider.overrideWith(
+        (ref) => _RecordingExtensionPostGenService(ref),
+      ),
+    ],
+  );
+  addTearDown(() async {
+    container.dispose();
+    await db.close();
+  });
+  return container;
 }
 
 class _AbortHarness {
@@ -94,14 +121,7 @@ void main() {
         isPostGenRunning: true,
       );
       final harnessProvider = _abortHarnessProvider(initialState);
-      final container = ProviderContainer(
-        overrides: [
-          extensionPostGenServiceProvider.overrideWith(
-            (ref) => _RecordingExtensionPostGenService(ref),
-          ),
-        ],
-      );
-      addTearDown(container.dispose);
+      final container = _createContainer();
       final harness = container.read(harnessProvider);
 
       await harness.handler.abortGeneration();
@@ -126,19 +146,22 @@ void main() {
         initialState,
         mutationGate: gate,
       );
-      final container = ProviderContainer(
-        overrides: [
-          extensionPostGenServiceProvider.overrideWith(
-            (ref) => _RecordingExtensionPostGenService(ref),
-          ),
-        ],
-      );
-      addTearDown(container.dispose);
+      final container = _createContainer();
       final harness = container.read(harnessProvider);
       container.read(streamingStateProvider('char-1').notifier).state =
           const StreamingState(text: 'Partial');
 
+      final ownedToken = CancelToken();
+      final releasedToken = CancelToken();
+      final unrelatedToken = CancelToken();
+      harness.handler.registerOwnedToken(ownedToken);
+      harness.handler.registerOwnedToken(releasedToken);
+      harness.handler.unregisterOwnedToken(releasedToken);
+
       final abort = harness.handler.abortGeneration();
+      expect(ownedToken.isCancelled, isTrue);
+      expect(releasedToken.isCancelled, isFalse);
+      expect(unrelatedToken.isCancelled, isFalse);
       await Future<void>.delayed(Duration.zero);
 
       expect(harness.state.requireValue.isGenerating, isTrue);
@@ -150,6 +173,38 @@ void main() {
       expect(harness.state.requireValue.isGenerating, isFalse);
       expect(harness.persistedSessions, hasLength(1));
       expect(harness.persistedSessions.single.messages.last.content, 'Partial');
+    },
+  );
+
+  test(
+    'retirement lets accepted abort persistence settle without publication',
+    () async {
+      final gate = Completer<void>();
+      final initialState = ChatState(
+        session: _session([
+          const ChatMessage(id: 'user-1', role: 'user', content: 'Hello'),
+        ]),
+        isGenerating: true,
+      );
+      final harnessProvider = _abortHarnessProvider(
+        initialState,
+        mutationGate: gate,
+      );
+      final container = _createContainer();
+      final harness = container.read(harnessProvider);
+      container.read(streamingStateProvider('char-1').notifier).state =
+          const StreamingState(text: 'Partial');
+
+      final abort = harness.handler.abortGeneration();
+      harness.handler.dispose();
+      expect(harness.persistedSessions, isEmpty);
+      gate.complete();
+      await abort;
+
+      expect(harness.persistedSessions, hasLength(1));
+      expect(harness.persistedSessions.single.messages.last.content, 'Partial');
+      expect(harness.stateHistory, isEmpty);
+      expect(harness.state.requireValue, same(initialState));
     },
   );
 
@@ -188,14 +243,7 @@ void main() {
         regenTargetId: restoration.id,
       );
       final harnessProvider = _abortHarnessProvider(initialState);
-      final container = ProviderContainer(
-        overrides: [
-          extensionPostGenServiceProvider.overrideWith(
-            (ref) => _RecordingExtensionPostGenService(ref),
-          ),
-        ],
-      );
-      addTearDown(container.dispose);
+      final container = _createContainer();
       final harness = container.read(harnessProvider);
       harness.handler.restorationMessage = restoration;
       container.read(streamingStateProvider('char-1').notifier).state =
@@ -231,14 +279,7 @@ void main() {
         isPostGenRunning: true,
       );
       final harnessProvider = _abortHarnessProvider(initialState);
-      final container = ProviderContainer(
-        overrides: [
-          extensionPostGenServiceProvider.overrideWith(
-            (ref) => _RecordingExtensionPostGenService(ref),
-          ),
-        ],
-      );
-      addTearDown(container.dispose);
+      final container = _createContainer();
       final harness = container.read(harnessProvider);
       harness.handler.restorationMessage = const ChatMessage(
         id: 'assistant-1',
@@ -263,14 +304,7 @@ void main() {
     final harnessProvider = _abortHarnessProvider(
       const ChatState(isPostGenRunning: true),
     );
-    final container = ProviderContainer(
-      overrides: [
-        extensionPostGenServiceProvider.overrideWith(
-          (ref) => _RecordingExtensionPostGenService(ref),
-        ),
-      ],
-    );
-    addTearDown(container.dispose);
+    final container = _createContainer();
     final harness = container.read(harnessProvider);
     final postGenService =
         container.read(extensionPostGenServiceProvider)

@@ -144,6 +144,14 @@ class StreamGenerationService {
     timing('generation entered');
     final cancelToken = CancelToken();
     var studioWasActive = false;
+    if (_isAborted()) {
+      cancelToken.cancel('Generation owner retired');
+      return ChatState(
+        session: saveSession ?? session,
+        isGenerating: false,
+        visibleStartIndex: vsi,
+      );
+    }
     _ref
         .read(chatProvider(_charId).notifier)
         .setCancelToken(cancelToken, genId: _genId);

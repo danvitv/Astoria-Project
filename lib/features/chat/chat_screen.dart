@@ -74,6 +74,7 @@ import 'widgets/memory_sheet.dart';
 import 'widgets/studio_history_rotation_sheet.dart';
 import 'widgets/post_cleaner_status_card.dart';
 import 'widgets/post_gen_status_card.dart';
+import 'widgets/card_evolution_background_card.dart';
 import 'widgets/studio_status_card.dart';
 import 'widgets/chat_webview_widget.dart';
 import 'widgets/triggered_items_sheet.dart';
@@ -2251,7 +2252,15 @@ class _ChatBodyState extends ConsumerState<_ChatBody>
               left: 12,
               right: 12,
               top: contextCardBottom + 112,
-              child: PostGenStatusCard(sessionId: widget.state.session?.id),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  PostGenStatusCard(sessionId: widget.state.session?.id),
+                  CardEvolutionBackgroundCard(
+                    sessionId: widget.state.session?.id,
+                  ),
+                ],
+              ),
             ),
             // Bottom panel: drawer + input bar
             Positioned.fill(

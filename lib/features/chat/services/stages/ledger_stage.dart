@@ -15,8 +15,7 @@ import '../../../../core/models/agent_operation_record.dart';
 import '../../../../core/models/chat_message.dart';
 import '../../../../core/models/pipeline_settings.dart';
 import '../../../../core/models/studio_config.dart';
-import '../../../../core/navigation/rewrite_review_navigation.dart';
-import '../../../../core/services/card_rewriter/automated_card_evolution_service.dart';
+import '../../../../core/state/card_evolution_worker_provider.dart';
 import '../../../../core/state/db_provider.dart';
 import '../../../../core/state/memory_agent_providers.dart';
 import '../../../../core/state/character_provider.dart';
@@ -39,7 +38,8 @@ import 'stage_context.dart';
 
 /// Stage 7: Studio Ledger trigger.
 ///
-/// Fire-and-forget — does not block generation or user interaction.
+/// Awaited foreground work: reconciliation and ordinary Ledger must settle
+/// before the next turn. Review-only Card Evolution is durably queued separately.
 /// Extracts entity/relationship/arc/world state from the final assistant
 /// response and persists it to tracker_rows via [StudioLedgerService].
 /// Only runs when Studio is enabled.
@@ -74,51 +74,42 @@ class LedgerStage {
   }) async {
     if (!ctx.ref.mounted) return;
 
+    final statusOwner = ctx.ref.read(postGenStatusProvider.notifier);
     PostGenStatusState? ownedRunningStatus;
     void startStatus(PostGenTask task) {
       if (!ctx.ref.mounted) return;
-      final status = PostGenStatusState.running(
+      ownedRunningStatus = statusOwner.startRun(
         sessionId: sessionId,
         task: task,
       );
-      ownedRunningStatus = status;
-      ctx.ref.read(postGenStatusProvider.notifier).state = status;
     }
 
     bool ownsRunningStatus() {
-      if (!ctx.ref.mounted || ownedRunningStatus == null) return false;
-      final current = ctx.ref.read(postGenStatusProvider);
-      // Prefer identical-object check to prevent older runs overwriting newer
-      // ones. Fall back to logical check (same session+task+running phase) so
-      // a state replacement by Riverpod internals or an auto-dismiss timer
-      // does not strand the status at "running" forever.
-      return current.sessionId == sessionId &&
-          current.task == ownedRunningStatus!.task &&
-          current.phase == PostGenTaskPhase.running;
+      if (!statusOwner.mounted || ownedRunningStatus == null) return false;
+      return statusOwner.ownsRun(ownedRunningStatus!);
     }
 
-    void finishOwnedStatus(PostGenStatusState status) {
-      if (!ownsRunningStatus() || status.sessionId != sessionId) return;
-      ctx.ref.read(postGenStatusProvider.notifier).state = status;
+    void finishOwnedStatus({required bool isError, required String detail}) {
+      if (!statusOwner.mounted || ownedRunningStatus == null) return;
+      statusOwner.finishRun(
+        ownedRunningStatus!,
+        isError: isError,
+        detail: detail,
+      );
       ownedRunningStatus = null;
     }
 
     void clearOwnedStatus() {
-      if (!ownsRunningStatus()) return;
-      ctx.ref.read(postGenStatusProvider.notifier).state =
-          const PostGenStatusState.idle();
+      if (!statusOwner.mounted || ownedRunningStatus == null) return;
+      statusOwner.clearRun(ownedRunningStatus!);
       ownedRunningStatus = null;
     }
 
     void updateOwnedStatusDetail(String detail) {
-      if (!ownsRunningStatus()) return;
-      final status = PostGenStatusState.running(
-        sessionId: sessionId,
-        task: ownedRunningStatus!.task,
-        detail: detail,
-      );
-      ownedRunningStatus = status;
-      ctx.ref.read(postGenStatusProvider.notifier).state = status;
+      if (!ctx.ref.mounted || ownedRunningStatus == null) return;
+      ctx.ref
+          .read(postGenStatusProvider.notifier)
+          .updateRunDetail(ownedRunningStatus!, detail);
     }
 
     final isCurrent = isManualRerun
@@ -275,6 +266,14 @@ class LedgerStage {
             ),
           );
           startStatus(PostGenTask.ledgerReconciliation);
+          final background = pipeline.cardRewriter.enabled
+              ? ctx.ref.read(cardEvolutionBackgroundProvider)
+              : null;
+          final reserveEvolutionJob = background?.prepareReservation(
+            sessionId: sessionId,
+            characterId: ctx.charId,
+            turn: turnConfig,
+          );
           reconciliationResult = await service.reconcile(
             sessionId: sessionId,
             settings: pipeline,
@@ -285,7 +284,11 @@ class LedgerStage {
             isStillCurrent: isCurrent,
             cancelToken: cancelToken,
             operationIdentity: 'automatic:$genId',
+            reserveEvolutionJob: reserveEvolutionJob,
           );
+          if (reconciliationResult.status == 'ok') {
+            background?.notifyCommitted();
+          }
           _recordOperation(
             sessionId: sessionId,
             targetMessage: targetMessage,
@@ -305,17 +308,8 @@ class LedgerStage {
               clearOwnedStatus();
             } else {
               finishOwnedStatus(
-                reconciliationResult.status == 'ok'
-                    ? PostGenStatusState.done(
-                        sessionId: sessionId,
-                        task: PostGenTask.ledgerReconciliation,
-                        detail: detail,
-                      )
-                    : PostGenStatusState.error(
-                        sessionId: sessionId,
-                        task: PostGenTask.ledgerReconciliation,
-                        detail: detail,
-                      ),
+                isError: reconciliationResult.status != 'ok',
+                detail: detail,
               );
             }
           }
@@ -335,77 +329,6 @@ class LedgerStage {
             'ops=${reconciliationResult.opsApplied} '
             'error=${reconciliationResult.error ?? "none"}',
           );
-          if (reconciliationResult.status == 'ok' &&
-              pipeline.cardRewriter.enabled &&
-              isCurrent()) {
-            final runHead = await reconciliationRunRepo.getHead(sessionId);
-            if (runHead != null && isCurrent()) {
-              final rewriteReviewAuthority =
-                  captureAutomaticRewriteReviewAuthority(
-                    charId: ctx.charId,
-                    sessionId: sessionId,
-                  );
-              final rewriteOutcome = await ctx.ref
-                  .read(automatedCardEvolutionServiceProvider)
-                  .runAfterReconciliation(
-                    runHead,
-                    onStage: (stage) {
-                      if (!ctx.ref.mounted || !isCurrent()) return;
-                      startStatus(
-                        stage == AutomatedCardEvolutionStage.observation
-                            ? PostGenTask.cardEvolutionObservation
-                            : PostGenTask.cardRewriter,
-                      );
-                    },
-                  );
-              debugPrint(
-                '[StudioLedger] card rewriter session=$sessionId '
-                'kind=${rewriteOutcome.kind} '
-                'detail=${rewriteOutcome.detail ?? '-'}',
-              );
-              emitAutomaticRewriteReviewIntent(
-                ctx.ref,
-                outcome: rewriteOutcome,
-                capturedAuthority: rewriteReviewAuthority,
-              );
-              if (ctx.ref.mounted && isCurrent()) {
-                final isFailure = const {
-                  'modelNotConfigured',
-                  'cardModelFailed',
-                  'lorebookModelFailed',
-                  'invalidCardOutput',
-                  'invalidLorebookOutput',
-                  'snapshotUnavailable',
-                  'snapshotTooLarge',
-                  'staleEvidence',
-                  'canonUnavailable',
-                  'fieldMismatch',
-                  'unexpectedFailure',
-                  'failed',
-                }.contains(rewriteOutcome.kind);
-                final detail = rewriteOutcome.kind == 'persisted'
-                    ? 'Card Rewriter created a review proposal'
-                    : rewriteOutcome.kind == 'emptyModelProposal'
-                    ? 'Card Rewriter found no durable card changes'
-                    : 'Card Rewriter: ${rewriteOutcome.kind}'
-                          '${rewriteOutcome.detail == null ? '' : ' — ${rewriteOutcome.detail}'}';
-                finishOwnedStatus(
-                  isFailure
-                      ? PostGenStatusState.error(
-                          sessionId: sessionId,
-                          task: PostGenTask.cardRewriter,
-                          detail: detail,
-                        )
-                      : PostGenStatusState.done(
-                          sessionId: sessionId,
-                          task: PostGenTask.cardRewriter,
-                          detail: detail,
-                        ),
-                );
-              }
-              if (!isCurrent()) return;
-            }
-          }
           if (!isCurrent()) return;
         }
       }
@@ -459,19 +382,7 @@ class LedgerStage {
         if (result.status == 'aborted') {
           clearOwnedStatus();
         } else {
-          finishOwnedStatus(
-            result.status == 'ok'
-                ? PostGenStatusState.done(
-                    sessionId: sessionId,
-                    task: PostGenTask.ledger,
-                    detail: detail,
-                  )
-                : PostGenStatusState.error(
-                    sessionId: sessionId,
-                    task: PostGenTask.ledger,
-                    detail: detail,
-                  ),
-          );
+          finishOwnedStatus(isError: result.status != 'ok', detail: detail);
         }
       }
 
@@ -520,13 +431,7 @@ class LedgerStage {
         '[StudioLedger] pipeline trigger failed session=$sessionId: $e',
       );
       if (ownedRunningStatus != null) {
-        finishOwnedStatus(
-          PostGenStatusState.error(
-            sessionId: sessionId,
-            task: ownedRunningStatus!.task,
-            detail: 'Studio Ledger stopped: $e',
-          ),
-        );
+        finishOwnedStatus(isError: true, detail: 'Studio Ledger stopped: $e');
       }
       unawaited(
         _recordDiag(
@@ -549,14 +454,11 @@ class LedgerStage {
     } finally {
       _invalidateAgentOpsViews(sessionId);
       // Covers cancellation and exceptions in catch-side diagnostics. Identity
-      // plus session/task checks ensure an older run cannot clear a newer one.
+      // is retained across detail updates; an older run cannot clear a new one.
       if (ownedRunningStatus != null && ownsRunningStatus()) {
         finishOwnedStatus(
-          PostGenStatusState.error(
-            sessionId: sessionId,
-            task: ownedRunningStatus!.task,
-            detail: 'Studio Ledger stopped before completion',
-          ),
+          isError: true,
+          detail: 'Studio Ledger stopped before completion',
         );
       }
     }

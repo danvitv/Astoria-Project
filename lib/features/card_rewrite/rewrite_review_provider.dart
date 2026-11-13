@@ -14,6 +14,11 @@ import '../../core/services/card_rewriter/effective_canon_read_repository.dart';
 import '../../core/state/card_rewriter_providers.dart';
 import '../../core/state/db_provider.dart';
 import '../../core/state/lorebook_embedding_provider.dart';
+import '../../core/state/session_mutation_gate.dart';
+import '../chat/chat_provider.dart';
+import '../chat/chat_session_service.dart';
+import '../chat/state/chat_native_owner_registry.dart';
+import '../chat_history/chat_history_provider.dart';
 import 'rewrite_native_owner.dart';
 
 /// Durable review aggregate for one job: job row + operations joined with
@@ -432,11 +437,31 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
   /// Atomic apply of all approved operations. The expected canon stamp is re-
   /// derived from a FRESH read-side assembly right before the call (Oracle
   /// contract), never reused from the stored job stamp.
-  Future<ManualRewriteApplyOutcome> apply(ManualRewriteJobSnapshot snap) {
+  Future<ManualRewriteApplyOutcome> apply(ManualRewriteJobSnapshot snap) async {
     if (!writeQueue.idle) {
       return Future.value(const ManualRewriteApplyOutcome.blocked('uiBusy'));
     }
-    return _ordinary(() => _apply(snap));
+    final sessionId = snap.job.chatSessionId;
+    final owners = ref.read(chatNativeOwnerRegistryProvider);
+    // Inspect loaded owners only: checking Apply must not instantiate a chat.
+    if (owners.loaded.any(
+      (owner) =>
+          owner.sessionId() == sessionId &&
+          (!owner.isIdle() || !owner.queue.isIdle),
+    )) {
+      return const ManualRewriteApplyOutcome.blocked('sessionBusy');
+    }
+    final lease = ref.read(sessionMutationGateProvider).tryApply(
+      sessionId, characterId: snap.job.characterId,
+    );
+    if (lease == null) {
+      return const ManualRewriteApplyOutcome.blocked('sessionBusy');
+    }
+    try {
+      return await _ordinary(() => _apply(snap));
+    } finally {
+      lease.release();
+    }
   }
 
   Future<ManualRewriteApplyOutcome> _apply(
@@ -445,6 +470,9 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
     final character = await ref
         .read(characterRepoProvider)
         .getById(snap.job.characterId);
+    if (!ref.mounted) {
+      return const ManualRewriteApplyOutcome.blocked('reviewRetired');
+    }
     if (character == null) {
       return const ManualRewriteApplyOutcome.blocked('characterNotFound');
     }
@@ -453,9 +481,14 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
       character: character,
       stableStamp: isAutomatedEvolutionJob(snap.job),
     );
+    if (!ref.mounted) {
+      return const ManualRewriteApplyOutcome.blocked('reviewRetired');
+    }
     if (stamp == null) {
       return const ManualRewriteApplyOutcome.blocked('invalidCanonContext');
     }
+    final chatRepo = ref.read(chatRepoProvider);
+    final embeddingWorker = ref.read(sessionLorebookEmbeddingWorkerProvider);
     final outcome = await ref
         .read(manualRewriteApplyRepoProvider)
         .applyApproved(
@@ -464,7 +497,23 @@ class RewriteReviewController extends Notifier<RewriteReviewUiState> {
           expectedJobVersion: snap.job.version,
         );
     if (outcome.isApplied) {
-      unawaited(ref.read(sessionLorebookEmbeddingWorkerProvider).drain());
+      // Rebind/cache retirement belongs to the command, while the apply fence
+      // is still held. A delayed/unmounted screen must not invalidate a newer
+      // generation after the command has released ownership.
+      final session = await chatRepo.getById(snap.job.chatSessionId);
+      ChatSessionService.clearCache(charId: snap.job.characterId);
+      if (session != null) {
+        ChatSessionService.clearCache(charId: session.characterId);
+      }
+      if (!ref.mounted) return outcome;
+      final loaded = ref.read(chatNativeOwnerRegistryProvider).loaded;
+      for (final owner in loaded) {
+        if (owner.sessionId() == snap.job.chatSessionId) {
+          ref.invalidate(chatProvider(owner.characterId));
+        }
+      }
+      ref.invalidate(chatHistoryProvider);
+      unawaited(embeddingWorker.drain());
     }
     return outcome;
   }

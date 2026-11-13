@@ -31,9 +31,11 @@ class AbortHandler {
 
   CancelToken? _cancelToken;
   CancelToken? _imgGenCancelToken;
+  final Set<CancelToken> _ownedTokens = Set<CancelToken>.identity();
   ChatMessage? _restorationMessage;
   int _activeGenId = 0;
   Future<void>? _abortFuture;
+  bool _disposed = false;
 
   AbortHandler({
     required this._ref,
@@ -45,20 +47,62 @@ class AbortHandler {
   });
 
   int nextGenId() => ++_activeGenId;
-  bool isCurrentGen(int genId) => _activeGenId == genId;
+  bool isCurrentGen(int genId) => !_disposed && _activeGenId == genId;
+
+  /// Retires this owner without accessing Ref, publishing state or settling DB
+  /// work. Unlike Stop, this is safe during provider lifetime cleanup.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _activeGenId++;
+    final generationToken = _cancelToken;
+    final imageToken = _imgGenCancelToken;
+    _cancelToken = null;
+    _imgGenCancelToken = null;
+    generationToken?.cancel();
+    imageToken?.cancel();
+    _cancelOwnedTokens();
+  }
+
+  /// Captures transport ownership independently of shared provider state.
+  void registerOwnedToken(CancelToken token) {
+    if (_disposed) {
+      if (!token.isCancelled) token.cancel();
+      return;
+    }
+    _ownedTokens.add(token);
+  }
+
+  void unregisterOwnedToken(CancelToken token) {
+    _ownedTokens.remove(token);
+  }
+
+  void _cancelOwnedTokens() {
+    final tokens = _ownedTokens.toList(growable: false);
+    _ownedTokens.clear();
+    for (final token in tokens) {
+      if (!token.isCancelled) token.cancel();
+    }
+  }
 
   // ignore: unnecessary_getters_setters
   ChatMessage? get restorationMessage => _restorationMessage;
   set restorationMessage(ChatMessage? msg) => _restorationMessage = msg;
-  // ignore: unnecessary_getters_setters
+
   CancelToken? get imgGenCancelToken => _imgGenCancelToken;
-  set imgGenCancelToken(CancelToken? t) => _imgGenCancelToken = t;
+  set imgGenCancelToken(CancelToken? t) {
+    if (_disposed) {
+      t?.cancel();
+      return;
+    }
+    _imgGenCancelToken = t;
+  }
 
   bool get isGeneratingImage =>
       _imgGenCancelToken != null && !(_imgGenCancelToken!.isCancelled);
 
   void setCancelToken(CancelToken token, {required int genId}) {
-    if (_activeGenId != genId) {
+    if (!isCurrentGen(genId)) {
       token.cancel();
       return;
     }
@@ -102,7 +146,7 @@ class AbortHandler {
   }
 
   Future<void> _abortGeneration() async {
-    if (!_ref.mounted) return;
+    if (_disposed || !_ref.mounted) return;
     _activeGenId++;
     final StreamingState partialStreaming = _ref.read(
       streamingStateProvider(_charId),
@@ -111,6 +155,7 @@ class AbortHandler {
     _cancelToken = null;
     _imgGenCancelToken?.cancel();
     _imgGenCancelToken = null;
+    _cancelOwnedTokens();
     // Cancel any in-flight post-gen work (cleaner, fact-checker, ledger).
     // The ledger shares the cleaner's CancelToken, so one cancel covers both.
     final cleanerToken = _ref.read(cleanerCancelTokenProvider);
@@ -139,7 +184,7 @@ class AbortHandler {
           partialStreaming,
           restorationSnapshot,
         );
-        if (!_ref.mounted || _activeGenId != abortGenId) return;
+        if (!_ref.mounted || !isCurrentGen(abortGenId)) return;
         if (durableSession != null) {
           ChatSessionService.updateCache(durableSession);
         }
@@ -156,12 +201,12 @@ class AbortHandler {
           ),
         );
       } catch (error) {
-        if (!_ref.mounted || _activeGenId != abortGenId) return;
+        if (!_ref.mounted || !isCurrentGen(abortGenId)) return;
         final sessionId = current.session?.id;
         final durableSession = sessionId == null
             ? current.session
             : await _loadSession(sessionId);
-        if (!_ref.mounted || _activeGenId != abortGenId) return;
+        if (!_ref.mounted || !isCurrentGen(abortGenId)) return;
         if (durableSession != null) {
           ChatSessionService.updateCache(durableSession);
         }

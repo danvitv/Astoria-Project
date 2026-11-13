@@ -44,6 +44,8 @@ class CardEvolutionCollectorCoordinator {
     this.observationPromotionThreshold,
     this.observationMinConfidence,
     this.observationExpiryRuns,
+    this.isStillCurrent,
+    this.isCommitCurrent,
   });
 
   final CardEvolutionRepo repo;
@@ -60,18 +62,52 @@ class CardEvolutionCollectorCoordinator {
   final int Function()? observationPromotionThreshold;
   final double Function()? observationMinConfidence;
   final int Function()? observationExpiryRuns;
+  final bool Function()? isStillCurrent;
+  final Future<bool> Function()? isCommitCurrent;
   final Map<String, CancelToken> _observationTokens = {};
+  final Map<String, int> _cancellationEpochs = {};
+  bool _disposed = false;
+
+  bool Function() _invocation(
+    String sessionId,
+    bool Function()? isInvocationCurrent,
+  ) {
+    final epoch = _cancellationEpochs[sessionId] ?? 0;
+    var active = true;
+    return () => active =
+        active &&
+        !_disposed &&
+        (_cancellationEpochs[sessionId] ?? 0) == epoch &&
+        isStillCurrent?.call() != false &&
+        isInvocationCurrent?.call() != false;
+  }
+
+  void _requireCurrent(bool Function() current) {
+    if (!current()) throw const _CollectorCancelled();
+  }
+
+  Future<void> _requireCommitCurrent(bool Function() current) async {
+    _requireCurrent(current);
+    if (isCommitCurrent != null && !await isCommitCurrent!()) {
+      throw const _CollectorCancelled();
+    }
+    _requireCurrent(current);
+  }
 
   Future<bool> runCollector(
     CardEvolutionCollectorBatch batch, {
     void Function()? onObservationStage,
+    bool Function()? isInvocationCurrent,
   }) async {
     final reconciliationRun = batch.boundary;
     final sessionId = reconciliationRun.sessionId;
+    final current = _invocation(sessionId, isInvocationCurrent);
     String? claimId;
     String? ownerId;
     try {
+      _requireCurrent(current);
       final snapshot = await repo.buildObservationSnapshotForRuns(batch.runs);
+      _requireCurrent(current);
       if (snapshot == null) return false;
       ownerId = 'collector-owner-${generateId()}';
       final now = currentTimestampSeconds();
@@ -84,15 +120,17 @@ class CardEvolutionCollectorCoordinator {
         leaseSeconds: leaseSeconds,
         rangeHash: batch.rangeHash,
       );
+      if (claim.canRun && claim.row != null) claimId = claim.row!.id;
+      _requireCurrent(current);
       if (claim.kind == 'completed') return true;
       if (!claim.canRun || claim.row == null) return false;
-      claimId = claim.row!.id;
       onObservationStage?.call();
       final output = await runObservationPass(
         sessionId,
         snapshot,
         claim.row!.collectorOrdinal,
         pipelineRunId: claim.row!.id,
+        isInvocationCurrent: current,
         onFailure: ({required code, detail, callId}) async {
           await collectorRunRepo.markFailed(
             id: claimId!,
@@ -103,25 +141,35 @@ class CardEvolutionCollectorCoordinator {
             callId: callId,
           );
         },
-        finalize: (output, applyEffects) =>
-            collectorRunRepo.completeWithEffects(
+        finalize: (output, applyEffects) async {
+          _requireCurrent(current);
+          return repo.db.transaction(() async {
+            await _requireCommitCurrent(current);
+            final completed = await collectorRunRepo.completeWithEffects(
               id: claimId!,
               ownerId: ownerId!,
               modelOutputHash: computeHash(output),
               now: currentTimestampSeconds(),
               validateEvidence: () async {
+                _requireCurrent(current);
                 final logical = await collectorRunRepo.runsForCollectors(
                   sessionId,
                   [claim.row!],
                 );
+                _requireCurrent(current);
                 return _sameRuns(logical, batch.runs);
               },
               applyEffects: applyEffects,
-            ),
+            );
+            await _requireCommitCurrent(current);
+            return completed;
+          });
+        },
       );
+      _requireCurrent(current);
       if (output == null) {
         await collectorRunRepo.markFailed(
-          id: claimId,
+          id: claimId!,
           ownerId: ownerId,
           now: currentTimestampSeconds(),
           code: 'collectorFailed',
@@ -129,11 +177,12 @@ class CardEvolutionCollectorCoordinator {
         );
         return false;
       }
-      await checkPromotions(sessionId);
+      await checkPromotions(sessionId, isInvocationCurrent: current);
+      _requireCurrent(current);
       claimId = null;
       return true;
     } catch (error) {
-      if (claimId != null && ownerId != null) {
+      if (current() && claimId != null && ownerId != null) {
         await collectorRunRepo.markFailed(
           id: claimId,
           ownerId: ownerId,
@@ -154,6 +203,7 @@ class CardEvolutionCollectorCoordinator {
     String sessionId,
     CardEvolutionObservationSnapshot snapshot,
     int runOrdinal, {
+    bool Function()? isInvocationCurrent,
     String? pipelineRunId,
     Future<void> Function({
       required String code,
@@ -164,12 +214,18 @@ class CardEvolutionCollectorCoordinator {
     Future<bool> Function(String output, Future<void> Function() applyEffects)?
     finalize,
   }) async {
-    final config = await resolveModel(sessionId);
-    final prompt = _buildObservationPrompt(snapshot);
+    final current = _invocation(sessionId, isInvocationCurrent);
+    if (!current()) return null;
     final token = CancelToken();
     _observationTokens[sessionId] = token;
     try {
-      if (token.isCancelled) return null;
+      final config = await resolveModel(sessionId);
+      if (!current()) return null;
+      if (token.isCancelled) {
+        await onFailure?.call(code: 'cancelled');
+        return null;
+      }
+      final prompt = _buildObservationPrompt(snapshot);
       final outcome = await _executor(
         config: config,
         prompt: prompt,
@@ -186,8 +242,12 @@ class CardEvolutionCollectorCoordinator {
           stageOrdinal: runOrdinal,
         ),
       );
-      if (token.isCancelled ||
-          outcome.status == AgentOperationStatus.aborted ||
+      if (!current()) return null;
+      if (token.isCancelled) {
+        await onFailure?.call(code: 'cancelled');
+        return null;
+      }
+      if (outcome.status == AgentOperationStatus.aborted ||
           !outcome.isOk ||
           outcome.text == null) {
         await onFailure?.call(
@@ -206,6 +266,7 @@ class CardEvolutionCollectorCoordinator {
           detail: 'Collector response is not valid JSON',
           source: 'model',
         );
+        if (!current() || token.isCancelled) return null;
         await onFailure?.call(
           code: 'parserRejected',
           detail: 'Collector response is not valid JSON',
@@ -237,7 +298,9 @@ class CardEvolutionCollectorCoordinator {
         code: 'accepted',
         source: 'model',
       );
+      if (!current() || token.isCancelled) return null;
       Future<void> applyEffects() async {
+        await _requireCommitCurrent(current);
         await _applyCollectorActions(
           sessionId: sessionId,
           snapshot: snapshot,
@@ -245,14 +308,20 @@ class CardEvolutionCollectorCoordinator {
           actions: actions,
           validEvidenceIds: validEvidenceIds,
           retrievalTargets: retrievalTargets,
+          current: current,
         );
+        await _requireCommitCurrent(current);
       }
 
       if (finalize != null) {
         if (!await finalize(outcome.text!, applyEffects)) return null;
       } else {
-        await applyEffects();
+        // Manual observation refresh has no collector claim transaction. Keep
+        // its effects atomic so cancellation during a repository await rolls
+        // back, rather than leaving a partial observation set behind.
+        await repo.db.transaction(applyEffects);
       }
+      if (!current() || token.isCancelled) return null;
       return outcome.text;
     } finally {
       if (identical(_observationTokens[sessionId], token)) {
@@ -264,15 +333,21 @@ class CardEvolutionCollectorCoordinator {
   Future<CardEvolutionFinalizeOutcome> recoverFailedCollectorUnshared(
     CardEvolutionCollectorRunRow failed, {
     String? manualResponse,
+    bool Function()? isInvocationCurrent,
+    CardEvolutionWriterContinuation? continueWriter,
   }) async {
+    final current = _invocation(failed.sessionId, isInvocationCurrent);
+    if (!current()) return const CardEvolutionFinalizeOutcome('cancelled');
     final runs = await collectorRunRepo.runsForCollectors(failed.sessionId, [
       failed,
     ]);
+    if (!current()) return const CardEvolutionFinalizeOutcome('cancelled');
     if (runs.length != collectorReconciliationBatchSize) {
       return const CardEvolutionFinalizeOutcome('collectorEvidenceStale');
     }
     final batch = CardEvolutionCollectorBatch(runs);
     final snapshot = await repo.buildObservationSnapshotForRuns(runs);
+    if (!current()) return const CardEvolutionFinalizeOutcome('cancelled');
     if (snapshot == null ||
         computeHash(snapshot.selectedInputJson) != failed.inputHash) {
       return const CardEvolutionFinalizeOutcome('staleInput');
@@ -289,6 +364,7 @@ class CardEvolutionCollectorCoordinator {
           pipelineRunId: failed.id,
           stage: 'card.collector',
         );
+        if (!current()) return const CardEvolutionFinalizeOutcome('cancelled');
         prompt = capture?.prompt;
       }
       if (prompt != null && prompt != currentPrompt) {
@@ -312,6 +388,18 @@ class CardEvolutionCollectorCoordinator {
       now: currentTimestampSeconds(),
       leaseSeconds: leaseSeconds,
     );
+    if (!current()) {
+      if (claim.canRun && claim.row != null) {
+        await collectorRunRepo.markFailed(
+          id: failed.id,
+          ownerId: ownerId,
+          now: currentTimestampSeconds(),
+          code: 'cancelled',
+          callId: failed.lastCallId,
+        );
+      }
+      return const CardEvolutionFinalizeOutcome('cancelled');
+    }
     if (!claim.canRun || claim.row == null) {
       return CardEvolutionFinalizeOutcome(claim.kind);
     }
@@ -330,11 +418,14 @@ class CardEvolutionCollectorCoordinator {
     String? output = manualResponse;
     LlmCaptureContext? selectedContext = context;
     var completed = false;
+    CancelToken? token;
     try {
+      _requireCurrent(current);
       if (output == null) {
-        final config = await resolveModel(failed.sessionId);
-        final token = CancelToken();
+        token = CancelToken();
         _observationTokens[failed.sessionId] = token;
+        final config = await resolveModel(failed.sessionId);
+        _requireCurrent(current);
         final outcome = await _executor(
           config: config,
           prompt: prompt!,
@@ -344,17 +435,26 @@ class CardEvolutionCollectorCoordinator {
           cancelToken: token,
           captureContext: context,
         );
+        _requireCurrent(current);
         selectedContext = outcome.selectedCaptureContext;
-        if (token.isCancelled || !outcome.isOk || outcome.text == null) {
+        if (token.isCancelled ||
+            outcome.status == AgentOperationStatus.aborted ||
+            !outcome.isOk ||
+            outcome.text == null) {
+          final code =
+              token.isCancelled ||
+                  outcome.status == AgentOperationStatus.aborted
+              ? 'cancelled'
+              : outcome.status.name;
           await collectorRunRepo.markFailed(
             id: failed.id,
             ownerId: ownerId,
             now: currentTimestampSeconds(),
-            code: outcome.status.name,
+            code: code,
             detail: outcome.lastError?.toString(),
             callId: selectedContext?.callId ?? failed.lastCallId,
           );
-          return CardEvolutionFinalizeOutcome(outcome.status.name);
+          return CardEvolutionFinalizeOutcome(code);
         }
         output = outcome.text;
       }
@@ -369,7 +469,9 @@ class CardEvolutionCollectorCoordinator {
         output: output!,
         captureContext: selectedContext,
         source: manualResponse == null ? 'exact_retry' : 'manual_correction',
+        current: current,
       );
+      _requireCurrent(current);
       if (!finalized.success) {
         await collectorRunRepo.markFailed(
           id: failed.id,
@@ -388,9 +490,24 @@ class CardEvolutionCollectorCoordinator {
         );
       }
       completed = true;
-      await checkPromotions(failed.sessionId);
-      return continueWriterAfterCollectors(failed.sessionId);
+      await checkPromotions(failed.sessionId, isInvocationCurrent: current);
+      _requireCurrent(current);
+      return (continueWriter ?? continueWriterAfterCollectors)(
+        failed.sessionId,
+      );
     } catch (error) {
+      if (!current()) {
+        if (!completed) {
+          await collectorRunRepo.markFailed(
+            id: failed.id,
+            ownerId: ownerId,
+            now: currentTimestampSeconds(),
+            code: 'cancelled',
+            callId: selectedContext?.callId ?? failed.lastCallId,
+          );
+        }
+        return const CardEvolutionFinalizeOutcome('cancelled');
+      }
       if (!completed) {
         await collectorRunRepo.markFailed(
           id: failed.id,
@@ -407,7 +524,9 @@ class CardEvolutionCollectorCoordinator {
         error.toString(),
       );
     } finally {
-      _observationTokens.remove(failed.sessionId);
+      if (identical(_observationTokens[failed.sessionId], token)) {
+        _observationTokens.remove(failed.sessionId);
+      }
     }
   }
 
@@ -421,7 +540,9 @@ class CardEvolutionCollectorCoordinator {
     required String output,
     required LlmCaptureContext? captureContext,
     required String source,
+    required bool Function() current,
   }) async {
+    _requireCurrent(current);
     final actions = parser.parse(output);
     if (actions == null) {
       await _diagnostics.recordCollectorParserVerdict(
@@ -452,38 +573,50 @@ class CardEvolutionCollectorCoordinator {
       responseText: source == 'manual_correction' ? output : null,
       source: source,
     );
-    final completed = await collectorRunRepo.completeWithEffects(
-      id: collectorId,
-      ownerId: ownerId,
-      modelOutputHash: computeHash(output),
-      now: currentTimestampSeconds(),
-      lastCallId: captureContext?.callId,
-      validateEvidence: () async {
-        final collector = await collectorRunRepo.getById(collectorId);
-        if (collector == null) return false;
-        final logical = await collectorRunRepo.runsForCollectors(sessionId, [
-          collector,
-        ]);
-        if (!_sameRuns(logical, batch.runs)) {
-          return false;
-        }
-        final currentSnapshot = await repo.buildObservationSnapshotForRuns(
-          logical,
-        );
-        return currentSnapshot != null &&
-            computeHash(currentSnapshot.selectedInputJson) ==
-                collector.inputHash &&
-            collector.inputHash == computeHash(snapshot.selectedInputJson);
-      },
-      applyEffects: () => _applyCollectorActions(
-        sessionId: sessionId,
-        snapshot: snapshot,
-        runOrdinal: runOrdinal,
-        actions: actions,
-        validEvidenceIds: validEvidenceIds,
-        retrievalTargets: retrievalTargets,
-      ),
-    );
+    _requireCurrent(current);
+    final completed = await repo.db.transaction(() async {
+      _requireCurrent(current);
+      final completed = await collectorRunRepo.completeWithEffects(
+        id: collectorId,
+        ownerId: ownerId,
+        modelOutputHash: computeHash(output),
+        now: currentTimestampSeconds(),
+        lastCallId: captureContext?.callId,
+        validateEvidence: () async {
+          _requireCurrent(current);
+          final collector = await collectorRunRepo.getById(collectorId);
+          _requireCurrent(current);
+          if (collector == null) return false;
+          final logical = await collectorRunRepo.runsForCollectors(sessionId, [
+            collector,
+          ]);
+          _requireCurrent(current);
+          if (!_sameRuns(logical, batch.runs)) {
+            return false;
+          }
+          final currentSnapshot = await repo.buildObservationSnapshotForRuns(
+            logical,
+          );
+          _requireCurrent(current);
+          return currentSnapshot != null &&
+              computeHash(currentSnapshot.selectedInputJson) ==
+                  collector.inputHash &&
+              collector.inputHash == computeHash(snapshot.selectedInputJson);
+        },
+        applyEffects: () => _applyCollectorActions(
+          sessionId: sessionId,
+          snapshot: snapshot,
+          runOrdinal: runOrdinal,
+          actions: actions,
+          validEvidenceIds: validEvidenceIds,
+          retrievalTargets: retrievalTargets,
+          current: current,
+        ),
+      );
+      _requireCurrent(current);
+      return completed;
+    });
+    _requireCurrent(current);
     return completed
         ? const _CollectorFinalizeResult.success()
         : const _CollectorFinalizeResult.failure(
@@ -506,7 +639,9 @@ class CardEvolutionCollectorCoordinator {
     required List<ParsedObservationAction> actions,
     required Set<String> validEvidenceIds,
     required Map<String, String> retrievalTargets,
+    required bool Function() current,
   }) async {
+    _requireCurrent(current);
     final now = currentTimestampSeconds();
     for (final action in actions) {
       if (!validEvidenceIds.containsAll(action.evidenceMessageIds)) continue;
@@ -533,7 +668,9 @@ class CardEvolutionCollectorCoordinator {
         runOrdinal: runOrdinal,
         now: now,
         action: action,
+        current: current,
       );
+      _requireCurrent(current);
     }
     await observationRepo.expireUnconfirmed(
       sessionId: sessionId,
@@ -541,6 +678,7 @@ class CardEvolutionCollectorCoordinator {
       maxUnconfirmedRuns: observationExpiryRuns?.call() ?? 4,
       now: now,
     );
+    _requireCurrent(current);
   }
 
   Future<void> _applyObservationAction({
@@ -549,13 +687,16 @@ class CardEvolutionCollectorCoordinator {
     required int runOrdinal,
     required int now,
     required ParsedObservationAction action,
+    required bool Function() current,
   }) async {
+    _requireCurrent(current);
     switch (action.action) {
       case 'confirm':
         final existing = await observationRepo.findByScopeKey(
           sessionId,
           action.scopeKey,
         );
+        _requireCurrent(current);
         if (existing != null &&
             existing.status == 'active' &&
             (existing.targetKind == null ||
@@ -603,6 +744,7 @@ class CardEvolutionCollectorCoordinator {
           sessionId,
           action.scopeKey,
         );
+        _requireCurrent(current);
         if (existing != null && existing.status == 'active') {
           await observationRepo.contradictObservation(existing.id, now: now);
         }
@@ -610,7 +752,12 @@ class CardEvolutionCollectorCoordinator {
     }
   }
 
-  Future<void> checkPromotions(String sessionId) async {
+  Future<void> checkPromotions(
+    String sessionId, {
+    bool Function()? isInvocationCurrent,
+  }) async {
+    final current = _invocation(sessionId, isInvocationCurrent);
+    if (!current()) return;
     final now = currentTimestampSeconds();
     final threshold = observationPromotionThreshold?.call() ?? 3;
     final minConfidence = observationMinConfidence?.call() ?? 0.7;
@@ -619,8 +766,14 @@ class CardEvolutionCollectorCoordinator {
       minRepeatCount: threshold,
       minConfidence: minConfidence,
     );
+    if (!current()) return;
     for (final obs in promotable) {
-      await observationRepo.promoteObservation(obs.id, now: now);
+      if (!current()) return;
+      await repo.db.transaction(() async {
+        await _requireCommitCurrent(current);
+        await observationRepo.promoteObservation(obs.id, now: now);
+        await _requireCommitCurrent(current);
+      });
     }
   }
 
@@ -648,10 +801,16 @@ class CardEvolutionCollectorCoordinator {
   }
 
   void cancelSession(String sessionId) {
+    _cancellationEpochs.update(
+      sessionId,
+      (epoch) => epoch + 1,
+      ifAbsent: () => 1,
+    );
     _observationTokens[sessionId]?.cancel('generationAborted');
   }
 
   void dispose() {
+    _disposed = true;
     for (final token in _observationTokens.values) {
       token.cancel('serviceDisposed');
     }
@@ -714,6 +873,10 @@ class CardEvolutionCollectorCoordinator {
       return selectedInputJson;
     }
   }
+}
+
+final class _CollectorCancelled implements Exception {
+  const _CollectorCancelled();
 }
 
 final class _CollectorFinalizeResult {

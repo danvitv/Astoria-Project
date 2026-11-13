@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 
+import '../db/app_db.dart';
 import '../db/repositories/character_knowledge_fact_repo.dart';
 import '../db/repositories/character_repo.dart';
 import '../db/repositories/chat_repo.dart';
@@ -200,6 +201,11 @@ class StudioLedgerService {
         );
   }
 
+  /// [reserveEvolutionJob] runs inside the canonical reconciliation transaction
+  /// for its exact persisted run, including an idempotent replay. It must only
+  /// reserve through a repository sharing this database: no network, provider
+  /// resolution, timers or post-commit notification. Failure rolls back canon
+  /// and the reservation together. Callers must capture routing before this call.
   Future<LedgerRunResult> reconcile({
     required String sessionId,
     required PipelineSettings settings,
@@ -210,6 +216,8 @@ class StudioLedgerService {
     FutureOr<bool> Function()? isStillCurrent,
     CancelToken? cancelToken,
     String? operationIdentity,
+    Future<void> Function(LedgerReconciliationSuccessfulRunRow run)?
+    reserveEvolutionJob,
   }) {
     final request = LedgerReconciliationRequest(
       sessionId: sessionId,
@@ -220,6 +228,7 @@ class StudioLedgerService {
       macroCtx: macroCtx,
       isStillCurrent: isStillCurrent,
       cancelToken: cancelToken,
+      reserveEvolutionJob: reserveEvolutionJob,
       purpose: operationIdentity?.startsWith('manual:') == true
           ? 'manual'
           : 'normal',

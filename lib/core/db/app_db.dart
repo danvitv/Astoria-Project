@@ -48,6 +48,7 @@ part 'migrations/upgrade_v140.dart';
 part 'migrations/upgrade_v141.dart';
 part 'migrations/upgrade_v142.dart';
 part 'migrations/upgrade_v143.dart';
+part 'migrations/upgrade_v144.dart';
 
 @DriftDatabase(
   tables: [
@@ -105,6 +106,7 @@ part 'migrations/upgrade_v143.dart';
     CardEvolutionDebugRuns,
     CardEvolutionObservations,
     CardEvolutionCollectorRuns,
+    CardEvolutionJobs,
     CharacterKnowledgeFactRows,
     CharacterSessionBaselineRows,
     CharacterRevisionRows,
@@ -305,7 +307,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 143;
+  int get schemaVersion => 144;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -335,6 +337,7 @@ class AppDatabase extends _$AppDatabase {
       );
       await _ensureSchemaIntegrity();
       await _installHistoryInvalidation();
+      await _installCardEvolutionJobLifecycle();
     },
     onUpgrade: (Migrator m, int from, int to) async {
       await _upgradeV2ToV50(m, from);
@@ -351,6 +354,7 @@ class AppDatabase extends _$AppDatabase {
       await _upgradeV141(m, from);
       await _upgradeV142(m, from);
       await _upgradeV143(m, from);
+      await _upgradeV144(m, from);
       // Local v136 repairs missing indexes/triggers and replaces the request
       // capture trigger. Only install current-schema integrity after all
       // historical table rebuilds and data normalization have finished.

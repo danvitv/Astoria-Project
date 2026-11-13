@@ -27,6 +27,15 @@ class GlazeExpansionTile extends StatefulWidget {
   final Widget? trailing;
 
   final List<Widget> children;
+
+  /// Defers creating the body until the first expansion (or the initial build
+  /// when [initiallyExpanded] is true). Supply exactly one of this or [children].
+  ///
+  /// Once opened, the body stays mounted across collapses to preserve child
+  /// state and the cross-fade animation, just like eager [children]. The builder
+  /// runs on subsequent tile rebuilds, even when collapsed, so it receives fresh
+  /// inputs rather than retaining a cached widget list.
+  final List<Widget> Function(BuildContext context)? childrenBuilder;
   final bool initiallyExpanded;
 
   /// Wraps the tile in its own glass card.
@@ -41,7 +50,8 @@ class GlazeExpansionTile extends StatefulWidget {
   const GlazeExpansionTile({
     super.key,
     required this.title,
-    required this.children,
+    List<Widget>? children,
+    this.childrenBuilder,
     this.subtitle,
     this.leading,
     this.trailing,
@@ -49,7 +59,11 @@ class GlazeExpansionTile extends StatefulWidget {
     this.surface = false,
     this.childrenPadding = const EdgeInsets.fromLTRB(14, 0, 14, 12),
     this.showDivider = false,
-  });
+  }) : assert(
+         (children == null) != (childrenBuilder == null),
+         'Supply exactly one of children or childrenBuilder.',
+       ),
+       children = children ?? const [];
 
   @override
   State<GlazeExpansionTile> createState() => _GlazeExpansionTileState();
@@ -57,10 +71,14 @@ class GlazeExpansionTile extends StatefulWidget {
 
 class _GlazeExpansionTileState extends State<GlazeExpansionTile> {
   late bool _expanded = widget.initiallyExpanded;
+  late bool _hasExpanded = widget.initiallyExpanded;
 
   void _toggle() {
     Haptics.selectionClick();
-    setState(() => _expanded = !_expanded);
+    setState(() {
+      _expanded = !_expanded;
+      _hasExpanded = _hasExpanded || _expanded;
+    });
   }
 
   @override
@@ -134,7 +152,11 @@ class _GlazeExpansionTileState extends State<GlazeExpansionTile> {
             padding: widget.childrenPadding,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: widget.children,
+              children: widget.childrenBuilder == null
+                  ? widget.children
+                  : _hasExpanded
+                  ? widget.childrenBuilder!(context)
+                  : const [],
             ),
           ),
         ),

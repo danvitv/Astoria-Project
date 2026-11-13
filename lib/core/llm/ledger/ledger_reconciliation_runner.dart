@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../db/app_db.dart';
 import '../../db/repositories/ledger_debug_run_repo.dart';
 import '../../db/repositories/ledger_reconciliation_lease_repo.dart';
 import '../../db/repositories/tracker_snapshot_repo.dart';
@@ -36,6 +37,7 @@ final class LedgerReconciliationRequest {
     required this.isStillCurrent,
     required this.cancelToken,
     required this.purpose,
+    this.reserveEvolutionJob,
   });
 
   final String sessionId;
@@ -47,6 +49,8 @@ final class LedgerReconciliationRequest {
   final FutureOr<bool> Function()? isStillCurrent;
   final CancelToken? cancelToken;
   final String purpose;
+  final Future<void> Function(LedgerReconciliationSuccessfulRunRow run)?
+  reserveEvolutionJob;
 }
 
 final class LedgerReconciliationReplacementRequest {
@@ -647,6 +651,7 @@ final class LedgerReconciliationRunner {
           token: token,
           isStillCurrent: request.isStillCurrent,
           replacement: replacement,
+          reserveEvolutionJob: request.reserveEvolutionJob,
         ),
       );
       return LedgerRunResult(

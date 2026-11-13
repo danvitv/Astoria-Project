@@ -26,6 +26,8 @@ final class CardEvolutionWriterCoordinator {
     required this.writerCallRunner,
     required this.leaseSeconds,
     this.isLorebookEvolutionEnabled,
+    this.isStillCurrent,
+    this.isCommitCurrent,
     WriterContextConsolidator? writerContextConsolidator,
   }) {
     _writerContextConsolidator =
@@ -44,8 +46,46 @@ final class CardEvolutionWriterCoordinator {
   final DurableWriterCallRunner writerCallRunner;
   final int leaseSeconds;
   final bool Function()? isLorebookEvolutionEnabled;
+  final bool Function()? isStillCurrent;
+  final Future<bool> Function()? isCommitCurrent;
   late final WriterContextConsolidator _writerContextConsolidator;
   final Map<String, CancelToken> _tokens = {};
+  final Map<String, int> _cancellationEpochs = {};
+  bool _disposed = false;
+
+  bool Function() _invocation(
+    String sessionId,
+    bool Function()? isInvocationCurrent,
+  ) {
+    final epoch = _cancellationEpochs[sessionId] ?? 0;
+    var active = true;
+    return () => active =
+        active &&
+        !_disposed &&
+        (_cancellationEpochs[sessionId] ?? 0) == epoch &&
+        isStillCurrent?.call() != false &&
+        isInvocationCurrent?.call() != false;
+  }
+
+  void _requireCurrent(bool Function() current, CancelToken token) {
+    if (!current() || token.isCancelled) {
+      token.cancel('generationAborted');
+      throw const _WriterCancelled();
+    }
+  }
+
+  Future<void> _requireCommitCurrent(
+    bool Function() current,
+    CancelToken token,
+  ) async {
+    _requireCurrent(current, token);
+    if (isCommitCurrent != null && !await isCommitCurrent!()) {
+      throw const _WriterCancelled();
+    }
+    // Cancellation may arrive while the durable check is awaiting SQLite;
+    // its own cancellation write then waits behind this transaction.
+    _requireCurrent(current, token);
+  }
 
   Future<CardEvolutionFinalizeOutcome> runWriter(
     String sessionId, {
@@ -53,7 +93,10 @@ final class CardEvolutionWriterCoordinator {
     String collectorBoundaryHash = '',
     List<CardEvolutionCollectorRunRow> collectorBoundaryRuns = const [],
     List<String>? reconciliationRunIds,
+    bool Function()? isInvocationCurrent,
   }) async {
+    final current = _invocation(sessionId, isInvocationCurrent);
+    if (!current()) return const CardEvolutionFinalizeOutcome('cancelled');
     final owner = 'evolution-owner-${generateId()}';
     final now = currentTimestampSeconds();
     final claimed = await repo.claim(
@@ -71,6 +114,17 @@ final class CardEvolutionWriterCoordinator {
       }),
     );
     final claim = claimed.claim;
+    if (!current()) {
+      if (claimed.isClaimed && claim != null) {
+        await writerCallRunner.markWriterFailure(
+          claim,
+          owner,
+          'cancelled',
+          null,
+        );
+      }
+      return const CardEvolutionFinalizeOutcome('cancelled');
+    }
     if (!claimed.isClaimed || claim == null) {
       await diagnostics.saveSelectionBail(
         sessionId: sessionId,
@@ -83,14 +137,17 @@ final class CardEvolutionWriterCoordinator {
       );
       return CardEvolutionFinalizeOutcome(claimed.kind, null, claimed.detail);
     }
-    return _runClaimedWriter(claim, owner);
+    return _runClaimedWriter(claim, owner, current: current);
   }
 
   Future<CardEvolutionFinalizeOutcome> recoverWriterUnshared(
     CardEvolutionClaimRow failed, {
     String? requestedCallId,
     String? manualResponse,
+    bool Function()? isInvocationCurrent,
   }) async {
+    final current = _invocation(failed.sessionId, isInvocationCurrent);
+    if (!current()) return const CardEvolutionFinalizeOutcome('cancelled');
     final owner = 'evolution-recovery-${generateId()}';
     final claimed = await repo.claimFailedWriter(
       claimId: failed.id,
@@ -99,6 +156,17 @@ final class CardEvolutionWriterCoordinator {
       leaseSeconds: leaseSeconds,
     );
     final claim = claimed.claim;
+    if (!current()) {
+      if (claimed.isClaimed && claim != null) {
+        await writerCallRunner.markWriterFailure(
+          claim,
+          owner,
+          'cancelled',
+          null,
+        );
+      }
+      return const CardEvolutionFinalizeOutcome('cancelled');
+    }
     if (!claimed.isClaimed || claim == null) {
       return CardEvolutionFinalizeOutcome(claimed.kind, null, claimed.detail);
     }
@@ -109,6 +177,15 @@ final class CardEvolutionWriterCoordinator {
         ownerId: owner,
         now: currentTimestampSeconds(),
       );
+      if (!current()) {
+        await writerCallRunner.markWriterFailure(
+          claim,
+          owner,
+          'cancelled',
+          null,
+        );
+        return const CardEvolutionFinalizeOutcome('cancelled');
+      }
       if (!retried) {
         await repo.markWriterFailed(
           claimId: claim.row.id,
@@ -120,6 +197,15 @@ final class CardEvolutionWriterCoordinator {
       }
     } else {
       final chain = await writerCallRepo.readChain(claim.row.id);
+      if (!current()) {
+        await writerCallRunner.markWriterFailure(
+          claim,
+          owner,
+          'cancelled',
+          null,
+        );
+        return const CardEvolutionFinalizeOutcome('cancelled');
+      }
       final frontier = chain
           .where((row) => row.status != 'completed')
           .firstOrNull;
@@ -130,6 +216,15 @@ final class CardEvolutionWriterCoordinator {
           ownerId: owner,
           now: currentTimestampSeconds(),
         );
+        if (!current()) {
+          await writerCallRunner.markWriterFailure(
+            claim,
+            owner,
+            'cancelled',
+            null,
+          );
+          return const CardEvolutionFinalizeOutcome('cancelled');
+        }
         if (!retried) {
           await repo.markWriterFailed(
             claimId: claim.row.id,
@@ -146,25 +241,30 @@ final class CardEvolutionWriterCoordinator {
       owner,
       manualCallId: requestedCallId,
       manualResponse: manualResponse,
+      current: current,
     );
   }
 
   Future<CardEvolutionFinalizeOutcome> _runClaimedWriter(
     CardEvolutionClaim claim,
     String owner, {
+    required bool Function() current,
     String? manualCallId,
     String? manualResponse,
   }) async {
     final sessionId = claim.row.sessionId;
     final token = CancelToken();
-    _tokens[sessionId] = token;
     try {
+      _requireCurrent(current, token);
+      _tokens[sessionId] = token;
       final chain = await writerCallRepo.readChain(claim.row.id);
+      _requireCurrent(current, token);
       final snapshotOutcome = await repo.readPromptSnapshotOutcome(
         claimId: claim.row.id,
         ownerId: owner,
         now: currentTimestampSeconds(),
       );
+      _requireCurrent(current, token);
       final snapshot = snapshotOutcome.snapshot;
       if (snapshot == null) {
         await _discardOrRetainWriter(
@@ -180,7 +280,12 @@ final class CardEvolutionWriterCoordinator {
           snapshotOutcome.reason,
         );
       }
-      final model = LazyWriterModel(resolveModel);
+      final model = LazyWriterModel(() async {
+        _requireCurrent(current, token);
+        final config = await resolveModel();
+        _requireCurrent(current, token);
+        return config;
+      });
       var nextOrdinal = 1;
       var chainIndex = 0;
       var parentCallId = chain.isEmpty ? null : chain.first.parentCallId;
@@ -197,6 +302,7 @@ final class CardEvolutionWriterCoordinator {
         manualCallId: manualCallId,
         manualResponse: manualResponse,
       );
+      _requireCurrent(current, token);
       if (prepared.failure != null) return prepared.failure!;
       final sharedContext = prepared.context!;
       chainIndex = prepared.chainIndex;
@@ -241,6 +347,7 @@ final class CardEvolutionWriterCoordinator {
           manualCallId: manualCallId,
           manualResponse: manualResponse,
         );
+        _requireCurrent(current, token);
         if (card.failure != null) return card.failure!;
         chainIndex++;
         nextOrdinal++;
@@ -274,6 +381,7 @@ final class CardEvolutionWriterCoordinator {
             manualCallId: manualCallId,
             manualResponse: manualResponse,
           );
+          _requireCurrent(current, token);
           if (repair.failure != null) return repair.failure!;
           chainIndex++;
           nextOrdinal++;
@@ -320,6 +428,7 @@ final class CardEvolutionWriterCoordinator {
           manualCallId: manualCallId,
           manualResponse: manualResponse,
         );
+        _requireCurrent(current, token);
         if (lorebook.failure != null) return lorebook.failure!;
         chainIndex++;
         modelOutputs['lorebook'] = lorebook.call!.responseText!;
@@ -335,28 +444,42 @@ final class CardEvolutionWriterCoordinator {
         return failed.failure!;
       }
       if (operations.isEmpty) {
-        if (claim.row.predecessorRunOrdinal > 0) {
-          await repo.completeEmptyClaim(
-            claimId: claim.row.id,
-            ownerId: owner,
-            now: currentTimestampSeconds(),
-          );
-        } else {
-          await repo.abandonClaim(claimId: claim.row.id, ownerId: owner);
-        }
+        _requireCurrent(current, token);
+        await repo.db.transaction(() async {
+          await _requireCommitCurrent(current, token);
+          if (claim.row.predecessorRunOrdinal > 0) {
+            await repo.completeEmptyClaim(
+              claimId: claim.row.id,
+              ownerId: owner,
+              now: currentTimestampSeconds(),
+            );
+          } else {
+            await repo.abandonClaim(claimId: claim.row.id, ownerId: owner);
+          }
+          await _requireCommitCurrent(current, token);
+        });
         return const CardEvolutionFinalizeOutcome(
           'emptyModelProposal',
           null,
           'Every enabled writer returned an empty operations list. Check the saved card/lorebook debug responses.',
         );
       }
-      final finalized = await repo.finalize(
-        claimId: claim.row.id,
-        ownerId: owner,
-        now: currentTimestampSeconds(),
-        modelOutput: jsonEncode(modelOutputs),
-        operations: operations,
-      );
+      _requireCurrent(current, token);
+      // Only finalization is inside this transaction, never model/network work.
+      // A late Stop during repository validation rolls the proposal back.
+      final finalized = await repo.db.transaction(() async {
+        await _requireCommitCurrent(current, token);
+        final outcome = await repo.finalize(
+          claimId: claim.row.id,
+          ownerId: owner,
+          now: currentTimestampSeconds(),
+          modelOutput: jsonEncode(modelOutputs),
+          operations: operations,
+        );
+        await _requireCommitCurrent(current, token);
+        return outcome;
+      });
+      _requireCurrent(current, token);
       if (!finalized.isPersisted) {
         await writerCallRunner.markWriterFailure(
           claim,
@@ -367,6 +490,15 @@ final class CardEvolutionWriterCoordinator {
       }
       return finalized;
     } on CardRewriteModelNotConfigured catch (error) {
+      if (!current() || token.isCancelled) {
+        await writerCallRunner.markWriterFailure(
+          claim,
+          owner,
+          'cancelled',
+          null,
+        );
+        return const CardEvolutionFinalizeOutcome('cancelled');
+      }
       await writerCallRunner.markWriterFailure(
         claim,
         owner,
@@ -375,6 +507,15 @@ final class CardEvolutionWriterCoordinator {
       );
       return const CardEvolutionFinalizeOutcome('modelNotConfigured');
     } catch (error) {
+      if (!current() || token.isCancelled) {
+        await writerCallRunner.markWriterFailure(
+          claim,
+          owner,
+          'cancelled',
+          null,
+        );
+        return const CardEvolutionFinalizeOutcome('cancelled');
+      }
       await writerCallRunner.markWriterFailure(
         claim,
         owner,
@@ -402,10 +543,16 @@ final class CardEvolutionWriterCoordinator {
       : writerCallRunner.markWriterFailure(claim, owner, code, detail);
 
   void cancelSession(String sessionId) {
+    _cancellationEpochs.update(
+      sessionId,
+      (epoch) => epoch + 1,
+      ifAbsent: () => 1,
+    );
     _tokens[sessionId]?.cancel('generationAborted');
   }
 
   void dispose() {
+    _disposed = true;
     for (final token in _tokens.values) {
       token.cancel('serviceDisposed');
     }
@@ -563,4 +710,8 @@ final class CardEvolutionWriterCoordinator {
 
   static bool _isCardScopeTarget(String key) =>
       !key.contains('/') && CardRewriteScope.tryParse(key) != null;
+}
+
+final class _WriterCancelled implements Exception {
+  const _WriterCancelled();
 }

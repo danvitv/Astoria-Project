@@ -8,9 +8,6 @@ import '../../core/db/app_db.dart' show RewriteJobRow;
 import '../../core/models/character.dart';
 import '../../core/services/card_rewriter/card_rewriter_contracts.dart';
 import '../../core/state/db_provider.dart';
-import '../chat/chat_provider.dart';
-import '../chat/chat_session_service.dart';
-import '../chat_history/chat_history_provider.dart';
 import '../../shared/theme/app_colors.dart';
 import '../../shared/widgets/glass_surface.dart';
 import '../../shared/widgets/glaze_bottom_sheet.dart';
@@ -57,8 +54,9 @@ class _RewriteReviewScreenState extends ConsumerState<RewriteReviewScreen> {
 
   void _retireOwner() {
     _release?.call();
-    if (identical(_controller?.nativeOwner, _owner))
+    if (identical(_controller?.nativeOwner, _owner)) {
       _controller?.nativeOwner = null;
+    }
     _release = null;
     _owner = null;
     _controller = null;
@@ -116,8 +114,9 @@ class _RewriteReviewScreenState extends ConsumerState<RewriteReviewScreen> {
   @override
   void didUpdateWidget(covariant RewriteReviewScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.jobId != widget.jobId || oldWidget.charId != widget.charId)
+    if (oldWidget.jobId != widget.jobId || oldWidget.charId != widget.charId) {
       _retireOwner();
+    }
   }
 
   @override
@@ -137,8 +136,9 @@ class _RewriteReviewScreenState extends ConsumerState<RewriteReviewScreen> {
     if (owner == null ||
         !owner.current ||
         !owner.queue.idle ||
-        owner.selected() == null)
+        owner.selected() == null) {
       return;
+    }
     // Explicit root push retains this SAME mounted review route/controller.
     // No selected ID is passed as model authority and no sibling route is adopted.
     Navigator.of(context, rootNavigator: true).push<void>(
@@ -722,10 +722,6 @@ class _ApplyFooter extends ConsumerWidget {
                     .read(chatRepoProvider)
                     .getById(snapshot.job.chatSessionId);
                 if (session != null && context.mounted) {
-                  ChatSessionService.clearCache();
-                  ref.invalidate(chatProvider(snapshot.job.characterId));
-                  ref.invalidate(chatProvider(session.characterId));
-                  ref.invalidate(chatHistoryProvider);
                   context.go(
                     '/chat/${session.characterId}?session=${session.sessionIndex}',
                   );

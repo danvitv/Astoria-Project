@@ -19,6 +19,9 @@ import 'dart:async';
 /// queue — the inner call would wait on its own enclosing operation.
 class ChatSessionWriteQueue {
   Future<void> _tail = Future<void>.value();
+  int _pending = 0;
+
+  bool get isIdle => _pending == 0;
 
   int _publishSeq = 0;
 
@@ -42,6 +45,7 @@ class ChatSessionWriteQueue {
   /// Returns the operation's own future, so callers still see its result and
   /// its errors; a failed write does not poison the queue for later ones.
   Future<T> run<T>(Future<T> Function() operation) {
+    _pending++;
     final previous = _tail;
     final next = () async {
       try {
@@ -49,7 +53,11 @@ class ChatSessionWriteQueue {
       } catch (_) {
         // A failed write must not permanently block the queue.
       }
-      return operation();
+      try {
+        return await operation();
+      } finally {
+        _pending--;
+      }
     }();
     _tail = next.then<void>((_) {}, onError: (Object _) {});
     return next;

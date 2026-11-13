@@ -11,6 +11,7 @@ import '../../core/llm/tokenizer.dart';
 import '../../core/llm/context_budget_guard.dart';
 import '../../core/llm/prompt_isolate.dart';
 import '../../core/state/studio_turn_config_resolver.dart';
+import '../../core/state/session_mutation_gate.dart';
 import 'state/context_budget_notice.dart';
 import 'providers/prompt_build_providers.dart';
 import '../../core/models/chat_message.dart';
@@ -135,22 +136,20 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
         buildRef.mounted &&
         identical(_sessionBuildRetired, retired) &&
         !retired.isCompleted;
+    final abortHandler = _createAbortHandler(buildRef, current);
+    _abortHandler = abortHandler;
+    buildRef.onDispose(abortHandler.dispose);
     _buildComplete = false;
-    bool titleOwnerCurrent() =>
-        current() &&
-        _buildComplete &&
-        !_sendInFlight &&
-        _sessionChangesInFlight == 0 &&
-        state.value != null &&
-        !state.value!.isGenerating &&
-        !state.value!.isGeneratingImage &&
-        !state.value!.isPostGenRunning &&
-        !state.value!.isSendPending;
-    final nativeOwner = ChatNativeOwner(
-      characterId: arg,
-      sessionId: () =>
-          current() && _buildComplete ? state.value?.session?.id : null,
-      isIdle: () =>
+    final gate = buildRef.read(sessionMutationGateProvider);
+    final selection = gate.trySelection(arg) ?? await gate.waitSelection(arg);
+    if (selection == null) return const ChatState();
+    if (!current()) {
+      selection.release();
+      return const ChatState();
+    }
+    buildRef.onDispose(selection.release);
+    try {
+      bool titleOwnerCurrent() =>
           current() &&
           _buildComplete &&
           !_sendInFlight &&
@@ -159,56 +158,73 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
           !state.value!.isGenerating &&
           !state.value!.isGeneratingImage &&
           !state.value!.isPostGenRunning &&
-          !state.value!.isSendPending,
-      queue: _sessionWrites,
-      refresh: (id, publication, sourceCurrent) =>
-          _refreshNativeLatest(id, publication, current, sourceCurrent),
-      titles: ChatNativeSessionTitlePort(
-        buildRef.read(chatRepoProvider),
-        titleOwnerCurrent,
-      ),
-    );
-    buildRef.onDispose(
-      buildRef.read(chatNativeOwnerRegistryProvider).register(nativeOwner),
-    );
-    final maintenance = buildRef
-        .read(chatNativeOwnerRegistryProvider)
-        .awaitRegistration(nativeOwner);
-    if (maintenance != null) await maintenance;
-    if (!current()) return const ChatState();
-    _sessionCtrl = _createSessionController(buildRef);
-    // Mirror this character's generation state into the global registry so the
-    // chat list can show a live "typing" indicator for the session without
-    // building its full state. Generation outlives the chat screen
-    // (`keepAlive`), so the entry persists until the reply actually finishes.
-    // Loading notifications can create this inventory too. Install only after
-    // admitted maintenance settles, preserving its exact captured job inventory.
-    listenSelf(
-      (_, AsyncValue<ChatState> next) => _syncGeneratingRegistry(next),
-    );
-    final existing = await _sessionSvc.findExistingSession(arg);
-    if (!current()) return const ChatState();
-    if (_buildComplete) {
-      return state.value ?? ChatState(session: existing);
-    }
-    if (existing != null) {
-      final fixed = _fixupSwipesWithImageResults(existing);
-      if (!identical(fixed, existing)) {
-        await buildRef.read(chatRepoProvider).put(fixed);
-        if (!current()) return const ChatState();
-        ChatSessionService.updateCache(fixed);
+          !state.value!.isSendPending;
+      final nativeOwner = ChatNativeOwner(
+        characterId: arg,
+        sessionId: () =>
+            current() && _buildComplete ? state.value?.session?.id : null,
+        isIdle: () =>
+            current() &&
+            _buildComplete &&
+            !_sendInFlight &&
+            _sessionChangesInFlight == 0 &&
+            state.value != null &&
+            !state.value!.isGenerating &&
+            !state.value!.isGeneratingImage &&
+            !state.value!.isPostGenRunning &&
+            !state.value!.isSendPending,
+        queue: _sessionWrites,
+        refresh: (id, publication, sourceCurrent) =>
+            _refreshNativeLatest(id, publication, current, sourceCurrent),
+        titles: ChatNativeSessionTitlePort(
+          buildRef.read(chatRepoProvider),
+          titleOwnerCurrent,
+        ),
+      );
+      buildRef.onDispose(
+        buildRef.read(chatNativeOwnerRegistryProvider).register(nativeOwner),
+      );
+      final maintenance = buildRef
+          .read(chatNativeOwnerRegistryProvider)
+          .awaitRegistration(nativeOwner);
+      if (maintenance != null) await maintenance;
+      if (!current()) return const ChatState();
+      _sessionCtrl = _createSessionController(buildRef);
+      // Mirror this character's generation state into the global registry so the
+      // chat list can show a live "typing" indicator for the session without
+      // building its full state. Generation outlives the chat screen
+      // (`keepAlive`), so the entry persists until the reply actually finishes.
+      // Loading notifications can create this inventory too. Install only after
+      // admitted maintenance settles, preserving its exact captured job inventory.
+      listenSelf(
+        (_, AsyncValue<ChatState> next) => _syncGeneratingRegistry(next),
+      );
+      final existing = await _sessionSvc.findExistingSession(arg);
+      if (!current()) return const ChatState();
+      if (_buildComplete) {
+        return state.value ?? ChatState(session: existing);
       }
-      final start = fixed.messages.length > ChatState.initialPageSize
-          ? fixed.messages.length - ChatState.initialPageSize
-          : 0;
-      final result = ChatState(session: fixed, visibleStartIndex: start);
+      if (existing != null) {
+        final fixed = _fixupSwipesWithImageResults(existing);
+        if (!identical(fixed, existing)) {
+          await buildRef.read(chatRepoProvider).put(fixed);
+          if (!current()) return const ChatState();
+          ChatSessionService.updateCache(fixed);
+        }
+        final start = fixed.messages.length > ChatState.initialPageSize
+            ? fixed.messages.length - ChatState.initialPageSize
+            : 0;
+        final result = ChatState(session: fixed, visibleStartIndex: start);
+        _buildComplete = true;
+        return result;
+      }
+      final session = await _sessionSvc.createInitialSession(arg);
+      if (!current()) return const ChatState();
       _buildComplete = true;
-      return result;
+      return ChatState(session: session);
+    } finally {
+      selection.release();
     }
-    final session = await _sessionSvc.createInitialSession(arg);
-    if (!current()) return const ChatState();
-    _buildComplete = true;
-    return ChatState(session: session);
   }
 
   void loadOlderMessages() {
@@ -225,22 +241,54 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     );
   }
 
-  late final AbortHandler _abortHandler = AbortHandler(
-    ref: ref,
-    charId: arg,
-    setState: (s) {
-      state = s;
-    },
-    getState: () => state,
-    mutateSession: (sessionId, mutate) => ref
-        .read(chatRepoProvider)
-        .mutateSession(
-          sessionId: sessionId,
-          mutate: mutate,
-          updatedAt: currentTimestampSeconds(),
-        ),
-    loadSession: ref.read(chatRepoProvider).getById,
-  );
+  late AbortHandler _abortHandler;
+
+  AbortHandler _createAbortHandler(Ref buildRef, bool Function() current) =>
+      AbortHandler(
+        ref: buildRef,
+        charId: arg,
+        setState: (s) {
+          if (current()) state = s;
+        },
+        getState: () => state,
+        mutateSession: (sessionId, mutate) => buildRef
+            .read(chatRepoProvider)
+            .mutateSession(
+              sessionId: sessionId,
+              mutate: mutate,
+              updatedAt: currentTimestampSeconds(),
+            ),
+        loadSession: buildRef.read(chatRepoProvider).getById,
+      );
+
+  /// Claim before preparation awaits, so Apply and a new foreground turn cannot
+  /// both pass an idle UI check. Keep the claim through durable settlement.
+  Future<void> _withForegroundMutation(
+    Future<void> Function() action, {
+    void Function()? onBusy,
+  }) async {
+    if (!ref.mounted) {
+      onBusy?.call();
+      return;
+    }
+    final sessionId = state.value?.session?.id;
+    if (sessionId == null) {
+      onBusy?.call();
+      return;
+    }
+    final lease = ref
+        .read(sessionMutationGateProvider)
+        .tryForeground(sessionId);
+    if (lease == null) {
+      onBusy?.call();
+      return;
+    }
+    try {
+      await action();
+    } finally {
+      lease.release();
+    }
+  }
 
   void setCancelToken(CancelToken token, {required int genId}) =>
       _abortHandler.setCancelToken(token, genId: genId);
@@ -253,8 +301,8 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   void abortImageGeneration() => _abortHandler.abortImageGeneration();
   Future<void> abortGeneration() => _abortHandler.abortGeneration();
   void cancelImageGeneration() => _abortHandler.cancelImageGeneration();
-  Future<void> retryImageGeneration() async =>
-      _imageRecoverySvc.retryImageGeneration();
+  Future<void> retryImageGeneration() =>
+      _withForegroundMutation(() => _imageRecoverySvc.retryImageGeneration());
   Future<void> findImageOnDisk(
     String messageId,
     String instruction, {
@@ -281,10 +329,12 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     final queueKey = '$messageId#${blockIndex ?? 'all'}';
     if (!_queuedImageRetries.add(queueKey)) return;
     try {
-      await _imageRecoverySvc.retryImageGenerationForMessage(
-        messageId,
-        failedOnly: failedOnly,
-        blockIndex: blockIndex,
+      await _withForegroundMutation(
+        () => _imageRecoverySvc.retryImageGenerationForMessage(
+          messageId,
+          failedOnly: failedOnly,
+          blockIndex: blockIndex,
+        ),
       );
     } finally {
       _queuedImageRetries.remove(queueKey);
@@ -292,20 +342,24 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   }
 
   ChatSessionService get _sessionSvc => ChatSessionService(ref);
-  ImageRecoveryService get _imageRecoverySvc => ImageRecoveryService(
-    ref: ref,
-    charId: arg,
-    setImgGenCancelToken: (t) {
-      _abortHandler.imgGenCancelToken = t;
-    },
-    getImgGenCancelToken: () => _abortHandler.imgGenCancelToken,
-    startImageOperation: _abortHandler.nextGenId,
-    isCurrentGeneration: _abortHandler.isCurrentGen,
-    setState: (s) {
-      state = s;
-    },
-    getState: () => state,
-  );
+  ImageRecoveryService get _imageRecoverySvc {
+    final ref = this.ref;
+    final abortHandler = _abortHandler;
+    return ImageRecoveryService(
+      ref: ref,
+      charId: arg,
+      setImgGenCancelToken: (t) {
+        abortHandler.imgGenCancelToken = t;
+      },
+      getImgGenCancelToken: () => abortHandler.imgGenCancelToken,
+      startImageOperation: abortHandler.nextGenId,
+      isCurrentGeneration: abortHandler.isCurrentGen,
+      setState: (s) {
+        if (ref.mounted && identical(_abortHandler, abortHandler)) state = s;
+      },
+      getState: () => state,
+    );
+  }
 
   // Controllers
   //
@@ -433,57 +487,72 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     String newContent, {
     String? tagStart,
     String? tagEnd,
-  }) => _messageOpsCtrl.editMessage(
-    index,
-    newContent,
-    tagStart: tagStart,
-    tagEnd: tagEnd,
+  }) => _withForegroundMutation(
+    () => _messageOpsCtrl.editMessage(
+      index,
+      newContent,
+      tagStart: tagStart,
+      tagEnd: tagEnd,
+    ),
   );
 
   Future<void> moveMessage(int fromIndex, int toIndex) =>
-      _messageOpsCtrl.moveMessage(fromIndex, toIndex);
+      _withForegroundMutation(
+        () => _messageOpsCtrl.moveMessage(fromIndex, toIndex),
+      );
 
-  Future<void> deleteMessage(int index) => _messageOpsCtrl.deleteMessage(index);
+  Future<void> deleteMessage(int index) =>
+      _withForegroundMutation(() => _messageOpsCtrl.deleteMessage(index));
 
   Future<void> deleteMessages(Set<int> indices) =>
-      _messageOpsCtrl.deleteMessages(indices);
+      _withForegroundMutation(() => _messageOpsCtrl.deleteMessages(indices));
 
   Future<void> toggleMessageHidden(int index) =>
-      _messageOpsCtrl.toggleMessageHidden(index);
+      _withForegroundMutation(() => _messageOpsCtrl.toggleMessageHidden(index));
 
   Future<void> toggleImageHidden(int index) =>
-      _messageOpsCtrl.toggleImageHidden(index);
+      _withForegroundMutation(() => _messageOpsCtrl.toggleImageHidden(index));
 
-  Future<void> unhideAllMessages() => _messageOpsCtrl.unhideAllMessages();
+  Future<void> unhideAllMessages() =>
+      _withForegroundMutation(_messageOpsCtrl.unhideAllMessages);
 
   Future<void> hideTopMessages(int count) =>
-      _messageOpsCtrl.hideTopMessages(count);
+      _withForegroundMutation(() => _messageOpsCtrl.hideTopMessages(count));
 
-  Future<void> clearChat() => _messageOpsCtrl.clearChat();
+  Future<void> clearChat() =>
+      _withForegroundMutation(_messageOpsCtrl.clearChat);
 
   Future<void> setSwipe(int messageIndex, int swipeId) =>
-      _swipeCtrl.setSwipe(messageIndex, swipeId);
+      _withForegroundMutation(() => _swipeCtrl.setSwipe(messageIndex, swipeId));
 
   Future<void> changeSwipe(
     int messageIndex,
     int dir, {
     bool fromSwipe = false,
-  }) => _swipeCtrl.changeSwipe(messageIndex, dir, fromSwipe: fromSwipe);
+  }) => _withForegroundMutation(
+    () => _swipeCtrl.changeSwipe(messageIndex, dir, fromSwipe: fromSwipe),
+  );
 
   Future<void> changeAgentSwipe(
     int messageIndex,
     int dir, {
     bool fromSwipe = false,
-  }) => _swipeCtrl.changeAgentSwipe(messageIndex, dir, fromSwipe: fromSwipe);
+  }) => _withForegroundMutation(
+    () => _swipeCtrl.changeAgentSwipe(messageIndex, dir, fromSwipe: fromSwipe),
+  );
 
   Future<void> deleteActiveSwipe(int messageIndex) =>
-      _swipeCtrl.deleteActiveSwipe(messageIndex);
+      _withForegroundMutation(() => _swipeCtrl.deleteActiveSwipe(messageIndex));
 
   Future<void> deleteActiveAgentSwipe(int messageIndex) =>
-      _swipeCtrl.deleteActiveAgentSwipe(messageIndex);
+      _withForegroundMutation(
+        () => _swipeCtrl.deleteActiveAgentSwipe(messageIndex),
+      );
 
   Future<void> setGreeting(int messageIndex, int direction) =>
-      _swipeCtrl.setGreeting(messageIndex, direction);
+      _withForegroundMutation(
+        () => _swipeCtrl.setGreeting(messageIndex, direction),
+      );
 
   Future<void> switchSession(int sessionIndex) {
     // The message an impersonation wrote stays in the composer of the chat it
@@ -515,6 +584,10 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   Future<ChatSession?> branchSession(int index) async {
     final buildRef = ref, retired = _sessionBuildRetired;
     if (!buildRef.mounted) return null;
+    final selection = buildRef
+        .read(sessionMutationGateProvider)
+        .trySelection(arg);
+    if (selection == null) return null;
     _sessionChangesInFlight++;
     try {
       final maintenance = buildRef
@@ -541,6 +614,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       return await controller.branchSession(index);
     } finally {
       _sessionChangesInFlight--;
+      selection.release();
     }
   }
 
@@ -552,6 +626,10 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   ) async {
     final buildRef = ref, retired = _sessionBuildRetired;
     if (!buildRef.mounted) return;
+    final selection = buildRef
+        .read(sessionMutationGateProvider)
+        .trySelection(arg);
+    if (selection == null) return;
     _sessionChangesInFlight++;
     try {
       final maintenance = buildRef
@@ -578,6 +656,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       await operation(controller);
     } finally {
       _sessionChangesInFlight--;
+      selection.release();
     }
   }
 
@@ -637,7 +716,30 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     String? guidanceText,
     List<String> imageDataUrls = const [],
     Completer<bool>? durableAcceptance,
+  }) => _withForegroundMutation(
+    () => _sendMessageOwned(
+      text,
+      expectedSessionId: state.value?.session?.id,
+      guidanceText: guidanceText,
+      imageDataUrls: imageDataUrls,
+      durableAcceptance: durableAcceptance,
+    ),
+    onBusy: () {
+      if (durableAcceptance?.isCompleted == false) {
+        durableAcceptance!.complete(false);
+      }
+    },
+  );
+
+  Future<void> _sendMessageOwned(
+    String text, {
+    required String? expectedSessionId,
+    String? guidanceText,
+    List<String> imageDataUrls = const [],
+    Completer<bool>? durableAcceptance,
   }) async {
+    final ref = this.ref;
+    final abortHandler = _abortHandler;
     if (!ref.mounted) {
       durableAcceptance?.complete(false);
       return;
@@ -669,6 +771,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     }
     final current = state.value;
     if (current == null ||
+        current.session?.id != expectedSessionId ||
         current.isGenerating ||
         current.isGeneratingImage ||
         current.isPostGenRunning) {
@@ -681,10 +784,10 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     final sendPendingToken = ++_sendPendingSeq;
     // Stop must own preparation too. Allocating a fresh id in _runGeneration
     // after these awaits would resurrect a send that has already been aborted.
-    final genId = _abortHandler.nextGenId();
+    final genId = abortHandler.nextGenId();
     bool ownsSend() =>
         ref.mounted &&
-        _abortHandler.isCurrentGen(genId) &&
+        abortHandler.isCurrentGen(genId) &&
         state.value?.session?.id == current.session!.id;
 
     try {
@@ -733,7 +836,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       );
 
       // Stop is available during read-only preflight, before persistence too.
-      _abortHandler.clearStreaming();
+      abortHandler.clearStreaming();
       state = AsyncData(current.copyWith(isSendPending: true));
       if (!await _checkContextBudget(
             current.session!.copyWith(messages: [...current.messages, userMsg]),
@@ -786,7 +889,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       // that is a whole durable append later — anything the previous run left
       // behind would be the reply the user just read, shown again under the
       // message they just sent until the first token replaces it.
-      _abortHandler.clearStreaming();
+      abortHandler.clearStreaming();
       state = AsyncData(
         current.copyWith(session: optimisticSession, isSendPending: true),
       );
@@ -824,7 +927,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       ChatSessionService.updateCache(updatedSession);
       _invalidateHistory();
       final afterWrite = state.value;
-      if (!_abortHandler.isCurrentGen(genId)) {
+      if (!abortHandler.isCurrentGen(genId)) {
         // Stop cancels the reply, not the user's append. Finish publishing the
         // durable message without reopening the generation window, but never
         // replace a newer run/session's state.
@@ -884,7 +987,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
           if (talkativeness is num && talkativeness < 1.0) {
             final roll = DateTime.now().microsecond % 100 / 100.0;
             if (roll > talkativeness) {
-              _abortHandler.clearStreaming();
+              abortHandler.clearStreaming();
               state = AsyncData(
                 current.copyWith(session: updatedSession, isGenerating: false),
               );
@@ -927,7 +1030,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       // ownership instead.
       final settled = state.value;
       if (ref.mounted &&
-          _abortHandler.isCurrentGen(genId) &&
+          abortHandler.isCurrentGen(genId) &&
           settled != null &&
           !settled.isGenerating &&
           !settled.isSendPending &&
@@ -1014,11 +1117,13 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     ChatSession session, {
     required int genId,
   }) async {
+    final ref = this.ref;
+    final abortHandler = _abortHandler;
     try {
-      if (!ref.mounted || !_abortHandler.isCurrentGen(genId)) return;
+      if (!ref.mounted || !abortHandler.isCurrentGen(genId)) return;
       final charRepo = ref.read(characterRepoProvider);
       final character = await charRepo.getById(arg);
-      if (!ref.mounted || !_abortHandler.isCurrentGen(genId)) return;
+      if (!ref.mounted || !abortHandler.isCurrentGen(genId)) return;
       if (character == null) return;
       final post = ref.read(extensionPostGenServiceProvider);
       await post.runAfterUserBlocks(
@@ -1035,12 +1140,27 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   }
 
   Future<void> regenerateLastAssistant({String? guidanceText}) async {
+    await _withForegroundMutation(
+      () => _regenerateLastAssistant(
+        guidanceText: guidanceText,
+        expectedSessionId: state.value?.session?.id,
+      ),
+    );
+  }
+
+  Future<void> _regenerateLastAssistant({
+    String? guidanceText,
+    required String? expectedSessionId,
+  }) async {
+    final ref = this.ref;
+    final abortHandler = _abortHandler;
     if (!ref.mounted) return;
     final maintenance = ref
         .read(chatNativeOwnerRegistryProvider)
         .beforeSessionSelection();
     if (maintenance != null) await maintenance;
     if (!ref.mounted) return;
+    if (state.value?.session?.id != expectedSessionId) return;
     if (ref.read(editingMessageIdProvider(arg)) != null) return;
     if (state.value?.isGenerating == true ||
         state.value?.isPostGenRunning == true) {
@@ -1052,6 +1172,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     final current = state.value;
     if (current == null ||
         current.session == null ||
+        current.session!.id != expectedSessionId ||
         current.isGenerating ||
         current.isGeneratingImage ||
         current.isPostGenRunning) {
@@ -1062,7 +1183,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
 
     final lastMsg = current.messages[lastIdx];
 
-    final genId = _abortHandler.nextGenId();
+    final genId = abortHandler.nextGenId();
     final budgetSession = current.session!.copyWith(
       messages: lastMsg.role == 'assistant'
           ? current.messages.take(lastIdx).toList()
@@ -1109,7 +1230,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
 
     final prevAssistant = lastMsg;
     final regenTargetId = prevAssistant.id;
-    _abortHandler.restorationMessage = prevAssistant;
+    abortHandler.restorationMessage = prevAssistant;
 
     // The reply always lands as a *new* variation (`SavedMessageWriter`
     // appends it to `swipes[]`), so open that slot the moment the run starts
@@ -1194,6 +1315,20 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   /// chat). Optional [guidanceText] steers it via the guided-impersonation
   /// wrapper. Mirrors hydall/Glaze `startImpersonation`.
   Future<void> impersonate({String? guidanceText}) async {
+    await _withForegroundMutation(
+      () => _impersonate(
+        guidanceText: guidanceText,
+        expectedSessionId: state.value?.session?.id,
+      ),
+    );
+  }
+
+  Future<void> _impersonate({
+    String? guidanceText,
+    required String? expectedSessionId,
+  }) async {
+    final ref = this.ref;
+    final abortHandler = _abortHandler;
     if (!ref.mounted) return;
     final maintenance = ref
         .read(chatNativeOwnerRegistryProvider)
@@ -1207,6 +1342,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     final current = state.value;
     if (current == null ||
         current.session == null ||
+        current.session!.id != expectedSessionId ||
         current.isGenerating ||
         current.isGeneratingImage ||
         current.isPostGenRunning) {
@@ -1223,12 +1359,12 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     // Impersonation never restores a chat message on abort — clear any stale
     // restoration target left by a prior regenerate so Stop only drops the
     // streamed input text.
-    _abortHandler.restorationMessage = null;
-    final genId = _abortHandler.nextGenId();
+    abortHandler.restorationMessage = null;
+    final genId = abortHandler.nextGenId();
     final service = ImpersonationService(
       ref: ref,
       charId: arg,
-      isAborted: () => !_abortHandler.isCurrentGen(genId),
+      isAborted: () => !abortHandler.isCurrentGen(genId),
     );
 
     final impersonationPrompt = service.resolveImpersonationPrompt(session.id);
@@ -1249,9 +1385,9 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
         impersonationPrompt: impersonationPrompt,
         guidanceText: guidanceText,
         setCancelToken: (token) =>
-            _abortHandler.setCancelToken(token, genId: genId),
+            abortHandler.setCancelToken(token, genId: genId),
         onDelta: (text) {
-          if (!ref.mounted || !_abortHandler.isCurrentGen(genId)) return;
+          if (!ref.mounted || !abortHandler.isCurrentGen(genId)) return;
           ref.read(impersonationStateProvider(arg).notifier).state =
               ImpersonationState(active: true, text: text);
         },
@@ -1269,7 +1405,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
         }
         // Only clear the generating flag if this run still owns the slot; an
         // abort/newer generation already reset it otherwise.
-        if (_abortHandler.isCurrentGen(genId)) {
+        if (abortHandler.isCurrentGen(genId)) {
           final latest = state.value;
           if (latest != null && latest.isGenerating) {
             state = AsyncData(latest.copyWith(isGenerating: false));
@@ -1318,6 +1454,14 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   /// with the continue instruction injected right after the reply being
   /// extended. See `docs/INVARIANTS.md` INV-CM1..INV-CM4.
   Future<void> continueMessage() async {
+    await _withForegroundMutation(
+      () => _continueMessage(state.value?.session?.id),
+    );
+  }
+
+  Future<void> _continueMessage(String? expectedSessionId) async {
+    final ref = this.ref;
+    final abortHandler = _abortHandler;
     if (!ref.mounted) return;
     final maintenance = ref
         .read(chatNativeOwnerRegistryProvider)
@@ -1331,6 +1475,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     final current = state.value;
     if (current == null ||
         current.session == null ||
+        current.session!.id != expectedSessionId ||
         current.isGenerating ||
         current.isGeneratingImage ||
         current.isPostGenRunning) {
@@ -1349,7 +1494,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       return;
     }
 
-    final genId = _abortHandler.nextGenId();
+    final genId = abortHandler.nextGenId();
     if (!await _checkContextBudget(
       current.session!,
       genId: genId,
@@ -1359,7 +1504,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     }
     // Continuation never rolls a message back on abort; drop any restoration
     // snapshot a previous regenerate left behind so Stop cannot re-append it.
-    _abortHandler.restorationMessage = null;
+    abortHandler.restorationMessage = null;
     state = AsyncData(
       current.copyWith(
         isGenerating: true,
@@ -1387,10 +1532,12 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     required int genId,
     String? requiredMessageId,
   }) async {
+    final ref = this.ref;
+    final abortHandler = _abortHandler;
     final initial = state.value;
     bool owns() =>
         ref.mounted &&
-        _abortHandler.isCurrentGen(genId) &&
+        abortHandler.isCurrentGen(genId) &&
         identical(state.value, initial) &&
         state.value?.session?.id == session.id &&
         ref.read(editingMessageIdProvider(arg)) == null;
@@ -1481,6 +1628,10 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
   /// 'cleaned' blue sub-swipe appended to the target message, cleaning the
   /// final (agentSwipes[0]) text. See [GenerationPipeline.rerunCleaner].
   Future<void> rerunCleaner(String messageId) async {
+    await _withForegroundMutation(() => _rerunCleaner(messageId));
+  }
+
+  Future<void> _rerunCleaner(String messageId) async {
     if (!ref.mounted) return;
     final current = state.value;
     if (current == null || current.isGenerating || current.isPostGenRunning) {

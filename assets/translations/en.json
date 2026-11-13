@@ -1,4 +1,12 @@
 {
+  "background_evolution_pending": "Card Evolution queued for background execution",
+  "background_evolution_running": "Card Evolution running in background",
+  "background_evolution_completed": "Card Evolution review preparation completed",
+  "background_evolution_failed": "Card Evolution failed · inspect Agentic Ops",
+  "background_evolution_cancelled": "Card Evolution cancelled",
+  "background_evolution_stale": "Card Evolution stopped: source or settings changed",
+  "background_evolution_cancel": "Cancel this background job",
+  "background_evolution_hide": "Hide status",
   "support_assistant_entry": "Astoria Assistant",
   "support_provider_title": "Provider · native setup",
   "support_provider_permissions": "In Astoria settings → Privacy, explicitly select Connections and enable Read safe settings locally. Settings changes is a separate prerequisite for review, Apply and native key entry. No model or recipient is needed. Opening this prerequisite sheet reads no provider profiles or keys and sends nothing.",

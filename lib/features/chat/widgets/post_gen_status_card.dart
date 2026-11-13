@@ -12,7 +12,8 @@ import 'chat_status_card_shell.dart';
 /// ref. When the owning ref goes away mid-run nobody is left to write the
 /// terminal state and the card would spin forever. The bound is generous on
 /// purpose: an aux call may retry three times against a three-minute timeout,
-/// so anything past this window is a stranded indicator, not slow work.
+/// so the indicator is hidden past this window. This is a presentation timeout,
+/// not proof the work stopped: only its owner may settle the run's state.
 const Duration kPostGenRunningWatchdog = Duration(minutes: 12);
 
 /// Floating card shown at the top of the chat while post-generation tasks
@@ -30,11 +31,14 @@ class PostGenStatusCard extends ConsumerStatefulWidget {
 
 class _PostGenStatusCardState extends ConsumerState<PostGenStatusCard> {
   PostGenTaskPhase? _lastSeenPhase;
-  PostGenTask? _lastSeenTask;
+  Object? _lastSeenRunId;
+  Object? _dismissedRunId;
+  Timer? _autoDismiss;
   Timer? _watchdog;
 
   @override
   void dispose() {
+    _autoDismiss?.cancel();
     _watchdog?.cancel();
     super.dispose();
   }
@@ -48,20 +52,24 @@ class _PostGenStatusCardState extends ConsumerState<PostGenStatusCard> {
         state.task == PostGenTask.none ||
         state.sessionId != widget.sessionId) {
       _lastSeenPhase = null;
-      _lastSeenTask = null;
+      _lastSeenRunId = null;
+      _autoDismiss?.cancel();
+      _autoDismiss = null;
       _watchdog?.cancel();
       _watchdog = null;
       return const SizedBox.shrink();
     }
 
-    // Detect transitions: when either the phase or the task changes we
-    // may need to (re)schedule the auto-dismiss.  Without tracking the
-    // task, completing a second post-gen task while the card still shows the
-    // first task's `done` phase would skip the dismiss timer — leaving the
-    // later completion card stuck.
-    if (_lastSeenPhase != state.phase || _lastSeenTask != state.task) {
+    if (identical(_dismissedRunId, state.runId)) {
+      return const SizedBox.shrink();
+    }
+
+    // A same-task replacement gets its own full deadline. Progress updates keep
+    // the identity and must not restart that deadline.
+    if (_lastSeenPhase != state.phase ||
+        !identical(_lastSeenRunId, state.runId)) {
       _lastSeenPhase = state.phase;
-      _lastSeenTask = state.task;
+      _lastSeenRunId = state.runId;
       if (state.phase == PostGenTaskPhase.done ||
           state.phase == PostGenTaskPhase.error) {
         _scheduleAutoDismiss(state);
@@ -180,7 +188,7 @@ class _PostGenStatusCardState extends ConsumerState<PostGenStatusCard> {
               // Hides the indicator only. The underlying task keeps running and
               // is cancelled from its own control, so this can never leave the
               // pipeline in a half-stopped state.
-              onPressed: _dismissRunning,
+              onPressed: () => _hideStatus(state),
             )
           : null,
     );
@@ -189,44 +197,40 @@ class _PostGenStatusCardState extends ConsumerState<PostGenStatusCard> {
   void _scheduleAutoDismiss(PostGenStatusState expected) {
     _watchdog?.cancel();
     _watchdog = null;
-    Future<void>.delayed(const Duration(milliseconds: 2500), () {
-      if (!mounted) return;
-      final current = ref.read(postGenStatusProvider);
-      if (identical(current, expected)) {
-        ref.read(postGenStatusProvider.notifier).state =
-            const PostGenStatusState.idle();
-      }
-    });
+    _autoDismiss?.cancel();
+    _autoDismiss = Timer(
+      const Duration(milliseconds: 2500),
+      () => _hideStatus(expected),
+    );
   }
 
-  /// Clears a running status that nobody is left to finish.
-  ///
-  /// Compares logically rather than by identity: the stranded state is the very
-  /// object we saw, but an equal-valued replacement is just as stuck, and the
-  /// point of the watchdog is that its owner is already gone.
+  /// Hides a possibly stranded indicator without settling the underlying run.
   void _scheduleWatchdog(PostGenStatusState expected) {
+    _autoDismiss?.cancel();
+    _autoDismiss = null;
     _watchdog?.cancel();
     _watchdog = Timer(kPostGenRunningWatchdog, () {
       if (!mounted) return;
       final current = ref.read(postGenStatusProvider);
-      if (current.phase != PostGenTaskPhase.running ||
-          current.sessionId != expected.sessionId ||
-          current.task != expected.task) {
+      if (!current.isActive || !current.isSameRun(expected)) {
         return;
       }
       debugPrint(
-        '[PostGenStatus] watchdog cleared stranded ${expected.task.name} '
+        '[PostGenStatus] watchdog hid ${expected.task.name} '
         'session=${expected.sessionId}',
       );
-      ref.read(postGenStatusProvider.notifier).state =
-          const PostGenStatusState.idle();
+      _hideStatus(expected);
     });
   }
 
-  void _dismissRunning() {
+  void _hideStatus(PostGenStatusState expected) {
+    if (!mounted) return;
+    final current = ref.read(postGenStatusProvider);
+    if (!current.isSameRun(expected) || current.phase != expected.phase) return;
+    _autoDismiss?.cancel();
+    _autoDismiss = null;
     _watchdog?.cancel();
     _watchdog = null;
-    ref.read(postGenStatusProvider.notifier).state =
-        const PostGenStatusState.idle();
+    setState(() => _dismissedRunId = expected.runId);
   }
 }

@@ -275,14 +275,19 @@ abstract class ChatSession with _$ChatSession {
     @Default({}) Map<String, dynamic> lastScrollAnchor,
   }) = _ChatSession;
 
-  factory ChatSession.fromJson(Map<String, dynamic> json) {
-    final normalized = Map<String, dynamic>.from(json);
-    final updatedAt = normalized['updatedAt'];
-    if (updatedAt is num) {
-      normalized['updatedAt'] = normalizeTimestampSeconds(updatedAt.toInt());
-    }
-    return _$ChatSessionFromJson(normalized);
+  // Freezed discovers JSON support from the expression-bodied factory. Keep
+  // normalization outside it so a clean codegen also emits fromJson/toJson.
+  factory ChatSession.fromJson(Map<String, dynamic> json) =>
+      _$ChatSessionFromJson(_normalizeChatSessionJson(json));
+}
+
+Map<String, dynamic> _normalizeChatSessionJson(Map<String, dynamic> json) {
+  final normalized = Map<String, dynamic>.from(json);
+  final updatedAt = normalized['updatedAt'];
+  if (updatedAt is num) {
+    normalized['updatedAt'] = normalizeTimestampSeconds(updatedAt.toInt());
   }
+  return normalized;
 }
 
 class SessionMetadata {

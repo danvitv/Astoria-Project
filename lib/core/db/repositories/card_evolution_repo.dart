@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../models/character.dart';
 import '../../models/tracker.dart';
+import '../../services/card_rewriter/card_evolution_cadence.dart';
 import '../../services/card_rewriter/card_rewrite_operation_parser.dart';
 import '../../services/card_rewriter/card_evolution_target_policy.dart';
 import '../../services/card_rewriter/card_rewriter_contracts.dart';
@@ -21,9 +22,6 @@ import 'manual_rewrite_job_repo.dart';
 import 'session_lorebook_evolution_repo.dart';
 
 const _maxChatHistoryMessages = 40;
-const _writerCollectorBatchSize = 2;
-const _writerReconciliationRunCount =
-    _writerCollectorBatchSize * collectorReconciliationBatchSize;
 const _maxCanonValueCharacters = 2000;
 const _maxLorebookEntryCharacters = 60000;
 const _maxLorebookTotalCharacters = 600000;
@@ -865,7 +863,7 @@ class CardEvolutionRepo {
   });
 
   /// Records a successful automatic writer cycle that correctly produced no
-  /// operations. This prevents the same three-collector boundary from being
+  /// operations. This prevents the same delivered Collector boundary from being
   /// retried after every subsequent collector while retaining no review job.
   Future<bool> completeEmptyClaim({
     required String claimId,
@@ -1061,8 +1059,7 @@ class CardEvolutionRepo {
       );
     }
     final runIds = await _reconciliationRunIdsForClaim(claim);
-    if (claim.predecessorRunOrdinal > 0 &&
-        runIds.length != _writerReconciliationRunCount) {
+    if (claim.predecessorRunOrdinal > 0 && runIds.isEmpty) {
       return const CardEvolutionSelection.failed(
         CardEvolutionSelectionFailure.collectorRunsUnresolved,
       );
@@ -1117,14 +1114,14 @@ class CardEvolutionRepo {
         );
       }
       if (reconciliationRun == null && reconciliationRunIds.isEmpty) {
-        // Manual runs use the same durable boundary as the automated lane.
+        // Manual runs retain their historical six-reconciliation input window.
         // Never infer a Ledger snapshot from today's mutable transcript tail.
         reconciliationRunIds = validRuns
             .skip(
-              (validRuns.length - _writerReconciliationRunCount).clamp(
-                0,
-                validRuns.length,
-              ),
+              (validRuns.length -
+                      CardEvolutionWriterCadence.manualWindow.collectorCount *
+                          collectorReconciliationBatchSize)
+                  .clamp(0, validRuns.length),
             )
             .map((run) => run.id)
             .toList();
@@ -1534,29 +1531,52 @@ class CardEvolutionRepo {
   Future<List<String>> _reconciliationRunIdsForClaim(
     CardEvolutionClaimRow claim,
   ) async {
-    if (claim.predecessorRunOrdinal <= 0) return const [];
-    final rows =
-        await (db.select(db.cardEvolutionCollectorRuns)
-              ..where((row) => row.sessionId.equals(claim.sessionId))
-              ..where(
-                (row) => row.collectorOrdinal.isBetweenValues(
-                  claim.predecessorRunOrdinal - _writerCollectorBatchSize + 1,
-                  claim.predecessorRunOrdinal,
-                ),
-              )
-              ..where((row) => row.status.equals('completed'))
-              ..orderBy([(row) => OrderingTerm.asc(row.collectorOrdinal)]))
-            .get();
-    if (rows.length != _writerCollectorBatchSize ||
+    // Contract v8 already binds the exact ordered run IDs into inputHash. Infer
+    // the old/new cadence from that saved range, never from today's policy or
+    // ordinal divisibility (the delivered frontier may be historical).
+    List<String>? savedIds;
+    final stored = claim.selectedInputJson;
+    if (stored != null) {
+      try {
+        final root = jsonDecode(stored);
+        final ids = root['limits']['reconciliationRunIds'];
+        if (ids is! List || ids.any((id) => id is! String)) return const [];
+        savedIds = ids.cast<String>();
+      } catch (_) {
+        return const [];
+      }
+    }
+    if (claim.predecessorRunOrdinal <= 0) return savedIds ?? const [];
+    final cadence = savedIds == null
+        ? CardEvolutionWriterCadence.historicalTwoCollectors
+        : CardEvolutionWriterCadence.forSavedRunCount(
+            savedIds.length,
+            reconciliationsPerCollector: collectorReconciliationBatchSize,
+          );
+    if (cadence == null) return const [];
+    final collectorRepo = CardEvolutionCollectorRunRepo(db);
+    final rows = await collectorRepo.completedBoundary(
+      claim.sessionId,
+      claim.predecessorRunOrdinal,
+      count: cadence.collectorCount,
+    );
+    if (rows.length != cadence.collectorCount ||
         rows.last.reconciliationChainHash != claim.predecessorCursorHash) {
       return const [];
     }
-    return [
-      for (final run in await CardEvolutionCollectorRunRepo(
-        db,
-      ).runsForCollectors(claim.sessionId, rows))
+    final runIds = [
+      for (final run in await collectorRepo.runsForCollectors(
+        claim.sessionId,
+        rows,
+      ))
         run.id,
     ];
+    if (runIds.length !=
+            cadence.collectorCount * collectorReconciliationBatchSize ||
+        (savedIds != null && !listEquals(runIds, savedIds))) {
+      return const [];
+    }
+    return runIds;
   }
 
   List<Object?>? _selectReconciliationHistories({

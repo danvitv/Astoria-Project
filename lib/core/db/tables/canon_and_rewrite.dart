@@ -1,5 +1,61 @@
 part of '../tables.dart';
 
+/// Local review-only background work, reserved for one exact committed Ledger
+/// run. Routing contains only nonsecret identifiers/options, never credentials
+/// or prompts. The first reservation's routing snapshot is never replaced.
+@DataClassName('CardEvolutionJobRow')
+@TableIndex(
+  name: 'idx_card_evolution_job_reconciliation',
+  columns: {#reconciliationRunId},
+  unique: true,
+)
+@TableIndex(
+  name: 'idx_card_evolution_job_recoverable',
+  columns: {#status, #availableAt, #leaseUntil},
+)
+@TableIndex(
+  name: 'idx_card_evolution_job_session',
+  columns: {#sessionId, #status, #leaseUntil},
+)
+class CardEvolutionJobs extends Table {
+  @override
+  String get tableName => 'card_evolution_jobs';
+
+  TextColumn get id => text()();
+  TextColumn get sessionId => text().references(
+    ChatSessions,
+    #sessionId,
+    onDelete: KeyAction.cascade,
+  )();
+  TextColumn get characterId => text()();
+  TextColumn get reconciliationRunId => text()();
+  TextColumn get reconciliationChainHash => text()();
+  TextColumn get routingSnapshotJson => text()();
+  TextColumn get routingSnapshotHash => text()();
+  IntColumn get availableAt => integer()();
+  TextColumn get status => text().withDefault(const Constant('pending'))();
+  TextColumn get ownerNonce => text().nullable()();
+  IntColumn get leaseUntil => integer().nullable()();
+  TextColumn get resultDetail => text().nullable()();
+  IntColumn get createdAt => integer()();
+  IntColumn get updatedAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<String> get customConstraints => [
+    "CHECK (id <> '' AND session_id <> '' AND character_id <> '' "
+        "AND reconciliation_run_id <> '' AND reconciliation_chain_hash <> '' "
+        "AND routing_snapshot_json <> '' AND routing_snapshot_hash <> '')",
+    "CHECK (status IN ('pending', 'running', 'completed', 'failed', "
+        "'cancelled', 'stale'))",
+    "CHECK ((status = 'running' AND owner_nonce IS NOT NULL "
+        "AND owner_nonce <> '' AND lease_until IS NOT NULL) OR "
+        "(status <> 'running' AND owner_nonce IS NULL AND lease_until IS NULL))",
+  ];
+}
+
 @DataClassName('CharacterRevisionRow')
 @TableIndex(
   name: 'idx_character_revision_hash',

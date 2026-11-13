@@ -1,4 +1,12 @@
 {
+  "background_evolution_pending": "Card Evolution ожидает фонового запуска",
+  "background_evolution_running": "Card Evolution работает в фоне",
+  "background_evolution_completed": "Подготовка предложений Card Evolution завершена",
+  "background_evolution_failed": "Ошибка Card Evolution · открой Agentic Ops",
+  "background_evolution_cancelled": "Card Evolution отменён",
+  "background_evolution_stale": "Card Evolution остановлен: изменился источник или настройки",
+  "background_evolution_cancel": "Отменить эту фоновую задачу",
+  "background_evolution_hide": "Скрыть статус",
   "support_assistant_entry": "Астория Ассистент",
   "support_provider_title": "Провайдер · нативная настройка",
   "support_provider_permissions": "В настройках Астории → Приватность явно выбери «Подключения» и включи локальное чтение безопасных настроек. Право изменения настроек независимо и нужно для обзора, применения и нативного ввода ключа. Модель и получатель не нужны. Это окно требований не читает профили или ключи и ничего не отправляет.",

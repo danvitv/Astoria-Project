@@ -26,6 +26,7 @@ import '../../../core/services/generation_notification_service.dart';
 import '../../../core/state/active_studio_preset_provider.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../core/state/memory_agent_providers.dart';
+import '../../../core/state/session_mutation_gate.dart';
 import '../../../core/utils/time_helpers.dart';
 import '../../settings/api_list_provider.dart';
 import '../chat_session_service.dart';
@@ -45,6 +46,7 @@ final manualStudioLedgerServiceProvider = Provider<ManualStudioLedgerService>((
       ledgerReconciliationCheckpointRepoProvider,
     ),
     ledger: DefaultStudioLedgerExecutor(ref.watch(studioLedgerServiceProvider)),
+    sessionMutationGate: ref.watch(sessionMutationGateProvider),
     loadApiConfigs: () async {
       await ref.read(apiListProvider.future);
       return ref.read(apiListProvider).value ?? const <ApiConfig>[];
@@ -207,6 +209,7 @@ class ManualStudioLedgerService {
     required this.readPipelineSettings,
     required this.loadActivePresetId,
     required this.acquireForegroundLease,
+    this.sessionMutationGate,
   });
 
   final ChatRepo chatRepo;
@@ -222,11 +225,12 @@ class ManualStudioLedgerService {
   final PipelineSettings Function() readPipelineSettings;
   final Future<String> Function() loadActivePresetId;
   final Future<PostGenerationForegroundLease> Function() acquireForegroundLease;
+  final SessionMutationGate? sessionMutationGate;
 
   Future<ManualStudioLedgerResult> rerun({
     required String sessionId,
     required ChatMessage target,
-  }) async {
+  }) => _withSessionMutation(sessionId, () async {
     final turnConfigFuture = _resolveTurnConfig(sessionId);
     final session = await chatRepo.getById(sessionId);
     if (session == null) throw StateError('Session not found');
@@ -292,7 +296,7 @@ class ManualStudioLedgerService {
       result: result,
       startedAtMs: startedAt,
     );
-  }
+  });
 
   Future<void> _syncGameTimeToMessage(
     String sessionId,
@@ -350,7 +354,7 @@ class ManualStudioLedgerService {
 
   Future<ManualStudioLedgerResult> rerunMissingForReconciliation(
     String sessionId,
-  ) async {
+  ) => _withSessionMutation(sessionId, () async {
     final session = await chatRepo.getById(sessionId);
     if (session == null) throw StateError('Session not found');
     final plan = await _reconciliationPlan(session);
@@ -368,67 +372,68 @@ class ManualStudioLedgerService {
       throw StateError('The reconciliation endpoint is already committed');
     }
     return rerun(sessionId: sessionId, target: endpoint);
-  }
+  });
 
-  Future<ManualStudioLedgerResult> reconcile(String sessionId) async {
-    final turnConfigFuture = _resolveTurnConfig(sessionId);
-    final session = await chatRepo.getById(sessionId);
-    if (session == null) throw StateError('Session not found');
-    final turnConfig = await turnConfigFuture;
-    _requireLedgerEnabled(turnConfig);
-    final plan = await _reconciliationPlan(session);
-    if (plan == null) {
-      throw StateError('No batch of five committed Ledger ranges is due');
-    }
-    final endpoint = plan.endMessage;
-    final endpointSnapshot = await snapshotRepo.getByAnchor(
-      sessionId: sessionId,
-      messageId: endpoint.id,
-      swipeId: endpoint.swipeId,
-      agentSwipeId: endpoint.agentSwipeId,
-    );
-    if (endpointSnapshot?.committed != true) {
-      throw StateError('The reconciliation endpoint is not committed');
-    }
+  Future<ManualStudioLedgerResult> reconcile(String sessionId) =>
+      _withSessionMutation(sessionId, () async {
+        final turnConfigFuture = _resolveTurnConfig(sessionId);
+        final session = await chatRepo.getById(sessionId);
+        if (session == null) throw StateError('Session not found');
+        final turnConfig = await turnConfigFuture;
+        _requireLedgerEnabled(turnConfig);
+        final plan = await _reconciliationPlan(session);
+        if (plan == null) {
+          throw StateError('No batch of five committed Ledger ranges is due');
+        }
+        final endpoint = plan.endMessage;
+        final endpointSnapshot = await snapshotRepo.getByAnchor(
+          sessionId: sessionId,
+          messageId: endpoint.id,
+          swipeId: endpoint.swipeId,
+          agentSwipeId: endpoint.agentSwipeId,
+        );
+        if (endpointSnapshot?.committed != true) {
+          throw StateError('The reconciliation endpoint is not committed');
+        }
 
-    final ledgerConfig = turnConfig.resolveLedgerConfig(
-      errorLabel: 'ledger-reconciliation-manual',
-    );
-    final macroCtx = await _macroContext(
-      sessionId,
-      session.characterId,
-      _personaName(session.messages),
-    );
-    final startedAt = DateTime.now().millisecondsSinceEpoch;
-    final isTargetCurrent = _targetOwnershipGuard(sessionId, endpoint);
-    if (!await isTargetCurrent()) {
-      return _abortedManualResult(endpoint, startedAt);
-    }
-    final result = await _runForeground(
-      () => ledger.reconcile(
-        sessionId: sessionId,
-        turnConfig: turnConfig,
-        config: ledgerConfig,
-        plan: plan,
-        macroCtx: macroCtx,
-        isStillCurrent: isTargetCurrent,
-      ),
-    );
-    if (!await isTargetCurrent()) {
-      return _abortedManualResult(endpoint, startedAt);
-    }
-    await _writeReconciliationDiagnostic(
-      sessionId: sessionId,
-      trigger: endpoint,
-      plan: plan,
-      result: result,
-    );
-    return ManualStudioLedgerResult(
-      target: endpoint,
-      result: result,
-      startedAtMs: startedAt,
-    );
-  }
+        final ledgerConfig = turnConfig.resolveLedgerConfig(
+          errorLabel: 'ledger-reconciliation-manual',
+        );
+        final macroCtx = await _macroContext(
+          sessionId,
+          session.characterId,
+          _personaName(session.messages),
+        );
+        final startedAt = DateTime.now().millisecondsSinceEpoch;
+        final isTargetCurrent = _targetOwnershipGuard(sessionId, endpoint);
+        if (!await isTargetCurrent()) {
+          return _abortedManualResult(endpoint, startedAt);
+        }
+        final result = await _runForeground(
+          () => ledger.reconcile(
+            sessionId: sessionId,
+            turnConfig: turnConfig,
+            config: ledgerConfig,
+            plan: plan,
+            macroCtx: macroCtx,
+            isStillCurrent: isTargetCurrent,
+          ),
+        );
+        if (!await isTargetCurrent()) {
+          return _abortedManualResult(endpoint, startedAt);
+        }
+        await _writeReconciliationDiagnostic(
+          sessionId: sessionId,
+          trigger: endpoint,
+          plan: plan,
+          result: result,
+        );
+        return ManualStudioLedgerResult(
+          target: endpoint,
+          result: result,
+          startedAtMs: startedAt,
+        );
+      });
 
   Future<LedgerReconciliationPlan?> _reconciliationPlan(
     ChatSession session,
@@ -456,7 +461,7 @@ class ManualStudioLedgerService {
   Future<ManualStudioLedgerResult> regenerateLatest({
     required String sessionId,
     required String expectedRunId,
-  }) async {
+  }) => _withSessionMutation(sessionId, () async {
     final turnConfigFuture = _resolveTurnConfig(sessionId);
     final session = await chatRepo.getById(sessionId);
     if (session == null) throw StateError('Session not found');
@@ -515,6 +520,24 @@ class ManualStudioLedgerService {
       result: result,
       startedAtMs: startedAt,
     );
+  });
+
+  Future<T> _withSessionMutation<T>(
+    String sessionId,
+    Future<T> Function() action,
+  ) async {
+    // Claim before preparation, and retain ownership through executor cleanup
+    // and final diagnostics. Nested recovery/rerun claims may share foreground.
+    final gate = sessionMutationGate;
+    final lease = gate?.tryForeground(sessionId);
+    if (gate != null && lease == null) {
+      throw StateError('Session Apply is in progress; manual Ledger is busy');
+    }
+    try {
+      return await action();
+    } finally {
+      lease?.release();
+    }
   }
 
   Future<StudioTurnConfigSnapshot> _resolveTurnConfig(String sessionId) async {

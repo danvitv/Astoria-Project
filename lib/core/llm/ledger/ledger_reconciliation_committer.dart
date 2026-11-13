@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
+import '../../db/app_db.dart';
 import '../../db/repositories/character_knowledge_fact_repo.dart';
 import '../../db/repositories/ledger_reconciliation_checkpoint_repo.dart';
 import '../../db/repositories/ledger_reconciliation_lease_repo.dart';
@@ -35,6 +36,7 @@ final class LedgerReconciliationCommitRequest {
     required this.token,
     required this.isStillCurrent,
     required this.replacement,
+    this.reserveEvolutionJob,
   }) : anchors = plan.messages
            .map(
              (message) => ReconciliationAnchor(
@@ -66,6 +68,11 @@ final class LedgerReconciliationCommitRequest {
   final CancelToken token;
   final FutureOr<bool> Function()? isStillCurrent;
   final LedgerReplacementBasisReady? replacement;
+
+  /// Repository-only reservation on the same database/transaction. Must not
+  /// resolve providers, perform network work, schedule timers or notify a worker.
+  final Future<void> Function(LedgerReconciliationSuccessfulRunRow run)?
+  reserveEvolutionJob;
   final List<ReconciliationAnchor> anchors;
   final Map<String, dynamic> canonicalResult;
   final List<String> intendedOps;
@@ -261,6 +268,16 @@ final class LedgerReconciliationCommitter {
       final append = await _reconciliationRunRepo.appendCandidate(draft);
       if (append is ReconciliationRunIdempotent) {
         replayed = true;
+        if (request.reserveEvolutionJob != null) {
+          final replayedRun = await _reconciliationRunRepo.getByContentHash(
+            request.sessionId,
+            draft.contentHash,
+          );
+          if (replayedRun == null) {
+            throw StateError('Replayed reconciliation run is unavailable');
+          }
+          await _reserveEvolutionJob(request, replayedRun);
+        }
         return;
       }
       if (append is! ReconciliationRunAppended) {
@@ -367,6 +384,7 @@ final class LedgerReconciliationCommitter {
           rangeHash: plan.rangeHash,
         ),
       );
+      await _reserveEvolutionJob(request, appendedRun);
       await _canonAuthority.throwIfCommitStale(
         sessionId: request.sessionId,
         canon: request.canon,
@@ -380,6 +398,29 @@ final class LedgerReconciliationCommitter {
       opsApplied: opsApplied,
       replayed: replayed,
     );
+  }
+
+  Future<void> _reserveEvolutionJob(
+    LedgerReconciliationCommitRequest request,
+    LedgerReconciliationSuccessfulRunRow run,
+  ) async {
+    final reserve = request.reserveEvolutionJob;
+    if (reserve == null) return;
+    await reserve(run);
+    await _canonAuthority.throwIfCommitStale(
+      sessionId: request.sessionId,
+      canon: request.canon,
+      token: request.token,
+      isStillCurrent: request.isStillCurrent,
+      target: LedgerTarget.fromMessage(request.plan.endMessage),
+      checkCanon: false,
+    );
+    if (!await _reconciliationLeaseRepo.ownsLiveLeaseInTransaction(
+      sessionId: request.sessionId,
+      ownerId: request.leaseOwnerId,
+    )) {
+      throw const LedgerCommitStale();
+    }
   }
 
   Future<void> _throwIfReconciliationAborted(

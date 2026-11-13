@@ -53,31 +53,37 @@ final class DurableWriterCallRunner {
     required String? manualCallId,
     required String? manualResponse,
   }) async {
-    final prepared = await _prepareCall(
-      claim: claim,
-      owner: owner,
-      chain: chain,
-      chainIndex: chainIndex,
-      ordinal: ordinal,
-      stage: stage,
-      stageOrdinal: stageOrdinal,
-      prompt: prompt,
-      parentCallId: parentCallId,
-    );
-    if (prepared.failure != null || prepared.call!.status == 'completed') {
-      return prepared;
-    }
-    return _executePreparedCall(
-      claim: claim,
-      owner: owner,
-      model: model,
-      token: token,
-      call: prepared.call!,
-      captureStage: captureStage,
-      manualResponse: manualCallId == prepared.call!.id ? manualResponse : null,
-      parse: (response) =>
-          ParsedWriterCallResult.accepted(jsonEncode({'handoff': response})),
-    );
+    return _runCancellable(claim, owner, token, ordinal, () async {
+      final prepared = await _prepareCall(
+        claim: claim,
+        owner: owner,
+        token: token,
+        chain: chain,
+        chainIndex: chainIndex,
+        ordinal: ordinal,
+        stage: stage,
+        stageOrdinal: stageOrdinal,
+        prompt: prompt,
+        parentCallId: parentCallId,
+      );
+      _checkCancelled(token);
+      if (prepared.failure != null || prepared.call!.status == 'completed') {
+        return prepared;
+      }
+      return _executePreparedCall(
+        claim: claim,
+        owner: owner,
+        model: model,
+        token: token,
+        call: prepared.call!,
+        captureStage: captureStage,
+        manualResponse: manualCallId == prepared.call!.id
+            ? manualResponse
+            : null,
+        parse: (response) =>
+            ParsedWriterCallResult.accepted(jsonEncode({'handoff': response})),
+      );
+    });
   }
 
   Future<DurableWriterCallResult> runOperationCall({
@@ -98,84 +104,91 @@ final class DurableWriterCallRunner {
     required String? manualCallId,
     required String? manualResponse,
   }) async {
-    final prepared = await _prepareCall(
-      claim: claim,
-      owner: owner,
-      chain: chain,
-      chainIndex: chainIndex,
-      ordinal: ordinal,
-      stage: stage,
-      stageOrdinal: 1,
-      prompt: prompt,
-      parentCallId: parentCallId,
-      cardTargetContext: allowedCardFields == null ? null : targetContext,
-    );
-    if (prepared.failure != null) return prepared;
-    if (prepared.call!.status == 'completed') {
-      final decoded = _decodeOperations(prepared.call!.resultJson);
-      if (prepared.call!.parserCode == 'invalidOutput' &&
-          stage == 'card_writer') {
-        return DurableWriterCallResult.completed(prepared.call!);
-      }
-      if (decoded == null) {
-        return failClosed(
-          claim,
-          owner,
-          'checkpointMalformed',
-          'Stored $stage resultJson is malformed',
-        );
-      }
-      return DurableWriterCallResult.completed(prepared.call!, decoded);
-    }
-    return _executePreparedCall(
-      claim: claim,
-      owner: owner,
-      model: model,
-      token: token,
-      call: prepared.call!,
-      captureStage: captureStage,
-      manualResponse: manualCallId == prepared.call!.id ? manualResponse : null,
-      completeRejected: stage == 'card_writer',
-      parse: (response) {
-        final parsed = allowedCardFields == null
-            ? CardRewriteOperationParser.parseLorebookEvolutionBatch(response)
-            : CardRewriteOperationParser.parseEvolutionBatch(
-                response,
-                allowedFields: allowedCardFields,
-              );
-        final detail = parsed == null
-            ? allowedCardFields == null
-                  ? CardRewriteOperationParser.explainLorebookEvolutionBatchFailure(
-                      response,
-                    )
-                  : CardRewriteOperationParser.explainEvolutionBatchFailure(
-                      response,
-                      allowedFields: allowedCardFields,
-                    )
-            : allowedCardFields == null
-            ? null
-            : CardEvolutionTargetPolicy.explainFailure(
-                    parsed.whereType<CardRewriteOperationSnapshot>(),
-                    targetContext,
-                  ) ??
-                  CardRewriteOperationParser.explainEvolutionEvidenceFailure(
-                    parsed.whereType<CardRewriteOperationSnapshot>(),
-                    cardContext,
-                  );
-        if (parsed == null || detail != null) {
-          return ParsedWriterCallResult.rejected(detail ?? 'invalid output');
+    return _runCancellable(claim, owner, token, ordinal, () async {
+      final prepared = await _prepareCall(
+        claim: claim,
+        owner: owner,
+        token: token,
+        chain: chain,
+        chainIndex: chainIndex,
+        ordinal: ordinal,
+        stage: stage,
+        stageOrdinal: 1,
+        prompt: prompt,
+        parentCallId: parentCallId,
+        cardTargetContext: allowedCardFields == null ? null : targetContext,
+      );
+      _checkCancelled(token);
+      if (prepared.failure != null) return prepared;
+      if (prepared.call!.status == 'completed') {
+        final decoded = _decodeOperations(prepared.call!.resultJson);
+        if (prepared.call!.parserCode == 'invalidOutput' &&
+            stage == 'card_writer') {
+          return DurableWriterCallResult.completed(prepared.call!);
         }
-        return ParsedWriterCallResult.accepted(
-          _encodeOperations(parsed),
-          parsed,
-        );
-      },
-    );
+        if (decoded == null) {
+          return failClosed(
+            claim,
+            owner,
+            'checkpointMalformed',
+            'Stored $stage resultJson is malformed',
+          );
+        }
+        return DurableWriterCallResult.completed(prepared.call!, decoded);
+      }
+      return _executePreparedCall(
+        claim: claim,
+        owner: owner,
+        model: model,
+        token: token,
+        call: prepared.call!,
+        captureStage: captureStage,
+        manualResponse: manualCallId == prepared.call!.id
+            ? manualResponse
+            : null,
+        completeRejected: stage == 'card_writer',
+        parse: (response) {
+          final parsed = allowedCardFields == null
+              ? CardRewriteOperationParser.parseLorebookEvolutionBatch(response)
+              : CardRewriteOperationParser.parseEvolutionBatch(
+                  response,
+                  allowedFields: allowedCardFields,
+                );
+          final detail = parsed == null
+              ? allowedCardFields == null
+                    ? CardRewriteOperationParser.explainLorebookEvolutionBatchFailure(
+                        response,
+                      )
+                    : CardRewriteOperationParser.explainEvolutionBatchFailure(
+                        response,
+                        allowedFields: allowedCardFields,
+                      )
+              : allowedCardFields == null
+              ? null
+              : CardEvolutionTargetPolicy.explainFailure(
+                      parsed.whereType<CardRewriteOperationSnapshot>(),
+                      targetContext,
+                    ) ??
+                    CardRewriteOperationParser.explainEvolutionEvidenceFailure(
+                      parsed.whereType<CardRewriteOperationSnapshot>(),
+                      cardContext,
+                    );
+          if (parsed == null || detail != null) {
+            return ParsedWriterCallResult.rejected(detail ?? 'invalid output');
+          }
+          return ParsedWriterCallResult.accepted(
+            _encodeOperations(parsed),
+            parsed,
+          );
+        },
+      );
+    });
   }
 
   Future<DurableWriterCallResult> _prepareCall({
     required CardEvolutionClaim claim,
     required String owner,
+    required CancelToken token,
     required List<CardEvolutionWriterCallRow> chain,
     required int chainIndex,
     required int ordinal,
@@ -185,6 +198,7 @@ final class DurableWriterCallRunner {
     required String? parentCallId,
     String? cardTargetContext,
   }) async {
+    _checkCancelled(token);
     final outcome = await writerCallRepo.prepareNextCall(
       claimId: claim.row.id,
       ownerId: owner,
@@ -195,6 +209,7 @@ final class DurableWriterCallRunner {
       prompt: prompt,
       parentCallId: parentCallId,
     );
+    _checkCancelled(token);
     final call = outcome.row;
     if (call == null) {
       return failClosed(claim, owner, outcome.kind, 'Unable to prepare $stage');
@@ -257,19 +272,23 @@ final class DurableWriterCallRunner {
     String? manualResponse,
     bool completeRejected = false,
   }) async {
+    _checkCancelled(token);
     final now = currentTimestampSeconds();
-    if (!await repo.renewClaimLease(
+    final renewed = await repo.renewClaimLease(
       claimId: claim.row.id,
       ownerId: owner,
       now: now,
       leaseSeconds: leaseSeconds,
-    )) {
+    );
+    _checkCancelled(token);
+    if (!renewed) {
       await markWriterFailure(
         claim,
         owner,
         'leaseLost',
         'Writer lease could not be renewed before ${call.stage}',
       );
+      _checkCancelled(token);
       return const DurableWriterCallResult.failure(
         CardEvolutionFinalizeOutcome('leaseLost'),
       );
@@ -286,6 +305,7 @@ final class DurableWriterCallRunner {
     );
     AuxCallOutcome? outcome;
     final config = manualResponse == null ? await model.resolve() : null;
+    _checkCancelled(token);
     final response =
         manualResponse ??
         (outcome = await executor(
@@ -297,15 +317,14 @@ final class DurableWriterCallRunner {
           cancelToken: token,
           captureContext: context,
         )).text;
+    if (outcome?.status == AgentOperationStatus.aborted) {
+      token.cancel('generationAborted');
+    }
+    _checkCancelled(token);
     if (manualResponse == null) {
       final modelOutcome = outcome!;
-      if (token.isCancelled ||
-          modelOutcome.status == AgentOperationStatus.aborted ||
-          !modelOutcome.isOk ||
-          response == null) {
-        final code = token.isCancelled
-            ? 'cancelled'
-            : '${call.stage}ModelFailed';
+      if (!modelOutcome.isOk || response == null) {
+        final code = '${call.stage}ModelFailed';
         final detail = _modelFailureDetail(modelOutcome);
         await writerCallRepo.failCall(
           id: call.id,
@@ -316,16 +335,19 @@ final class DurableWriterCallRunner {
           detail: detail,
           lastCallId: modelOutcome.selectedCaptureContext?.callId ?? call.id,
         );
+        _checkCancelled(token);
         await diagnostics.saveModelOutcome(
           sessionId: claim.row.sessionId,
           stage: call.stage == 'lorebook_writer' ? 'lorebook' : 'card',
           model: config!.model,
           outcome: modelOutcome,
         );
+        _checkCancelled(token);
         await markWriterFailure(claim, owner, code, detail);
+        _checkCancelled(token);
         return DurableWriterCallResult.failure(
           CardEvolutionFinalizeOutcome(
-            token.isCancelled ? 'cancelled' : _publicModelFailure(call.stage),
+            _publicModelFailure(call.stage),
             null,
             detail,
           ),
@@ -335,6 +357,7 @@ final class DurableWriterCallRunner {
     final responseText = response!;
     final parserContext = outcome?.selectedCaptureContext ?? context;
     final parsed = parse(responseText);
+    _checkCancelled(token);
     await diagnostics.recordWriterParserVerdict(
       context: parserContext,
       accepted: parsed.accepted,
@@ -346,6 +369,7 @@ final class DurableWriterCallRunner {
           ? 'exact_retry'
           : 'model',
     );
+    _checkCancelled(token);
     if (!parsed.accepted && (!completeRejected || manualResponse != null)) {
       await writerCallRepo.failCall(
         id: call.id,
@@ -359,7 +383,9 @@ final class DurableWriterCallRunner {
         parserCode: 'invalidOutput',
         parserDetail: parsed.detail,
       );
+      _checkCancelled(token);
       await markWriterFailure(claim, owner, 'parserRejected', parsed.detail);
+      _checkCancelled(token);
       return DurableWriterCallResult.failure(
         CardEvolutionFinalizeOutcome(
           call.stage == 'lorebook_writer'
@@ -370,22 +396,33 @@ final class DurableWriterCallRunner {
         ),
       );
     }
-    final completed = await writerCallRepo.completeCall(
-      id: call.id,
-      claimId: claim.row.id,
-      ownerId: owner,
-      now: currentTimestampSeconds(),
-      responseText: responseText,
-      resultJson: parsed.resultJson ?? jsonEncode({'rejected': parsed.detail}),
-      source: manualResponse != null
-          ? 'manual_correction'
-          : call.source == 'exact_retry'
-          ? 'exact_retry'
-          : 'model',
-      parserCode: parsed.accepted ? 'accepted' : 'invalidOutput',
-      parserDetail: parsed.detail,
-      lastCallId: parserContext.callId,
-    );
+    // Parsing, model work and diagnostics are already settled. Keep just the
+    // durable completion in this short transaction so a Stop during its await
+    // rolls back the prepared -> completed transition before failure cleanup.
+    final resultJson =
+        parsed.resultJson ?? jsonEncode({'rejected': parsed.detail});
+    final completed = await repo.db.transaction(() async {
+      _checkCancelled(token);
+      final completed = await writerCallRepo.completeCall(
+        id: call.id,
+        claimId: claim.row.id,
+        ownerId: owner,
+        now: currentTimestampSeconds(),
+        responseText: responseText,
+        resultJson: resultJson,
+        source: manualResponse != null
+            ? 'manual_correction'
+            : call.source == 'exact_retry'
+            ? 'exact_retry'
+            : 'model',
+        parserCode: parsed.accepted ? 'accepted' : 'invalidOutput',
+        parserDetail: parsed.detail,
+        lastCallId: parserContext.callId,
+      );
+      _checkCancelled(token);
+      return completed;
+    });
+    _checkCancelled(token);
     if (!completed) {
       return failClosed(
         claim,
@@ -401,9 +438,60 @@ final class DurableWriterCallRunner {
         model: config!.model,
         outcome: outcome,
       );
+      _checkCancelled(token);
     }
     final stored = await writerCallRepo.getById(call.id);
+    _checkCancelled(token);
     return DurableWriterCallResult.completed(stored!, parsed.operations);
+  }
+
+  static void _checkCancelled(CancelToken token) {
+    if (token.isCancelled) throw const _WriterCallCancelled();
+  }
+
+  Future<DurableWriterCallResult> _runCancellable(
+    CardEvolutionClaim claim,
+    String owner,
+    CancelToken token,
+    int ordinal,
+    Future<DurableWriterCallResult> Function() run,
+  ) async {
+    try {
+      _checkCancelled(token);
+      final result = await run();
+      _checkCancelled(token);
+      return result;
+    } catch (error) {
+      if (!token.isCancelled && error is! _WriterCallCancelled) rethrow;
+      // Failure cleanup deliberately runs after cancellation. Repository CAS
+      // still requires the live owner; a previously completed prefix is never
+      // edited or removed, including cancellation after an earlier commit.
+      final chain = await writerCallRepo.readChain(claim.row.id);
+      final call = chain.where((row) => row.ordinal == ordinal).firstOrNull;
+      if (call != null && call.status == 'prepared') {
+        await writerCallRepo.failCall(
+          id: call.id,
+          claimId: claim.row.id,
+          ownerId: owner,
+          now: currentTimestampSeconds(),
+          code: 'cancelled',
+          detail: 'Writer call cancelled before checkpoint acceptance',
+          lastCallId: call.lastCallId,
+          responseText: call.responseText,
+          parserCode: call.parserCode,
+          parserDetail: call.parserDetail,
+        );
+      }
+      await markWriterFailure(
+        claim,
+        owner,
+        'cancelled',
+        'Writer call cancelled',
+      );
+      return const DurableWriterCallResult.failure(
+        CardEvolutionFinalizeOutcome('cancelled'),
+      );
+    }
   }
 
   Future<DurableWriterCallResult> failClosed(
@@ -468,6 +556,10 @@ final class DurableWriterCallRunner {
     final code = last.statusCode == 0 ? '' : ' HTTP ${last.statusCode}';
     return '${attempts.length} attempt(s), ${last.status}$code$compactError';
   }
+}
+
+final class _WriterCallCancelled implements Exception {
+  const _WriterCallCancelled();
 }
 
 final class LazyWriterModel {

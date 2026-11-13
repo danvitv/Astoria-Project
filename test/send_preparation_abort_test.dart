@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:glaze_flutter/core/db/app_db.dart';
+import 'package:glaze_flutter/core/db/repositories/api_config_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/character_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/chat_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/lorebook_use_manifest_repo.dart';
@@ -149,6 +150,8 @@ void main() {
         final container = ProviderContainer(
           overrides: [
             appDbProvider.overrideWithValue(db),
+            // This fixture exercises chat preflight, not OS credential storage.
+            apiConfigRepoProvider.overrideWithValue(ApiConfigRepo(db)),
             characterRepoProvider.overrideWithValue(
               _DelayedCharacter(db, gate),
             ),

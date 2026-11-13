@@ -10,6 +10,8 @@ import 'package:glaze_flutter/core/db/repositories/canon_transition_fact_ref_rep
 import 'package:glaze_flutter/core/db/repositories/card_evolution_observation_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/card_evolution_collector_run_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/card_evolution_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/card_evolution_job_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/card_evolution_selected_input_validator.dart';
 import 'package:glaze_flutter/core/db/repositories/character_knowledge_fact_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/character_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/character_revision_repo.dart';
@@ -34,6 +36,7 @@ import 'package:glaze_flutter/core/services/card_rewriter/automated_card_evoluti
 import 'package:glaze_flutter/core/services/card_rewriter/card_rewriter_contracts.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/effective_canon_read_repository.dart';
 import 'package:glaze_flutter/core/utils/cast_helpers.dart';
+import 'package:glaze_flutter/core/utils/time_helpers.dart';
 
 void main() {
   late _Fixture fixture;
@@ -537,7 +540,7 @@ void main() {
   );
 
   test(
-    'automatic collector runs every third reconciliation and writer every second collector',
+    'automatic collector runs every third reconciliation and writer every fifth collector',
     () async {
       final prompts = <String>[];
       final contexts = <LlmCaptureContext>[];
@@ -547,42 +550,310 @@ void main() {
             ? _ok('{"observations":[]}')
             : _ok('{"operations":[]}');
       }, onCaptureContext: contexts.add);
-      for (var ordinal = 1; ordinal <= 6; ordinal++) {
+      for (var ordinal = 1; ordinal <= 30; ordinal++) {
         final run = await fixture.seedReconciliationRun(ordinal: ordinal);
         final result = await service.runAfterReconciliation(run);
         expect(
           result.kind,
-          ordinal < 6 ? 'collectorCompleted' : 'emptyModelProposal',
+          ordinal % 15 == 0 ? 'emptyModelProposal' : 'collectorCompleted',
+        );
+        expect(
+          prompts.where((value) => value.contains('Astoria card rewriter')),
+          hasLength(ordinal ~/ 15),
         );
       }
       expect(
         prompts.where((value) => value.contains('observation journal keeper')),
-        hasLength(2),
+        hasLength(10),
       );
       expect(
         prompts.where((value) => value.contains('Astoria card rewriter')),
-        hasLength(1),
+        hasLength(2),
       );
       final collectors = await fixture.db
           .select(fixture.db.cardEvolutionCollectorRuns)
           .get();
-      expect(collectors, hasLength(2));
-      expect(collectors.map((run) => run.reconciliationRunOrdinal), [3, 6]);
+      expect(collectors, hasLength(10));
+      expect(collectors.map((run) => run.reconciliationRunOrdinal), [
+        for (var ordinal = 3; ordinal <= 30; ordinal += 3) ordinal,
+      ]);
       expect(collectors.every((run) => run.status == 'completed'), isTrue);
       final claims = await fixture.db
           .select(fixture.db.cardEvolutionClaims)
           .get();
-      expect(claims.single.predecessorRunOrdinal, 2);
-      expect(claims.single.status, 'completed');
-      expect(claims.single.rewriteJobId, isNull);
+      expect(claims.map((claim) => claim.predecessorRunOrdinal), [5, 10]);
+      expect(claims.every((claim) => claim.status == 'completed'), isTrue);
+      expect(claims.every((claim) => claim.rewriteJobId == null), isTrue);
+      for (final claim in claims) {
+        final input = jsonDecode(claim.selectedInputJson!) as Map;
+        final ids = (input['limits'] as Map)['reconciliationRunIds'] as List;
+        final start = claim.predecessorRunOrdinal == 5 ? 1 : 16;
+        expect(ids, [for (var i = start; i < start + 15; i++) 'run-$i']);
+      }
       final collectorContexts = contexts
           .where((context) => context.stage == 'card.collector')
           .toList();
-      expect(collectorContexts.map((context) => context.stageOrdinal), [1, 2]);
+      expect(collectorContexts.map((context) => context.stageOrdinal), [
+        for (var ordinal = 1; ordinal <= 10; ordinal++) ordinal,
+      ]);
       expect(
         collectorContexts.every((context) => context.sessionId == 'session'),
         isTrue,
       );
+    },
+  );
+
+  test(
+    'delayed automatic job neither consumes future runs nor resets their journal',
+    () async {
+      final runs = [
+        for (var ordinal = 1; ordinal <= 18; ordinal++)
+          await fixture.seedReconciliationRun(ordinal: ordinal),
+      ];
+      var collectorCalls = 0;
+      var writerCalls = 0;
+      final service = fixture.service((_, prompt) async {
+        if (prompt.contains('observation journal keeper')) {
+          collectorCalls++;
+          return _ok('{"observations":[]}');
+        }
+        writerCalls++;
+        return _ok('{"operations":[]}');
+      });
+      await service.runAfterReconciliation(runs[2]);
+      expect(collectorCalls, 1);
+      expect(writerCalls, 0);
+      await service.runAfterReconciliation(runs.last);
+      expect(collectorCalls, 6);
+      expect(writerCalls, 1);
+      final journal = await fixture.collectorRepo.readSession('session');
+      expect(journal, hasLength(6));
+      await service.runAfterReconciliation(runs[2]);
+      expect(collectorCalls, 6);
+      expect(writerCalls, 1);
+      expect(
+        (await fixture.collectorRepo.readSession(
+          'session',
+        )).map((row) => row.id),
+        journal.map((row) => row.id),
+      );
+      service.dispose();
+    },
+  );
+
+  test(
+    'durable job cancellation fences collector effects without a local Stop',
+    () async {
+      for (var ordinal = 1; ordinal <= 3; ordinal++) {
+        await fixture.seedReconciliationRun(ordinal: ordinal);
+      }
+      final jobs = CardEvolutionJobRepo(fixture.db);
+      final now = currentTimestampSeconds();
+      final job = await jobs.enqueue(
+        sessionId: 'session',
+        characterId: 'character',
+        reconciliationRunId: 'run-3',
+        routingSnapshotJson: '{}',
+        routingSnapshotHash: 'hash',
+        now: now - 2,
+      );
+      final claimed = (await jobs.claim(
+        id: job.id,
+        now: now,
+        leaseSeconds: 900,
+      ))!;
+      final service = fixture.service(
+        (_, prompt) async {
+          await jobs.cancel(id: job.id, now: now);
+          return _ok(fixture.observationNewOutput);
+        },
+        isCommitCurrent: () =>
+            jobs.isOwned(id: job.id, ownerNonce: claimed.ownerNonce!, now: now),
+      );
+      await service.runAfterReconciliation(
+        (await LedgerReconciliationRunRepo(
+          fixture.db,
+        ).readSession('session')).last,
+      );
+      expect(
+        await fixture.observationRepo.getActiveObservations('session'),
+        isEmpty,
+      );
+      expect(
+        (await fixture.collectorRepo.readSession(
+          'session',
+        )).where((row) => row.status == 'completed'),
+        isEmpty,
+      );
+      expect((await jobs.getById(job.id))!.status, 'cancelled');
+      service.dispose();
+    },
+  );
+
+  for (final empty in [false, true]) {
+    test(
+      'durable cancellation fences ${empty ? 'empty writer boundary' : 'writer proposal'} transaction',
+      () async {
+        for (var ordinal = 1; ordinal <= 15; ordinal++) {
+          await fixture.seedReconciliationRun(ordinal: ordinal);
+        }
+        final jobs = CardEvolutionJobRepo(fixture.db);
+        final now = currentTimestampSeconds();
+        final job = await jobs.enqueue(
+          sessionId: 'session',
+          characterId: 'character',
+          reconciliationRunId: 'run-15',
+          routingSnapshotJson: '{}',
+          routingSnapshotHash: 'hash',
+          now: now - 2,
+        );
+        final claimed = (await jobs.claim(
+          id: job.id,
+          now: now,
+          leaseSeconds: 900,
+        ))!;
+        var writerCalls = 0;
+        final service = fixture.service(
+          (_, prompt) async {
+            if (prompt.contains('observation journal keeper')) {
+              return _ok('{"observations":[]}');
+            }
+            writerCalls++;
+            await jobs.cancel(id: job.id, now: now);
+            return _ok(empty ? '{"operations":[]}' : fixture.cardBatchOutput);
+          },
+          isCommitCurrent: () => jobs.isOwned(
+            id: job.id,
+            ownerNonce: claimed.ownerNonce!,
+            now: now,
+          ),
+        );
+        final result = await service.runAfterReconciliation(
+          (await LedgerReconciliationRunRepo(
+            fixture.db,
+          ).readSession('session')).last,
+        );
+        expect(writerCalls, 1);
+        expect(result.kind, isNot('persisted'));
+        expect(await fixture.db.select(fixture.db.rewriteJobs).get(), isEmpty);
+        expect(
+          await fixture.collectorRepo.latestDeliveredWriterBoundary('session'),
+          0,
+        );
+        expect(
+          (await fixture.collectorRepo.readSession(
+            'session',
+          )).where((row) => row.status == 'completed'),
+          hasLength(5),
+        );
+        service.dispose();
+      },
+    );
+  }
+
+  for (final empty in [false, true]) {
+    test(
+      'local cancellation during final durable check rolls back ${empty ? 'empty boundary' : 'proposal'}',
+      () async {
+        for (var ordinal = 1; ordinal <= 15; ordinal++) {
+          await fixture.seedReconciliationRun(ordinal: ordinal);
+        }
+        var writerResponded = false;
+        var writerChecks = 0;
+        late AutomatedCardEvolutionService service;
+        service = fixture.service(
+          (_, prompt) async {
+            if (prompt.contains('observation journal keeper')) {
+              return _ok('{"observations":[]}');
+            }
+            writerResponded = true;
+            return _ok(empty ? '{"operations":[]}' : fixture.cardBatchOutput);
+          },
+          isCommitCurrent: () async {
+            if (writerResponded && ++writerChecks == 2) {
+              // The final guard runs after staged writes, within their SQLite
+              // transaction. Durable Cancel would queue behind that transaction.
+              if (empty) {
+                expect(
+                  await fixture.collectorRepo.latestDeliveredWriterBoundary(
+                    'session',
+                  ),
+                  5,
+                );
+              } else {
+                expect(
+                  await fixture.db.select(fixture.db.rewriteJobs).get(),
+                  hasLength(1),
+                );
+              }
+              await Future<void>.value();
+              service.cancelSession('session');
+            }
+            return true;
+          },
+        );
+        final result = await service.runAfterReconciliation(
+          (await LedgerReconciliationRunRepo(
+            fixture.db,
+          ).readSession('session')).last,
+        );
+        expect(writerChecks, 2);
+        expect(result.kind, isNot('persisted'));
+        expect(await fixture.db.select(fixture.db.rewriteJobs).get(), isEmpty);
+        expect(
+          await fixture.collectorRepo.latestDeliveredWriterBoundary('session'),
+          0,
+        );
+        expect(
+          (await fixture.collectorRepo.readSession(
+            'session',
+          )).where((row) => row.status == 'completed'),
+          hasLength(5),
+        );
+        service.dispose();
+      },
+    );
+  }
+
+  test(
+    'incompatible journal discovery is read-only, never a session-wide reset',
+    () async {
+      for (var ordinal = 1; ordinal <= 3; ordinal++) {
+        await fixture.seedReconciliationRun(ordinal: ordinal);
+      }
+      final service = fixture.service(
+        (_, _) async => _ok(fixture.observationNewOutput),
+      );
+      await service.runAfterReconciliation(
+        (await LedgerReconciliationRunRepo(
+          fixture.db,
+        ).readSession('session')).last,
+      );
+      final before = await fixture.collectorRepo.readSession('session');
+      final observations = await fixture.observationRepo.getActiveObservations(
+        'session',
+      );
+      expect(observations, isNotEmpty);
+      await fixture.db.customStatement(
+        "UPDATE card_evolution_collector_runs SET range_hash = 'incompatible' WHERE session_id = 'session'",
+      );
+      await expectLater(
+        fixture.collectorRepo.pendingValidPairs('session'),
+        throwsStateError,
+      );
+      expect(
+        (await fixture.collectorRepo.readSession(
+          'session',
+        )).map((row) => row.id),
+        before.map((row) => row.id),
+      );
+      expect(
+        (await fixture.observationRepo.getActiveObservations(
+          'session',
+        )).map((row) => row.id),
+        observations.map((row) => row.id),
+      );
+      service.dispose();
     },
   );
 
@@ -610,6 +881,182 @@ void main() {
         .get();
     expect(collectors, hasLength(1));
     expect(collectors.single.status, 'completed');
+  });
+
+  test(
+    'historical delivered boundary waits for five new collectors across restart',
+    () async {
+      final historical = await fixture.seedHistoricalWriterClaim();
+      expect(
+        await fixture.repo.completeEmptyClaim(
+          claimId: historical.row.id,
+          ownerId: 'historical-owner',
+          now: 11,
+        ),
+        isTrue,
+      );
+      var writerCalls = 0;
+      Future<AuxCallOutcome> execute(CancelToken? _, String prompt) async {
+        if (prompt.contains('observation journal keeper')) {
+          return _ok('{"observations":[]}');
+        }
+        writerCalls++;
+        return _ok('{"operations":[]}');
+      }
+
+      var service = fixture.service(execute);
+      for (var ordinal = 7; ordinal <= 21; ordinal++) {
+        if (ordinal == 13) {
+          service.dispose();
+          service = fixture.service(execute);
+        }
+        final outcome = await service.runAfterReconciliation(
+          await fixture.seedReconciliationRun(ordinal: ordinal),
+        );
+        expect(
+          outcome.kind,
+          ordinal < 21 ? 'collectorCompleted' : 'emptyModelProposal',
+        );
+        expect(writerCalls, ordinal < 21 ? 0 : 1);
+      }
+      final claims = await fixture.db
+          .select(fixture.db.cardEvolutionClaims)
+          .get();
+      expect(claims.map((claim) => claim.predecessorRunOrdinal), [2, 7]);
+      expect(claims.first.selectedInputJson, historical.selectedInputJson);
+      final input = jsonDecode(claims.last.selectedInputJson!) as Map;
+      expect((input['limits'] as Map)['reconciliationRunIds'], [
+        for (var ordinal = 7; ordinal <= 21; ordinal++) 'run-$ordinal',
+      ]);
+      expect(
+        await fixture.collectorRepo.latestDeliveredWriterBoundary('session'),
+        7,
+      );
+      service.dispose();
+      final restarted = fixture.service(execute);
+      expect(
+        (await restarted.runPendingCollectors('session')).kind,
+        'collectorUpToDate',
+      );
+      expect(writerCalls, 1);
+      expect(await fixture.collectorRepo.readSession('session'), hasLength(7));
+      restarted.dispose();
+    },
+  );
+
+  test(
+    'historical two-collector failed claim recovers exact input after restart',
+    () async {
+      final historical = await fixture.seedHistoricalWriterClaim();
+      expect(
+        await fixture.repo.markWriterFailed(
+          claimId: historical.row.id,
+          ownerId: 'historical-owner',
+          now: 11,
+          code: 'cardWriterFailed',
+        ),
+        isTrue,
+      );
+      final collectorService = fixture.service(
+        (_, _) async => _ok('{"observations":[]}'),
+      );
+      for (var ordinal = 7; ordinal <= 9; ordinal++) {
+        await collectorService.runAfterReconciliation(
+          await fixture.seedReconciliationRun(ordinal: ordinal),
+        );
+      }
+      collectorService.dispose();
+
+      // The new automatic lane must not discard an old reproducible claim.
+      final blocked = await fixture.repo.claim(
+        sessionId: 'session',
+        ownerId: 'new-automatic-owner',
+        now: 12,
+        leaseSeconds: 60,
+      );
+      expect(blocked.kind, 'failed', reason: blocked.detail);
+      expect(blocked.claim?.selectedInputJson, historical.selectedInputJson);
+      var writerCalls = 0;
+      final restarted = fixture.service((_, _) async {
+        writerCalls++;
+        return _ok(fixture.cardBatchOutput);
+      });
+      final outcome = await restarted.resumeFailedWriter(historical.row.id);
+      expect(outcome.kind, 'persisted', reason: outcome.detail);
+      expect(writerCalls, 1);
+      final recovered = (await fixture.repo.getClaimById(historical.row.id))!;
+      expect(recovered.selectedInputJson, historical.selectedInputJson);
+      expect(recovered.inputHash, historical.row.inputHash);
+      expect(recovered.predecessorRunOrdinal, 2);
+      final proposal = await fixture.db
+          .select(fixture.db.cardEvolutionProposalRuns)
+          .getSingle();
+      expect(proposal.selectedInputJson, historical.selectedInputJson);
+      final session = await fixture.db
+          .select(fixture.db.chatSessions)
+          .getSingle();
+      expect(
+        CardEvolutionSelectedChatEvidence.tryParse(
+          proposal.selectedInputJson,
+        )!.validatesProposal(
+          proposal,
+          jobId: outcome.job!.id,
+          sessionId: 'session',
+          characterId: 'character',
+          messagesJson: session.messagesJson,
+        ),
+        isTrue,
+      );
+      restarted.dispose();
+    },
+  );
+
+  for (final mutation in [
+    "DELETE FROM card_evolution_collector_runs WHERE collector_ordinal = 1",
+    "UPDATE card_evolution_collector_runs SET range_hash = 'changed' WHERE collector_ordinal = 1",
+    "UPDATE card_evolution_collector_runs SET reconciliation_chain_hash = 'changed' WHERE collector_ordinal = 2",
+  ]) {
+    test(
+      'historical cadence still rejects unresolved evidence: $mutation',
+      () async {
+        final historical = await fixture.seedHistoricalWriterClaim();
+        await fixture.db.customStatement(mutation);
+        final snapshot = await fixture.repo.readPromptSnapshotOutcome(
+          claimId: historical.row.id,
+          ownerId: 'historical-owner',
+          now: 11,
+        );
+        expect(snapshot.snapshot, isNull);
+        expect(snapshot.reason, 'collectorRunsUnresolved');
+        expect(
+          (await fixture.repo.getClaimById(
+            historical.row.id,
+          ))!.selectedInputJson,
+          historical.selectedInputJson,
+        );
+      },
+    );
+  }
+
+  test('saved automatic run IDs must match the exact ordered batch', () async {
+    final historical = await fixture.seedHistoricalWriterClaim();
+    final input = jsonDecode(historical.selectedInputJson) as Map;
+    final limits = input['limits'] as Map;
+    final ids = limits['reconciliationRunIds'] as List;
+    limits['reconciliationRunIds'] = ids.reversed.toList();
+    final changed = jsonEncode(input);
+    await fixture.db.customStatement(
+      'UPDATE card_evolution_claims SET selected_input_json = ?, input_hash = ? '
+      'WHERE id = ?',
+      [changed, computeHash(changed), historical.row.id],
+    );
+    final snapshot = await fixture.repo.readPromptSnapshotOutcome(
+      claimId: historical.row.id,
+      ownerId: 'historical-owner',
+      now: 11,
+    );
+    expect(snapshot.snapshot, isNull);
+    expect(snapshot.reason, 'collectorRunsUnresolved');
   });
 
   test('Collector uses the Studio Ledger API and response budget', () async {
@@ -755,7 +1202,7 @@ void main() {
       return _ok('{"operations":[]}');
     });
     CardEvolutionFinalizeOutcome? outcome;
-    for (var ordinal = 1; ordinal <= 6; ordinal++) {
+    for (var ordinal = 1; ordinal <= 15; ordinal++) {
       outcome = await service.runAfterReconciliation(
         await fixture.seedReconciliationRun(
           ordinal: ordinal,
@@ -796,7 +1243,7 @@ void main() {
       writerCalls++;
       return _ok(writerCalls == 1 ? 'invalid' : '{"operations":[]}');
     });
-    for (final ordinal in [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]) {
+    for (var ordinal = 10; ordinal <= 300; ordinal += 10) {
       await service.runAfterReconciliation(
         await fixture.seedReconciliationRun(ordinal: ordinal),
       );
@@ -804,11 +1251,11 @@ void main() {
     expect(writerCalls, 3);
     final claim = await (fixture.db.select(
       fixture.db.cardEvolutionClaims,
-    )..where((row) => row.predecessorRunOrdinal.equals(4))).getSingle();
-    expect(claim.predecessorRunOrdinal, 4);
+    )..where((row) => row.predecessorRunOrdinal.equals(10))).getSingle();
+    expect(claim.predecessorRunOrdinal, 10);
     final boundary = await (fixture.db.select(
       fixture.db.cardEvolutionCollectorRuns,
-    )..where((row) => row.collectorOrdinal.equals(4))).getSingle();
+    )..where((row) => row.collectorOrdinal.equals(10))).getSingle();
     expect(claim.predecessorCursorHash, boundary.reconciliationChainHash);
   });
 
@@ -1108,31 +1555,31 @@ void main() {
           ? _ok('{"observations":[]}')
           : _ok('{"operations":[]}'),
     );
-    for (final ordinal in [1, 2, 3, 4, 5, 6]) {
+    for (var ordinal = 1; ordinal <= 15; ordinal++) {
       final result = await service.runAfterReconciliation(
         await fixture.seedReconciliationRun(ordinal: ordinal),
       );
       expect(
         result.kind,
-        ordinal < 6 ? 'collectorCompleted' : 'emptyModelProposal',
+        ordinal < 15 ? 'collectorCompleted' : 'emptyModelProposal',
       );
     }
     await service.runAfterReconciliation(
-      await fixture.seedReconciliationRun(ordinal: 7),
+      await fixture.seedReconciliationRun(ordinal: 16),
     );
     final result = await service.runAfterReconciliation(
-      await fixture.seedReconciliationRun(ordinal: 8),
+      await fixture.seedReconciliationRun(ordinal: 17),
     );
     expect(result.kind, 'collectorCompleted');
     final completed = await service.runAfterReconciliation(
-      await fixture.seedReconciliationRun(ordinal: 9),
+      await fixture.seedReconciliationRun(ordinal: 18),
     );
     expect(completed.kind, 'collectorCompleted');
     final claims = await fixture.db
         .select(fixture.db.cardEvolutionClaims)
         .get();
     expect(claims, hasLength(1));
-    expect(claims.single.predecessorRunOrdinal, 2);
+    expect(claims.single.predecessorRunOrdinal, 5);
   });
 
   test('primary current groups survive retrieval target extras cap', () async {
@@ -1501,6 +1948,44 @@ final class _Fixture {
     return (await collectorRepo.getById(row.id))!;
   }
 
+  Future<CardEvolutionClaim> seedHistoricalWriterClaim() async {
+    final collectorService = service(
+      (_, _) async => _ok('{"observations":[]}'),
+    );
+    for (var ordinal = 1; ordinal <= 6; ordinal++) {
+      await collectorService.runAfterReconciliation(
+        await seedReconciliationRun(ordinal: ordinal),
+      );
+    }
+    collectorService.dispose();
+    final collectors = await collectorRepo.completedBoundary(
+      'session',
+      2,
+      count: 2,
+    );
+    final runs = await collectorRepo.runsForCollectors('session', collectors);
+    final claimed = await repo.claim(
+      sessionId: 'session',
+      ownerId: 'historical-owner',
+      now: 10,
+      leaseSeconds: 60,
+      throughCollectorOrdinal: 2,
+      collectorBoundaryHash: collectors.last.reconciliationChainHash,
+      reconciliationRunIds: [for (final run in runs) run.id],
+      writerOptionsJson: '{"lorebookEnabled":false}',
+    );
+    expect(claimed.kind, 'claimed', reason: claimed.detail);
+    expect(
+      (await repo.readPromptSnapshotOutcome(
+        claimId: claimed.claim!.row.id,
+        ownerId: 'historical-owner',
+        now: 10,
+      )).snapshot,
+      isNotNull,
+    );
+    return claimed.claim!;
+  }
+
   Future<LedgerReconciliationSuccessfulRunRow> seedReconciliationRun({
     required int ordinal,
     List<Map<String, String>> messages = _messages,
@@ -1634,8 +2119,10 @@ final class _Fixture {
     int Function()? observationExpiryRuns,
     void Function(LlmCaptureContext context)? onCaptureContext,
     void Function(AuxApiConfig config, int maxTokens)? onRequest,
+    Future<bool> Function()? isCommitCurrent,
   }) => AutomatedCardEvolutionService(
     repo: repo,
+    isCommitCurrent: isCommitCurrent,
     observationRepo: observationRepo,
     collectorRunRepo: collectorRepo,
     requestCaptureRepo: captureRepo,

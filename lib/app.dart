@@ -25,6 +25,7 @@ import 'features/chat_history/chat_history_provider.dart';
 import 'features/settings/api_list_provider.dart';
 import 'features/settings/app_settings_provider.dart';
 import 'features/memory/state/memory_consolidation_worker_provider.dart';
+import 'core/state/card_evolution_worker_provider.dart';
 import 'features/catalog/services/datacat_provider.dart';
 import 'shared/widgets/desktop_popup.dart';
 import 'shared/theme/theme_font_provider.dart';
@@ -257,6 +258,8 @@ class _GlazeAppState extends ConsumerState<GlazeApp>
     await _activeSelectionsReady;
     if (!mounted) return;
     await ref.read(memoryConsolidationWorkerProvider).recoverAndDrain();
+    if (!mounted) return;
+    await ref.read(cardEvolutionBackgroundProvider).recoverAndDrain();
   }
 
   void _listenNotificationNavigation() {

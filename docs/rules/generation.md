@@ -110,8 +110,19 @@ this durable settlement completes. See INV-C3 in `docs/INVARIANTS.md`.
 ## State cleanup on every exit path
 
 `ChatState.isGenerating` must return to `false` on: completion, error, abort, app
-restart (`ChatNotifier.build()` fresh state). `ChatNotifier` uses `ref.keepAlive()` —
-provider disposal is not a cleanup path.
+restart (`ChatNotifier.build()` fresh state). `ChatNotifier` uses `ref.keepAlive()`:
+ordinary navigation does not stop a run. Explicit invalidation/container disposal
+does retire the build's concrete `AbortHandler`: synchronous token-only cleanup
+invalidates its callbacks and cancels its owned transports without touching Ref,
+UI state, or starting DB writes. User Stop remains the durable settlement path.
+Never reuse a retired handler in a replacement build.
+
+Rewrite Apply and foreground chat/manual Ledger operations claim the app-scoped
+`SessionMutationGate` before preparation awaits. Apply is exclusive against those
+claims for the same session and retires affected loaded chat/cache owners before
+releasing its claim. Do not hold a DB transaction while waiting for foreground
+network work; report `sessionBusy` instead. The in-process gate complements, not
+replaces, transactional canon/source/version checks.
 
 ---
 

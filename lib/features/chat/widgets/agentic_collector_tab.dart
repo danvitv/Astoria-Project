@@ -33,8 +33,8 @@ class _AgenticCollectorTabState extends ConsumerState<AgenticCollectorTab> {
 
   AgentOpsJobsNotifier get _jobs => ref.read(agentOpsJobsProvider.notifier);
 
-  /// Read rather than watched: `build` watches the set once, which is what
-  /// rebuilds these.
+  /// Callbacks read the current flags; `build` subscribes only to this session's
+  /// pending/recovery flags rather than every job in the app.
   bool get _runningPending => _jobs.isRunning(_pendingKey);
   bool get _recovering => _jobs.isAnyRunning(
     AgentOpsJobKeys.collectorRecoveryScope(widget.sessionId),
@@ -194,9 +194,18 @@ class _AgenticCollectorTabState extends ConsumerState<AgenticCollectorTab> {
 
   @override
   Widget build(BuildContext context) {
-    // Subscribes this tab to the running-jobs set; the `_running…` getters
-    // above read it.
-    ref.watch(agentOpsJobsProvider);
+    ref.watch(
+      agentOpsJobsProvider.select(
+        (jobs) => (
+          jobs.contains(_pendingKey),
+          jobs.any(
+            (key) => key.startsWith(
+              AgentOpsJobKeys.collectorRecoveryScope(widget.sessionId),
+            ),
+          ),
+        ),
+      ),
+    );
     final snapshot = ref.watch(collectorViewProvider(widget.sessionId));
     return snapshot.when(
       loading: () => const Center(child: GlazeSpinner()),
@@ -326,7 +335,7 @@ class _AgenticCollectorTabState extends ConsumerState<AgenticCollectorTab> {
                     title: Text(_collectorRunLabel(run)),
                     subtitle: Text(_collectorStatusLabel(run.row.status)),
                     childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-                    children: [
+                    childrenBuilder: (context) => [
                       _Detail(
                         label: 'agent_ops_run_id'.tr(),
                         value: run.row.id,
@@ -495,7 +504,7 @@ class _ObservationTile extends StatelessWidget {
           ),
         ),
         childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        children: [
+        childrenBuilder: (context) => [
           _Detail(
             label: 'agent_ops_scope'.tr(),
             value: observation.semanticScopeKey,

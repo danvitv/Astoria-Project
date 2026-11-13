@@ -151,13 +151,15 @@ void main() {
     await tester.tap(find.byIcon(Icons.close));
     await tester.pump();
 
-    // A stage whose ref went away can no longer clear the badge, so the user
-    // must be able to. The pipeline keeps running; only the indicator goes.
-    expect(container.read(postGenStatusProvider).phase, PostGenTaskPhase.idle);
+    // Hiding presentation is not evidence that the operation stopped.
+    expect(
+      container.read(postGenStatusProvider).phase,
+      PostGenTaskPhase.running,
+    );
     expect(find.text('Ledger running...'), findsNothing);
   });
 
-  testWidgets('a stranded running badge is cleared by the watchdog', (
+  testWidgets('a stranded running badge is hidden by the watchdog', (
     tester,
   ) async {
     final container = ProviderContainer();
@@ -182,7 +184,10 @@ void main() {
     await tester.pump(kPostGenRunningWatchdog + const Duration(seconds: 1));
     await tester.pump();
 
-    expect(container.read(postGenStatusProvider).phase, PostGenTaskPhase.idle);
+    expect(
+      container.read(postGenStatusProvider).phase,
+      PostGenTaskPhase.running,
+    );
     expect(find.text('Ledger running...'), findsNothing);
   });
 
@@ -225,5 +230,108 @@ void main() {
 
     // Drain the rescheduled timer so the test does not end with one pending.
     await tester.pump(kPostGenRunningWatchdog);
+  });
+
+  testWidgets('same-task replacement gets a fresh watchdog deadline', (
+    tester,
+  ) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final status = container.read(postGenStatusProvider.notifier);
+    final old = status.startRun(
+      sessionId: 'session-1',
+      task: PostGenTask.ledger,
+    );
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: PostGenStatusCard(sessionId: 'session-1')),
+        ),
+      ),
+    );
+
+    await tester.pump(kPostGenRunningWatchdog - const Duration(seconds: 1));
+    final newer = status.startRun(
+      sessionId: 'session-1',
+      task: PostGenTask.ledger,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5));
+
+    expect(status.finishRun(old), isFalse);
+    expect(status.clearRun(old), isFalse);
+    expect(status.state.isSameRun(newer), isTrue);
+    expect(find.text('Ledger running...'), findsOneWidget);
+    await tester.pump(kPostGenRunningWatchdog);
+    expect(find.text('Ledger running...'), findsNothing);
+    expect(status.ownsRun(newer), isTrue);
+  });
+
+  testWidgets('dismissed progress stays hidden without losing completion', (
+    tester,
+  ) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final status = container.read(postGenStatusProvider.notifier);
+    final run = status.startRun(
+      sessionId: 'session-1',
+      task: PostGenTask.ledger,
+    );
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: PostGenStatusCard(sessionId: 'session-1')),
+        ),
+      ),
+    );
+    await tester.tap(find.byIcon(Icons.close));
+    await tester.pump();
+    expect(status.updateRunDetail(run, 'retry'), isTrue);
+    await tester.pump();
+    expect(find.byType(GlazeSpinner), findsNothing);
+    expect(status.finishRun(run, detail: 'finished'), isTrue);
+    await tester.pump();
+    expect(status.state.isDone, isTrue);
+    expect(find.text('finished'), findsNothing);
+
+    status.startRun(sessionId: 'session-1', task: PostGenTask.ledger);
+    await tester.pump();
+    expect(find.text('Ledger running...'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('old terminal auto-dismiss cannot hide a newer same-task run', (
+    tester,
+  ) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final status = container.read(postGenStatusProvider.notifier);
+    final old = status.startRun(
+      sessionId: 'session-1',
+      task: PostGenTask.ledger,
+    );
+    status.finishRun(old);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: PostGenStatusCard(sessionId: 'session-1')),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(seconds: 2));
+    final newer = status.startRun(
+      sessionId: 'session-1',
+      task: PostGenTask.ledger,
+    );
+    status.finishRun(newer, detail: 'new completion');
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('new completion'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text('new completion'), findsNothing);
+    expect(status.state.isDone, isTrue);
   });
 }

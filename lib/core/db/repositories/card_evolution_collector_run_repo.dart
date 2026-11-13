@@ -339,9 +339,22 @@ class CardEvolutionCollectorRunRepo {
   Future<List<CardEvolutionCollectorBatch>> pendingValidPairs(
     String sessionId, {
     LedgerReconciliationSuccessfulRunRow? currentRun,
-  }) async {
+  }) => db.transaction(() async {
     final runs = await _validOrLegacyRuns(sessionId, currentRun: currentRun);
-    var collectors = await (db.select(
+    // Delayed jobs retain their exact committed source boundary. Validate the
+    // journal against the WHOLE logical chain below (so later valid collectors
+    // are not mistaken for corruption), but never process later batches here.
+    final sourceIndex = currentRun == null
+        ? runs.length - 1
+        : runs.indexWhere(
+            (run) =>
+                run.id == currentRun.id &&
+                run.chainHash == currentRun.chainHash &&
+                run.sessionId == sessionId,
+          );
+    if (currentRun != null && sourceIndex < 0) return const [];
+    final eligibleRunCount = sourceIndex + 1;
+    final collectors = await (db.select(
       db.cardEvolutionCollectorRuns,
     )..where((row) => row.sessionId.equals(sessionId))).get();
     final expectedBatches = <String, CardEvolutionCollectorBatch>{};
@@ -360,17 +373,12 @@ class CardEvolutionCollectorRunRepo {
       return batch == null || collector.rangeHash != batch.rangeHash;
     });
     if (incompatibleJournal) {
-      // A journal from another cadence cannot prove the current batch ranges.
-      // Rebuild it and its aggregate effects conservatively.
-      await db.transaction(() async {
-        await (db.delete(
-          db.cardEvolutionCollectorRuns,
-        )..where((row) => row.sessionId.equals(sessionId))).go();
-        await (db.delete(
-          db.cardEvolutionObservations,
-        )..where((row) => row.sessionId.equals(sessionId))).go();
-      });
-      collectors = const [];
+      // Discovery is read-only. Never erase accepted observations/journal rows
+      // as a side effect of a delayed or cancelled job. An incompatible journal
+      // needs an explicit repair policy, not an automatic session-wide reset.
+      throw StateError(
+        'Collector journal is incompatible with the logical reconciliation chain; explicit recovery required',
+      );
     }
     final completedByBoundary = {
       for (final row in collectors)
@@ -379,7 +387,7 @@ class CardEvolutionCollectorRunRepo {
     final batches = <CardEvolutionCollectorBatch>[];
     for (
       var index = 0;
-      index + collectorReconciliationBatchSize <= runs.length;
+      index + collectorReconciliationBatchSize <= eligibleRunCount;
       index += collectorReconciliationBatchSize
     ) {
       final batch = CardEvolutionCollectorBatch(
@@ -392,7 +400,7 @@ class CardEvolutionCollectorRunRepo {
       }
     }
     return batches;
-  }
+  });
 
   /// Valid reconciliation batches that can be started from the Collector UI.
   /// Failed and live in-flight rows use their dedicated recovery paths.
@@ -535,19 +543,19 @@ class CardEvolutionCollectorRunRepo {
       batchByBoundaryOrdinal[batch.boundary.ordinal] = batch;
     }
     final branchCollectorByOrdinal = {
-      for (final row in await (db.select(db.cardEvolutionCollectorRuns)
-            ..where((row) => row.sessionId.equals(toSessionId)))
-          .get())
+      for (final row in await (db.select(
+        db.cardEvolutionCollectorRuns,
+      )..where((row) => row.sessionId.equals(toSessionId))).get())
         row.collectorOrdinal: row,
     };
     final boundaryBySourceOrdinal = <int, CardEvolutionCollectorRunRow>{};
-    final sourceCollectors = await (db.select(db.cardEvolutionCollectorRuns)
-          ..where((row) => row.sessionId.equals(fromSessionId)))
-        .get();
+    final sourceCollectors = await (db.select(
+      db.cardEvolutionCollectorRuns,
+    )..where((row) => row.sessionId.equals(fromSessionId))).get();
     for (final source in sourceCollectors) {
       if (source.status != 'completed') continue;
-      final boundaryRun = transfer.branchRunBySourceId[
-          source.reconciliationRunId];
+      final boundaryRun =
+          transfer.branchRunBySourceId[source.reconciliationRunId];
       if (boundaryRun == null) continue;
       final batch = batchByBoundaryOrdinal[boundaryRun.ordinal];
       if (batch == null ||
@@ -596,12 +604,11 @@ class CardEvolutionCollectorRunRepo {
               completedAt: Value(source.completedAt),
             ),
           );
-      boundaryBySourceOrdinal[source.collectorOrdinal] =
-          (await getById(id))!;
+      boundaryBySourceOrdinal[source.collectorOrdinal] = (await getById(id))!;
     }
-    final sourceClaims = await (db.select(db.cardEvolutionClaims)
-          ..where((row) => row.sessionId.equals(fromSessionId)))
-        .get();
+    final sourceClaims = await (db.select(
+      db.cardEvolutionClaims,
+    )..where((row) => row.sessionId.equals(fromSessionId))).get();
     for (final source in sourceClaims) {
       if (source.status != 'completed' || source.predecessorRunOrdinal <= 0) {
         continue;
