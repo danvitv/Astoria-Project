@@ -16,10 +16,10 @@ import 'chat_status_card_shell.dart';
 /// not proof the work stopped: only its owner may settle the run's state.
 const Duration kPostGenRunningWatchdog = Duration(minutes: 12);
 
-/// Floating card shown at the top of the chat while post-generation tasks
+/// Compact row in the composer status panel while post-generation tasks
 /// (Ledger, Card Rewriter, and extension blocks) are running. Auto-dismisses
 /// 2.5s after the last task completes, and can always be dismissed by hand
-/// while running so a stranded indicator never blocks the chat header.
+/// while running so a stranded indicator need not occupy the status panel.
 class PostGenStatusCard extends ConsumerStatefulWidget {
   const PostGenStatusCard({super.key, required this.sessionId});
 

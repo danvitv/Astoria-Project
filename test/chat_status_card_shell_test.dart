@@ -2,25 +2,29 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:glaze_flutter/features/chat/widgets/chat_status_card_shell.dart';
+import 'package:glaze_flutter/shared/widgets/glass_surface.dart';
 import 'package:glaze_flutter/shared/widgets/glaze_spinner.dart';
 
+import 'helpers/pump_localized.dart';
+
 void main() {
-  testWidgets('renders the shared decoration and spinner/action slots', (
+  testWidgets('compact kit surface keeps the spinner and action slots', (
     tester,
   ) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: ChatStatusCardShell(
-            label: 'Working',
-            icon: Icons.sync,
-            accent: Colors.orange,
-            showSpinner: true,
-            action: IconButton(
-              onPressed: () {},
-              tooltip: 'Stop work',
-              icon: const Icon(Icons.stop_circle_outlined),
-            ),
+    var stopped = false;
+    await pumpLocalized(
+      tester,
+      Align(
+        alignment: Alignment.topCenter,
+        child: ChatStatusCardShell(
+          label: 'Working',
+          icon: Icons.sync,
+          accent: Colors.orange,
+          showSpinner: true,
+          action: IconButton(
+            onPressed: () => stopped = true,
+            tooltip: 'Stop work',
+            icon: const Icon(Icons.stop_circle_outlined),
           ),
         ),
       ),
@@ -29,51 +33,35 @@ void main() {
     expect(find.text('Working'), findsOneWidget);
     expect(find.byType(GlazeSpinner), findsOneWidget);
     expect(find.byIcon(Icons.sync), findsNothing);
-    expect(find.byTooltip('Stop work'), findsOneWidget);
-    expect(
-      tester.getSize(find.byType(GlazeSpinner)),
-      const Size.square(18),
-    );
-
-    final container = tester.widget<Container>(
-      find.ancestor(of: find.text('Working'), matching: find.byType(Container)),
-    );
-    expect(
-      container.padding,
-      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-    );
-    final decoration = container.decoration! as BoxDecoration;
-    expect(decoration.borderRadius, BorderRadius.circular(14));
-    expect(
-      decoration.border,
-      Border.all(color: Colors.orange.withValues(alpha: 0.35)),
-    );
-    expect(decoration.boxShadow, hasLength(1));
-    expect(decoration.boxShadow!.single.blurRadius, 18);
-    expect(decoration.boxShadow!.single.offset, const Offset(0, 8));
+    expect(tester.getSize(find.byType(GlazeSpinner)), const Size.square(18));
+    final surface = tester.widget<GlassSurface>(find.byType(GlassSurface));
+    expect(surface.borderRadius, BorderRadius.circular(12));
+    expect(surface.boxShadow, isNull);
+    expect(tester.getSize(find.byType(ChatStatusCardShell)).height, 52);
+    await tester.tap(find.byTooltip('Stop work'));
+    expect(stopped, isTrue);
   });
 
-  testWidgets('renders the icon slot without an action', (tester) async {
-    await tester.pumpWidget(
-      const MaterialApp(
-        home: Scaffold(
-          body: ChatStatusCardShell(
-            label: 'Complete',
-            icon: Icons.check_circle_outline,
-            accent: Colors.green,
-            showSpinner: false,
-          ),
-        ),
+  testWidgets('one-line status retains its full text as a tooltip', (
+    tester,
+  ) async {
+    await pumpLocalized(
+      tester,
+      const ChatStatusCardShell(
+        label: 'A detailed failure that must remain available',
+        icon: Icons.error_outline,
+        accent: Colors.red,
+        showSpinner: false,
       ),
     );
 
-    expect(find.text('Complete'), findsOneWidget);
-    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+    expect(find.byIcon(Icons.error_outline), findsOneWidget);
     expect(find.byType(GlazeSpinner), findsNothing);
-
-    final text = tester.widget<Text>(find.text('Complete'));
+    final text = tester.widget<Text>(
+      find.text('A detailed failure that must remain available'),
+    );
     expect(text.maxLines, 1);
     expect(text.overflow, TextOverflow.ellipsis);
-    expect(text.style!.fontWeight, FontWeight.w600);
+    expect(find.byTooltip(text.data!), findsOneWidget);
   });
 }

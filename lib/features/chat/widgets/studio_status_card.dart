@@ -5,7 +5,7 @@ import '../state/post_cleaner_state_provider.dart';
 import '../state/studio_cycle_state_provider.dart';
 import 'chat_status_card_shell.dart';
 
-/// Floating card shown at the top of the chat while the Studio controller-cycle
+/// Compact row in the composer status panel while the Studio controller-cycle
 /// is running, and for a brief moment after it finishes (done/agentErrors/
 /// error).
 ///

@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:glaze_flutter/features/chat/state/post_gen_status_provider.dart';
 import 'package:glaze_flutter/features/chat/widgets/post_gen_status_card.dart';
 import 'package:glaze_flutter/shared/widgets/glaze_spinner.dart';
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   testWidgets('shows a distinct Ledger reconciliation running badge', (
     tester,
   ) async {

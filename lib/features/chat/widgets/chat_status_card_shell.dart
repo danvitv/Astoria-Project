@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../shared/widgets/glass_surface.dart';
 import '../../../shared/widgets/glaze_spinner.dart';
 
 class ChatStatusCardShell extends StatelessWidget {
@@ -22,46 +23,45 @@ class ChatStatusCardShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: cs.surface.withValues(alpha: 0.92),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: accent.withValues(alpha: 0.35)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.22),
-              blurRadius: 18,
-              offset: const Offset(0, 8),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            if (showSpinner)
-              SizedBox(
-                width: 18,
-                height: 18,
-                child: GlazeSpinner(color: accent),
-              )
-            else
-              Icon(icon, size: 18, color: accent),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: cs.onSurface,
-                  fontWeight: FontWeight.w600,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: GlassSurface(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: accent.withValues(alpha: 0.25)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(
+              children: [
+                if (showSpinner)
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: GlazeSpinner(color: accent),
+                  )
+                else
+                  Icon(icon, size: 18, color: accent),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Tooltip(
+                    message: label,
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: cs.onSurface,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+                ?action,
+              ],
             ),
-            ?action,
-          ],
+          ),
         ),
       ),
     );

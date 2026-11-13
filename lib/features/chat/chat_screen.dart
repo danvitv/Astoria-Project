@@ -72,10 +72,7 @@ import 'widgets/chat_drawer_panel.dart';
 import 'widgets/context_coverage_card.dart';
 import 'widgets/memory_sheet.dart';
 import 'widgets/studio_history_rotation_sheet.dart';
-import 'widgets/post_cleaner_status_card.dart';
-import 'widgets/post_gen_status_card.dart';
-import 'widgets/card_evolution_background_card.dart';
-import 'widgets/studio_status_card.dart';
+import 'widgets/chat_status_panel.dart';
 import 'widgets/chat_webview_widget.dart';
 import 'widgets/triggered_items_sheet.dart';
 import 'widgets/webview_callbacks.dart';
@@ -1580,13 +1577,6 @@ class _ChatBodyState extends ConsumerState<_ChatBody>
             ? kContextCardHeaderGap + _contextCardCollapsedHeight + 8
             : 0.0;
         final effectiveTopInset = messageListTop + contextTopReserve;
-        // Where the card actually ends — the expanded body included. The
-        // floating status cards stack below that, so an open panel does not
-        // render underneath them.
-        final contextCardBottom = showContextCard
-            ? messageListTop + kContextCardHeaderGap + _contextCardHeight + 8
-            : messageListTop;
-
         final messageListBottom = _inputBarHeight + effectiveBottomInset;
 
         // WebView-bound inset: the *end value* of the current transition,
@@ -2230,38 +2220,6 @@ class _ChatBodyState extends ConsumerState<_ChatBody>
                   ),
                 ),
               ),
-            // POST-cleaner live status card. Rendered AFTER the memory activity
-            // card so it sits ABOVE it in z-order — the Stop button must stay
-            // clickable even when the memory card is visible underneath.
-            Positioned(
-              left: 12,
-              right: 12,
-              top: contextCardBottom,
-              child: const PostCleanerStatusCard(),
-            ),
-            // Studio tracker-cycle live status card. Shown during generation
-            // while Studio trackers / final generator are running.
-            Positioned(
-              left: 12,
-              right: 12,
-              top: contextCardBottom + 56,
-              child: const StudioStatusCard(),
-            ),
-            // Post-generation tasks (Ledger and extension blocks) live status.
-            Positioned(
-              left: 12,
-              right: 12,
-              top: contextCardBottom + 112,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  PostGenStatusCard(sessionId: widget.state.session?.id),
-                  CardEvolutionBackgroundCard(
-                    sessionId: widget.state.session?.id,
-                  ),
-                ],
-              ),
-            ),
             // Bottom panel: drawer + input bar
             Positioned.fill(
               child: Stack(
@@ -2312,7 +2270,7 @@ class _ChatBodyState extends ConsumerState<_ChatBody>
                                         .canDeleteSelection(
                                           widget.state.messages,
                                         );
-                                    return ChatInputBar(
+                                    final inputBar = ChatInputBar(
                                       key: ValueKey(widget.state.session?.id),
                                       blurViaWebView: !widget.blurIsFlutterSide,
                                       backdropKey: widget.chromeBackdropKey,
@@ -2562,6 +2520,19 @@ class _ChatBodyState extends ConsumerState<_ChatBody>
                                           )
                                           .impersonate(guidanceText: guidance),
                                       charId: widget.charId,
+                                    );
+                                    // The same measured box carries status and
+                                    // input, so the WebView reserves their full
+                                    // height instead of losing transcript text
+                                    // underneath floating status cards.
+                                    return Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        ChatStatusPanel(
+                                          sessionId: widget.state.session?.id,
+                                        ),
+                                        inputBar,
+                                      ],
                                     );
                                   },
                                 ),

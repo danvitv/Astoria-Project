@@ -33,34 +33,35 @@ class _CardEvolutionBackgroundCardState
     final active = job.status == 'pending' || job.status == 'running';
     if (!active && _dismissed == job.id) return const SizedBox.shrink();
     final failed = job.status == 'failed' || job.status == 'stale';
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: ChatStatusCardShell(
-        label: 'background_evolution_${job.status}'.tr(),
-        icon: failed ? Icons.error_outline : Icons.auto_fix_high_outlined,
-        accent: failed
-            ? Theme.of(context).colorScheme.error
-            : Theme.of(context).colorScheme.primary,
-        showSpinner: job.status == 'running',
-        action: IconButton(
-          icon: Icon(
-            active ? Icons.stop_circle_outlined : Icons.close,
-            size: 18,
-          ),
-          tooltip:
-              (active
-                      ? 'background_evolution_cancel'
-                      : 'background_evolution_hide')
-                  .tr(),
-          visualDensity: VisualDensity.compact,
-          onPressed: active
-              ? () async {
-                  await ref
-                      .read(cardEvolutionBackgroundProvider)
-                      .cancel(job.id);
-                }
-              : () => setState(() => _dismissed = job.id),
-        ),
+    final completed = job.status == 'completed';
+    return ChatStatusCardShell(
+      // A reservation may only check cadence and do no model work. Without
+      // worker stage information, do not claim proposals are being written.
+      label: active || completed
+          ? 'Card Evolution'
+          : 'background_evolution_${job.status}'.tr(),
+      icon: failed
+          ? Icons.error_outline
+          : completed
+          ? Icons.check_circle_outline
+          : Icons.auto_fix_high_outlined,
+      accent: failed
+          ? Theme.of(context).colorScheme.error
+          : Theme.of(context).colorScheme.primary,
+      showSpinner: job.status == 'running',
+      action: IconButton(
+        icon: Icon(active ? Icons.stop_circle_outlined : Icons.close, size: 18),
+        tooltip:
+            (active
+                    ? 'background_evolution_cancel'
+                    : 'background_evolution_hide')
+                .tr(),
+        visualDensity: VisualDensity.compact,
+        onPressed: active
+            ? () async {
+                await ref.read(cardEvolutionBackgroundProvider).cancel(job.id);
+              }
+            : () => setState(() => _dismissed = job.id),
       ),
     );
   }
