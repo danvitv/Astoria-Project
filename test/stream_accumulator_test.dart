@@ -96,6 +96,20 @@ void main() {
         raw: 'x<think>reason</think>y',
       ),
       const _Case(
+        '<thought mode="deep">reason</thought extra>answer',
+        'answer',
+        'reason',
+        true,
+        raw: '<think>reason</think>answer',
+      ),
+      const _Case(
+        'x<THOUGHT>reason</THOUGHT>y',
+        'xy',
+        'reason',
+        true,
+        raw: 'x<think>reason</think>y',
+      ),
+      const _Case(
         '<thinkingBroken>visible',
         '<thinkingBroken>visible',
         '',
@@ -169,7 +183,7 @@ void main() {
         tagStart: '<thinking>',
         tagEnd: '</thinking>',
         hasInlineTags: true,
-      )..consumeDelta('<think class=x>reason</think data-x>answer');
+      )..consumeDelta('<thought class=x>reason</thought data-x>answer');
 
       expect(accumulator.text, 'answer');
       expect(accumulator.reasoning, 'reason');

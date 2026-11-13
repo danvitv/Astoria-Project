@@ -14,10 +14,15 @@ class StreamAccumulator {
   bool _hasExternalReasoning = false;
   bool _splitDone = false;
   _ParsePhase _phase = _ParsePhase.beforeReasoning;
-  bool _variantOpenPossible = false;
-  bool _variantClosePossible = false;
-  bool _variantOpenTail = false;
-  bool _variantCloseTail = false;
+  List<bool> _variantOpenPossible = const [];
+  List<bool> _variantClosePossible = const [];
+  List<bool> _variantOpenTail = const [];
+  List<bool> _variantCloseTail = const [];
+  late final String? _configuredThinkVariant = _resolveThinkVariant(
+    tagStart: tagStart,
+    tagEnd: tagEnd,
+    enabled: _parsesInline,
+  );
 
   StreamAccumulator({
     this.tagStart,
@@ -29,24 +34,20 @@ class StreamAccumulator {
 
   bool get _parsesInline => hasInlineTags && tagStart != null && tagEnd != null;
 
-  bool get _normalizesThinkVariants {
-    if (!_parsesInline) return false;
-    final startLower = tagStart!.toLowerCase();
-    final endLower = tagEnd!.toLowerCase();
-    final usesThink =
-        startLower.startsWith('<think') &&
-        !startLower.startsWith('<thinking') &&
-        endLower.startsWith('</think') &&
-        !endLower.startsWith('</thinking');
-    final usesThinking =
-        startLower.startsWith('<thinking') && endLower.startsWith('</thinking');
-    return usesThink || usesThinking;
-  }
+  bool get _normalizesThinkVariants => _configuredThinkVariant != null;
 
-  String get _alternateOpen =>
-      tagStart!.toLowerCase().startsWith('<thinking') ? '<think' : '<thinking';
-  String get _alternateClose =>
-      tagEnd!.toLowerCase().startsWith('</thinking') ? '</think' : '</thinking';
+  List<String> get _alternateOpen => switch (_configuredThinkVariant) {
+    'think' => const ['<thinking', '<thought'],
+    'thinking' => const ['<think', '<thought'],
+    'thought' => const ['<think', '<thinking'],
+    _ => const [],
+  };
+  List<String> get _alternateClose => switch (_configuredThinkVariant) {
+    'think' => const ['</thinking', '</thought'],
+    'thinking' => const ['</think', '</thought'],
+    'thought' => const ['</think', '</thinking'],
+    _ => const [],
+  };
 
   void consumeDelta(String delta, {String? reasoningDelta}) {
     if (reasoningDelta != null && reasoningDelta.isNotEmpty) {
@@ -84,65 +85,64 @@ class StreamAccumulator {
         return;
       }
       _variantCandidate.write(char);
-      _variantOpenPossible = true;
-      _variantClosePossible = true;
+      _variantOpenPossible = List.filled(_alternateOpen.length, true);
+      _variantClosePossible = List.filled(_alternateClose.length, true);
+      _variantOpenTail = List.filled(_alternateOpen.length, false);
+      _variantCloseTail = List.filled(_alternateClose.length, false);
       return;
     }
 
     _variantCandidate.write(char);
     final index = _variantCandidate.length - 1;
-    final openComplete = _advanceVariant(
+    final openComplete = _advanceVariants(
       char,
       index,
       _alternateOpen,
-      isOpen: true,
+      possible: _variantOpenPossible,
+      tails: _variantOpenTail,
     );
-    final closeComplete = _advanceVariant(
+    final closeComplete = _advanceVariants(
       char,
       index,
       _alternateClose,
-      isOpen: false,
+      possible: _variantClosePossible,
+      tails: _variantCloseTail,
     );
     if (openComplete || closeComplete) {
       _clearVariantCandidate();
       _emitNormalized(openComplete ? tagStart! : tagEnd!);
-    } else if (!_variantOpenPossible && !_variantClosePossible) {
+    } else if (!_variantOpenPossible.any((value) => value) &&
+        !_variantClosePossible.any((value) => value)) {
       _rejectVariantCandidate();
     }
   }
 
-  bool _advanceVariant(
+  bool _advanceVariants(
     String char,
     int index,
-    String literal, {
-    required bool isOpen,
+    List<String> literals, {
+    required List<bool> possible,
+    required List<bool> tails,
   }) {
-    var possible = isOpen ? _variantOpenPossible : _variantClosePossible;
-    var inTail = isOpen ? _variantOpenTail : _variantCloseTail;
-    if (!possible) return false;
-
-    if (index < literal.length) {
-      possible = char.toLowerCase() == literal[index];
-    } else if (!inTail) {
-      if (_isWordCharacter(char)) {
-        possible = false;
+    var complete = false;
+    for (var variant = 0; variant < literals.length; variant++) {
+      if (!possible[variant]) continue;
+      final literal = literals[variant];
+      if (index < literal.length) {
+        possible[variant] = char.toLowerCase() == literal[index];
+      } else if (!tails[variant]) {
+        if (_isWordCharacter(char)) {
+          possible[variant] = false;
+        } else if (char == '>') {
+          complete = true;
+        } else {
+          tails[variant] = true;
+        }
       } else if (char == '>') {
-        return true;
-      } else {
-        inTail = true;
+        complete = true;
       }
-    } else if (char == '>') {
-      return true;
     }
-
-    if (isOpen) {
-      _variantOpenPossible = possible;
-      _variantOpenTail = inTail;
-    } else {
-      _variantClosePossible = possible;
-      _variantCloseTail = inTail;
-    }
-    return false;
+    return complete;
   }
 
   bool _isWordCharacter(String char) {
@@ -166,10 +166,10 @@ class StreamAccumulator {
 
   void _clearVariantCandidate() {
     _variantCandidate = StringBuffer();
-    _variantOpenPossible = false;
-    _variantClosePossible = false;
-    _variantOpenTail = false;
-    _variantCloseTail = false;
+    _variantOpenPossible = const [];
+    _variantClosePossible = const [];
+    _variantOpenTail = const [];
+    _variantCloseTail = const [];
   }
 
   void _emitNormalized(String value) {
@@ -286,3 +286,20 @@ class StreamAccumulator {
 }
 
 enum _ParsePhase { beforeReasoning, inReasoning, afterReasoning }
+
+String? _resolveThinkVariant({
+  required String? tagStart,
+  required String? tagEnd,
+  required bool enabled,
+}) {
+  if (!enabled) return null;
+  final startLower = tagStart!.toLowerCase();
+  final endLower = tagEnd!.toLowerCase();
+  for (final variant in const ['thinking', 'thought', 'think']) {
+    if (startLower.startsWith('<$variant') &&
+        endLower.startsWith('</$variant')) {
+      return variant;
+    }
+  }
+  return null;
+}
