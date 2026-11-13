@@ -19,6 +19,7 @@ import 'repositories/history_source_index_repo.dart';
 import 'native_history/history_index_worker.dart';
 import 'native_history/history_index_schema.dart';
 import '../models/studio_preset_block_migration.dart';
+import '../models/ledger_preset_instruction_defaults.dart';
 import '../models/studio_preset_codec.dart';
 import '../models/studio_agent_codec.dart';
 import '../models/studio_config.dart';
@@ -320,18 +321,19 @@ class AppDatabase extends _$AppDatabase {
       final now = currentTimestampSeconds();
       await customStatement(
         'INSERT INTO studio_preset_rows '
-        '(preset_id, name, blocks_json, agents_json, updated_at) '
-        'VALUES (?, ?, ?, ?, ?)',
+        '(preset_id, name, blocks_json, agents_json, runtime_settings_json, updated_at) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
         [
           'default',
           'Default Studio Preset',
-          jsonEncode(_legacyStudioPresetMigrationBlocks()),
+          jsonEncode(defaultStudioPresetSeedBlocks()),
           StudioAgentCodec.encodeAgents(
             StudioControllerOntology.buildDefaultAgents(
               sessionId: 'default',
               now: now,
             ),
           ),
+          jsonEncode({'version': 1, 'ledgerInstructionRevision': 1}),
           now,
         ],
       );

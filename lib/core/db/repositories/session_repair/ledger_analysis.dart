@@ -22,7 +22,7 @@ final class _LedgerAnalysisReader {
     'debugCount': 0,
     'bodyAccess': 'notGranted',
     'advisory': true,
-    'builtInContractEditable': false,
+    'builtInContractEditable': true,
   };
 
   Future<Map<String, Object?>> read(
@@ -83,7 +83,7 @@ final class _LedgerAnalysisReader {
         key: first[key],
       'bodyAccess': 'notGranted',
       'advisory': true,
-      'builtInContractEditable': false,
+      'builtInContractEditable': true,
     };
     return current() ? result : unavailable('sourceChanged');
   }
@@ -100,7 +100,7 @@ final class _LedgerAnalysisReader {
           variables: [
             Variable.withString(target),
             Variable.withString(parent),
-            Variable.withString(StudioLedgerPrompt.gameClockRules),
+            Variable.withString(ledgerDefaultClockInstructions),
           ],
           readsFrom: {
             owner._db.chatSessions,

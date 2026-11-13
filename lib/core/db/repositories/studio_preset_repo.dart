@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 
 import '../../application/sync_repo_interfaces.dart';
 import '../../llm/studio_controller_ontology.dart';
+import '../../models/ledger_preset_instruction_upgrade.dart';
 import '../../models/studio_config.dart';
 import '../../models/studio_agent_codec.dart';
 import '../../models/studio_preset_block_migration.dart';
@@ -52,6 +53,7 @@ class StudioPresetRepo implements SyncStudioPresetStore {
       id: 'default',
       name: 'Default Studio Preset',
       blocks: blocks,
+      runtime: const StudioRuntimeSettings(ledgerInstructionRevision: 1),
       updatedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
     );
     await upsert(preset);
@@ -66,6 +68,87 @@ class StudioPresetRepo implements SyncStudioPresetStore {
 
   @override
   Future<void> put(StudioPreset preset) => upsert(preset);
+
+  /// Explicit preview from persisted data, without legacy normalization that
+  /// could silently repair authored Ledger routing or remove unrelated blocks.
+  Future<LedgerPresetInstructionUpgradePlan> previewLedgerInstructionUpgrade(
+    String presetId,
+  ) async {
+    final row = await (db.select(
+      db.studioPresetRows,
+    )..where((t) => t.presetId.equals(presetId))).getSingleOrNull();
+    if (row == null) throw StateError('Studio preset no longer exists.');
+    final plan = planLedgerPresetInstructionUpgrade(
+      _ledgerUpgradeSnapshot(row),
+    );
+    return LedgerPresetInstructionUpgradePlan(
+      original: plan.original,
+      additions: plan.additions,
+      warnings: plan.warnings,
+      expectedFingerprint: ledgerPresetInstructionSourceFingerprint(
+        row.toJson(),
+      ),
+    );
+  }
+
+  /// Applies only the exact preview the user confirmed. No upsert, safety-net
+  /// normalization, agent mutation or ordinary read path can invoke this.
+  Future<StudioPreset> applyLedgerInstructionUpgrade({
+    required String presetId,
+    required String expectedFingerprint,
+  }) => db.transaction(() async {
+    final row = await (db.select(
+      db.studioPresetRows,
+    )..where((t) => t.presetId.equals(presetId))).getSingleOrNull();
+    if (row == null) throw StateError('Studio preset no longer exists.');
+    final latest = _ledgerUpgradeSnapshot(row);
+    if (ledgerPresetInstructionSourceFingerprint(row.toJson()) !=
+        expectedFingerprint) {
+      throw StateError('Studio preset changed. Preview the upgrade again.');
+    }
+    final plan = planLedgerPresetInstructionUpgrade(latest);
+    if (!plan.needsUpgrade) return latest;
+    // Append to raw JSON, rather than re-encoding existing typed blocks. This
+    // also preserves legacy keys and unknown authored fields on those blocks.
+    final blocks = jsonDecode(row.blocksJson) as List;
+    final runtime = Map<String, dynamic>.from(
+      jsonDecode(row.runtimeSettingsJson) as Map,
+    );
+    runtime['ledgerInstructionRevision'] = ledgerInstructionRevision;
+    final changed =
+        await (db.update(
+          db.studioPresetRows,
+        )..where((t) => t.presetId.equals(presetId))).write(
+          StudioPresetRowsCompanion(
+            blocksJson: Value(
+              jsonEncode([
+                ...blocks,
+                for (final block in plan.additions) block.toJson(),
+              ]),
+            ),
+            runtimeSettingsJson: Value(jsonEncode(runtime)),
+            updatedAt: Value(DateTime.now().millisecondsSinceEpoch),
+          ),
+        );
+    if (changed != 1) throw StateError('Studio preset changed during upgrade.');
+    final durable = await (db.select(
+      db.studioPresetRows,
+    )..where((t) => t.presetId.equals(presetId))).getSingle();
+    return _ledgerUpgradeSnapshot(durable);
+  });
+
+  StudioPreset _ledgerUpgradeSnapshot(StudioPresetRow row) {
+    final blocks = jsonDecode(row.blocksJson);
+    final runtime = jsonDecode(row.runtimeSettingsJson);
+    if (blocks is! List ||
+        blocks.any((value) => value is! Map) ||
+        runtime is! Map) {
+      throw const FormatException(
+        'Malformed Studio preset cannot be upgraded.',
+      );
+    }
+    return _rowToModel(row, normalize: false);
+  }
 
   Future<void> upsert(StudioPreset preset) async {
     final normalized = _normalizePreset(preset);
@@ -154,7 +237,7 @@ class StudioPresetRepo implements SyncStudioPresetStore {
     )..where((t) => t.presetId.equals(id))).go();
   }
 
-  StudioPreset _rowToModel(StudioPresetRow row) {
+  StudioPreset _rowToModel(StudioPresetRow row, {bool normalize = true}) {
     // Decode the complete persisted representation at the codec boundary. In
     // particular, blocks must still be raw while the codec inspects the Ledger
     // control header; canonicalizing each block first can turn malformed
@@ -182,7 +265,7 @@ class StudioPresetRepo implements SyncStudioPresetStore {
       'runtime': runtimeMap,
       'updatedAt': row.updatedAt,
     });
-    return _normalizePreset(decoded.preset);
+    return normalize ? _normalizePreset(decoded.preset) : decoded.preset;
   }
 
   Object? _decodeJson(String source) {

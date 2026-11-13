@@ -30,6 +30,7 @@ import 'package:glaze_flutter/core/models/character.dart';
 import 'package:glaze_flutter/core/models/character_knowledge_fact.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/pipeline_settings.dart';
+import 'package:glaze_flutter/core/models/studio_config.dart';
 import 'package:glaze_flutter/core/models/tracker.dart';
 import 'package:glaze_flutter/core/models/tracker_snapshot.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/effective_canon_context_loader.dart';
@@ -38,6 +39,12 @@ import 'package:glaze_flutter/core/services/card_rewriter/effective_canon_fence_
 final _memoryBookRepoProvider = Provider<MemoryBookRepo>(
   (ref) => throw UnimplementedError(),
 );
+
+// Configure every phase explicitly so transaction/security scenarios reach
+// their intended failure boundary rather than fail at prompt resolution.
+final _ledgerBlocks = defaultStudioPresetSeedBlocks()
+    .map(StudioPresetBlock.fromJson)
+    .toList();
 
 const _response = '''
 <glaze_memory_export>
@@ -155,6 +162,7 @@ void main() {
     run = (url, {isStillCurrent, onAttemptStart}) => service.run(
       sessionId: 'session',
       settings: const PipelineSettings(),
+      ledgerBlocks: _ledgerBlocks,
       config: _config(url),
       finalAssistantText: assistant.content,
       recentHistoryText: 'Start',
@@ -241,6 +249,7 @@ ${jsonEncode({
             ? await service.reconcile(
                 sessionId: 'session',
                 settings: const PipelineSettings(),
+                ledgerBlocks: _ledgerBlocks,
                 config: _config(endpoint.url),
                 plan: LedgerReconciliationPlan(
                   messages: const [
@@ -483,6 +492,7 @@ ${jsonEncode({
     Future<LedgerRunResult> ownedRun() => service.run(
       sessionId: 'session',
       settings: const PipelineSettings(),
+      ledgerBlocks: _ledgerBlocks,
       config: _config(endpoint.url),
       finalAssistantText: assistant.content,
       recentHistoryText: 'Start',
@@ -505,6 +515,7 @@ ${jsonEncode({
       service.run(
         sessionId: 'session',
         settings: const PipelineSettings(),
+        ledgerBlocks: _ledgerBlocks,
         config: _config(endpoint.url),
         finalAssistantText: assistant.content,
         recentHistoryText: 'Start',
@@ -517,6 +528,7 @@ ${jsonEncode({
       service.run(
         sessionId: 'session',
         settings: const PipelineSettings(),
+        ledgerBlocks: _ledgerBlocks,
         config: _config(endpoint.url),
         finalAssistantText: assistant.content,
         recentHistoryText: 'Start',
@@ -542,6 +554,7 @@ ${jsonEncode({
         service.run(
           sessionId: 'session',
           settings: const PipelineSettings(),
+          ledgerBlocks: _ledgerBlocks,
           config: _config(endpoint.url),
           finalAssistantText: assistant.content,
           recentHistoryText: 'Start',
@@ -554,6 +567,7 @@ ${jsonEncode({
         service.run(
           sessionId: 'session',
           settings: const PipelineSettings(),
+          ledgerBlocks: _ledgerBlocks,
           config: _config(endpoint.url),
           finalAssistantText: assistant.content,
           recentHistoryText: 'Start',
@@ -579,6 +593,7 @@ ${jsonEncode({
       service.run(
         sessionId: 'session',
         settings: const PipelineSettings(),
+        ledgerBlocks: _ledgerBlocks,
         config: _config(endpoint.url),
         finalAssistantText: assistant.content,
         recentHistoryText: 'Start',
@@ -636,6 +651,7 @@ ${jsonEncode({
         service.reconcile(
           sessionId: 'session',
           settings: const PipelineSettings(),
+          ledgerBlocks: _ledgerBlocks,
           config: _config(endpoint.url),
           plan: plan,
           operationIdentity: 'reconciliation-${plan.rangeHash}',
@@ -672,6 +688,7 @@ ${jsonEncode({
     final result = await service.reconcile(
       sessionId: 'session',
       settings: const PipelineSettings(),
+      ledgerBlocks: _ledgerBlocks,
       config: _config(endpoint.url),
       plan: const LedgerReconciliationPlan(
         messages: [
@@ -704,6 +721,7 @@ ${jsonEncode({
     final future = service.reconcile(
       sessionId: 'session',
       settings: const PipelineSettings(),
+      ledgerBlocks: _ledgerBlocks,
       config: _config(endpoint.url),
       plan: const LedgerReconciliationPlan(
         messages: [
@@ -753,6 +771,7 @@ ${jsonEncode({
       final result = await service.reconcile(
         sessionId: 'session',
         settings: const PipelineSettings(),
+        ledgerBlocks: _ledgerBlocks,
         config: _config(endpoint.url),
         plan: plan,
       );
@@ -797,6 +816,7 @@ ${jsonEncode({
         (await service.reconcile(
           sessionId: 'session',
           settings: const PipelineSettings(),
+          ledgerBlocks: _ledgerBlocks,
           config: _config(endpoint.url),
           plan: plan,
         )).status,
@@ -818,6 +838,7 @@ ${jsonEncode({
         (await service.reconcile(
           sessionId: 'session',
           settings: const PipelineSettings(),
+          ledgerBlocks: _ledgerBlocks,
           config: _config(endpoint.url),
           plan: plan,
         )).opsApplied,
@@ -841,6 +862,7 @@ ${jsonEncode({
         (await service.reconcile(
           sessionId: 'session',
           settings: const PipelineSettings(),
+          ledgerBlocks: _ledgerBlocks,
           config: _config(endpoint.url),
           plan: plan,
         )).status,
@@ -884,6 +906,7 @@ ${jsonEncode({
         (await service.reconcile(
           sessionId: 'session',
           settings: const PipelineSettings(),
+          ledgerBlocks: _ledgerBlocks,
           config: _config(endpoint.url),
           plan: plan,
         )).status,
@@ -902,6 +925,7 @@ ${jsonEncode({
         sessionId: 'session',
         expectedRunId: oldHead.id,
         settings: const PipelineSettings(),
+        ledgerBlocks: _ledgerBlocks,
         config: _config(endpoint.url),
       );
 
@@ -965,6 +989,7 @@ ${jsonEncode({
     await service.reconcile(
       sessionId: 'session',
       settings: const PipelineSettings(),
+      ledgerBlocks: _ledgerBlocks,
       config: _config(endpoint.url),
       plan: plan,
     );
@@ -975,6 +1000,7 @@ ${jsonEncode({
       sessionId: 'session',
       expectedRunId: oldHead.id,
       settings: const PipelineSettings(),
+      ledgerBlocks: _ledgerBlocks,
       config: _config(endpoint.url),
     );
 
@@ -1020,6 +1046,7 @@ ${jsonEncode({
       await service.reconcile(
         sessionId: 'session',
         settings: const PipelineSettings(),
+        ledgerBlocks: _ledgerBlocks,
         config: _config(initial.url),
         plan: plan,
       );
@@ -1032,6 +1059,7 @@ ${jsonEncode({
         sessionId: 'session',
         expectedRunId: head.id,
         settings: const PipelineSettings(),
+        ledgerBlocks: _ledgerBlocks,
         config: _config(blocked.url),
       );
 
@@ -1069,6 +1097,7 @@ ${jsonEncode({
       await service.reconcile(
         sessionId: 'session',
         settings: const PipelineSettings(),
+        ledgerBlocks: _ledgerBlocks,
         config: _config(initial.url),
         plan: plan,
       );
@@ -1080,6 +1109,7 @@ ${jsonEncode({
         sessionId: 'session',
         expectedRunId: oldHead.id,
         settings: const PipelineSettings(),
+        ledgerBlocks: _ledgerBlocks,
         config: _config(delayed.url),
       );
       await delayed.requestReceived;
@@ -1135,6 +1165,7 @@ ${jsonEncode({
     await service.reconcile(
       sessionId: 'session',
       settings: const PipelineSettings(),
+      ledgerBlocks: _ledgerBlocks,
       config: _config(initial.url),
       plan: plan,
     );
@@ -1146,6 +1177,7 @@ ${jsonEncode({
       sessionId: 'session',
       expectedRunId: head.id,
       settings: const PipelineSettings(),
+      ledgerBlocks: _ledgerBlocks,
       config: _config(delayed.url),
     );
     await delayed.requestReceived;
@@ -1190,6 +1222,7 @@ ${jsonEncode({
       final result = await service.reconcile(
         sessionId: 'session',
         settings: const PipelineSettings(),
+        ledgerBlocks: _ledgerBlocks,
         config: _config(endpoint.url),
         plan: plan,
         isStillCurrent: () async {
@@ -1298,6 +1331,7 @@ ${jsonEncode({
     final result = await service.run(
       sessionId: 'session',
       settings: const PipelineSettings(),
+      ledgerBlocks: _ledgerBlocks,
       config: _config(endpoint.url),
       finalAssistantText: timedAssistant.content,
       recentHistoryText: 'Start',
@@ -1384,6 +1418,7 @@ ${jsonEncode({
       finalAssistantText: nextSceneAssistant.content,
       recentHistoryText: '',
       settings: const PipelineSettings(),
+      ledgerBlocks: _ledgerBlocks,
       config: _config(endpoint.url),
     );
 
@@ -1529,6 +1564,7 @@ ${jsonEncode({
       final result = await service.run(
         sessionId: 'session',
         settings: const PipelineSettings(),
+        ledgerBlocks: _ledgerBlocks,
         config: _config(endpoint.url),
         finalAssistantText: assistant.content,
         recentHistoryText: 'Start',
@@ -1593,6 +1629,7 @@ ${jsonEncode({
       final result = await service.run(
         sessionId: 'session',
         settings: const PipelineSettings(),
+        ledgerBlocks: _ledgerBlocks,
         config: _config('http://127.0.0.1:1'),
         finalAssistantText: '   ',
         recentHistoryText: 'Start',

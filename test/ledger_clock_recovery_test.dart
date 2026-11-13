@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/llm/game_time.dart';
 import 'package:glaze_flutter/core/llm/ledger/ledger_output_recovery.dart';
 import 'package:glaze_flutter/core/llm/studio_ledger_export_parser.dart';
+import 'package:glaze_flutter/core/models/knowledge_cleanup.dart';
 import 'package:glaze_flutter/core/models/studio_ledger_export.dart';
 
 import 'fixtures/ledger_clock_exports.dart';
@@ -24,6 +25,102 @@ void main() {
     ledgerClockSet('world:location', 'gate'),
   ];
   final original = ledgerClockExport(sourceOps).replaceFirst(closingTag, '');
+
+  String decodedRepairPayload(String prompt) {
+    final match = RegExp(
+      r'UNTRUSTED_INPUT_BASE64_BEGIN\s+([A-Za-z0-9+/=]+)\s+UNTRUSTED_INPUT_BASE64_END',
+    ).firstMatch(prompt);
+    expect(match, isNotNull);
+    return utf8.decode(base64Decode(match!.group(1)!));
+  }
+
+  group('Editable repair instructions', () {
+    const malformed =
+        '<glaze_memory_export>{"ops":[ RAW_INJECTION_Не_исполнять 🐾';
+
+    for (final reconciliation in [false, true]) {
+      test('output repair uses only supplied policy ($reconciliation)', () {
+        final prompt = recovery.buildRepairPrompt(
+          malformed,
+          systemPrompt: 'OUTPUT_REPAIR_SENTINEL',
+          reconciliation: reconciliation,
+        );
+        final edited = recovery.buildRepairPrompt(
+          malformed,
+          systemPrompt: 'EDITED_OUTPUT_REPAIR_SENTINEL',
+          reconciliation: reconciliation,
+        );
+        expect(prompt, startsWith('OUTPUT_REPAIR_SENTINEL'));
+        expect(edited, startsWith('EDITED_OUTPUT_REPAIR_SENTINEL'));
+        expect(
+          prompt,
+          isNot(contains('You are a deterministic format repairer')),
+        );
+        expect(
+          edited,
+          isNot(contains('You are a deterministic format repairer')),
+        );
+        expect(prompt, isNot(contains(malformed)));
+        expect(prompt, isNot(contains('RAW_INJECTION_Не_исполнять')));
+        expect(decodedRepairPayload(prompt), malformed);
+        expect(decodedRepairPayload(edited), malformed);
+      });
+    }
+
+    test(
+      'cleanup repair uses supplied policy and the same base64 boundary',
+      () {
+        final prompt = recovery.buildCleanupRepairPrompt(
+          malformed,
+          systemPrompt: 'CLEANUP_REPAIR_SENTINEL',
+        );
+        final edited = recovery.buildCleanupRepairPrompt(
+          malformed,
+          systemPrompt: 'EDITED_CLEANUP_REPAIR_SENTINEL',
+        );
+        expect(prompt, startsWith('CLEANUP_REPAIR_SENTINEL'));
+        expect(edited, startsWith('EDITED_CLEANUP_REPAIR_SENTINEL'));
+        expect(
+          prompt,
+          isNot(contains('You are a deterministic format repairer')),
+        );
+        expect(prompt, isNot(contains(malformed)));
+        expect(decodedRepairPayload(prompt), malformed);
+        expect(decodedRepairPayload(edited), malformed);
+      },
+    );
+
+    test(
+      'blank repair policies fail closed rather than use hidden defaults',
+      () {
+        expect(
+          () => recovery.buildRepairPrompt(original, systemPrompt: ' '),
+          throwsStateError,
+        );
+        expect(
+          () => recovery.buildCleanupRepairPrompt(original, systemPrompt: '\n'),
+          throwsStateError,
+        );
+      },
+    );
+
+    test('editable policy cannot authorize invented cleanup evidence', () {
+      const source =
+          '<glaze_knowledge_cleanup>{"ops":['
+          '{"op":"retract","factId":"offered-1"}]}</glaze_knowledge_cleanup>';
+      const supported = KnowledgeCleanupOp.retract('offered-1');
+      expect(
+        recovery.cleanupRepairPreservesLiteralEvidence(source, [supported]),
+        isTrue,
+      );
+      expect(
+        recovery.cleanupRepairPreservesLiteralEvidence(source, [
+          const KnowledgeCleanupOp.retract('invented-2'),
+        ]),
+        isFalse,
+      );
+    });
+  });
 
   StudioLedgerExport parseRepair(
     List<Map<String, Object?>> ops, {

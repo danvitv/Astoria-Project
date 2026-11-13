@@ -28,6 +28,7 @@ import 'package:glaze_flutter/core/models/agent_operation_record.dart';
 import 'package:glaze_flutter/core/models/character.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/pipeline_settings.dart';
+import 'package:glaze_flutter/core/models/studio_config.dart';
 import 'package:glaze_flutter/core/models/tracker_snapshot.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/effective_canon_context_loader.dart';
 import 'package:glaze_flutter/core/utils/cast_helpers.dart';
@@ -35,6 +36,10 @@ import 'package:glaze_flutter/core/utils/cast_helpers.dart';
 final _bookProvider = Provider<MemoryBookRepo>(
   (ref) => throw UnimplementedError(),
 );
+
+final _ledgerBlocks = defaultStudioPresetSeedBlocks()
+    .map(StudioPresetBlock.fromJson)
+    .toList();
 
 const _assistant = ChatMessage(
   id: 'a1',
@@ -132,6 +137,7 @@ void main() {
   }) => service.reconcile(
     sessionId: 'session',
     settings: const PipelineSettings(),
+    ledgerBlocks: _ledgerBlocks,
     config: const AuxApiConfig(
       endpoint: 'https://offline.invalid',
       apiKey: '',

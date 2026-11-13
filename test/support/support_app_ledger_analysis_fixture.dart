@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
+import 'package:glaze_flutter/core/db/repositories/chat_repo.dart';
 import 'package:glaze_flutter/core/llm/game_time.dart';
 import 'package:glaze_flutter/core/llm/ledger/ledger_provenance.dart';
 import 'package:glaze_flutter/core/llm/studio_ledger_export_parser.dart';
@@ -12,6 +13,7 @@ import 'package:glaze_flutter/core/llm/transport/llm_call_event.dart';
 import 'package:glaze_flutter/core/llm/transport/llm_request_capture.dart';
 import 'package:glaze_flutter/core/models/agent_operation_record.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
+import 'package:glaze_flutter/core/models/ledger_preset_instruction_defaults.dart';
 import 'package:glaze_flutter/core/models/tracker.dart';
 import 'package:glaze_flutter/core/db/repositories/ledger_debug_run_repo.dart';
 import 'package:glaze_flutter/core/state/db_provider.dart';
@@ -177,12 +179,15 @@ Future<void> seedLedgerAnalysis(DomainLoopFixture f, AnalysisSeed mode) async {
       ),
   ];
   var prompt = const StudioLedgerPrompt().build(
+    systemPrompt:
+        '$ledgerDefaultTurnInstructions\n\n$ledgerDefaultSharedInstructions',
     finalAssistantText: analysisPrivate,
     currentUserText: analysisPrivate,
     recentHistoryText: analysisPrivate,
     currentTrackers: baseline,
     recentMemoryEntries: const [],
   );
+  expect(prompt, contains(ledgerDefaultClockInstructions));
   if (mode == AnalysisSeed.ambiguousBaseline) {
     prompt = prompt.replaceFirst(
       '\n<current_state>\n',
@@ -382,7 +387,10 @@ Future<void> runLedgerAnalysis(
             contains('analyzeLedger'),
           );
           expect((fields['session'] as Map)['maxLength'], 64);
-          expect((fields['offset'] as Map)['maximum'], 63);
+          expect(
+            (fields['offset'] as Map)['maximum'],
+            ChatRepo.maxControlMetadataOffset,
+          );
           final records = (f.lastData()['records'] as List)
               .cast<Map<dynamic, dynamic>>();
           final record = records.singleWhere(

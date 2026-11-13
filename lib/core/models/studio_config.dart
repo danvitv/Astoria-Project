@@ -55,6 +55,10 @@ abstract class StudioRuntimeSettings with _$StudioRuntimeSettings {
     LedgerPromptInjectionMode? requestedLedgerPromptInjectionMode,
     String? requestedLedgerPromptInjectionAlgorithmVersion,
 
+    /// Explicit, user-confirmed transfer of Ledger instructions into blocks.
+    /// Zero is legacy; once upgraded, deleted policy blocks never regrow.
+    @Default(0) int ledgerInstructionRevision,
+
     /// Optional override of the reasoning tags used by the agent pipeline.
     /// When non-empty, takes priority over the API config's
     /// `reasoningTagStart`/`reasoningTagEnd`. Empty/null falls back to the API

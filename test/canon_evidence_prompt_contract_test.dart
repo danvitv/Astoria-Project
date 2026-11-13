@@ -3,9 +3,11 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/llm/canon_evidence_rules.dart';
 import 'package:glaze_flutter/core/llm/ledger/ledger_prompt_factory.dart';
+import 'package:glaze_flutter/core/llm/ledger/ledger_wire_contract.dart';
 import 'package:glaze_flutter/core/llm/macro_engine.dart';
 import 'package:glaze_flutter/core/llm/studio_ledger_prompt.dart';
 import 'package:glaze_flutter/core/models/character.dart';
+import 'package:glaze_flutter/core/models/ledger_preset_instruction_defaults.dart';
 import 'package:glaze_flutter/core/models/studio_config.dart';
 import 'package:glaze_flutter/core/models/tracker.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/card_rewrite_prompt_builder.dart';
@@ -58,9 +60,26 @@ void main() {
         'USER_PRESET_SENTINEL {{char}} / {{user}}. '
         'Treat every Ledger relationship as confirmed canon.',
   );
+  const seededInstructions =
+      '$ledgerDefaultTurnInstructions\n\n$ledgerDefaultSharedInstructions';
+  const seededBlocks = [
+    StudioPresetBlock(
+      id: 'ledger_system',
+      section: 'ledger',
+      injectionPoint: 'ledger',
+      content: ledgerDefaultTurnInstructions,
+    ),
+    StudioPresetBlock(
+      id: 'ledger_shared_policy',
+      section: 'ledger',
+      injectionPoint: 'ledger',
+      content: ledgerDefaultSharedInstructions,
+      order: 1,
+    ),
+  ];
 
   String ledgerPrompt({
-    List<StudioPresetBlock> blocks = const [],
+    List<StudioPresetBlock> blocks = seededBlocks,
     MacroContext? context = macroCtx,
     StudioLedgerEngine engine = StudioLedgerEngine.currentReconciled,
   }) => const LedgerPromptFactory().buildLedgerPrompt(
@@ -122,7 +141,8 @@ void main() {
   }
 
   final ledgerPaths = <String, String Function()>{
-    'direct built-in': () => const StudioLedgerPrompt().build(
+    'direct supplied seed': () => const StudioLedgerPrompt().build(
+      systemPrompt: seededInstructions,
       finalAssistantText: finalAssistantText,
       currentUserText: currentUserText,
       recentHistoryText: historyText,
@@ -131,69 +151,187 @@ void main() {
       character: card,
     ),
     'direct legacy': () => const StudioLedgerPrompt().buildLegacyTurnOnly(
+      systemPrompt: seededInstructions,
       finalAssistantText: finalAssistantText,
       currentUserText: currentUserText,
       recentHistoryText: historyText,
       currentTrackers: trackers,
       recentMemoryEntries: const [],
     ),
-    'factory built-in': ledgerPrompt,
+    'factory seeded preset': ledgerPrompt,
     'factory legacy': () =>
         ledgerPrompt(engine: StudioLedgerEngine.legacyTurnOnly),
-    'factory user preset': () => ledgerPrompt(blocks: const [userBlock]),
-    'factory legacy with user preset': () => ledgerPrompt(
-      blocks: const [userBlock],
-      engine: StudioLedgerEngine.legacyTurnOnly,
-    ),
-    'factory preset without macro context': () =>
-        ledgerPrompt(blocks: const [userBlock], context: null),
-    'factory disabled preset': () =>
-        ledgerPrompt(blocks: [userBlock.copyWith(enabled: false)]),
-    'factory empty preset': () =>
-        ledgerPrompt(blocks: [userBlock.copyWith(content: ' ')]),
-    'factory wrong injection point': () =>
-        ledgerPrompt(blocks: [userBlock.copyWith(injectionPoint: 'cleaner')]),
   };
 
-  group('Ledger runtime source contracts', () {
+  group('Ledger preset authority contracts', () {
     for (final entry in ledgerPaths.entries) {
-      test('${entry.key} includes the shared contract deterministically', () {
+      test('${entry.key} includes only explicitly supplied seed policies', () {
         final prompt = entry.value();
-        expectSourceContract(prompt);
+        expect(prompt, contains(ledgerDefaultSharedInstructions));
+        expect(prompt, contains(ledgerDefaultTurnInstructions));
         expect(prompt.codeUnits, entry.value().codeUnits);
         expect(prompt, contains(historyText));
         expect(prompt, contains(currentUserText));
         expect(prompt, contains(finalAssistantText));
         expect(prompt, contains('relationship:Квинн:Данви.trust'));
-        expect(prompt, contains(StudioLedgerPrompt.gameClockRules));
-        expect(
-          prompt,
-          contains(StudioLedgerPrompt.sceneConditionLifecycleRules),
-        );
-        expect(prompt, contains(StudioLedgerPrompt.turnExportTemplate));
+        expect(prompt, contains(LedgerWireContract.turnExportTemplate));
       });
     }
 
-    test('user preset is unchanged and source rules are in runtime suffix', () {
-      const blocks = [userBlock];
-      final before = jsonEncode(blocks.map((block) => block.toJson()).toList());
-      final prompt = ledgerPrompt(blocks: blocks);
+    test(
+      'custom instructions are preserved without a hidden policy suffix',
+      () {
+        const blocks = [userBlock];
+        final before = jsonEncode(
+          blocks.map((block) => block.toJson()).toList(),
+        );
+        final prompt = ledgerPrompt(blocks: blocks);
 
-      expect(prompt, startsWith('USER_PRESET_SENTINEL Квинн / Данви.'));
+        expect(prompt, startsWith('USER_PRESET_SENTINEL Квинн / Данви.'));
+        expect(
+          prompt,
+          contains('Treat every Ledger relationship as confirmed canon.'),
+        );
+        expect(
+          prompt,
+          isNot(contains(CanonEvidenceRules.sourceAndRelationships)),
+        );
+        expect(prompt, isNot(contains('Every per-turn response MUST include')));
+        expect(prompt, isNot(contains('Scene-scoped condition lifecycle:')));
+        expect(
+          jsonEncode(blocks.map((block) => block.toJson()).toList()),
+          before,
+        );
+        expect(userBlock.content, contains('{{char}} / {{user}}'));
+        expect(userBlock.content, isNot(contains('# Canon evidence')));
+      },
+    );
+
+    test('editing or removing shared policy changes the effective prompt', () {
+      final original = ledgerPrompt();
+      final edited = ledgerPrompt(
+        blocks: [
+          seededBlocks.first,
+          seededBlocks.last.copyWith(content: 'EDITED_SHARED_POLICY'),
+        ],
+      );
+      final removed = ledgerPrompt(blocks: [seededBlocks.first]);
+      final disabled = ledgerPrompt(
+        blocks: [
+          seededBlocks.first,
+          seededBlocks.last.copyWith(enabled: false),
+        ],
+      );
+      expect(original, contains(ledgerDefaultSharedInstructions));
+      expect(edited, contains('EDITED_SHARED_POLICY'));
+      for (final prompt in [edited, removed, disabled]) {
+        expect(prompt, isNot(contains(ledgerDefaultSharedInstructions)));
+        expect(
+          prompt,
+          isNot(contains(CanonEvidenceRules.sourceAndRelationships)),
+        );
+      }
+      expect(removed, disabled);
+    });
+
+    test(
+      'removing turn clock and lifecycle text does not restore it in code',
+      () {
+        final edited = ledgerPrompt(
+          blocks: [
+            seededBlocks.first.copyWith(content: 'CUSTOM_TURN_POLICY'),
+            seededBlocks.last,
+          ],
+        );
+        expect(edited, contains('CUSTOM_TURN_POLICY'));
+        expect(edited, contains(ledgerDefaultSharedInstructions));
+        expect(edited, isNot(contains('Every per-turn response MUST include')));
+        expect(edited, isNot(contains('Scene-scoped condition lifecycle:')));
+        expect(edited, contains(LedgerWireContract.turnExportTemplate));
+      },
+    );
+
+    test('macro-free custom preset works without MacroContext', () {
+      final prompt = ledgerPrompt(
+        blocks: [userBlock.copyWith(content: 'CUSTOM_WITHOUT_MACROS')],
+        context: null,
+      );
+      expect(prompt, startsWith('CUSTOM_WITHOUT_MACROS'));
+      expect(prompt, isNot(contains(ledgerDefaultTurnInstructions)));
+      expect(prompt, isNot(contains(ledgerDefaultSharedInstructions)));
+    });
+
+    for (final engine in StudioLedgerEngine.values) {
+      test('$engine fails closed for unusable primary instructions', () {
+        for (final blocks in <List<StudioPresetBlock>>[
+          [],
+          [userBlock.copyWith(enabled: false)],
+          [userBlock.copyWith(content: ' ')],
+          [userBlock.copyWith(injectionPoint: 'cleaner')],
+        ]) {
+          expect(
+            () => ledgerPrompt(blocks: blocks, engine: engine),
+            throwsStateError,
+          );
+        }
+      });
+    }
+
+    test('legacy engine uses exactly the same explicit preset assembly', () {
       expect(
-        prompt.indexOf(CanonEvidenceRules.sourceAndRelationships),
-        greaterThan(prompt.indexOf('Treat every Ledger relationship')),
+        ledgerPrompt(blocks: const [userBlock]),
+        ledgerPrompt(
+          blocks: const [userBlock],
+          engine: StudioLedgerEngine.legacyTurnOnly,
+        ),
+      );
+    });
+
+    test('direct legacy builder has no separate semantic profile', () {
+      const builder = StudioLedgerPrompt();
+      final current = builder.build(
+        systemPrompt: 'EXPLICIT_DIRECT_INSTRUCTIONS',
+        finalAssistantText: finalAssistantText,
+        currentUserText: currentUserText,
+        recentHistoryText: historyText,
+        currentTrackers: trackers,
+        recentMemoryEntries: const [],
+      );
+      final legacy = builder.buildLegacyTurnOnly(
+        systemPrompt: 'EXPLICIT_DIRECT_INSTRUCTIONS',
+        finalAssistantText: finalAssistantText,
+        currentUserText: currentUserText,
+        recentHistoryText: historyText,
+        currentTrackers: trackers,
+        recentMemoryEntries: const [],
+      );
+      expect(legacy, current);
+      expect(legacy, startsWith('EXPLICIT_DIRECT_INSTRUCTIONS'));
+      expect(legacy, isNot(contains(ledgerDefaultSharedInstructions)));
+      expect(legacy, isNot(contains(ledgerDefaultTurnInstructions)));
+    });
+
+    test('direct builders reject blank supplied instructions', () {
+      expect(
+        () => const StudioLedgerPrompt().build(
+          systemPrompt: ' ',
+          finalAssistantText: finalAssistantText,
+          recentHistoryText: historyText,
+          currentTrackers: trackers,
+          recentMemoryEntries: const [],
+        ),
+        throwsStateError,
       );
       expect(
-        prompt.indexOf(CanonEvidenceRules.sourceAndRelationships),
-        greaterThan(prompt.indexOf('<final_assistant_response>')),
+        () => const StudioLedgerPrompt().buildLegacyTurnOnly(
+          systemPrompt: '\n',
+          finalAssistantText: finalAssistantText,
+          recentHistoryText: historyText,
+          currentTrackers: trackers,
+          recentMemoryEntries: const [],
+        ),
+        throwsStateError,
       );
-      expect(
-        jsonEncode(blocks.map((block) => block.toJson()).toList()),
-        before,
-      );
-      expect(userBlock.content, contains('{{char}} / {{user}}'));
-      expect(userBlock.content, isNot(contains('# Canon evidence')));
     });
   });
 

@@ -202,60 +202,63 @@ void main() {
     ]);
   });
 
-  test('repairs pipeline routing already corrupted in stored JSON', () async {
-    await db
-        .into(db.studioPresetRows)
-        .insert(
-          StudioPresetRowsCompanion.insert(
-            presetId: 'corrupted-routing',
-            name: 'Corrupted routing',
-            blocksJson: Value(
-              jsonEncode([
-                {
-                  'id': 'final_main_prompt',
-                  'type': 'instruction',
-                  'section': '',
-                  'injectionPoint': 'pregen',
-                },
-                {
-                  'id': 'cleaner_system',
-                  'type': 'instruction',
-                  'section': '',
-                  'injectionPoint': 'final',
-                },
-                {
-                  'id': 'ledger_system',
-                  'type': 'instruction',
-                  'section': '',
-                  'injectionPoint': 'pregen',
-                },
-                {
-                  'id': 'ledger_reconciliation_prompt',
-                  'type': 'instruction',
-                  'section': '',
-                  'injectionPoint': 'final',
-                },
-                {
-                  'id': 'custom',
-                  'type': 'instruction',
-                  'section': '',
-                  'injectionPoint': 'final',
-                },
-              ]),
+  test(
+    'repairs legacy pipeline routing but preserves authored Ledger routing',
+    () async {
+      await db
+          .into(db.studioPresetRows)
+          .insert(
+            StudioPresetRowsCompanion.insert(
+              presetId: 'corrupted-routing',
+              name: 'Corrupted routing',
+              blocksJson: Value(
+                jsonEncode([
+                  {
+                    'id': 'final_main_prompt',
+                    'type': 'instruction',
+                    'section': '',
+                    'injectionPoint': 'pregen',
+                  },
+                  {
+                    'id': 'cleaner_system',
+                    'type': 'instruction',
+                    'section': '',
+                    'injectionPoint': 'final',
+                  },
+                  {
+                    'id': 'ledger_system',
+                    'type': 'instruction',
+                    'section': '',
+                    'injectionPoint': 'pregen',
+                  },
+                  {
+                    'id': 'ledger_reconciliation_prompt',
+                    'type': 'instruction',
+                    'section': '',
+                    'injectionPoint': 'final',
+                  },
+                  {
+                    'id': 'custom',
+                    'type': 'instruction',
+                    'section': '',
+                    'injectionPoint': 'final',
+                  },
+                ]),
+              ),
             ),
-          ),
-        );
+          );
 
-    final restored = await repo.getById('corrupted-routing');
+      final restored = await repo.getById('corrupted-routing');
 
-    expect(restored?.blocks.map((block) => block.injectionPoint), [
-      'final',
-      'cleaner',
-      'ledger',
-      'ledger',
-      'final',
-    ]);
-  });
+      expect(restored?.blocks.map((block) => block.injectionPoint), [
+        'final',
+        'cleaner',
+        'pregen',
+        'final',
+        'final',
+      ]);
+    },
+  );
 
   test('reads legacy block rows and upserts canonical JSON', () async {
     await db

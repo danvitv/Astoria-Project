@@ -21,6 +21,7 @@ import '../studio_regex_applicator.dart';
 import '../transport/llm_capture_context.dart';
 import 'ledger_canon_authority.dart';
 import 'ledger_output_recovery.dart';
+import 'ledger_preset_prompt_resolver.dart';
 import 'ledger_reconciliation_committer.dart';
 import 'ledger_replacement_basis_resolver.dart';
 import 'ledger_run_diagnostics.dart';
@@ -284,20 +285,11 @@ final class LedgerReconciliationRunner {
         request.plan.messages,
       );
       await _throwIfAborted(token, request.isStillCurrent);
-      final promptBlock = request.ledgerBlocks
-          .where(
-            (block) =>
-                block.id == ledgerReconciliationPromptBlockId &&
-                block.enabled &&
-                block.injectionPoint == 'ledger' &&
-                block.content.trim().isNotEmpty,
-          )
-          .firstOrNull;
-      final systemPrompt = promptBlock == null
-          ? fallbackLedgerReconciliationPrompt
-          : request.macroCtx == null
-          ? promptBlock.content
-          : replaceMacros(promptBlock.content, request.macroCtx!).text;
+      final systemPrompt = const LedgerPresetPromptResolver()
+          .resolveReconciliation(
+            blocks: request.ledgerBlocks,
+            macroCtx: request.macroCtx,
+          );
       const reconciliationPrompt = StudioLedgerReconciliationPrompt();
       final reviewText = request.plan.messages
           .map((message) => message.content)
@@ -312,6 +304,7 @@ final class LedgerReconciliationRunner {
         trackers: promptTrackers,
         knowledgeFacts: offeredFacts,
         character: canon.source,
+        focalUserName: request.macroCtx?.userName ?? '',
       );
       final prompt = request.macroCtx == null
           ? rawPrompt
@@ -426,8 +419,20 @@ final class LedgerReconciliationRunner {
             ? _outputRecovery.buildRepairPrompt(
                 responseText,
                 reconciliation: true,
+                systemPrompt: const LedgerPresetPromptResolver()
+                    .resolveOutputRepair(
+                      blocks: request.ledgerBlocks,
+                      macroCtx: request.macroCtx,
+                    ),
               )
-            : _outputRecovery.buildCleanupRepairPrompt(responseText);
+            : _outputRecovery.buildCleanupRepairPrompt(
+                responseText,
+                systemPrompt: const LedgerPresetPromptResolver()
+                    .resolveCleanupRepair(
+                      blocks: request.ledgerBlocks,
+                      macroCtx: request.macroCtx,
+                    ),
+              );
         totalPromptChars += repairPrompt.length;
         if (!await _renewLease(request.sessionId, leaseOwnerId)) {
           return LedgerRunResult.aborted;

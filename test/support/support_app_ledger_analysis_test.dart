@@ -110,7 +110,7 @@ void main() {
           expect(data['numericClockComparison'], entry.$5);
           expect(data['bodyAccess'], 'notGranted');
           expect(data['advisory'], true);
-          expect(data['builtInContractEditable'], false);
+          expect(data['builtInContractEditable'], true);
           if (entry.$2 == 'available') {
             expect(data['capturedInstruction'], 'present');
             expect(data['captureCount'], 1);
@@ -174,7 +174,7 @@ void main() {
           'debugCount': valid ? 1 : 0,
           'bodyAccess': 'notGranted',
           'advisory': true,
-          'builtInContractEditable': false,
+          'builtInContractEditable': true,
         });
       });
       expect(await configurationAction(tester, () => ledgerSources(f)), before);

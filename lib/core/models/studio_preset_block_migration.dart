@@ -44,8 +44,6 @@ const _canonicalInjectionPoints = <String, String>{
   'cleaner_audit': 'cleaner',
   'cleaner_rules': 'cleaner',
   'cleaner_beauty': 'cleaner',
-  'ledger_system': 'ledger',
-  'ledger_reconciliation_prompt': 'ledger',
 };
 
 bool _hasBrokenCanonicalRouting(StudioPresetBlock block) {

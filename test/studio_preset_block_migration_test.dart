@@ -167,7 +167,7 @@ void main() {
       expect(custom.mode, 'direct');
     });
 
-    test('repairs built-in blocks corrupted before the codec fix', () {
+    test('repairs canonical routes but preserves authored Ledger routing', () {
       final corrupted = [
         const StudioPresetBlock(
           id: 'final_main_prompt',
@@ -207,11 +207,56 @@ void main() {
         'final',
         'cleaner',
         'cleaner',
-        'ledger',
-        'ledger',
+        'pregen',
+        'final',
         'final',
       ]);
       expect(migrateStudioPresetBlocksToV2(repaired), same(repaired));
     });
+
+    test(
+      'legacy Ledger sections still migrate through generic section routing',
+      () {
+        const legacy = [
+          StudioPresetBlock(
+            id: 'ledger_system',
+            section: 'ledger',
+            injectionPoint: 'pregen',
+          ),
+          StudioPresetBlock(
+            id: 'ledger_reconciliation_prompt',
+            section: 'ledger',
+            injectionPoint: 'final',
+          ),
+        ];
+        final migrated = migrateStudioPresetBlocksToV2(legacy);
+        expect(
+          migrated.map((block) => block.injectionPoint),
+          everyElement('ledger'),
+        );
+        expect(migrated.map((block) => block.section), everyElement(isEmpty));
+        expect(migrateStudioPresetBlocksToV2(migrated), same(migrated));
+      },
+    );
+
+    test(
+      'editor-created Ledger blocks retain intentional routes without migration',
+      () {
+        const authored = [
+          StudioPresetBlock(
+            id: 'ledger_system',
+            section: '',
+            injectionPoint: 'cleaner',
+          ),
+          StudioPresetBlock(
+            id: 'ledger_reconciliation_prompt',
+            section: '',
+            injectionPoint: 'final',
+          ),
+        ];
+        expect(studioPresetBlocksNeedMigration(authored), isFalse);
+        expect(migrateStudioPresetBlocksToV2(authored), same(authored));
+      },
+    );
   });
 }

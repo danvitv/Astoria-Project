@@ -4,7 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 
 import '../../llm/game_time.dart';
-import '../../llm/studio_ledger_prompt.dart';
+import '../../models/ledger_preset_instruction_defaults.dart';
 import '../../models/chat_message.dart';
 import '../../models/support_models.dart';
 import '../app_db.dart';

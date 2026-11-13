@@ -8,6 +8,7 @@ import 'package:glaze_flutter/core/state/chat_source_mutation_provider.dart';
 import 'package:glaze_flutter/core/state/character_folder_provider.dart';
 import 'package:glaze_flutter/core/state/preset_folder_provider.dart';
 import 'package:glaze_flutter/core/state/db_provider.dart';
+import 'package:glaze_flutter/core/state/session_mutation_gate.dart';
 import 'package:glaze_flutter/features/chat/chat_provider.dart';
 import 'package:glaze_flutter/features/chat/generating_sessions_provider.dart';
 import 'package:glaze_flutter/features/chat/state/chat_native_owner_registry.dart';
@@ -97,6 +98,8 @@ final class DomainLoopFixture {
     supportAppRepairNativePortProvider,
     supportAppNativeRepairPortProvider,
     chatNativeOwnerRegistryProvider,
+    // Real per-container, memory-only ownership gate; no DB or native startup.
+    sessionMutationGateProvider,
     chatSourceMutationRegistryProvider,
     chatProvider(character),
     generatingSessionsProvider,

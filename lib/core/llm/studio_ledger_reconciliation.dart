@@ -10,7 +10,7 @@ import '../models/knowledge_cleanup.dart';
 import '../models/tracker.dart';
 import 'studio_ledger_prompt.dart';
 import 'canon_evidence_text.dart';
-import 'canon_evidence_rules.dart';
+import 'ledger/ledger_wire_contract.dart';
 
 const ledgerReconciliationPromptBlockId = 'ledger_reconciliation_prompt';
 
@@ -203,9 +203,15 @@ class StudioLedgerReconciliationPrompt {
     required String systemPrompt,
     required LedgerReconciliationPlan plan,
     required List<Tracker> trackers,
+    required String focalUserName,
     List<CharacterKnowledgeFact> knowledgeFacts = const [],
     Character? character,
   }) {
+    if (systemPrompt.trim().isEmpty) {
+      throw StateError(
+        'Studio Ledger reconciliation requires nonblank preset instructions.',
+      );
+    }
     final chat = plan.messages
         .map(
           (message) =>
@@ -230,8 +236,6 @@ class StudioLedgerReconciliationPrompt {
 
     return '''$systemPrompt
 
-${CanonEvidenceRules.sourceAndRelationships}
-
 $cardSection<review_range start="${plan.startMessageId}" end="${plan.endMessage.id}">
 $chat
 </review_range>
@@ -248,34 +252,7 @@ ${keys.isEmpty ? '(no keys)' : keys.join('\n')}
 $factLines
 </knowledge_facts>
 
-Return exactly:
-<glaze_memory_export>
-{"ops":[],"knowledgeFacts":[]}
-</glaze_memory_export>
-
-<glaze_knowledge_cleanup>
-{"ops":[]}
-</glaze_knowledge_cleanup>
-
-Allowed namespaces: npc:, relationship:, arc:, world:, scene.
-Allowed Ledger ops: set, delete. Keep set values under 1200 characters.
-
-Knowledge cleanup may only repair facts listed in <knowledge_facts>:
-- retract: {"op":"retract","factId":"existing id"} for unsupported,
-  contradicted, or duplicate facts.
-- rename_entity: {"op":"rename_entity","fromKey":"entity:descriptive_alias",
-  "toKey":"entity:canonical","canonicalName":"Name"} only when the review
-  range explicitly resolves a placeholder or descriptive identity. Never
-  rename an already named person into a different named person.
-Never create facts, rewrite fact content, or retract a fact merely because it is
-old or absent from the review range.
-
-Game clock (world:time, world:date, world:day): advance world:time (24h HH:MM)
-only to correct a demonstrable clock error in the committed endpoint state.
-The ordinary turns in the review range were already applied; never add their
-elapsed time again. Keep the complete DD.MM.YYYY / RP day / HH:MM tuple and never
-guess a missing date or day. The clock only moves FORWARD — never rewind it;
-treat flashbacks and memories as prose, not clock changes.''';
+${LedgerWireContract.reconciliation(focalUserName: focalUserName)}''';
   }
 
   List<CharacterKnowledgeFact> relevantKnowledgeFacts(
@@ -503,23 +480,3 @@ int _duplicateLifecycleRank(CharacterKnowledgeFactLifecycle lifecycle) =>
 
 String _normalizedFactPart(String value) =>
     value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
-
-const fallbackLedgerReconciliationPrompt = '''You reconcile the committed
-Studio Ledger against a bounded range of accepted chat messages.
-
-Correct current state; do not summarize the conversation. User statements and
-explicit corrections have highest priority. Assistant narration is evidence of
-what was narrated, not proof of hidden motives, unseen research, ownership,
-causation, or off-screen events.
-
-When a placeholder identity is resolved, set the canonical entity keys and
-delete obsolete Unknown, Unidentified, Stranger, or equivalent keys in the same
-patch. Delete stale current locations after a scene or time advance when the
-entity's location is no longer established. Keep current_goal limited to the
-immediate active objective, not a backlog. Remove unsupported inference rather
-than inventing a replacement fact.
-
-Return only the required Ledger export and Knowledge cleanup blocks. Do not
-emit knowledgeFacts. Knowledge cleanup may only retract listed fact IDs or
-rename an explicitly resolved placeholder entity; it must never create or
-rewrite facts.''';

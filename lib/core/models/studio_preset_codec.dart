@@ -130,6 +130,10 @@ abstract final class StudioPresetCodec {
       if (rawRuntime is Map) {
         try {
           final runtimeJson = _jsonMap(rawRuntime);
+          // A malformed optional marker must not reset unrelated settings.
+          if (runtimeJson['ledgerInstructionRevision'] is! int) {
+            runtimeJson['ledgerInstructionRevision'] = 0;
+          }
           final rawRequestedMode =
               runtimeJson['requestedLedgerPromptInjectionMode'];
           if (rawRequestedMode != null &&

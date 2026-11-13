@@ -15,8 +15,59 @@ part of 'app_db.dart';
 /// installs create the DB via `onCreate`, which — unlike the `onUpgrade`
 /// migration — never seeds the `default` Studio preset row, so the seed is
 /// needed at runtime to back-fill it (see `StudioPresetRepo.ensureDefaultSeeded`).
-List<Map<String, dynamic>> defaultStudioPresetSeedBlocks() =>
-    _legacyStudioPresetMigrationBlocks();
+List<Map<String, dynamic>> defaultStudioPresetSeedBlocks() => [
+  ..._legacyStudioPresetMigrationBlocks().where(
+    (block) => block['section'] != 'ledger',
+  ),
+  _editableLedgerSeedBlock(
+    'ledger_system',
+    'Ledger: turn instructions',
+    ledgerDefaultTurnInstructions,
+    0,
+  ),
+  _editableLedgerSeedBlock(
+    'ledger_reconciliation_prompt',
+    'Ledger: reconciliation instructions',
+    ledgerDefaultReconciliationInstructions,
+    1,
+  ),
+  _editableLedgerSeedBlock(
+    'ledger_shared_policy',
+    'Ledger: shared evidence policy',
+    ledgerDefaultSharedInstructions,
+    2,
+  ),
+  _editableLedgerSeedBlock(
+    'ledger_output_repair',
+    'Ledger: export format repair',
+    ledgerDefaultRepairInstructions,
+    3,
+  ),
+  _editableLedgerSeedBlock(
+    'ledger_cleanup_repair',
+    'Ledger: cleanup format repair',
+    ledgerDefaultCleanupRepairInstructions,
+    4,
+  ),
+];
+
+Map<String, dynamic> _editableLedgerSeedBlock(
+  String id,
+  String name,
+  String content,
+  int order,
+) => {
+  'id': id,
+  'name': name,
+  'kind': 'instruction',
+  'role': 'system',
+  'content': content,
+  'enabled': true,
+  'locked': false,
+  'order': order,
+  'section': 'ledger',
+  'injectionPoint': 'ledger',
+};
 
 /// Versioned payload retained only so upgrades from old database schemas can
 /// finish without changing their historical migration behavior.

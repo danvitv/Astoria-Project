@@ -22,6 +22,7 @@ import '../studio_regex_applicator.dart';
 import '../transport/llm_capture_context.dart';
 import 'ledger_canon_authority.dart';
 import 'ledger_output_recovery.dart';
+import 'ledger_preset_prompt_resolver.dart';
 import 'ledger_prompt_factory.dart';
 import 'ledger_run_diagnostics.dart';
 import 'ledger_run_result.dart';
@@ -225,8 +226,7 @@ class LedgerTurnRunner {
       debugPrint(
         '[StudioLedger] prompt session=${request.sessionId} '
         'chars=${prompt.length} '
-        'usingPresetBlocks=${request.ledgerBlocks.isNotEmpty && request.macroCtx != null} '
-        'first500=${prompt.length > 500 ? prompt.substring(0, 500) : prompt}',
+        'presetBlockCount=${request.ledgerBlocks.length}',
       );
 
       // ── 4. Call LLM ─────────────────────────────────────────────────────
@@ -302,8 +302,7 @@ class LedgerTurnRunner {
       final rawResponse = outcome.text!;
       debugPrint(
         '[StudioLedger] raw response session=${request.sessionId} '
-        'chars=${rawResponse.length} '
-        'first1000=${rawResponse.length > 1000 ? rawResponse.substring(0, 1000) : rawResponse}',
+        'chars=${rawResponse.length}',
       );
 
       var effectiveResponse = rawResponse;
@@ -356,6 +355,10 @@ class LedgerTurnRunner {
         trace.recordRepairRequested(exportRepair: true);
         final repairPrompt = _outputRecovery.buildRepairPrompt(
           effectiveResponse,
+          systemPrompt: const LedgerPresetPromptResolver().resolveOutputRepair(
+            blocks: request.ledgerBlocks,
+            macroCtx: request.macroCtx,
+          ),
         );
         totalPromptChars += repairPrompt.length;
         final repair = await _llm.callOnceWithLog(

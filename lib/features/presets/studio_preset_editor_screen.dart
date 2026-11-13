@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/ledger_prompt_injection_mode.dart';
 import '../../core/models/ledger_prompt_injection_policy.dart';
+import '../../core/models/ledger_preset_instruction_upgrade.dart';
 import '../../core/models/card_rewriter_settings.dart';
 import '../../core/models/preset_folder.dart';
 import '../../core/models/studio_config.dart';
@@ -17,6 +18,7 @@ import '../../core/state/db_provider.dart';
 import '../../core/utils/id_generator.dart';
 import '../../shared/theme/app_colors.dart';
 import '../../shared/widgets/glaze_bottom_sheet.dart';
+import '../../shared/widgets/glaze_action_button.dart';
 import '../../shared/widgets/glaze_spinner.dart';
 import '../../shared/widgets/glaze_toast.dart';
 import '../../shared/widgets/folder_name_dialog.dart';
@@ -29,6 +31,7 @@ import '../studio/widgets/studio_block_section_list.dart';
 import '../studio/widgets/studio_preset_options_sheet.dart';
 import 'preset_deletion.dart';
 import 'studio_preset_export.dart';
+import 'studio_preset_save_controller.dart';
 import 'widgets/preset_dashboard_card.dart';
 
 /// Full editor for a single agentic (Studio) preset, rendered inline inside the
@@ -64,7 +67,8 @@ class StudioPresetEditorBodyState
   StudioPreset? _preset;
   bool _loading = true;
   String? _editingBlockId;
-  Timer? _saveTimer;
+  bool _ledgerUpgradeBusy = false;
+  late final StudioPresetSaveController _saveController;
 
   final ScrollController _scrollController = ScrollController();
   double? _savedScrollOffset;
@@ -84,18 +88,27 @@ class StudioPresetEditorBodyState
   @override
   void initState() {
     super.initState();
+    final repo = ref.read(studioPresetRepoProvider);
+    _saveController = StudioPresetSaveController(
+      write: (preset) async {
+        await repo.upsert(preset);
+        if (!mounted || widget.presetId != preset.id) return;
+        ref.invalidate(studioPresetListProvider);
+      },
+    );
     _load();
   }
 
   @override
   void deactivate() {
-    _flushSave();
+    _flushSaveBestEffort();
     super.deactivate();
   }
 
   @override
   void dispose() {
-    _flushSave();
+    _flushSaveBestEffort();
+    _saveController.dispose();
     _scrollController.dispose();
     _reasoningStartCtrl?.dispose();
     _reasoningEndCtrl?.dispose();
@@ -103,10 +116,9 @@ class StudioPresetEditorBodyState
   }
 
   Future<void> _load() async {
-    final preset = await ref
-        .read(studioPresetRepoProvider)
-        .getById(widget.presetId);
-    if (!mounted) return;
+    final presetId = widget.presetId;
+    final preset = await ref.read(studioPresetRepoProvider).getById(presetId);
+    if (!mounted || widget.presetId != presetId) return;
     setState(() {
       _preset = preset;
       _loading = false;
@@ -122,7 +134,7 @@ class StudioPresetEditorBodyState
   /// Closes the inline block editor if open; returns true when it handled back.
   bool handleBack() {
     if (_editingBlockId != null) {
-      _flushSave();
+      _flushSaveBestEffort();
       setState(() => _editingBlockId = null);
       _restoreScrollAfterFrame();
       return true;
@@ -134,33 +146,29 @@ class StudioPresetEditorBodyState
 
   /// Persists [next] immediately (used for discrete edits: toggles, add/delete).
   Future<void> _persistNow(StudioPreset next) async {
+    if (_ledgerUpgradeBusy) return;
     final stamped = next.copyWith(
       updatedAt: DateTime.now().millisecondsSinceEpoch,
     );
     setState(() => _preset = stamped);
-    await ref.read(studioPresetRepoProvider).upsert(stamped);
-    ref.invalidate(studioPresetListProvider);
+    await _saveController.writeImmediately(stamped);
   }
 
   /// Updates in memory now and debounces the write (used while typing content).
   void _persistDebounced(StudioPreset next) {
+    if (_ledgerUpgradeBusy) return;
     setState(
       () => _preset = next.copyWith(
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       ),
     );
-    _saveTimer?.cancel();
-    _saveTimer = Timer(const Duration(milliseconds: 500), _flushSave);
+    _saveController.schedule(_preset!);
   }
 
-  void _flushSave() {
-    if (_saveTimer?.isActive != true) return;
-    _saveTimer!.cancel();
-    final preset = _preset;
-    if (preset == null) return;
-    // ref is still valid in deactivate(); dispose() flush is a best-effort.
-    unawaited(ref.read(studioPresetRepoProvider).upsert(preset));
-    ref.invalidate(studioPresetListProvider);
+  Future<void> _flushSave() => _saveController.flushAndWait();
+
+  void _flushSaveBestEffort() {
+    unawaited(_flushSave().catchError((_) {}));
   }
 
   // ── Scroll position across the inline editor ───────────────────────────────
@@ -594,6 +602,93 @@ class StudioPresetEditorBodyState
 
   // ── Preset-level actions ───────────────────────────────────────────────────
 
+  Future<void> _upgradeLedgerInstructions() async {
+    final presetId = _preset?.id;
+    if (presetId == null || _ledgerUpgradeBusy) return;
+    final repo = ref.read(studioPresetRepoProvider);
+    bool ownsEditor() =>
+        mounted && widget.presetId == presetId && _preset?.id == presetId;
+    var applied = false;
+    setState(() => _ledgerUpgradeBusy = true);
+    try {
+      // Prevent an earlier debounced/full-row save from landing after the CAS.
+      // These are existing edits, not writes performed by the upgrade planner.
+      await _flushSave();
+      if (!mounted || !ownsEditor()) return;
+      final plan = await repo.previewLedgerInstructionUpgrade(presetId);
+      if (!mounted || !ownsEditor()) return;
+      if (!plan.needsUpgrade) {
+        GlazeToast.show(
+          context,
+          'Ledger instructions are already consolidated.',
+        );
+        return;
+      }
+      final description = [
+        'Add ${plan.additions.length} editable Ledger instruction blocks. '
+            'Existing blocks, their switches and routing will not be changed.',
+        'Revision $ledgerInstructionRevision: deleting a block after this '
+            'upgrade will not restore it automatically.',
+        if (plan.warnings.isNotEmpty) '\nWarnings:',
+        ...plan.warnings,
+        for (final block in plan.additions)
+          '\n${block.title} [${block.id}]\n${block.content}',
+      ].join('\n\n');
+      final confirmed = await GlazeBottomSheet.show<bool>(
+        context,
+        title: 'Consolidate Ledger instructions',
+        bigInfo: BottomSheetBigInfo(
+          icon: Icons.rule_folder_outlined,
+          description: description,
+        ),
+        items: [
+          BottomSheetItem(
+            label: 'Confirm and add editable instructions',
+            centered: true,
+            onTap: () => Navigator.of(context, rootNavigator: true).pop(true),
+          ),
+          BottomSheetItem(
+            label: 'action_cancel'.tr(),
+            centered: true,
+            onTap: () => Navigator.of(context, rootNavigator: true).pop(false),
+          ),
+        ],
+      );
+      if (!mounted || !ownsEditor() || confirmed != true) return;
+      final durable = await repo.applyLedgerInstructionUpgrade(
+        presetId: presetId,
+        expectedFingerprint: plan.expectedFingerprint,
+      );
+      applied = true;
+      if (!mounted || !ownsEditor()) return;
+      // Never retain a revision-zero editor snapshot after the commit, even
+      // if the optional latest-row reload fails.
+      setState(() => _preset = durable);
+      ref.invalidate(studioPresetListProvider);
+      // Read the latest durable row without repairing authored Ledger routing.
+      final latest = await repo.previewLedgerInstructionUpgrade(presetId);
+      if (!mounted || !ownsEditor()) return;
+      setState(() {
+        _preset = latest.original;
+        _reasoningStartCtrl?.text =
+            latest.original.runtime.reasoningTagStart ?? '';
+        _reasoningEndCtrl?.text = latest.original.runtime.reasoningTagEnd ?? '';
+      });
+      GlazeToast.show(context, 'Ledger instructions are now editable blocks.');
+    } on Object catch (error) {
+      if (mounted && ownsEditor()) {
+        GlazeToast.show(
+          context,
+          applied
+              ? 'Ledger upgrade applied, but reloading failed: $error'
+              : 'Ledger upgrade was not applied: $error',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _ledgerUpgradeBusy = false);
+    }
+  }
+
   void _showRenameDialog() {
     final preset = _preset;
     if (preset == null) return;
@@ -630,10 +725,14 @@ class StudioPresetEditorBodyState
       title: 'studio_delete_preset'.tr(),
       description: 'studio_confirm_delete_preset'.tr(args: [preset.name]),
     );
-    if (!ok) return;
-    _saveTimer?.cancel();
+    if (!mounted || !ok) return;
+    // Finish this editor's writes before deleting, so a queued full-row save
+    // cannot recreate the preset after its deletion.
+    await _flushSave();
+    if (!mounted) return;
     await deletePresetAndFolderMemberships(ref, preset.id, PresetKind.agentic);
     if (!mounted) return;
+    _saveController.discardDirty();
     widget.onClose();
   }
 
@@ -676,23 +775,26 @@ class StudioPresetEditorBodyState
       );
     }
 
-    return SingleChildScrollView(
-      controller: _scrollController,
-      key: const ValueKey('studio_dashboard'),
-      padding: EdgeInsets.only(
-        top: MediaQuery.paddingOf(context).top,
-        bottom:
-            MediaQuery.paddingOf(context).bottom +
-            MediaQuery.viewInsetsOf(context).bottom,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildDashboard(preset),
-          _buildRuntimeSettingsCard(preset),
-          _buildBlocksCard(preset),
-          const SizedBox(height: 60),
-        ],
+    return AbsorbPointer(
+      absorbing: _ledgerUpgradeBusy,
+      child: SingleChildScrollView(
+        controller: _scrollController,
+        key: const ValueKey('studio_dashboard'),
+        padding: EdgeInsets.only(
+          top: MediaQuery.paddingOf(context).top,
+          bottom:
+              MediaQuery.paddingOf(context).bottom +
+              MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildDashboard(preset),
+            _buildRuntimeSettingsCard(preset),
+            _buildBlocksCard(preset),
+            const SizedBox(height: 60),
+          ],
+        ),
       ),
     );
   }
@@ -720,6 +822,20 @@ class StudioPresetEditorBodyState
       subtitle: 'studio_preset_subtitle'.tr(),
       onTitleTap: _showRenameDialog,
       onMenuTap: _showOptionsMenu,
+      belowUtils:
+          preset.runtime.ledgerInstructionRevision >= ledgerInstructionRevision
+          ? null
+          : Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: GlazeActionButton(
+                label: 'Consolidate Ledger instructions',
+                icon: Icons.rule_folder_outlined,
+                busy: _ledgerUpgradeBusy,
+                onTap: _ledgerUpgradeBusy
+                    ? null
+                    : () => unawaited(_upgradeLedgerInstructions()),
+              ),
+            ),
       // All three stats read as the same pill.
       utilsTrailing: [
         PresetStatBadge(

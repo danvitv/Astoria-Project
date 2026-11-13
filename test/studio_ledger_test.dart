@@ -14,6 +14,7 @@ import 'package:glaze_flutter/core/db/repositories/tracker_snapshot_repo.dart';
 import 'package:glaze_flutter/core/llm/studio_ledger_export_parser.dart';
 import 'package:glaze_flutter/core/llm/game_time.dart';
 import 'package:glaze_flutter/core/llm/ledger/ledger_prompt_factory.dart';
+import 'package:glaze_flutter/core/llm/ledger/ledger_wire_contract.dart';
 import 'package:glaze_flutter/core/llm/macro_engine.dart';
 import 'package:glaze_flutter/core/llm/knowledge_cleanup_parser.dart';
 import 'package:glaze_flutter/core/llm/studio_ledger_prompt.dart';
@@ -25,6 +26,7 @@ import 'package:glaze_flutter/core/models/memory_book.dart';
 import 'package:glaze_flutter/core/models/character_knowledge_fact.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/knowledge_cleanup.dart';
+import 'package:glaze_flutter/core/models/ledger_preset_instruction_defaults.dart';
 import 'package:glaze_flutter/core/models/studio_config.dart';
 import 'package:glaze_flutter/core/models/tracker.dart';
 import 'package:glaze_flutter/core/models/tracker_snapshot.dart';
@@ -35,6 +37,11 @@ import 'package:glaze_flutter/core/state/db_provider.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 
 AppDatabase _db() => AppDatabase.forTesting(NativeDatabase.memory());
+
+const _turnInstructions =
+    '$ledgerDefaultTurnInstructions\n\n$ledgerDefaultSharedInstructions';
+const _reconciliationInstructions =
+    '$ledgerDefaultReconciliationInstructions\n\n$ledgerDefaultSharedInstructions';
 
 final _ledgerTrackerLoaderProvider = Provider<LedgerTrackerLoader>(
   (ref) => LedgerTrackerLoader(ref),
@@ -168,22 +175,22 @@ void main() {
   });
 
   group('StudioLedgerPrompt', () {
-    test('all prompt paths require time even when no other state changes', () {
-      for (final (blocks, engine) in [
-        (const <StudioPresetBlock>[], StudioLedgerEngine.currentReconciled),
-        (const <StudioPresetBlock>[], StudioLedgerEngine.legacyTurnOnly),
-        (
-          const [
-            StudioPresetBlock(
-              id: 'ledger_system',
-              content: 'Maintain continuity. Omit unchanged values.',
-              injectionPoint: 'ledger',
-              section: 'ledger',
-            ),
-          ],
-          StudioLedgerEngine.currentReconciled,
+    test('seeded turn policy supplies clock rules for both engines', () {
+      const blocks = [
+        StudioPresetBlock(
+          id: 'ledger_system',
+          content: ledgerDefaultTurnInstructions,
+          injectionPoint: 'ledger',
+          section: 'ledger',
         ),
-      ]) {
+        StudioPresetBlock(
+          id: 'ledger_shared_policy',
+          content: ledgerDefaultSharedInstructions,
+          injectionPoint: 'ledger',
+          section: 'ledger',
+        ),
+      ];
+      for (final engine in StudioLedgerEngine.values) {
         final prompt = const LedgerPromptFactory().buildLedgerPrompt(
           finalAssistantText: 'Она снова открыла дверь.',
           currentUserText: 'Спустя полчаса. Следующая сцена.',
@@ -202,11 +209,8 @@ void main() {
             sessionId: 'session',
           ),
         );
-        expect(prompt, contains(StudioLedgerPrompt.gameClockRules));
-        expect(
-          prompt,
-          contains(StudioLedgerPrompt.sceneConditionLifecycleRules),
-        );
+        expect(prompt, contains(ledgerDefaultTurnInstructions));
+        expect(prompt, contains(ledgerDefaultSharedInstructions));
         expect(
           prompt,
           contains(
@@ -219,8 +223,6 @@ void main() {
           prompt,
           contains('Also show the resulting clock in the visible ledger'),
         );
-        expect(prompt, contains('still return the required world:time'));
-        expect(prompt, contains('knowledgeFacts may be empty'));
         expect(prompt, contains('do not fabricate missing components'));
         expect(
           prompt,
@@ -228,28 +230,14 @@ void main() {
         );
         expect(prompt, isNot(contains('include it with empty arrays')));
         expect(prompt, isNot(contains('output empty arrays')));
-        if (blocks.isNotEmpty) {
-          expect(
-            prompt.lastIndexOf(StudioLedgerPrompt.gameClockRules),
-            greaterThan(prompt.indexOf('Omit unchanged values.')),
-          );
-        }
         final template = RegExp(
           r'<glaze_memory_export>\n([^\n]+)\n</glaze_memory_export>',
         ).firstMatch(prompt)!.group(1)!;
-        expect(template, StudioLedgerPrompt.turnExportTemplate);
-        final result = parser.parse(
-          '<glaze_memory_export>\n'
-          '${template.replaceFirst('HH:MM', '11:11')}\n'
-          '</glaze_memory_export>',
-          clockPolicy: const LedgerClockPolicy.turn(
-            current: GameTimeState(time: '11:11', date: '09.04.2026', day: 0),
-          ),
-        );
-        expect(result.rejectedOps, isEmpty);
-        expect(result.export!.ops, hasLength(1));
-        expect(result.export!.ops.single.key, 'world:time');
-        expect(result.export!.ops.single.value, '11:11');
+        expect(template, LedgerWireContract.turnExportTemplate);
+        expect(jsonDecode(template), {
+          'ops': <dynamic>[],
+          'knowledgeFacts': <dynamic>[],
+        });
         final currentUser = RegExp(
           r'<current_user_turn>\n([\s\S]*?)\n</current_user_turn>',
         ).firstMatch(prompt)!.group(1)!;
@@ -258,10 +246,26 @@ void main() {
       }
     });
 
-    test('required template can return elapsed time without other changes', () {
+    test('structural template does not prescribe a clock operation', () {
+      final payload = jsonDecode(LedgerWireContract.turnExportTemplate);
+      expect(payload, {'ops': <dynamic>[], 'knowledgeFacts': <dynamic>[]});
+      expect(LedgerWireContract.turnExportTemplate, isNot(contains('HH:MM')));
+    });
+
+    test('elapsed time is authored explicitly rather than by the template', () {
+      final payload =
+          jsonDecode(LedgerWireContract.turnExportTemplate)
+              as Map<String, dynamic>;
+      (payload['ops'] as List<dynamic>).add({
+        'op': 'set',
+        'key': 'world:time',
+        'value': '11:13',
+        'evidence': 'The short exchange took two minutes.',
+        'eventState': 'completed',
+      });
       final result = parser.parse(
         '<glaze_memory_export>\n'
-        '${StudioLedgerPrompt.turnExportTemplate.replaceFirst('HH:MM', '11:13')}\n'
+        '${jsonEncode(payload)}\n'
         '</glaze_memory_export>',
         clockPolicy: const LedgerClockPolicy.turn(
           current: GameTimeState(time: '11:11', date: '09.04.2026', day: 0),
@@ -275,11 +279,11 @@ void main() {
 
     test('required template permits coordinated midnight date and day ops', () {
       final payload =
-          jsonDecode(StudioLedgerPrompt.turnExportTemplate)
+          jsonDecode(LedgerWireContract.turnExportTemplate)
               as Map<String, dynamic>;
       final ops = payload['ops'] as List<dynamic>;
-      (ops.single as Map<String, dynamic>)['value'] = '00:02';
       ops.addAll([
+        {'op': 'set', 'key': 'world:time', 'value': '00:02'},
         {'op': 'set', 'key': 'world:date', 'value': '10.04.2026'},
         {'op': 'set', 'key': 'world:day', 'value': '1'},
       ]);
@@ -298,6 +302,7 @@ void main() {
 
     test('injects full values only for relevant existing state', () {
       final prompt = const StudioLedgerPrompt().build(
+        systemPrompt: _turnInstructions,
         finalAssistantText: 'Lucy checks the door.',
         recentHistoryText: 'Danvi asks Lucy about the plan.',
         currentTrackers: _makeTrackers('s', {
@@ -318,7 +323,10 @@ void main() {
       expect(currentState, isNot(contains('npc:Rebecca.attitude_to_user')));
       expect(prompt, contains('<existing_keys>'));
       expect(prompt, contains('npc:Rebecca.attitude_to_user'));
-      expect(prompt, contains('from <current_state> or <existing_keys>'));
+      expect(
+        prompt,
+        contains('Reuse exact keys from current_state or existing_keys'),
+      );
       expect(prompt, contains('"knowledgeFacts"'));
       expect(prompt, isNot(contains('durableFacts')));
       expect(prompt, isNot(contains('Max value length')));
@@ -373,6 +381,7 @@ void main() {
 
     test('legacy per-turn compatibility profile is parser-compatible', () {
       final prompt = const StudioLedgerPrompt().buildLegacyTurnOnly(
+        systemPrompt: _turnInstructions,
         finalAssistantText: 'Lucy closes the door.',
         recentHistoryText: 'User: Leave now.',
         currentTrackers: const [],
@@ -380,16 +389,18 @@ void main() {
       );
 
       expect(prompt, contains('<glaze_memory_export>'));
-      expect(prompt, contains(StudioLedgerPrompt.turnExportTemplate));
-      expect(prompt, contains('Allowed ops: set, delete'));
-      expect(prompt, isNot(contains('rename_entity')));
-      expect(prompt, isNot(contains('accepted assistant prose as evidence')));
+      expect(prompt, contains(LedgerWireContract.turnExportTemplate));
+      expect(prompt, contains('"set"'));
+      expect(prompt, contains('"delete"'));
+      expect(prompt, contains(ledgerDefaultTurnInstructions));
+      expect(prompt, contains(ledgerDefaultSharedInstructions));
     });
 
     test(
       'clock history block renders ordered entries and is omitted when empty',
       () {
         final withEntries = const StudioLedgerPrompt().build(
+          systemPrompt: _turnInstructions,
           finalAssistantText: 'Lucy closes the door.',
           recentHistoryText: '',
           currentTrackers: const [],
@@ -411,6 +422,7 @@ void main() {
         );
 
         final withoutEntries = const StudioLedgerPrompt().build(
+          systemPrompt: _turnInstructions,
           finalAssistantText: 'Lucy closes the door.',
           recentHistoryText: '',
           currentTrackers: const [],
@@ -433,6 +445,48 @@ void main() {
   });
 
   group('Ledger reconciliation', () {
+    test(
+      'custom reconciliation policy is not overridden by hidden semantics',
+      () {
+        final messages = _conversation(1);
+        final plan = const LedgerReconciliationPlanner().planForEndpoint(
+          messages: messages,
+          endAssistantMessageId: 'a1',
+        )!;
+        const builder = StudioLedgerReconciliationPrompt();
+        final prompt = builder.build(
+          systemPrompt: 'CUSTOM_RECONCILIATION_POLICY',
+          focalUserName: '',
+          plan: plan,
+          trackers: const [],
+        );
+        final edited = builder.build(
+          systemPrompt: 'EDITED_RECONCILIATION_POLICY',
+          focalUserName: '',
+          plan: plan,
+          trackers: const [],
+        );
+        expect(prompt, startsWith('CUSTOM_RECONCILIATION_POLICY'));
+        expect(edited, startsWith('EDITED_RECONCILIATION_POLICY'));
+        for (final output in [prompt, edited]) {
+          expect(output, isNot(contains(ledgerDefaultSharedInstructions)));
+          expect(
+            output,
+            isNot(contains(ledgerDefaultReconciliationInstructions)),
+          );
+          expect(
+            output,
+            isNot(contains('Every per-turn response MUST include')),
+          );
+          expect(output, isNot(contains('Scene-scoped condition lifecycle:')));
+          expect(output, isNot(contains('Unknown stays unknown')));
+          expect(output, contains('<glaze_memory_export>'));
+          expect(output, contains('<glaze_knowledge_cleanup>'));
+          expect(output, contains('Assistant turn 1'));
+        }
+      },
+    );
+
     test('manual plan ends at the requested assistant with five chunks', () {
       final messages = <ChatMessage>[
         const ChatMessage(id: 'a0', role: 'assistant', content: 'Opening'),
@@ -626,18 +680,18 @@ void main() {
           currentAssistantMessageId: 'a6',
         )!;
         final prompt = const StudioLedgerReconciliationPrompt().build(
-          systemPrompt: 'DB PROMPT',
+          systemPrompt: _reconciliationInstructions,
+          focalUserName: '',
           plan: plan,
           trackers: _makeTrackers('s', {
             'npc:Unidentified Netrunner.location': 'Afterlife bar',
             'npc:Rebecca.location': 'Elsewhere',
           }),
         );
-        expect(prompt, contains('DB PROMPT'));
+        expect(prompt, contains(ledgerDefaultReconciliationInstructions));
         expect(prompt, contains('npc:Unidentified Netrunner.location'));
         expect(prompt, contains('npc:Rebecca.location'));
-        expect(prompt, contains('never add their'));
-        expect(prompt, contains('elapsed time again'));
+        expect(prompt, contains('world:time'));
         final state = RegExp(
           r'<committed_state>([\s\S]*?)</committed_state>',
         ).firstMatch(prompt)!.group(1)!;
@@ -709,6 +763,7 @@ void main() {
 
       final prompt = const StudioLedgerReconciliationPrompt().build(
         systemPrompt: 'PROMPT',
+        focalUserName: '',
         plan: plan,
         trackers: trackers,
       );
@@ -1004,6 +1059,7 @@ void main() {
 
       final prompt = const StudioLedgerReconciliationPrompt().build(
         systemPrompt: 'DB PROMPT',
+        focalUserName: '',
         plan: plan,
         trackers: const [],
         knowledgeFacts: const [placeholder, inferred],
@@ -1891,6 +1947,7 @@ Ledger text.
       );
 
       final prompt = const StudioLedgerPrompt().build(
+        systemPrompt: _turnInstructions,
         finalAssistantText: 'Lucy watches the door.',
         recentHistoryText: '',
         currentTrackers: await loader.loadEffectiveLedgerTrackers(sessionId),
@@ -1922,6 +1979,7 @@ Ledger text.
         );
 
         final beforeCommit = const StudioLedgerPrompt().build(
+          systemPrompt: _turnInstructions,
           finalAssistantText: 'Lucy watches the door.',
           recentHistoryText: '',
           currentTrackers: await loader.loadEffectiveLedgerTrackers(sessionId),
@@ -1937,6 +1995,7 @@ Ledger text.
         );
 
         final afterCommit = const StudioLedgerPrompt().build(
+          systemPrompt: _turnInstructions,
           finalAssistantText: 'Lucy watches the door.',
           recentHistoryText: '',
           currentTrackers: await loader.loadEffectiveLedgerTrackers(sessionId),
@@ -1966,6 +2025,7 @@ Ledger text.
       );
 
       final prompt = const StudioLedgerPrompt().build(
+        systemPrompt: _turnInstructions,
         finalAssistantText: 'Lucy watches the door.',
         recentHistoryText: '',
         currentTrackers: await loader.loadEffectiveLedgerTrackers(sessionId),
