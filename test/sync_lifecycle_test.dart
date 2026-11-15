@@ -4856,6 +4856,48 @@ void main() {
     );
   });
 
+  test('conflict comparison normalizes legacy manifest seconds', () {
+    const localHash = 'local-character';
+    const cloudHash = 'cloud-character';
+    const path = '/Astoria-dev/characters/guild.json';
+    const local = SyncManifestEntry(
+      type: 'character',
+      id: 'guild',
+      path: path,
+      updatedAt: 1787088360,
+      hash: localHash,
+    );
+
+    expect(
+      SyncConflictDetector.needsConflict(
+        local,
+        const SyncManifestEntry(
+          type: 'character',
+          id: 'guild',
+          path: path,
+          updatedAt: 1787088359000,
+          hash: cloudHash,
+        ),
+      ),
+      isTrue,
+      reason: 'A newer local legacy-seconds entry must not be auto-pulled',
+    );
+    expect(
+      SyncConflictDetector.needsConflict(
+        local,
+        const SyncManifestEntry(
+          type: 'character',
+          id: 'guild',
+          path: path,
+          updatedAt: 1787088361000,
+          hash: cloudHash,
+        ),
+      ),
+      isFalse,
+      reason: 'A genuinely newer cloud entry should still be pulled',
+    );
+  });
+
   test(
     'Push skips singleton upload when cloud manifest hash matches but file was wiped',
     () async {

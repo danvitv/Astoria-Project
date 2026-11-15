@@ -14,3 +14,8 @@ int normalizeTimestampSeconds(int value) =>
 /// tolerating a legacy millisecond value at the call boundary.
 int timestampSecondsToMilliseconds(int value) =>
     normalizeTimestampSeconds(value) * 1000;
+
+/// Normalizes a timestamp whose contract is milliseconds while tolerating
+/// legacy values persisted in seconds. Existing millisecond precision is kept.
+int normalizeTimestampMilliseconds(int value) =>
+    value > 0 && value < _millisecondsEpochFloor ? value * 1000 : value;

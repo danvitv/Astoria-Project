@@ -11,6 +11,8 @@ void main() {
     expect(normalizeTimestampSeconds(1787088360372), 1787088360);
     expect(timestampSecondsToMilliseconds(1787088360), 1787088360000);
     expect(timestampSecondsToMilliseconds(1787088360372), 1787088360000);
+    expect(normalizeTimestampMilliseconds(1787088360), 1787088360000);
+    expect(normalizeTimestampMilliseconds(1787088360372), 1787088360372);
   });
 
   test('ChatSession cloud JSON normalizes legacy milliseconds', () {

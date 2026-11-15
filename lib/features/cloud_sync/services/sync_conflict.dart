@@ -1,4 +1,5 @@
 import '../sync_models.dart';
+import '../../../core/utils/time_helpers.dart';
 
 class SyncConflict {
   final String key;
@@ -28,7 +29,8 @@ class SyncConflictDetector {
     if (localEntry.hash == cloudEntry.hash) return false;
     // updatedAt == 0 means never edited on this device — prefer cloud pull.
     if (localEntry.updatedAt == 0) return false;
-    return localEntry.updatedAt > cloudEntry.updatedAt;
+    return normalizeTimestampMilliseconds(localEntry.updatedAt) >
+        normalizeTimestampMilliseconds(cloudEntry.updatedAt);
   }
 
   static String getConflictName(
