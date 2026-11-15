@@ -84,20 +84,116 @@ void main() {
     expect((merged['sources'] as List), hasLength(2));
   });
 
-  test('identity collision rolls back the complete incoming union', () async {
+  test('legacy event collision preserves both accepted variants', () async {
     await targetSync.mergeBySessionId('session', _payload('collision'));
-    final original = (await targetSync.getBySessionId('session'))!;
     final incoming = _payload('new-event', extraEvents: [_event('collision')]);
-    final events = (incoming['events'] as List).cast<Map<String, dynamic>>();
-    events.last['description'] = 'different immutable content';
+    final incomingEvents = (incoming['events'] as List)
+        .cast<Map<String, dynamic>>();
+    incomingEvents.last['description'] = 'different immutable content';
     (incoming['sources'] as List).add(_source('collision'));
 
+    final merged = await targetSync.mergeBySessionId('session', incoming);
+    final repeated = await targetSync.mergeBySessionId('session', incoming);
+
+    expect(repeated, merged);
+    final events = (merged['events'] as List).cast<Map<String, dynamic>>();
+    expect(events, hasLength(3));
+    expect(
+      events.map((event) => event['description']),
+      containsAll(['Accepted collision', 'different immutable content']),
+    );
+    expect(events.where((event) => event['id'] == 'collision'), isEmpty);
+  });
+
+  test(
+    'legacy event variants converge independently on both devices',
+    () async {
+      final first = _payload('collision', extraEvents: [_event('anchor')]);
+      (first['sources'] as List).add(_source('anchor'));
+      first['links'] = [_link('collision', 'anchor', acceptedAt: 10)];
+      first['invalidations'] = [_invalidation('collision')];
+      final second = _clone(first);
+      ((second['events'] as List).first as Map<String, dynamic>)
+        ..['description'] = 'A different accepted interpretation'
+        ..['kind'] = 'result';
+      await sourceSync.mergeBySessionId('session', first);
+      await targetSync.mergeBySessionId('session', second);
+      final firstSnapshot = (await sourceSync.getBySessionId('session'))!;
+      final secondSnapshot = (await targetSync.getBySessionId('session'))!;
+
+      final firstMerged = await sourceSync.mergeBySessionId(
+        'session',
+        secondSnapshot,
+      );
+      final secondMerged = await targetSync.mergeBySessionId(
+        'session',
+        firstSnapshot,
+      );
+
+      expect(secondMerged, firstMerged);
+      expect((firstMerged['events'] as List), hasLength(3));
+      expect((firstMerged['links'] as List), hasLength(2));
+      expect((firstMerged['invalidations'] as List), hasLength(2));
+      expect(
+        (firstMerged['events'] as List).where(
+          (event) => (event as Map<String, dynamic>)['id'] == 'collision',
+        ),
+        isEmpty,
+      );
+      expect(
+        (firstMerged['links'] as List).where(
+          (link) =>
+              (link as Map<String, dynamic>)['fromEventId'] == 'collision' ||
+              link['toEventId'] == 'collision',
+        ),
+        isEmpty,
+      );
+      expect(
+        (firstMerged['invalidations'] as List).where(
+          (item) =>
+              (item as Map<String, dynamic>)['targetType'] == 'event' &&
+              item['targetId'] == 'collision',
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  test('rewritten legacy identities are revalidated atomically', () async {
+    final local = _payload('collision');
+    final incoming = _payload('collision');
+    ((incoming['events'] as List).single as Map<String, dynamic>)
+      ..['description'] = 'A different accepted interpretation'
+      ..['kind'] = 'result';
+    await targetSync.mergeBySessionId('session', local);
+    final migrated = await targetSync.mergeBySessionId('session', incoming);
+    final derivedIncomingId =
+        (migrated['events'] as List).cast<Map<String, dynamic>>().singleWhere(
+              (event) =>
+                  event['description'] == 'A different accepted interpretation',
+            )['id']
+            as String;
+
+    await targetSync.deleteBySessionId('session');
+    await targetSync.mergeBySessionId('session', local);
+    final poisoned = _payload('collision', extraEvents: [_event('anchor')]);
+    ((poisoned['events'] as List).first as Map<String, dynamic>)
+      ..['description'] = 'A different accepted interpretation'
+      ..['kind'] = 'result';
+    final overlappingSource = _source('anchor')..['id'] = derivedIncomingId;
+    (poisoned['sources'] as List).add(overlappingSource);
+
     await expectLater(
-      targetSync.mergeBySessionId('session', incoming),
-      throwsStateError,
+      targetSync.mergeBySessionId('session', poisoned),
+      throwsFormatException,
     );
 
-    expect(await targetSync.getBySessionId('session'), original);
+    final retained = await targetSync.getBySessionId('session');
+    expect((retained!['events'] as List), hasLength(1));
+    expect(
+      ((retained['events'] as List).single as Map<String, dynamic>)['id'],
+      'collision',
+    );
   });
 
   test('same event identity converges acceptance metadata', () async {

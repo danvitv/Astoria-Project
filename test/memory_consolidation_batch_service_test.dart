@@ -1151,7 +1151,7 @@ void main() {
     expect(await harness.jobRepo.getSessionJobs(_sessionId), hasLength(2));
   });
 
-  test('a changed source revision is rebuilt as a new package', () async {
+  test('changed fingerprint gets a new package and event id', () async {
     final harness = await _makeHarness();
     final book = await _seedBook(harness, count: 1);
     final original = book.entries.single;
@@ -1165,6 +1165,7 @@ void main() {
       branchId: _sessionId,
       plan: originalPlan,
     )).single;
+    final oldItem = (await harness.jobRepo.getItems(oldJob.id)).single;
     expect(
       await harness.jobRepo.cancel(oldJob.id, reason: 'source_context_changed'),
       isTrue,
@@ -1172,15 +1173,13 @@ void main() {
 
     final previousRevision = original.revisions.single;
     final currentRevision = previousRevision.copyWith(
-      id: '${original.id}:r2',
-      version: 2,
       content: '${previousRevision.content} Updated.',
       createdAt: 2,
     );
     final changed = original.copyWith(
       content: currentRevision.content,
       activeRevisionId: currentRevision.id,
-      revisions: [...original.revisions, currentRevision],
+      revisions: [currentRevision],
     );
     final currentPlan = await harness.batch.planScan(
       sessionId: _sessionId,
@@ -1195,10 +1194,10 @@ void main() {
 
     expect(rebuilt.id, isNot(oldJob.id));
     expect(rebuilt.status, 'pending');
-    expect(
-      (await harness.jobRepo.getItems(rebuilt.id)).single.revisionId,
-      currentRevision.id,
-    );
+    final rebuiltItem = (await harness.jobRepo.getItems(rebuilt.id)).single;
+    expect(rebuiltItem.revisionId, currentRevision.id);
+    expect(rebuiltItem.fingerprint, isNot(oldItem.fingerprint));
+    expect(rebuiltItem.proposedEventId, isNot(oldItem.proposedEventId));
     final jobs = await harness.jobRepo.getSessionJobs(_sessionId);
     expect(jobs, hasLength(2));
     expect(jobs.singleWhere((job) => job.id == oldJob.id).status, 'cancelled');

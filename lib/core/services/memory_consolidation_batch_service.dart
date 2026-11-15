@@ -681,7 +681,9 @@ class MemoryConsolidationBatchService {
     String fingerprint,
   ) {
     final digest = sha256
-        .convert(utf8.encode('$sessionId|$branchId|$entryId|$revisionId'))
+        .convert(
+          utf8.encode('$sessionId|$branchId|$entryId|$revisionId|$fingerprint'),
+        )
         .toString();
     return 'event-${digest.substring(0, 24)}';
   }
