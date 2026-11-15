@@ -20,5 +20,6 @@ class SyncDeletionTracker {
     await record('tracker_value', sessionId, prefs);
     await record('tracker_snapshot', sessionId, prefs);
     await record('info_block', sessionId, prefs);
+    await record('memory_event_registry', sessionId, prefs);
   }
 }

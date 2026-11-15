@@ -472,6 +472,7 @@ class CharactersNotifier extends AsyncNotifier<List<Character>> {
       await SyncDeletionTracker.record('tracker_snapshot', sid);
       await SyncDeletionTracker.record('session_lorebook_overlays', sid);
       await SyncDeletionTracker.record('reconciliation_state', sid);
+      await SyncDeletionTracker.record('memory_event_registry', sid);
       if (result.studioConfigSessionIds.contains(sid)) {
         await SyncDeletionTracker.record('studio_config', sid);
       }

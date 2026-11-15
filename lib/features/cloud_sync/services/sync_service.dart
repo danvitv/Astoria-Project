@@ -52,6 +52,7 @@ class SyncService {
   final SyncChatSummaryStore? _chatSummaryStore;
   final SyncCharacterFolderStore? _characterFolderStore;
   final SyncMemoryGraphStore? _memoryGraphStore;
+  final SyncMemoryEventRegistryStore? _memoryEventRegistryStore;
   final SyncCharacterKnowledgeStore? _characterKnowledgeStore;
   final SyncSessionLorebookOverlayStore? _sessionLorebookOverlayStore;
   final SyncReconciliationStateStore? _reconciliationStateStore;
@@ -248,6 +249,7 @@ class SyncService {
     this._chatSummaryStore,
     this._characterFolderStore,
     this._memoryGraphStore,
+    this._memoryEventRegistryStore,
     this._characterKnowledgeStore,
     this._sessionLorebookOverlayStore,
     this._reconciliationStateStore,
@@ -306,6 +308,7 @@ class SyncService {
     chatSummaryStore: _chatSummaryStore,
     characterFolderStore: _characterFolderStore,
     memoryGraphStore: _memoryGraphStore,
+    memoryEventRegistryStore: _memoryEventRegistryStore,
     characterKnowledgeStore: _characterKnowledgeStore,
     sessionLorebookOverlayStore: _sessionLorebookOverlayStore,
     reconciliationStateStore: _reconciliationStateStore,
@@ -348,6 +351,7 @@ class SyncService {
     _rewriteJobHistoryStore,
     _checkWorkflow,
     _reconciliationPageCache,
+    _memoryEventRegistryStore,
   );
 
   Future<void> init() async {

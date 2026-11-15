@@ -14,6 +14,7 @@ import 'services/dropbox/dropbox_auth.dart';
 import 'services/gdrive/gdrive_auth.dart';
 import '../../core/db/repositories/sync_session_consistency_repo.dart';
 import '../../core/db/repositories/rewrite_job_history_sync_repo.dart';
+import '../../core/db/repositories/memory_event_registry_sync_repo.dart';
 import '../../core/state/character_folder_provider.dart'
     show characterFolderRepoProvider;
 import '../../core/state/lorebook_provider.dart' show saveLorebookActivations;
@@ -106,6 +107,9 @@ final syncServiceProvider = FutureProvider<SyncService>((ref) async {
       ref.watch(characterFolderRepoProvider),
     ),
     memoryGraphStore: MemoryGraphSyncStore(ref.watch(appDbProvider)),
+    memoryEventRegistryStore: MemoryEventRegistrySyncRepo(
+      ref.watch(appDbProvider),
+    ),
     characterKnowledgeStore: CharacterKnowledgeSyncStore(
       ref.watch(appDbProvider),
     ),

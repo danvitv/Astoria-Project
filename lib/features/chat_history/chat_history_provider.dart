@@ -285,6 +285,7 @@ class ChatHistoryNotifier extends AsyncNotifier<List<ChatSessionInfo>> {
       await SyncDeletionTracker.record('tracker_snapshot', sessionId);
       await SyncDeletionTracker.record('session_lorebook_overlays', sessionId);
       await SyncDeletionTracker.record('reconciliation_state', sessionId);
+      await SyncDeletionTracker.record('memory_event_registry', sessionId);
       if (studioConfig != null) {
         await SyncDeletionTracker.record('studio_config', sessionId);
       }

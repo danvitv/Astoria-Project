@@ -115,7 +115,8 @@ class SyncManifest {
   ///         nonempty normalized states accepted by the previous importer.
   ///  17 — retry tracker snapshot history truncated by the old revision cleanup,
   ///         retaining a local-only restore request across push-first upgrades.
-  static const int currentVersion = 17;
+  ///  18 — added merge-only accepted Memory event registry facts.
+  static const int currentVersion = 18;
 
   final int version;
   final String deviceId;
@@ -285,6 +286,8 @@ String cloudPath(String type, String id) {
       return '$cloudBase/character_folders.json';
     case 'memory_graph':
       return '$cloudBase/memory_graphs/$id.json';
+    case 'memory_event_registry':
+      return '$cloudBase/memory_event_registry/$id.json';
     case 'character_knowledge':
       return '$cloudBase/character_knowledge/$id.json';
     case 'session_lorebook_overlays':

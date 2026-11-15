@@ -506,6 +506,69 @@ class FakeRewriteJobHistoryStore implements SyncRewriteJobHistoryStore {
   }
 }
 
+class FakeMemoryEventRegistryStore implements SyncMemoryEventRegistryStore {
+  final Map<String, Map<String, dynamic>> data = {};
+  Future<void> Function(String sessionId)? beforeMerge;
+  bool failDelete = false;
+
+  @override
+  Future<List<String>> getAllSessionIds() async => data.keys.toList()..sort();
+
+  @override
+  Future<Map<String, dynamic>?> getBySessionId(String sessionId) async =>
+      data[sessionId];
+
+  @override
+  Future<Map<String, dynamic>> mergeBySessionId(
+    String sessionId,
+    Map<String, dynamic> incoming,
+  ) async {
+    await beforeMerge?.call(sessionId);
+    if (incoming['__memoryEventRegistry'] != true ||
+        incoming['sessionId'] != sessionId) {
+      throw const FormatException('Invalid memory event registry');
+    }
+    final events = <String, Map<String, dynamic>>{};
+    for (final payload in [data[sessionId], incoming]) {
+      for (final raw in (payload?['events'] as List?) ?? const []) {
+        final event = Map<String, dynamic>.from(raw as Map);
+        events[event['id'] as String] = event;
+      }
+    }
+    final sorted = events.keys.toList()..sort();
+    return data[sessionId] = {
+      '__memoryEventRegistry': true,
+      'schemaVersion': 1,
+      'sessionId': sessionId,
+      'events': [for (final id in sorted) events[id]!],
+      'sources': <dynamic>[],
+      'links': <dynamic>[],
+      'invalidations': <dynamic>[],
+    };
+  }
+
+  @override
+  Future<void> deleteBySessionId(String sessionId) async {
+    if (failDelete) throw StateError('Registry delete failed');
+    data.remove(sessionId);
+  }
+}
+
+Map<String, dynamic> fakeMemoryEventRegistry(
+  String sessionId,
+  List<String> ids,
+) => {
+  '__memoryEventRegistry': true,
+  'schemaVersion': 1,
+  'sessionId': sessionId,
+  'events': [
+    for (final id in ids) {'id': id},
+  ],
+  'sources': <dynamic>[],
+  'links': <dynamic>[],
+  'invalidations': <dynamic>[],
+};
+
 Map<String, dynamic> fakeRewriteHistory(String sessionId, List<String> ids) => {
   '__rewriteJobHistory': true,
   'schemaVersion': 1,
@@ -660,6 +723,7 @@ class InMemoryManifestProvider implements SyncManifestProvider {
   SyncManifest _cached = const SyncManifest(deviceId: '', createdAt: 0);
   final Map<String, String> _storage = {};
   Future<void> Function(bool applyAcceptedHashes)? beforeBuild;
+  Future<void> Function(SyncManifest manifest)? beforeWrite;
 
   InMemoryManifestProvider({
     required SyncCharacterStore characterRepo,
@@ -680,6 +744,7 @@ class InMemoryManifestProvider implements SyncManifestProvider {
     SyncSessionLorebookOverlayStore? sessionLorebookOverlayStore,
     SyncReconciliationStateStore? reconciliationStateStore,
     SyncRewriteJobHistoryStore? rewriteJobHistoryStore,
+    SyncMemoryEventRegistryStore? memoryEventRegistryStore,
     SyncImageStore? imageStore,
   }) : _builder = SyncManifestBuilder(
          characterRepo: characterRepo,
@@ -702,6 +767,7 @@ class InMemoryManifestProvider implements SyncManifestProvider {
          sessionLorebookOverlayStore: sessionLorebookOverlayStore,
          reconciliationStateStore: reconciliationStateStore,
          rewriteJobHistoryStore: rewriteJobHistoryStore,
+         memoryEventRegistryStore: memoryEventRegistryStore,
          imageStore: imageStore,
        );
 
@@ -735,6 +801,7 @@ class InMemoryManifestProvider implements SyncManifestProvider {
 
   @override
   Future<void> writeLocalManifest(SyncManifest manifest) async {
+    await beforeWrite?.call(manifest);
     _cached = manifest;
     _storage['manifest'] = jsonEncode(manifest.toJson());
   }
@@ -787,6 +854,7 @@ class SyncWorld {
   late final FakeCharacterDeletionStore characterDeletions;
   late final FakeReconciliationStateStore? reconciliationStates;
   late final FakeRewriteJobHistoryStore? rewriteJobHistory;
+  late final FakeMemoryEventRegistryStore? memoryEventRegistry;
   late final FakeSessionLorebookOverlayStore? sessionLorebookOverlays;
 
   SyncWorld({
@@ -794,6 +862,7 @@ class SyncWorld {
     FakeCloudAdapter? cloudAdapter,
     FakeReconciliationStateStore? reconciliationStateStore,
     FakeRewriteJobHistoryStore? rewriteJobHistoryStore,
+    FakeMemoryEventRegistryStore? memoryEventRegistryStore,
     FakeSessionLorebookOverlayStore? sessionLorebookOverlayStore,
     Future<void> Function(Set<String>)? reconcilePulledSessions,
   }) {
@@ -814,6 +883,7 @@ class SyncWorld {
     characterDeletions = FakeCharacterDeletionStore(characters);
     reconciliationStates = reconciliationStateStore;
     rewriteJobHistory = rewriteJobHistoryStore;
+    memoryEventRegistry = memoryEventRegistryStore;
     sessionLorebookOverlays = sessionLorebookOverlayStore;
     _reconcilePulledSessions = reconcilePulledSessions;
     manifestProvider = InMemoryManifestProvider(
@@ -830,6 +900,7 @@ class SyncWorld {
       sessionLorebookOverlayStore: sessionLorebookOverlays,
       reconciliationStateStore: reconciliationStates,
       rewriteJobHistoryStore: rewriteJobHistory,
+      memoryEventRegistryStore: memoryEventRegistry,
       imageStore: images,
     );
   }
@@ -869,6 +940,9 @@ class SyncWorld {
     0,
     Duration.zero,
     rewriteJobHistory,
+    null,
+    null,
+    memoryEventRegistry,
   );
 }
 
@@ -1620,6 +1694,331 @@ void main() {
       expect((targetHistory.data[sessionId]!['jobs'] as List), hasLength(1));
     },
   );
+
+  test('push-first unions cloud and local memory event registries', () async {
+    const sessionId = 'registry-union-session';
+    final sourceRegistry = FakeMemoryEventRegistryStore();
+    final source = SyncWorld(memoryEventRegistryStore: sourceRegistry);
+    await source.chats.put(makeChat(sessionId));
+    sourceRegistry.data[sessionId] = fakeMemoryEventRegistry(sessionId, [
+      'cloud-event',
+    ]);
+    await source.engine.pushEntities(onProgress: (_) {});
+
+    final targetRegistry = FakeMemoryEventRegistryStore();
+    final target = SyncWorld(memoryEventRegistryStore: targetRegistry);
+    target.cloud.files.addAll(source.cloud.files);
+    await target.chats.put(makeChat(sessionId));
+    targetRegistry.data[sessionId] = fakeMemoryEventRegistry(sessionId, [
+      'local-event',
+    ]);
+
+    await target.engine.pushEntities(onProgress: (_) {});
+
+    final path = cloudPath('memory_event_registry', sessionId);
+    expect(
+      (jsonDecode(target.cloud.files[path]!)['events'] as List).map(
+        (event) => event['id'],
+      ),
+      ['cloud-event', 'local-event'],
+    );
+    expect(
+      target.cloud.ensuredFolders,
+      contains('$cloudBase/memory_event_registry'),
+    );
+  });
+
+  test('pull imports a memory event registry after its owning chat', () async {
+    const sessionId = 'registry-pull-session';
+    final registry = FakeMemoryEventRegistryStore();
+    final world = SyncWorld(memoryEventRegistryStore: registry);
+    final chat = makeChat(sessionId);
+    final payload = fakeMemoryEventRegistry(sessionId, ['cloud-event']);
+    registry.beforeMerge = (id) async {
+      if (world.chats.data[id] == null) {
+        throw StateError('Registry imported before its owning chat');
+      }
+    };
+    final chatEntry = SyncManifestEntry(
+      type: 'chat',
+      id: sessionId,
+      path: cloudPath('chat', sessionId),
+      updatedAt: 1000,
+      hash: SyncSerialization.computeChatMetadataHash(
+        SessionMetadata(
+          sessionId: sessionId,
+          characterId: chat.characterId,
+          sessionIndex: chat.sessionIndex,
+          updatedAt: chat.updatedAt,
+          messageCount: 0,
+          lastMessageContent: '',
+          lastMessageTimestamp: 0,
+        ),
+      ),
+    );
+    final registryEntry = SyncManifestEntry(
+      type: 'memory_event_registry',
+      id: sessionId,
+      path: cloudPath('memory_event_registry', sessionId),
+      updatedAt: 1000,
+      hash: SyncSerialization.computeSyncHash(payload),
+    );
+    world.cloud.files[chatEntry.path] = jsonEncode(chat.toJson());
+    world.cloud.files[registryEntry.path] = jsonEncode(payload);
+    world.cloud.files[cloudPath('manifest', 'manifest')] = jsonEncode(
+      SyncManifest(
+        deviceId: 'cloud',
+        createdAt: 1,
+        entries: {chatEntry.key: chatEntry, registryEntry.key: registryEntry},
+      ).toJson(),
+    );
+    final conflicts = <SyncConflict>[];
+
+    await world.engine.pullEntities(
+      onProgress: (_) {},
+      onConflict: conflicts.add,
+    );
+
+    expect(conflicts, isEmpty);
+    expect(world.chats.data, contains(sessionId));
+    expect(
+      (registry.data[sessionId]!['events'] as List).single['id'],
+      'cloud-event',
+    );
+  });
+
+  test(
+    'registry tombstone survives push and blocks stale resurrection',
+    () async {
+      const sessionId = 'registry-cleared-session';
+      final oldPayload = fakeMemoryEventRegistry(sessionId, ['old-event']);
+      final sourceRegistry = FakeMemoryEventRegistryStore();
+      final source = SyncWorld(memoryEventRegistryStore: sourceRegistry);
+      await source.chats.put(makeChat(sessionId));
+      sourceRegistry.data[sessionId] = oldPayload;
+      await source.engine.pushEntities(onProgress: (_) {});
+
+      sourceRegistry.data.remove(sessionId);
+      await SyncDeletionTracker.record('memory_event_registry', sessionId);
+      await source.engine.pushEntities(onProgress: (_) {});
+      final key = entryKey('memory_event_registry', sessionId);
+      var cloudManifest = SyncManifest.fromJson(
+        jsonDecode(source.cloud.files[cloudPath('manifest', 'manifest')]!)
+            as Map<String, dynamic>,
+      );
+      expect(cloudManifest.entries[key]?.deleted, isTrue);
+      expect(
+        source.cloud.files,
+        isNot(contains(cloudPath('memory_event_registry', sessionId))),
+      );
+
+      final staleRegistry = FakeMemoryEventRegistryStore();
+      final stale = SyncWorld(memoryEventRegistryStore: staleRegistry);
+      stale.cloud.files.addAll(source.cloud.files);
+      await stale.chats.put(makeChat(sessionId));
+      staleRegistry.data[sessionId] = oldPayload;
+      final oldEntry = SyncManifestEntry(
+        type: 'memory_event_registry',
+        id: sessionId,
+        path: cloudPath('memory_event_registry', sessionId),
+        updatedAt: 1,
+        hash: SyncSerialization.computeSyncHash(oldPayload),
+      );
+      await stale.manifestProvider.writeLocalManifest(
+        SyncManifest(
+          deviceId: 'stale',
+          createdAt: 1,
+          entries: {oldEntry.key: oldEntry},
+        ),
+      );
+
+      await stale.engine.pushEntities(onProgress: (_) {});
+
+      expect(staleRegistry.data, isEmpty);
+      cloudManifest = SyncManifest.fromJson(
+        jsonDecode(stale.cloud.files[cloudPath('manifest', 'manifest')]!)
+            as Map<String, dynamic>,
+      );
+      expect(cloudManifest.entries[key]?.deleted, isTrue);
+    },
+  );
+
+  test('first pull does not erase an unbased local registry', () async {
+    const sessionId = 'unbased-registry-session';
+    final registry = FakeMemoryEventRegistryStore();
+    final world = SyncWorld(memoryEventRegistryStore: registry);
+    await world.chats.put(makeChat(sessionId));
+    registry.data[sessionId] = fakeMemoryEventRegistry(sessionId, [
+      'local-event',
+    ]);
+    expect(
+      (await world.manifestProvider.buildLocalManifest()).entries,
+      contains(entryKey('memory_event_registry', sessionId)),
+    );
+    final tombstone = SyncManifestEntry(
+      type: 'memory_event_registry',
+      id: sessionId,
+      path: cloudPath('memory_event_registry', sessionId),
+      updatedAt: 1000,
+      hash: '',
+      deleted: true,
+    );
+    world.cloud.files[cloudPath('manifest', 'manifest')] = jsonEncode(
+      SyncManifest(
+        deviceId: 'cloud',
+        createdAt: 1,
+        entries: {tombstone.key: tombstone},
+      ).toJson(),
+    );
+    final conflicts = <SyncConflict>[];
+
+    await world.engine.pullEntities(
+      onProgress: (_) {},
+      onConflict: conflicts.add,
+    );
+
+    expect(conflicts.map((conflict) => conflict.key), [tombstone.key]);
+    expect(registry.data[sessionId], isNotNull);
+
+    await world.engine.applyPendingPull(
+      onProgress: (_) {},
+      resolvedAsCloud: [tombstone.key],
+    );
+
+    expect(registry.data[sessionId], isNull);
+    expect(
+      (await world.manifestProvider.readLocalManifest())
+          .entries[tombstone.key]
+          ?.deleted,
+      isTrue,
+    );
+  });
+
+  test('failed registry tombstone deletion is not accepted', () async {
+    const sessionId = 'registry-delete-failure-session';
+    final payload = fakeMemoryEventRegistry(sessionId, ['local-event']);
+    final registry = FakeMemoryEventRegistryStore()..failDelete = true;
+    final world = SyncWorld(memoryEventRegistryStore: registry);
+    await world.chats.put(makeChat(sessionId));
+    registry.data[sessionId] = payload;
+    final active = SyncManifestEntry(
+      type: 'memory_event_registry',
+      id: sessionId,
+      path: cloudPath('memory_event_registry', sessionId),
+      updatedAt: 1,
+      hash: SyncSerialization.computeSyncHash(payload),
+    );
+    await world.manifestProvider.writeLocalManifest(
+      SyncManifest(
+        deviceId: 'local',
+        createdAt: 1,
+        lastSync: 1,
+        entries: {active.key: active},
+      ),
+    );
+    final tombstone = SyncManifestEntry(
+      type: 'memory_event_registry',
+      id: sessionId,
+      path: active.path,
+      updatedAt: 1000,
+      hash: '',
+      deleted: true,
+    );
+    world.cloud.files[cloudPath('manifest', 'manifest')] = jsonEncode(
+      SyncManifest(
+        deviceId: 'cloud',
+        createdAt: 1,
+        entries: {tombstone.key: tombstone},
+      ).toJson(),
+    );
+
+    await expectLater(
+      world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {}),
+      throwsA(isA<SyncQueueAggregateError>()),
+    );
+
+    expect(registry.data[sessionId], payload);
+    final retained =
+        (await world.manifestProvider.readLocalManifest()).entries[active.key];
+    expect(retained?.hash, active.hash);
+    expect(retained?.deleted, isFalse);
+  });
+
+  test('local resolution replaces an unbased registry tombstone', () async {
+    const sessionId = 'registry-local-winner-session';
+    final payload = fakeMemoryEventRegistry(sessionId, ['local-event']);
+    final registry = FakeMemoryEventRegistryStore();
+    final world = SyncWorld(memoryEventRegistryStore: registry);
+    await world.chats.put(makeChat(sessionId));
+    registry.data[sessionId] = payload;
+    final tombstone = SyncManifestEntry(
+      type: 'memory_event_registry',
+      id: sessionId,
+      path: cloudPath('memory_event_registry', sessionId),
+      updatedAt: 1000,
+      hash: '',
+      deleted: true,
+    );
+    world.cloud.files[cloudPath('manifest', 'manifest')] = jsonEncode(
+      SyncManifest(
+        deviceId: 'cloud',
+        createdAt: 1,
+        entries: {tombstone.key: tombstone},
+      ).toJson(),
+    );
+
+    await world.engine.pullEntities(onProgress: (_) {}, onConflict: (_) {});
+    var failManifestWrite = true;
+    world.manifestProvider.beforeWrite = (_) async {
+      if (failManifestWrite) throw StateError('Manifest write interrupted');
+    };
+    await expectLater(
+      world.engine.applyPendingPull(
+        onProgress: (_) {},
+        resolvedAsCloud: const [],
+      ),
+      throwsStateError,
+    );
+    expect(
+      (await world.manifestProvider.readLocalManifest()).entries[tombstone.key],
+      isNull,
+    );
+    failManifestWrite = false;
+    await world.engine.applyPendingPull(
+      onProgress: (_) {},
+      resolvedAsCloud: const [],
+      pushLocalChanges: true,
+    );
+
+    expect(registry.data[sessionId], payload);
+    final cloudManifest = SyncManifest.fromJson(
+      jsonDecode(world.cloud.files[cloudPath('manifest', 'manifest')]!)
+          as Map<String, dynamic>,
+    );
+    final published = cloudManifest.entries[tombstone.key];
+    expect(published?.deleted, isFalse);
+    expect(published?.hash, SyncSerialization.computeSyncHash(payload));
+    expect(world.cloud.files[tombstone.path], jsonEncode(payload));
+  });
+
+  test('runtime clear records a memory event registry tombstone', () async {
+    await SyncDeletionTracker.recordSessionRuntimeClear('cleared-session');
+    final prefs = await SharedPreferences.getInstance();
+    final deleted =
+        (jsonDecode(prefs.getString('gz_sync_deleted_entries')!) as List)
+            .cast<Map<String, dynamic>>();
+
+    expect(
+      deleted,
+      contains(
+        predicate<Map<String, dynamic>>(
+          (row) =>
+              row['type'] == 'memory_event_registry' &&
+              row['id'] == 'cleared-session',
+        ),
+      ),
+    );
+  });
 
   test('pull reconciles touched sessions after primary entities', () async {
     final seen = <Set<String>>[];

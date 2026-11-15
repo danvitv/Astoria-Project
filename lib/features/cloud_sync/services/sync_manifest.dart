@@ -32,6 +32,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
   final SyncChatSummaryStore? _chatSummaryStore;
   final SyncCharacterFolderStore? _characterFolderStore;
   final SyncMemoryGraphStore? _memoryGraphStore;
+  final SyncMemoryEventRegistryStore? _memoryEventRegistryStore;
   final SyncCharacterKnowledgeStore? _characterKnowledgeStore;
   final SyncSessionLorebookOverlayStore? _sessionLorebookOverlayStore;
   final SyncReconciliationStateStore? _reconciliationStateStore;
@@ -86,6 +87,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
     this._chatSummaryStore,
     this._characterFolderStore,
     this._memoryGraphStore,
+    this._memoryEventRegistryStore,
     this._characterKnowledgeStore,
     this._sessionLorebookOverlayStore,
     this._reconciliationStateStore,
@@ -459,6 +461,33 @@ class SyncManifestBuilder implements SyncManifestProvider {
           id: sessionId,
           path: cloudPath('memory_graph', sessionId),
           updatedAt: updatedAt,
+          hash: hash,
+        );
+      }
+    }
+
+    if (_memoryEventRegistryStore != null) {
+      final store = _memoryEventRegistryStore;
+      final sessionIds = await _read(store.getAllSessionIds);
+      for (final sessionId in sessionIds) {
+        if (!chatSessionIds.contains(sessionId) ||
+            await isDeleted('chat', sessionId)) {
+          continue;
+        }
+        final registry = await _read(() => store.getBySessionId(sessionId));
+        if (registry == null) continue;
+        final hash = SyncSerialization.computeSyncHash(registry);
+        final key = entryKey('memory_event_registry', sessionId);
+        entries[key] = SyncManifestEntry(
+          type: 'memory_event_registry',
+          id: sessionId,
+          path: cloudPath('memory_event_registry', sessionId),
+          updatedAt: _resolveUpdatedAt(
+            hash: hash,
+            prevEntry: previous.entries[key],
+            cloudEntry: cloudManifest?.entries[key],
+            now: now,
+          ),
           hash: hash,
         );
       }
