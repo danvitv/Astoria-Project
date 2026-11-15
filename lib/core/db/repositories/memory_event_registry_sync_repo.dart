@@ -197,9 +197,19 @@ class MemoryEventRegistrySyncRepo implements SyncMemoryEventRegistryStore {
         final existing = await (db.select(
           db.memoryEventRows,
         )..where((row) => row.id.equals(event.id))).getSingleOrNull();
-        _verify(existing, event, 'event');
+        _verifyEvent(existing, event);
         if (existing == null) {
           await db.into(db.memoryEventRows).insert(event);
+        } else if (_incomingEventMetadataWins(existing, event)) {
+          await (db.update(
+            db.memoryEventRows,
+          )..where((row) => row.id.equals(event.id))).write(
+            MemoryEventRowsCompanion(
+              acceptedAt: Value(event.acceptedAt),
+              acceptedBy: Value(event.acceptedBy),
+              createdAt: Value(event.createdAt),
+            ),
+          );
         }
       }
       for (final source in sources) {
@@ -215,9 +225,15 @@ class MemoryEventRegistrySyncRepo implements SyncMemoryEventRegistryStore {
         final existing = await (db.select(
           db.memoryEventLinkRows,
         )..where((row) => row.id.equals(link.id))).getSingleOrNull();
-        _verify(existing, link, 'link');
+        _verifyLink(existing, link);
         if (existing == null) {
           await db.into(db.memoryEventLinkRows).insert(link);
+        } else if (link.acceptedAt < existing.acceptedAt) {
+          await (db.update(
+            db.memoryEventLinkRows,
+          )..where((row) => row.id.equals(link.id))).write(
+            MemoryEventLinkRowsCompanion(acceptedAt: Value(link.acceptedAt)),
+          );
         }
       }
       for (final item in invalidations) {
@@ -232,9 +248,17 @@ class MemoryEventRegistrySyncRepo implements SyncMemoryEventRegistryStore {
                 ))
                 .getSingleOrNull();
         if (existing != null) {
-          if (existing.causeMemoryEntryId != item.causeMemoryEntryId ||
-              existing.createdAt != item.createdAt) {
+          if (existing.causeMemoryEntryId != item.causeMemoryEntryId) {
             throw StateError('Conflicting memory invalidation identity');
+          }
+          if (item.createdAt < existing.createdAt) {
+            await (db.update(
+              db.memoryEventInvalidationRows,
+            )..where((row) => row.id.equals(existing.id))).write(
+              MemoryEventInvalidationRowsCompanion(
+                createdAt: Value(item.createdAt),
+              ),
+            );
           }
           continue;
         }
@@ -302,9 +326,69 @@ class MemoryEventRegistrySyncRepo implements SyncMemoryEventRegistryStore {
   static void _verify(DataClass? existing, DataClass incoming, String kind) {
     if (existing != null &&
         jsonEncode(existing.toJson()) != jsonEncode(incoming.toJson())) {
-      throw StateError('Conflicting memory $kind identity');
+      throw StateError(
+        'Conflicting memory $kind identity '
+        '(${_differentFields(existing.toJson(), incoming.toJson()).join(', ')})',
+      );
     }
   }
+
+  static void _verifyEvent(MemoryEventRow? existing, MemoryEventRow incoming) {
+    if (existing == null) return;
+    final local = Map<String, dynamic>.from(existing.toJson())
+      ..remove('acceptedAt')
+      ..remove('acceptedBy')
+      ..remove('createdAt');
+    final remote = Map<String, dynamic>.from(incoming.toJson())
+      ..remove('acceptedAt')
+      ..remove('acceptedBy')
+      ..remove('createdAt');
+    if (jsonEncode(local) != jsonEncode(remote)) {
+      throw StateError(
+        'Conflicting memory event identity '
+        '(${_differentFields(local, remote).join(', ')})',
+      );
+    }
+  }
+
+  static void _verifyLink(
+    MemoryEventLinkRow? existing,
+    MemoryEventLinkRow incoming,
+  ) {
+    if (existing == null) return;
+    final local = Map<String, dynamic>.from(existing.toJson())
+      ..remove('acceptedAt');
+    final remote = Map<String, dynamic>.from(incoming.toJson())
+      ..remove('acceptedAt');
+    if (jsonEncode(local) != jsonEncode(remote)) {
+      throw StateError(
+        'Conflicting memory link identity '
+        '(${_differentFields(local, remote).join(', ')})',
+      );
+    }
+  }
+
+  static bool _incomingEventMetadataWins(
+    MemoryEventRow existing,
+    MemoryEventRow incoming,
+  ) {
+    if (incoming.acceptedAt != existing.acceptedAt) {
+      return incoming.acceptedAt < existing.acceptedAt;
+    }
+    if (incoming.createdAt != existing.createdAt) {
+      return incoming.createdAt < existing.createdAt;
+    }
+    return incoming.acceptedBy.compareTo(existing.acceptedBy) < 0;
+  }
+
+  static List<String> _differentFields(
+    Map<String, dynamic> local,
+    Map<String, dynamic> remote,
+  ) =>
+      ({...local.keys, ...remote.keys}
+          .where((key) => jsonEncode(local[key]) != jsonEncode(remote[key]))
+          .toList()
+        ..sort());
 
   static List<T> _rows<T>(
     Map<String, dynamic> data,

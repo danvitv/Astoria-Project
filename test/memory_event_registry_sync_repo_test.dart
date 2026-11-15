@@ -100,8 +100,48 @@ void main() {
     expect(await targetSync.getBySessionId('session'), original);
   });
 
+  test('same event identity converges acceptance metadata', () async {
+    final local = _payload('event');
+    final localEvent = (local['events'] as List).single as Map<String, dynamic>;
+    localEvent['acceptedAt'] = 20;
+    localEvent['acceptedBy'] = 'user-z';
+    localEvent['createdAt'] = 20;
+    await targetSync.mergeBySessionId('session', local);
+
+    final incoming = _payload('event');
+    final incomingEvent =
+        (incoming['events'] as List).single as Map<String, dynamic>;
+    incomingEvent['acceptedAt'] = 10;
+    incomingEvent['acceptedBy'] = 'user-a';
+    incomingEvent['createdAt'] = 10;
+    final merged = await targetSync.mergeBySessionId('session', incoming);
+    await targetSync.mergeBySessionId('session', local);
+
+    final event = (merged['events'] as List).single as Map<String, dynamic>;
+    expect(event['acceptedAt'], 10);
+    expect(event['acceptedBy'], 'user-a');
+    expect(event['createdAt'], 10);
+    expect(await targetSync.getBySessionId('session'), merged);
+  });
+
+  test('same link identity converges acceptance timestamp', () async {
+    final local = _payload('event-a', extraEvents: [_event('event-b')]);
+    (local['sources'] as List).add(_source('event-b'));
+    local['links'] = [_link('event-a', 'event-b', acceptedAt: 20)];
+    await targetSync.mergeBySessionId('session', local);
+
+    final incoming = _clone(local);
+    (incoming['links'] as List).single['acceptedAt'] = 10;
+    final merged = await targetSync.mergeBySessionId('session', incoming);
+
+    expect(
+      ((merged['links'] as List).single as Map<String, dynamic>)['acceptedAt'],
+      10,
+    );
+  });
+
   test(
-    'invalidation uses portable natural identity and rejects collision',
+    'invalidation identity converges timestamp and rejects cause collision',
     () async {
       final payload = _payload('event');
       payload['invalidations'] = [_invalidation('event')];
@@ -110,14 +150,18 @@ void main() {
 
       final conflicting = _clone(payload);
       (conflicting['invalidations'] as List).single['createdAt'] = 99;
-      await expectLater(
-        targetSync.mergeBySessionId('session', conflicting),
-        throwsStateError,
-      );
+      await targetSync.mergeBySessionId('session', conflicting);
       expect(
         ((await targetSync.getBySessionId('session'))!['invalidations'] as List)
             .single['createdAt'],
         10,
+      );
+
+      (conflicting['invalidations'] as List).single['causeMemoryEntryId'] =
+          'different-memory';
+      await expectLater(
+        targetSync.mergeBySessionId('session', conflicting),
+        throwsStateError,
       );
     },
   );
@@ -227,6 +271,22 @@ Map<String, dynamic> _source(String eventId) => {
   'messageIdsJson': jsonEncode(['message-$eventId']),
   'sourceSwipeId': 0,
   'sourceAgentSwipeId': 0,
+};
+
+Map<String, dynamic> _link(
+  String fromEventId,
+  String toEventId, {
+  required int acceptedAt,
+}) => {
+  'id': '$fromEventId-$toEventId-link',
+  'sessionId': 'session',
+  'branchId': 'session',
+  'fromEventId': fromEventId,
+  'toEventId': toEventId,
+  'relation': 'continues',
+  'status': 'active',
+  'revision': 1,
+  'acceptedAt': acceptedAt,
 };
 
 Map<String, dynamic> _invalidation(String eventId) => {
