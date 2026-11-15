@@ -259,7 +259,7 @@ class SyncController {
       late Future<void> pending;
       switch (mode) {
         case 'push':
-          pending = owned.fullPush(
+          pending = owned.fullPushWithConflictPreflight(
             includeApiKeys: _syncIncludeApiKeys,
             onProgress: progress,
           );
@@ -280,10 +280,16 @@ class SyncController {
           .capturePublicationGuard(); // Exact synchronously started workflow.
       await pending;
       if (!current()) return 'Cloud sync owner retired';
-      if (mode != 'push')
+      if (mode != 'push' || owned.status == SyncStatus.conflict)
         await refreshDataProvidersAfterPull(isCurrent: current);
       if (!current()) return 'Cloud sync owner retired';
-      _syncResult = mode == 'push'
+      _syncResult = owned.conflicts.isNotEmpty
+          ? {
+              'type': 'pull',
+              'pulled': itemsCount,
+              'conflictsCount': owned.conflicts.length,
+            }
+          : mode == 'push'
           ? {'type': 'push', 'pushed': itemsCount}
           : mode == 'pull'
           ? {
@@ -295,8 +301,8 @@ class SyncController {
       statusNotifier.state = owned.status;
       conflictsNotifier.state = List.of(owned.conflicts);
       if (mode == 'full') return 'sync_full_done'.tr();
-      if (mode == 'pull' && owned.conflicts.isNotEmpty) {
-        return 'Pull completed with ${owned.conflicts.length} conflicts';
+      if (owned.conflicts.isNotEmpty) {
+        return 'Sync requires resolving ${owned.conflicts.length} conflicts';
       }
       return '${mode == 'push' ? 'Push' : 'Pull'} completed ($itemsCount items)';
     } catch (e) {

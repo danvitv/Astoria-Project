@@ -274,6 +274,83 @@ class MemoryEventRegistryRepo {
     }
   }
 
+  /// Rechecks immutable accepted sources after cloud chat/Memory Book apply.
+  /// Rows remain historical evidence; only their active projection is
+  /// invalidated when the current source snapshot no longer proves them.
+  Future<void> reconcileCurrentSources(String sessionId) =>
+      db.transaction(() async {
+        final session = await (db.select(
+          db.chatSessions,
+        )..where((row) => row.sessionId.equals(sessionId))).getSingleOrNull();
+        if (session == null) return;
+        final branchIdentity = SessionBranchIdentity.fromSessionVarsJson(
+          sessionId: sessionId,
+          sessionVarsJson: session.sessionVarsJson,
+        );
+        if (branchIdentity == null) return;
+        final branchId = branchIdentity.branchId;
+        final history = _decodeHistory(session.messagesJson);
+        final entries = await _readEntries(sessionId);
+        final events =
+            await (db.select(db.memoryEventRows)..where(
+                  (row) =>
+                      row.sessionId.equals(sessionId) &
+                      row.branchId.equals(branchId) &
+                      row.status.equals('active'),
+                ))
+                .get();
+        for (final event in events) {
+          final sources =
+              await (db.select(db.memoryEventSourceRows)..where(
+                    (row) =>
+                        row.eventId.equals(event.id) &
+                        row.sessionId.equals(sessionId) &
+                        row.branchId.equals(branchId),
+                  ))
+                  .get();
+          if (sources.isEmpty) continue;
+          final current =
+              history != null &&
+              entries != null &&
+              await _hasCurrentEventSources(
+                eventId: event.id,
+                sessionId: sessionId,
+                branchId: branchId,
+                entries: entries,
+                history: history,
+              );
+        if (current) continue;
+        final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        await _insertInvalidation(
+          sessionId: sessionId,
+          branchId: branchId,
+          targetType: 'event',
+          targetId: event.id,
+          reason: 'source_context_changed',
+          createdAt: now,
+        );
+        final links =
+            await (db.select(db.memoryEventLinkRows)..where(
+                  (row) =>
+                      row.sessionId.equals(sessionId) &
+                      row.branchId.equals(branchId) &
+                      (row.fromEventId.equals(event.id) |
+                          row.toEventId.equals(event.id)),
+                ))
+                .get();
+        for (final link in links) {
+          await _insertInvalidation(
+            sessionId: sessionId,
+            branchId: branchId,
+            targetType: 'link',
+            targetId: link.id,
+            reason: 'endpoint_source_context_changed',
+            createdAt: now,
+          );
+        }
+      }
+      });
+
   Future<void> _insertInvalidation({
     required String sessionId,
     required String branchId,

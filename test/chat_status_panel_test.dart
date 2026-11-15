@@ -129,7 +129,7 @@ void main() {
         expect(find.textContaining('Preparing Card Evolution'), findsNothing);
 
         // The two actions retain different ownership: hide is not Stop.
-        await tester.tap(find.byTooltip('Hide status'));
+        await tester.tap(find.byIcon(Icons.close));
         await tester.pump();
         expect(status.ownsRun(run), isTrue);
         expect(repo.cancelled, isEmpty);
@@ -171,9 +171,9 @@ void main() {
     await tester.pump();
     expect(repo.cancelled, ['job-1']);
     expect(token.isCancelled, isFalse);
-    await tester.ensureVisible(find.byTooltip('Stop cleaner'));
+    await tester.ensureVisible(find.byIcon(Icons.stop_circle_outlined).first);
     await tester.pump();
-    await tester.tap(find.byTooltip('Stop cleaner'));
+    await tester.tap(find.byIcon(Icons.stop_circle_outlined).first);
     expect(token.isCancelled, isTrue);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -205,5 +205,12 @@ void main() {
     expect(find.text('Card Evolution'), findsOneWidget);
     expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
     expect(find.textContaining('review preparation'), findsNothing);
+    // pumpLocalized mounts under runAsync, so the card's Timer uses the real
+    // clock rather than the widget-test fake clock.
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 2600)),
+    );
+    await tester.pump();
+    expect(tester.getSize(find.byType(ChatStatusPanel)).height, 0);
   });
 }

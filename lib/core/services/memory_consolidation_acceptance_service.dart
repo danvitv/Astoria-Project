@@ -7,6 +7,13 @@ import '../llm/memory_consolidation_response_parser.dart';
 import '../llm/memory_consolidation_package_parser.dart';
 import '../models/memory_consolidation.dart';
 
+class MemoryConsolidationStaleException implements Exception {
+  const MemoryConsolidationStaleException();
+
+  @override
+  String toString() => 'Consolidation package became stale before acceptance.';
+}
+
 /// Parses and transactionally accepts one reviewed consolidation response.
 ///
 /// This is intentionally not an LLM client. The caller owns model transport,
@@ -45,7 +52,7 @@ class MemoryConsolidationAcceptanceService {
       acceptedBy: acceptedBy,
     );
     if (!accepted) {
-      throw StateError('Consolidation package became stale before acceptance.');
+      throw const MemoryConsolidationStaleException();
     }
     return true;
   }

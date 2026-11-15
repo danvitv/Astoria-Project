@@ -1,5 +1,12 @@
+import 'dart:convert';
+
+import 'package:collection/collection.dart';
 import 'package:drift/drift.dart';
 
+import '../../models/chat_message.dart';
+import '../../models/memory_book.dart';
+import '../../models/memory_entry_revisions.dart';
+import '../../models/memory_source_manifest.dart';
 import '../../utils/id_generator.dart';
 import '../../utils/time_helpers.dart';
 import '../app_db.dart';
@@ -792,6 +799,201 @@ class MemoryConsolidationJobRepo {
       }
       return recovered;
     });
+  }
+
+  /// Retires device-local work whose frozen inputs were superseded by sync.
+  /// Accepted registry rows are compared by their complete deterministic source
+  /// identity; unrelated local review packages remain available.
+  Future<void> reconcileAfterSync(
+    String sessionId, {
+    required bool sourceContextChanged,
+    required bool registryChanged,
+  }) => db.transaction(() async {
+    final jobs =
+        await (db.select(db.memoryConsolidationJobRows)..where(
+              (row) =>
+                  row.sessionId.equals(sessionId) &
+                  row.status.isIn(const [
+                    'pending',
+                    'running',
+                    'review_pending',
+                    'failed',
+                  ]),
+            ))
+            .get();
+    if (jobs.isEmpty) return;
+
+    Map<String, MemoryEntry>? currentEntries;
+    List<ChatMessage>? currentHistory;
+    if (sourceContextChanged) {
+      try {
+        final session = await (db.select(
+          db.chatSessions,
+        )..where((row) => row.sessionId.equals(sessionId))).getSingleOrNull();
+        final book = await (db.select(
+          db.memoryBookRows,
+        )..where((row) => row.sessionId.equals(sessionId))).getSingleOrNull();
+        if (session != null && book != null) {
+          final historyJson = jsonDecode(session.messagesJson);
+          final entriesJson = jsonDecode(book.entriesJson);
+          if (historyJson is List && entriesJson is List) {
+            currentHistory = historyJson
+                .map(
+                  (item) => ChatMessage.fromJson(
+                    Map<String, dynamic>.from(item as Map),
+                  ),
+                )
+                .toList(growable: false);
+            final decodedEntries = <String, MemoryEntry>{};
+            for (final item in entriesJson) {
+              final memoryEntry = MemoryEntry.fromJson(
+                Map<String, dynamic>.from(item as Map),
+              );
+              decodedEntries[memoryEntry.id] = memoryEntry;
+            }
+            currentEntries = decodedEntries;
+          }
+        }
+      } on Object {
+        currentEntries = null;
+        currentHistory = null;
+      }
+    }
+
+    final acceptedSources = <(String, String, String, String)>{};
+    final occupiedEventIds = <String>{};
+    if (registryChanged) {
+      final invalidated =
+          await (db.select(db.memoryEventInvalidationRows)..where(
+                (row) =>
+                    row.sessionId.equals(sessionId) &
+                    row.targetType.equals('event'),
+              ))
+              .get();
+      final invalidatedIds = invalidated.map((row) => row.targetId).toSet();
+      final events =
+          await (db.select(db.memoryEventRows)..where(
+                (row) =>
+                    row.sessionId.equals(sessionId) &
+                    row.status.equals('active'),
+              ))
+              .get();
+      final activeIds = events
+          .map((row) => row.id)
+          .where((id) => !invalidatedIds.contains(id))
+          .toSet();
+      occupiedEventIds.addAll(activeIds);
+      if (activeIds.isNotEmpty) {
+        final sources = await (db.select(
+          db.memoryEventSourceRows,
+        )..where((row) => row.eventId.isIn(activeIds))).get();
+        acceptedSources.addAll(
+          sources.map(
+            (row) => (
+              row.eventId,
+              row.memoryEntryId,
+              row.revisionId,
+              row.fingerprint,
+            ),
+          ),
+        );
+      }
+    }
+
+    final now = _now;
+    for (final job in jobs) {
+      final items = await getItems(job.id);
+      final exactCovered = items
+          .where(
+            (item) => acceptedSources.contains((
+              item.proposedEventId,
+              item.memoryEntryId,
+              item.revisionId,
+              item.fingerprint,
+            )),
+          )
+          .length;
+      final collidesWithAccepted = items.any(
+        (item) => occupiedEventIds.contains(item.proposedEventId),
+      );
+      final completedRemotely =
+          items.isNotEmpty && exactCovered == items.length;
+      final sourcesStillCurrent =
+          !sourceContextChanged ||
+          (currentEntries != null &&
+              currentHistory != null &&
+              _sourcesAreCurrent(items, currentEntries, currentHistory));
+      if (!completedRemotely && sourcesStillCurrent && !collidesWithAccepted) {
+        continue;
+      }
+      final nextStatus = completedRemotely ? 'completed' : 'cancelled';
+      final nextItemStatus = completedRemotely ? 'accepted' : 'cancelled';
+      final reason = completedRemotely ? null : 'source_context_changed';
+      final changed =
+          await (db.update(db.memoryConsolidationJobRows)..where(
+                (row) =>
+                    row.id.equals(job.id) &
+                    row.version.equals(job.version) &
+                    row.status.equals(job.status),
+              ))
+              .write(
+                MemoryConsolidationJobRowsCompanion(
+                  status: Value(nextStatus),
+                  leaseOwnerId: const Value(null),
+                  leaseExpiresAt: const Value(null),
+                  lastError: Value(reason),
+                  version: Value(job.version + 1),
+                  updatedAt: Value(now),
+                ),
+              );
+      if (changed != 1) continue;
+      await (db.update(
+        db.memoryConsolidationJobItemRows,
+      )..where((row) => row.jobId.equals(job.id))).write(
+        MemoryConsolidationJobItemRowsCompanion(
+          status: Value(nextItemStatus),
+          lastError: Value(reason),
+          updatedAt: Value(now),
+        ),
+      );
+    }
+  });
+
+  static bool _sourcesAreCurrent(
+    List<MemoryConsolidationJobItemRow> items,
+    Map<String, MemoryEntry> entries,
+    List<ChatMessage> history,
+  ) {
+    if (items.isEmpty) return false;
+    for (final item in items) {
+      final entry = entries[item.memoryEntryId];
+      if (entry == null ||
+          entry.status != 'active' ||
+          !MemoryEntryRevisions.isUsable(entry)) {
+        return false;
+      }
+      final revision = MemoryEntryRevisions.find(entry, item.revisionId);
+      final manifest = revision?.sourceManifest;
+      if (revision == null ||
+          revision.id != entry.activeRevisionId ||
+          manifest == null ||
+          manifest != entry.sourceManifest ||
+          !const ListEquality<String>().equals(
+            entry.messageIds,
+            revision.messageIds,
+          ) ||
+          manifest.validate(revision.messageIds, history) !=
+              MemorySourceValidity.verified ||
+          item.fingerprint !=
+              MemoryEventRegistryRepo.sourceFingerprint(
+                revision,
+                sourceSwipeId: entry.sourceSwipeId,
+                sourceAgentSwipeId: entry.sourceAgentSwipeId,
+              )) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<bool> retryFailed(String jobId) => db.transaction(() async {

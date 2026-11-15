@@ -170,10 +170,16 @@ class MemoryConsolidationBatchService {
     if (minCount < 1) {
       throw ArgumentError.value(minCount, 'minCount', 'must be at least 1');
     }
+    final covered = await coveredEntryIds(
+      sessionId: sessionId,
+      branchId: branchId,
+    );
     final pending = entries
         .where(
           (entry) =>
-              entry.status == 'active' && isEligibleSource(entry, sessionId),
+              !covered.contains(entry.id) &&
+              entry.status == 'active' &&
+              isEligibleSource(entry, sessionId),
         )
         .toList();
     final packages = planner.plan(
@@ -623,23 +629,28 @@ class MemoryConsolidationBatchService {
     required String jobId,
     required bool Function() isCurrent,
     String acceptedBy = 'user',
-  }) => jobRepo.acceptReviewedPackage(
-    jobId: jobId,
-    acceptReviewed: (draftJson) async {
-      final review = _decodeEnvelope(jobId, draftJson);
-      final accepted = await acceptance.acceptReviewedPackage(
-        response: review.response,
-        pack: review.pack,
-        isCurrent: isCurrent,
-        acceptedBy: acceptedBy,
+  }) async {
+    try {
+      return await jobRepo.acceptReviewedPackage(
+        jobId: jobId,
+        acceptReviewed: (draftJson) async {
+          final review = _decodeEnvelope(jobId, draftJson);
+          final accepted = await acceptance.acceptReviewedPackage(
+            response: review.response,
+            pack: review.pack,
+            isCurrent: isCurrent,
+            acceptedBy: acceptedBy,
+          );
+          if (!accepted) {
+            throw const MemoryConsolidationStaleException();
+          }
+        },
       );
-      if (!accepted) {
-        throw StateError(
-          'Consolidation package could not be verified for acceptance.',
-        );
-      }
-    },
-  );
+    } on MemoryConsolidationStaleException {
+      await jobRepo.cancel(jobId, reason: 'source_context_changed');
+      return false;
+    }
+  }
 
   /// Rejects a reviewed package: the draft stays diagnosable in the row until
   /// cancellation clears it from the active flow, and nothing is written to

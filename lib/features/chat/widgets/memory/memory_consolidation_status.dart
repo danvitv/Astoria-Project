@@ -36,6 +36,7 @@ class MemoryConsolidationStatus extends StatelessWidget {
     this.completedCount = 0,
     this.onReview,
     this.onRetry,
+    this.onRebuild,
     this.onCopyDiagnostics,
     this.onCancel,
   });
@@ -44,6 +45,7 @@ class MemoryConsolidationStatus extends StatelessWidget {
   final int completedCount;
   final void Function(String jobId)? onReview;
   final void Function(String jobId)? onRetry;
+  final void Function(String jobId)? onRebuild;
   final void Function(String jobId)? onCopyDiagnostics;
   final void Function(String jobId)? onCancel;
 
@@ -99,6 +101,19 @@ class MemoryConsolidationStatus extends StatelessWidget {
         ),
       ],
     ),
+    'cancelled' when item.lastError == 'cancelled_by_user' => GlazeActionButton(
+      key: ValueKey('package-restart-${item.jobId}'),
+      icon: Icons.restart_alt_rounded,
+      label: 'memory_consolidation_queue_restart'.tr(),
+      onTap: onRetry == null ? null : () => onRetry!(item.jobId),
+    ),
+    'cancelled' when item.lastError == 'source_context_changed' =>
+      GlazeActionButton(
+        key: ValueKey('package-rebuild-${item.jobId}'),
+        icon: Icons.replay_rounded,
+        label: 'memory_consolidation_queue_rebuild'.tr(),
+        onTap: onRebuild == null ? null : () => onRebuild!(item.jobId),
+      ),
     'pending' || 'running' => GlazeActionButton(
       key: ValueKey('package-cancel-${item.jobId}'),
       tone: GlazeActionTone.neutral,

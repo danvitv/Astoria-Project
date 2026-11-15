@@ -124,6 +124,47 @@ void main() {
     },
   );
 
+  test(
+    'sync source reconciliation invalidates stale accepted coverage',
+    () async {
+      final source = await seedSessionAndMemory();
+      expect(
+        await repo.accept(event: event(source), isCurrent: () => true),
+        isTrue,
+      );
+      const changed = ChatMessage(
+        id: 'message-1',
+        role: 'assistant',
+        content: 'The synced chat now says something else.',
+        swipeId: 2,
+        agentSwipeId: 3,
+      );
+      await (db.update(
+        db.chatSessions,
+      )..where((row) => row.sessionId.equals('session-1'))).write(
+        ChatSessionsCompanion(
+          messagesJson: Value(jsonEncode([changed.toJson()])),
+        ),
+      );
+
+      await repo.reconcileCurrentSources('session-1');
+
+      expect(
+        await repo.getActiveEvents(
+          sessionId: 'session-1',
+          branchId: 'session-1',
+        ),
+        isEmpty,
+      );
+      final invalidation = (await repo.getInvalidations(
+        sessionId: 'session-1',
+        branchId: 'session-1',
+      )).single;
+      expect(invalidation.targetId, 'event-1');
+      expect(invalidation.reason, 'source_context_changed');
+    },
+  );
+
   test('rejects stale fingerprint and does not write partial rows', () async {
     final source = await seedSessionAndMemory();
     final stale = MemoryEventSourceInput(

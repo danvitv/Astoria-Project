@@ -38,11 +38,12 @@ void main() {
     expect(surface.borderRadius, BorderRadius.circular(12));
     expect(surface.boxShadow, isNull);
     expect(tester.getSize(find.byType(ChatStatusCardShell)).height, 52);
-    await tester.tap(find.byTooltip('Stop work'));
+    expect(find.byTooltip('Working'), findsNothing);
+    await tester.tap(find.byIcon(Icons.stop_circle_outlined));
     expect(stopped, isTrue);
   });
 
-  testWidgets('one-line status retains its full text as a tooltip', (
+  testWidgets('one-line status retains full text without an overlay tooltip', (
     tester,
   ) async {
     await pumpLocalized(
@@ -62,6 +63,63 @@ void main() {
     );
     expect(text.maxLines, 1);
     expect(text.overflow, TextOverflow.ellipsis);
-    expect(find.byTooltip(text.data!), findsOneWidget);
+    expect(text.data, 'A detailed failure that must remain available');
+    expect(find.byTooltip(text.data!), findsNothing);
+  });
+
+  testWidgets('fully visible status does not create a redundant tooltip', (
+    tester,
+  ) async {
+    await pumpLocalized(
+      tester,
+      const ChatStatusCardShell(
+        label: 'Card Evolution',
+        icon: Icons.check_circle_outline,
+        accent: Colors.orange,
+        showSpinner: false,
+      ),
+    );
+
+    expect(find.text('Card Evolution'), findsOneWidget);
+    expect(find.byTooltip('Card Evolution'), findsNothing);
+  });
+
+  testWidgets('action theme cannot overflow or stretch the compact row', (
+    tester,
+  ) async {
+    await pumpLocalized(
+      tester,
+      Builder(
+        builder: (context) => Theme(
+          data: Theme.of(context).copyWith(
+            iconButtonTheme: const IconButtonThemeData(
+              style: ButtonStyle(
+                minimumSize: WidgetStatePropertyAll(Size(180, 108)),
+              ),
+            ),
+          ),
+          child: ChatStatusCardShell(
+            label: 'A status that still needs room for its label',
+            icon: Icons.sync,
+            accent: Colors.orange,
+            showSpinner: false,
+            action: IconButton(
+              onPressed: () {},
+              tooltip: 'Bounded action',
+              icon: const Icon(Icons.close),
+            ),
+          ),
+        ),
+      ),
+      surfaceSize: const Size(320, 576),
+    );
+
+    expect(tester.takeException(), isNull);
+    expect(tester.getSize(find.byType(ChatStatusCardShell)).height, 52);
+    expect(tester.getSize(find.byType(IconButton)), const Size.square(32));
+    expect(
+      tester.widget<TooltipVisibility>(find.byType(TooltipVisibility)).visible,
+      isFalse,
+    );
   });
 }

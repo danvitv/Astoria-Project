@@ -28,8 +28,9 @@ class ChatStatusCardShell extends StatelessWidget {
       child: GlassSurface(
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: accent.withValues(alpha: 0.25)),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 48),
+        child: SizedBox(
+          height: 48,
+          width: double.infinity,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10),
             child: Row(
@@ -44,21 +45,27 @@ class ChatStatusCardShell extends StatelessWidget {
                   Icon(icon, size: 18, color: accent),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Tooltip(
-                    message: label,
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: cs.onSurface,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: cs.onSurface,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
-                ?action,
+                if (action != null)
+                  TooltipVisibility(
+                    visible: false,
+                    child: SizedBox.square(
+                      // IconButton themes and accessibility settings must not
+                      // consume the row or make it taller than the viewport.
+                      dimension: 32,
+                      child: action,
+                    ),
+                  ),
               ],
             ),
           ),

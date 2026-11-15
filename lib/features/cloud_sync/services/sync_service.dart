@@ -61,6 +61,8 @@ class SyncService {
   final CharacterDeletionStore _characterDeletionStore;
   final Future<void> Function(LorebookActivations) _saveLorebookActivations;
   final Future<void> Function(Set<String>)? _reconcilePulledSessions;
+  final Future<void> Function(Map<String, Set<String>>)?
+  _reconcileMemoryConsolidationJobs;
   final Future<String> Function(String)? _diagnosticDownload;
   // Trusted constructor seam; production defaults to the actual provider below.
   final CloudAdapter Function(SyncProvider)? _selectAdapter;
@@ -258,6 +260,8 @@ class SyncService {
     required CharacterDeletionStore characterDeletionStore,
     required Future<void> Function(LorebookActivations) saveLorebookActivations,
     Future<void> Function(Set<String>)? reconcilePulledSessions,
+    Future<void> Function(Map<String, Set<String>>)?
+    reconcileMemoryConsolidationJobs,
     Future<String> Function(String)? diagnosticDownload,
     CloudAdapter Function(SyncProvider)? selectAdapter,
     ReconciliationPageCache? reconciliationPageCache,
@@ -269,6 +273,7 @@ class SyncService {
        _characterDeletionStore = characterDeletionStore,
        _saveLorebookActivations = saveLorebookActivations,
        _reconcilePulledSessions = reconcilePulledSessions,
+       _reconcileMemoryConsolidationJobs = reconcileMemoryConsolidationJobs,
        _diagnosticDownload = diagnosticDownload,
        _selectAdapter = selectAdapter,
        _reconciliationPageCache = reconciliationPageCache,
@@ -352,6 +357,7 @@ class SyncService {
     _checkWorkflow,
     _reconciliationPageCache,
     _memoryEventRegistryStore,
+    _reconcileMemoryConsolidationJobs,
   );
 
   Future<void> init() async {
@@ -531,11 +537,30 @@ class SyncService {
     if (_operationInProgress)
       throw StateError('Sync operation already in progress');
     await _workflow(() async {
-      await fullPush(onProgress: onProgress, includeApiKeys: includeApiKeys);
+      await fullPushWithConflictPreflight(
+        onProgress: onProgress,
+        includeApiKeys: includeApiKeys,
+      );
+      if (_status == SyncStatus.conflict) return;
       _checkWorkflow();
       if (_status != SyncStatus.error) await fullPull(onProgress: onProgress);
     }, oauth: true);
   }
+
+  Future<void> fullPushWithConflictPreflight({
+    void Function(SyncProgress)? onProgress,
+    bool? includeApiKeys,
+  }) => _workflow(() async {
+    try {
+      await fullPush(onProgress: onProgress, includeApiKeys: includeApiKeys);
+    } on SyncPullRequiredBeforePush {
+      // A divergent registry tombstone is a user choice, not a transport
+      // failure. Let pull publish the ordinary conflict rows first.
+      await fullPull(onProgress: onProgress);
+      if (_status == SyncStatus.conflict) return;
+      await fullPush(onProgress: onProgress, includeApiKeys: includeApiKeys);
+    }
+  }, oauth: true);
 
   Future<void> wipeCloudData({void Function(SyncProgress)? onProgress}) async {
     await _withAdapterOperation(() => _wipeCloudData(onProgress: onProgress));

@@ -37,7 +37,6 @@ import '../../../shared/widgets/glaze_text_field.dart';
 import '../../../shared/widgets/glaze_toast.dart';
 import '../../../shared/widgets/swipe_tab_switcher.dart';
 import '../../../shared/widgets/tab_slide_switcher.dart';
-import '../../backup/backup_provider.dart';
 import '../../memory/controllers/memory_book_controller.dart';
 import '../../memory/state/memory_book_revision_provider.dart';
 import '../../memory/state/memory_consolidation_worker_provider.dart';
@@ -1097,6 +1096,9 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
         final job = rowJob(jobId);
         if (job != null) _retryPackage(job);
       },
+      // Never revive a pack whose frozen sources went stale. Re-plan the
+      // current book so new revisions receive new fingerprints/request keys.
+      onRebuild: (_) => _startBookScan(),
       onCopyDiagnostics: _copyPackageDiagnostics,
       onCancel: (jobId) {
         final job = rowJob(jobId);
@@ -1146,7 +1148,12 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
     final epoch = ++_packageEpoch;
     setState(() => _packageJobId = job.id);
     try {
-      await ref.read(memoryConsolidationJobRepoProvider).retryFailed(job.id);
+      final repo = ref.read(memoryConsolidationJobRepoProvider);
+      if (job.status == 'cancelled') {
+        await repo.revive(job.id);
+      } else {
+        await repo.retryFailed(job.id);
+      }
       ref
           .read(memoryConsolidationWorkerProvider)
           .notifyPending(widget.sessionId);
@@ -1332,16 +1339,6 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
         pendingCount: pendingCount,
       );
       if (started != true || !mounted || epoch != _scanEpoch) return;
-      final backup = await ref.read(backupServiceProvider.future);
-      final backupPath = await backup.exportBackup();
-      if (!mounted || epoch != _scanEpoch) return;
-      if (backupPath.isEmpty) {
-        GlazeToast.show(
-          context,
-          'memory_consolidation_scan_backup_cancelled'.tr(),
-        );
-        return;
-      }
       final worker = ref.read(memoryConsolidationWorkerProvider);
       await batch.enqueueScan(
         sessionId: widget.sessionId,

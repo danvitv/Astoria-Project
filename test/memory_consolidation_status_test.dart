@@ -75,6 +75,7 @@ void main() {
     // attempt count after retries, completed summary, and per-row actions.
     String? reviewed;
     String? retried;
+    String? rebuilt;
     String? diagnosed;
     String? cancelled;
     await _pump(
@@ -98,10 +99,18 @@ void main() {
               sourceCount: 3,
               lastError: 'source_context_changed',
             ),
+            _item(
+              'job-cancelled',
+              'cancelled',
+              index: 5,
+              sourceCount: 5,
+              lastError: 'cancelled_by_user',
+            ),
           ],
           completedCount: 1,
           onReview: (id) => reviewed = id,
           onRetry: (id) => retried = id,
+          onRebuild: (id) => rebuilt = id,
           onCopyDiagnostics: (id) => diagnosed = id,
           onCancel: (id) => cancelled = id,
         ),
@@ -113,6 +122,7 @@ void main() {
     expect(find.textContaining('Package 2 · 10 memories'), findsOneWidget);
     expect(find.textContaining('Package 3 · 10 memories'), findsOneWidget);
     expect(find.textContaining('Package 4 · 3 memories'), findsOneWidget);
+    expect(find.textContaining('Package 5 · 5 memories'), findsOneWidget);
     expect(find.text('1 completed'), findsOneWidget);
     // Localized durable causes, never raw machine strings.
     expect(find.textContaining('awaiting review'), findsOneWidget);
@@ -147,10 +157,19 @@ void main() {
       find.byKey(const ValueKey('package-cancel-job-running')),
       findsOneWidget,
     );
-    // Cancelled rows offer no action — a fresh scan re-covers them.
+    // A stale source gets a fresh-book rebuild action; it must not reuse the
+    // frozen package. Explicit user cancellation can restart that snapshot.
     expect(
-      find.byKey(const ValueKey('package-cancel-job-stale')),
+      find.byKey(const ValueKey('package-restart-job-stale')),
       findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('package-rebuild-job-stale')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('package-restart-job-cancelled')),
+      findsOneWidget,
     );
 
     await tester.tap(find.byKey(const ValueKey('package-review-job-review')));
@@ -163,6 +182,12 @@ void main() {
     expect(diagnosed, 'job-failed');
     await tester.tap(find.byKey(const ValueKey('package-cancel-job-running')));
     expect(cancelled, 'job-running');
+    await tester.tap(
+      find.byKey(const ValueKey('package-restart-job-cancelled')),
+    );
+    expect(retried, 'job-cancelled');
+    await tester.tap(find.byKey(const ValueKey('package-rebuild-job-stale')));
+    expect(rebuilt, 'job-stale');
 
     // Initial scan stays in the actions menu, not the queue.
     var scans = 0;

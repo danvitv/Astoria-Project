@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -404,17 +407,21 @@ void main() {
       proposed: changed.copyWith(content: 'The promise was rewritten.'),
     );
 
-    await expectLater(
-      harness.batch.acceptReviewed(jobId: job.id, isCurrent: _alwaysCurrent),
-      throwsStateError,
+    expect(
+      await harness.batch.acceptReviewed(
+        jobId: job.id,
+        isCurrent: _alwaysCurrent,
+      ),
+      isFalse,
     );
     expect(await harness.eventCount(), 0);
     expect(await harness.linkCount(), 0);
-    expect((await harness.job(job.id))!.status, 'review_pending');
+    expect((await harness.job(job.id))!.status, 'cancelled');
+    expect((await harness.job(job.id))!.lastError, 'source_context_changed');
     expect(
       (await harness.jobRepo.getItems(
         job.id,
-      )).every((item) => item.status == 'review_pending'),
+      )).every((item) => item.status == 'cancelled'),
       isTrue,
     );
   });
@@ -645,6 +652,146 @@ void main() {
         minCount: 1,
       ),
       isNull,
+    );
+  });
+
+  test('accepted registry coverage needs no local completed job', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness);
+    final job = await harness.batch.enqueue(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+    );
+    expect(await _run(harness, 'runner-1'), isTrue);
+    expect(
+      await harness.batch.acceptReviewed(
+        jobId: job.id,
+        isCurrent: _alwaysCurrent,
+      ),
+      isTrue,
+    );
+
+    // Cloud registry sync carries accepted facts, not device-local job rows.
+    await (harness.db.delete(
+      harness.db.memoryConsolidationJobItemRows,
+    )..where((row) => row.jobId.equals(job.id))).go();
+    await (harness.db.delete(
+      harness.db.memoryConsolidationJobRows,
+    )..where((row) => row.id.equals(job.id))).go();
+
+    expect(
+      await harness.batch.enqueuePending(
+        sessionId: _sessionId,
+        branchId: _sessionId,
+        entries: book.entries,
+        minCount: 1,
+      ),
+      isNull,
+    );
+  });
+
+  test('sync reconciliation retires superseded local package work', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness);
+    final job = await harness.batch.enqueue(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: book.entries,
+    );
+    expect(await _run(harness, 'runner-1'), isTrue);
+    expect(
+      await harness.batch.acceptReviewed(
+        jobId: job.id,
+        isCurrent: _alwaysCurrent,
+      ),
+      isTrue,
+    );
+
+    // The accepted graph came from cloud while this device still had the same
+    // deterministic package in review.
+    await (harness.db.update(
+      harness.db.memoryConsolidationJobRows,
+    )..where((row) => row.id.equals(job.id))).write(
+      const MemoryConsolidationJobRowsCompanion(
+        status: Value('review_pending'),
+      ),
+    );
+    await (harness.db.update(
+      harness.db.memoryConsolidationJobItemRows,
+    )..where((row) => row.jobId.equals(job.id))).write(
+      const MemoryConsolidationJobItemRowsCompanion(
+        status: Value('review_pending'),
+      ),
+    );
+
+    await harness.jobRepo.reconcileAfterSync(
+      _sessionId,
+      sourceContextChanged: false,
+      registryChanged: true,
+    );
+
+    expect((await harness.job(job.id))!.status, 'completed');
+    expect(
+      (await harness.jobRepo.getItems(
+        job.id,
+      )).every((item) => item.status == 'accepted'),
+      isTrue,
+    );
+
+    final contextHarness = await _makeHarness();
+    final contextBook = await _seedBook(contextHarness);
+    final stale = await contextHarness.batch.enqueue(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: contextBook.entries,
+    );
+    expect(await _run(contextHarness, 'runner-2'), isTrue);
+    final messages =
+        (jsonDecode(
+                  (await (contextHarness.db.select(
+                            contextHarness.db.chatSessions,
+                          )..where((row) => row.sessionId.equals(_sessionId)))
+                          .getSingle())
+                      .messagesJson,
+                )
+                as List)
+            .map((item) => Map<String, dynamic>.from(item as Map))
+            .toList();
+    messages.add(
+      const ChatMessage(
+        id: 'unrelated-message',
+        role: 'user',
+        content: 'An unrelated synced append.',
+      ).toJson(),
+    );
+    await (contextHarness.db.update(
+      contextHarness.db.chatSessions,
+    )..where((row) => row.sessionId.equals(_sessionId))).write(
+      ChatSessionsCompanion(messagesJson: Value(jsonEncode(messages))),
+    );
+    await contextHarness.jobRepo.reconcileAfterSync(
+      _sessionId,
+      sourceContextChanged: true,
+      registryChanged: false,
+    );
+    expect((await contextHarness.job(stale.id))!.status, 'review_pending');
+
+    messages.first['content'] = 'The synced source message changed.';
+    await (contextHarness.db.update(
+      contextHarness.db.chatSessions,
+    )..where((row) => row.sessionId.equals(_sessionId))).write(
+      ChatSessionsCompanion(messagesJson: Value(jsonEncode(messages))),
+    );
+    await contextHarness.jobRepo.reconcileAfterSync(
+      _sessionId,
+      sourceContextChanged: true,
+      registryChanged: false,
+    );
+    expect((await contextHarness.job(stale.id))!.status, 'cancelled');
+    expect(
+      (await contextHarness.job(stale.id))!.lastError,
+      'source_context_changed',
     );
   });
 
@@ -1002,6 +1149,59 @@ void main() {
     expect(revived.first.id, rows.first.id);
     expect(revived.first.status, 'pending');
     expect(await harness.jobRepo.getSessionJobs(_sessionId), hasLength(2));
+  });
+
+  test('a changed source revision is rebuilt as a new package', () async {
+    final harness = await _makeHarness();
+    final book = await _seedBook(harness, count: 1);
+    final original = book.entries.single;
+    final originalPlan = await harness.batch.planScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: [original],
+    );
+    final oldJob = (await harness.batch.enqueueScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      plan: originalPlan,
+    )).single;
+    expect(
+      await harness.jobRepo.cancel(oldJob.id, reason: 'source_context_changed'),
+      isTrue,
+    );
+
+    final previousRevision = original.revisions.single;
+    final currentRevision = previousRevision.copyWith(
+      id: '${original.id}:r2',
+      version: 2,
+      content: '${previousRevision.content} Updated.',
+      createdAt: 2,
+    );
+    final changed = original.copyWith(
+      content: currentRevision.content,
+      activeRevisionId: currentRevision.id,
+      revisions: [...original.revisions, currentRevision],
+    );
+    final currentPlan = await harness.batch.planScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      entries: [changed],
+    );
+    final rebuilt = (await harness.batch.enqueueScan(
+      sessionId: _sessionId,
+      branchId: _sessionId,
+      plan: currentPlan,
+    )).single;
+
+    expect(rebuilt.id, isNot(oldJob.id));
+    expect(rebuilt.status, 'pending');
+    expect(
+      (await harness.jobRepo.getItems(rebuilt.id)).single.revisionId,
+      currentRevision.id,
+    );
+    final jobs = await harness.jobRepo.getSessionJobs(_sessionId);
+    expect(jobs, hasLength(2));
+    expect(jobs.singleWhere((job) => job.id == oldJob.id).status, 'cancelled');
   });
 
   test('threshold counts only sources not already queued', () async {

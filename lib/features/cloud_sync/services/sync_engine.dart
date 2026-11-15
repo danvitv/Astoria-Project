@@ -57,6 +57,15 @@ class SyncProgress {
   const SyncProgress({this.current = 0, this.total = 0, this.message});
 }
 
+class SyncPullRequiredBeforePush implements Exception {
+  const SyncPullRequiredBeforePush(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 class SyncEngine {
   final CloudAdapter _adapter;
   final SyncManifestProvider _manifestBuilder;
@@ -89,6 +98,8 @@ class SyncEngine {
   final CharacterDeletionStore _characterDeletionStore;
   final Future<void> Function(LorebookActivations) _saveLorebookActivations;
   final Future<void> Function(Set<String>)? _reconcilePulledSessions;
+  final Future<void> Function(Map<String, Set<String>>)?
+  _reconcileMemoryConsolidationJobs;
   final int _operationDelayMs;
   final Duration _wipePollInterval;
   final SyncQueue _queue = SyncQueue();
@@ -171,6 +182,7 @@ class SyncEngine {
     this._checkOriginalWorkflow,
     this._reconciliationPageCache,
     this._memoryEventRegistryStore,
+    this._reconcileMemoryConsolidationJobs,
   ]) {
     _binarySyncer = SyncBinaryAssetSyncer(
       _adapter,
@@ -697,13 +709,15 @@ class SyncEngine {
       }
       final localEntry = localManifest.entries[cloudEntry.key];
       final previouslyAccepted = previousManifest.entries[cloudEntry.key];
-      final unbasedRegistryDeletion =
-          previouslyAccepted == null &&
+      final ambiguousRegistryDeletion =
           cloudEntry.type == 'memory_event_registry' &&
           cloudEntry.deleted &&
           localEntry != null &&
-          !localEntry.deleted;
-      if (unbasedRegistryDeletion) {
+          !localEntry.deleted &&
+          (previouslyAccepted == null ||
+              (!previouslyAccepted.deleted &&
+                  previouslyAccepted.hash != localEntry.hash));
+      if (ambiguousRegistryDeletion) {
         conflicts.add(
           SyncConflict(
             key: cloudEntry.key,
@@ -899,13 +913,15 @@ class SyncEngine {
       }
       final localEntry = localManifest.entries[cloudEntry.key];
       final previouslyAccepted = previousManifest.entries[cloudEntry.key];
-      final unbasedRegistryDeletion =
-          previousManifest.entries[cloudEntry.key] == null &&
+      final ambiguousRegistryDeletion =
           cloudEntry.type == 'memory_event_registry' &&
           cloudEntry.deleted &&
           localEntry != null &&
-          !localEntry.deleted;
-      if (unbasedRegistryDeletion) {
+          !localEntry.deleted &&
+          (previouslyAccepted == null ||
+              (!previouslyAccepted.deleted &&
+                  previouslyAccepted.hash != localEntry.hash));
+      if (ambiguousRegistryDeletion) {
         if (resolvedAsCloud != null &&
             resolvedAsCloud.contains(cloudEntry.key)) {
           pullEntries.add(cloudEntry);
@@ -1030,6 +1046,7 @@ class SyncEngine {
     ],
     () async {
       final appliedEntries = <SyncManifestEntry>[];
+      final consolidationChanges = <String, Set<String>>{};
       var processed = 0;
       final primaryEntries = pullEntries
           .where(
@@ -1152,6 +1169,13 @@ class SyncEngine {
               _checkCurrent();
               appliedEntries.add(entry);
             }
+            if (entry.type == 'chat' ||
+                entry.type == 'memory_book' ||
+                entry.type == 'memory_event_registry') {
+              consolidationChanges
+                  .putIfAbsent(entry.id, () => <String>{})
+                  .add(entry.type);
+            }
             _checkCurrent();
             processed++;
             onProgress(
@@ -1219,6 +1243,11 @@ class SyncEngine {
         ...await applyEntries(rewriteEntries),
         ...await applyEntries(registryEntries),
       ];
+
+      final reconcileMemoryJobs = _reconcileMemoryConsolidationJobs;
+      if (reconcileMemoryJobs != null && consolidationChanges.isNotEmpty) {
+        await _commit(() => reconcileMemoryJobs(consolidationChanges));
+      }
 
       await _finalizePull(
         localManifest,
@@ -2913,7 +2942,7 @@ class SyncEngine {
         }
         // Local facts changed without first observing the remote clear. Neither
         // side can be discarded safely; the pull path must resolve the deletion.
-        throw StateError(
+        throw const SyncPullRequiredBeforePush(
           'Pull required before push: memory event registry was cleared remotely',
         );
       }

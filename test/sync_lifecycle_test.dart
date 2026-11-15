@@ -865,6 +865,8 @@ class SyncWorld {
     FakeMemoryEventRegistryStore? memoryEventRegistryStore,
     FakeSessionLorebookOverlayStore? sessionLorebookOverlayStore,
     Future<void> Function(Set<String>)? reconcilePulledSessions,
+    Future<void> Function(Map<String, Set<String>>)?
+    reconcileMemoryConsolidationJobs,
   }) {
     characters = FakeCharacterStore();
     chats = FakeChatStore();
@@ -886,6 +888,7 @@ class SyncWorld {
     memoryEventRegistry = memoryEventRegistryStore;
     sessionLorebookOverlays = sessionLorebookOverlayStore;
     _reconcilePulledSessions = reconcilePulledSessions;
+    _reconcileMemoryConsolidationJobs = reconcileMemoryConsolidationJobs;
     manifestProvider = InMemoryManifestProvider(
       characterRepo: characters,
       chatRepo: chats,
@@ -906,6 +909,8 @@ class SyncWorld {
   }
 
   Future<void> Function(Set<String>)? _reconcilePulledSessions;
+  Future<void> Function(Map<String, Set<String>>)?
+  _reconcileMemoryConsolidationJobs;
 
   SyncEngine get engine => SyncEngine(
     cloud,
@@ -943,6 +948,7 @@ class SyncWorld {
     null,
     null,
     memoryEventRegistry,
+    _reconcileMemoryConsolidationJobs,
   );
 }
 
@@ -1731,7 +1737,13 @@ void main() {
   test('pull imports a memory event registry after its owning chat', () async {
     const sessionId = 'registry-pull-session';
     final registry = FakeMemoryEventRegistryStore();
-    final world = SyncWorld(memoryEventRegistryStore: registry);
+    Map<String, Set<String>>? reconciliation;
+    final world = SyncWorld(
+      memoryEventRegistryStore: registry,
+      reconcileMemoryConsolidationJobs: (changes) async {
+        reconciliation = changes;
+      },
+    );
     final chat = makeChat(sessionId);
     final payload = fakeMemoryEventRegistry(sessionId, ['cloud-event']);
     registry.beforeMerge = (id) async {
@@ -1785,6 +1797,7 @@ void main() {
       (registry.data[sessionId]!['events'] as List).single['id'],
       'cloud-event',
     );
+    expect(reconciliation?[sessionId], {'chat', 'memory_event_registry'});
   });
 
   test(
@@ -1892,6 +1905,59 @@ void main() {
           ?.deleted,
       isTrue,
     );
+  });
+
+  test('divergent registry tombstone requires pull conflict', () async {
+    const sessionId = 'divergent-registry-session';
+    final previousPayload = fakeMemoryEventRegistry(sessionId, ['old-event']);
+    final currentPayload = fakeMemoryEventRegistry(sessionId, ['new-event']);
+    final registry = FakeMemoryEventRegistryStore();
+    final world = SyncWorld(memoryEventRegistryStore: registry);
+    await world.chats.put(makeChat(sessionId));
+    registry.data[sessionId] = currentPayload;
+    final previous = SyncManifestEntry(
+      type: 'memory_event_registry',
+      id: sessionId,
+      path: cloudPath('memory_event_registry', sessionId),
+      updatedAt: 1,
+      hash: SyncSerialization.computeSyncHash(previousPayload),
+    );
+    await world.manifestProvider.writeLocalManifest(
+      SyncManifest(
+        deviceId: 'local',
+        createdAt: 1,
+        lastSync: 1,
+        entries: {previous.key: previous},
+      ),
+    );
+    final tombstone = SyncManifestEntry(
+      type: 'memory_event_registry',
+      id: sessionId,
+      path: previous.path,
+      updatedAt: 2000,
+      hash: '',
+      deleted: true,
+    );
+    world.cloud.files[cloudPath('manifest', 'manifest')] = jsonEncode(
+      SyncManifest(
+        deviceId: 'cloud',
+        createdAt: 1,
+        entries: {tombstone.key: tombstone},
+      ).toJson(),
+    );
+
+    await expectLater(
+      world.engine.pushEntities(onProgress: (_) {}),
+      throwsA(isA<SyncPullRequiredBeforePush>()),
+    );
+    final conflicts = <SyncConflict>[];
+    await world.engine.pullEntities(
+      onProgress: (_) {},
+      onConflict: conflicts.add,
+    );
+
+    expect(conflicts.map((conflict) => conflict.key), [tombstone.key]);
+    expect(registry.data[sessionId], currentPayload);
   });
 
   test('failed registry tombstone deletion is not accepted', () async {

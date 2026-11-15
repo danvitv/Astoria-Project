@@ -15,6 +15,8 @@ import 'services/gdrive/gdrive_auth.dart';
 import '../../core/db/repositories/sync_session_consistency_repo.dart';
 import '../../core/db/repositories/rewrite_job_history_sync_repo.dart';
 import '../../core/db/repositories/memory_event_registry_sync_repo.dart';
+import '../../core/db/repositories/memory_event_registry_repo.dart';
+import '../../core/db/repositories/memory_consolidation_job_repo.dart';
 import '../../core/state/character_folder_provider.dart'
     show characterFolderRepoProvider;
 import '../../core/state/lorebook_provider.dart' show saveLorebookActivations;
@@ -70,6 +72,7 @@ final syncServiceProvider = FutureProvider<SyncService>((ref) async {
   if (disposed) throw StateError('Cloud sync owner retired');
   final themeStorage = await ThemePresetStorage.create();
   if (disposed) throw StateError('Cloud sync owner retired');
+  final appDb = ref.watch(appDbProvider);
 
   final service = SyncService(
     // Lazy IO under the issuing workflow; the channel's private app data root
@@ -134,6 +137,23 @@ final syncServiceProvider = FutureProvider<SyncService>((ref) async {
     reconcilePulledSessions: SyncSessionConsistencyRepo(
       ref.watch(appDbProvider),
     ).reconcile,
+    reconcileMemoryConsolidationJobs: (changes) async {
+      final repo = MemoryConsolidationJobRepo(appDb);
+      for (final entry in changes.entries) {
+        final sourceContextChanged =
+            entry.value.contains('chat') || entry.value.contains('memory_book');
+        await repo.reconcileAfterSync(
+          entry.key,
+          sourceContextChanged: sourceContextChanged,
+          registryChanged: entry.value.contains('memory_event_registry'),
+        );
+        if (sourceContextChanged) {
+          await MemoryEventRegistryRepo(
+            appDb,
+          ).reconcileCurrentSources(entry.key);
+        }
+      }
+    },
   );
   owned = service;
   final initializing = service.init();

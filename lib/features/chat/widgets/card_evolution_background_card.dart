@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -18,6 +20,14 @@ class CardEvolutionBackgroundCard extends ConsumerStatefulWidget {
 class _CardEvolutionBackgroundCardState
     extends ConsumerState<CardEvolutionBackgroundCard> {
   String? _dismissed;
+  String? _autoDismissScheduledFor;
+  Timer? _autoDismiss;
+
+  @override
+  void dispose() {
+    _autoDismiss?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -25,7 +35,10 @@ class _CardEvolutionBackgroundCardState
     if (sessionId == null) return const SizedBox.shrink();
     final jobs =
         ref.watch(cardEvolutionJobsProvider(sessionId)).value ?? const [];
-    if (jobs.isEmpty) return const SizedBox.shrink();
+    if (jobs.isEmpty) {
+      _cancelAutoDismiss();
+      return const SizedBox.shrink();
+    }
     final job =
         jobs.where((job) => job.status == 'running').firstOrNull ??
         jobs.where((job) => job.status == 'pending').firstOrNull ??
@@ -34,6 +47,11 @@ class _CardEvolutionBackgroundCardState
     if (!active && _dismissed == job.id) return const SizedBox.shrink();
     final failed = job.status == 'failed' || job.status == 'stale';
     final completed = job.status == 'completed';
+    if (completed) {
+      _scheduleAutoDismiss(job.id);
+    } else {
+      _cancelAutoDismiss();
+    }
     return ChatStatusCardShell(
       // A reservation may only check cadence and do no model work. Without
       // worker stage information, do not claim proposals are being written.
@@ -61,8 +79,29 @@ class _CardEvolutionBackgroundCardState
             ? () async {
                 await ref.read(cardEvolutionBackgroundProvider).cancel(job.id);
               }
-            : () => setState(() => _dismissed = job.id),
+            : () => _dismiss(job.id),
       ),
     );
+  }
+
+  void _scheduleAutoDismiss(String jobId) {
+    if (_autoDismissScheduledFor == jobId) return;
+    _autoDismiss?.cancel();
+    _autoDismissScheduledFor = jobId;
+    _autoDismiss = Timer(const Duration(milliseconds: 2500), () {
+      if (!mounted) return;
+      _dismiss(jobId);
+    });
+  }
+
+  void _cancelAutoDismiss() {
+    _autoDismiss?.cancel();
+    _autoDismiss = null;
+    _autoDismissScheduledFor = null;
+  }
+
+  void _dismiss(String jobId) {
+    _cancelAutoDismiss();
+    if (mounted) setState(() => _dismissed = jobId);
   }
 }
