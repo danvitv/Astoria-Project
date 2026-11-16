@@ -203,6 +203,26 @@ void main() {
 
       expect(resolved.maxTokens, 21000);
     });
+
+    test('auxiliary Studio slot preserves API reasoning controls', () {
+      final resolved = StudioSlotResolver.resolve(
+        apiConfigs: const [
+          ApiConfig(
+            id: 'api',
+            requestReasoning: true,
+            reasoningEffort: 'low',
+            omitReasoning: false,
+            omitReasoningEffort: false,
+          ),
+        ],
+        apiConfigId: 'api',
+      );
+
+      expect(resolved.requestReasoning, isTrue);
+      expect(resolved.reasoningEffort, 'low');
+      expect(resolved.omitReasoning, isFalse);
+      expect(resolved.omitReasoningEffort, isFalse);
+    });
   });
 
   test('Studio slot parameters override API parameters by key', () async {

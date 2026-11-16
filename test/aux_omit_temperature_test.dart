@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/llm/aux_llm_client.dart';
 import 'package:glaze_flutter/core/llm/transport/chat_transport.dart';
 import 'package:glaze_flutter/core/llm/transport/chat_transport_request.dart';
+import 'package:glaze_flutter/core/llm/transport/llm_protocol.dart';
+import 'package:glaze_flutter/core/llm/transport/openai_chat_transport.dart';
 
 /// Records the request an aux call actually sends. Every auxiliary call — the
 /// summary, the Studio cleaner, the Ledger, the JAR lorebook rebuild — pins its
@@ -76,5 +78,32 @@ void main() {
       expect(transport.request!.omitTemperature, isFalse);
       expect(transport.request!.temperature, 0.3);
     });
+  });
+
+  test('explicit aux reasoning controls travel into the request', () async {
+    final transport = _RecordingTransport();
+    final client = AuxLlmClient(transportPicker: (_) => transport);
+
+    await client.callOnceWithLog(
+      config: _config(omitTemperature: true),
+      prompt: 'audit this',
+      maxTokens: 512,
+      temperature: 0.3,
+      timeoutMs: 5000,
+      requestReasoning: true,
+      reasoningEffort: 'low',
+      omitReasoning: false,
+      omitReasoningEffort: false,
+    );
+
+    expect(transport.request!.requestReasoning, isTrue);
+    expect(transport.request!.reasoningEffort, 'low');
+    expect(transport.request!.omitReasoning, isFalse);
+    expect(transport.request!.omitReasoningEffort, isFalse);
+    final body = OpenAiChatTransport.buildBody(
+      transport.request!,
+      protocol: LlmProtocol.customChatCompletion,
+    );
+    expect(body['reasoning_effort'], 'low');
   });
 }

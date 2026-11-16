@@ -254,7 +254,10 @@ class LedgerTurnRunner {
         temperature: temperature,
         timeoutMs: timeoutMs,
         cancelToken: token,
-        omitReasoning: true,
+        requestReasoning: request.config.requestReasoning,
+        reasoningEffort: request.config.reasoningEffort,
+        omitReasoning: request.config.omitReasoning,
+        omitReasoningEffort: request.config.omitReasoningEffort,
         onAttemptStart: (attempt, maxAttempts) => request.onAttemptStart?.call(
           LedgerAttemptPhase.initial,
           attempt,
@@ -371,7 +374,10 @@ class LedgerTurnRunner {
           temperature: 0,
           timeoutMs: timeoutMs,
           cancelToken: token,
-          omitReasoning: true,
+          requestReasoning: request.config.requestReasoning,
+          reasoningEffort: request.config.reasoningEffort,
+          omitReasoning: request.config.omitReasoning,
+          omitReasoningEffort: request.config.omitReasoningEffort,
           onAttemptStart: (attempt, maxAttempts) => request.onAttemptStart
               ?.call(LedgerAttemptPhase.parserRepair, attempt, maxAttempts),
           captureContext: LlmCaptureContext(

@@ -330,7 +330,10 @@ final class LedgerReconciliationRunner {
             : 0.2,
         timeoutMs: timeoutMs,
         cancelToken: token,
-        omitReasoning: true,
+        requestReasoning: request.config.requestReasoning,
+        reasoningEffort: request.config.reasoningEffort,
+        omitReasoning: request.config.omitReasoning,
+        omitReasoningEffort: request.config.omitReasoningEffort,
         captureContext: LlmCaptureContext(
           stage: 'ledger.reconciliation',
           sessionId: request.sessionId,
@@ -446,7 +449,10 @@ final class LedgerReconciliationRunner {
           temperature: 0,
           timeoutMs: timeoutMs,
           cancelToken: token,
-          omitReasoning: true,
+          requestReasoning: request.config.requestReasoning,
+          reasoningEffort: request.config.reasoningEffort,
+          omitReasoning: request.config.omitReasoning,
+          omitReasoningEffort: request.config.omitReasoningEffort,
           captureContext: LlmCaptureContext(
             stage: 'ledger.reconciliation_repair',
             sessionId: request.sessionId,

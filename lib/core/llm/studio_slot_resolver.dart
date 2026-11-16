@@ -68,6 +68,10 @@ class StudioSlotResolver {
           protocol: fallback.protocol,
           maxTokens: fallback.maxTokens,
           useResponsesApi: useResponsesApi ?? fallback.useResponsesApi,
+          requestReasoning: fallback.requestReasoning,
+          reasoningEffort: fallback.reasoningEffort,
+          omitReasoning: fallback.omitReasoning,
+          omitReasoningEffort: fallback.omitReasoningEffort,
           omitTemperature: fallback.omitTemperature,
           extraRequestParameters: mergeExtraRequestParameters(
             fallback.extraRequestParameters,
@@ -118,6 +122,10 @@ class StudioSlotResolver {
       protocol: selected.protocol,
       maxTokens: selected.maxTokens,
       useResponsesApi: useResponsesApi ?? selected.useResponsesApi,
+      requestReasoning: selected.requestReasoning,
+      reasoningEffort: selected.reasoningEffort,
+      omitReasoning: selected.omitReasoning,
+      omitReasoningEffort: selected.omitReasoningEffort,
       omitTemperature: selected.omitTemperature,
       extraRequestParameters: mergeExtraRequestParameters(
         selected.extraRequestParameters,

@@ -39,6 +39,10 @@ class AuxApiConfig {
   final String protocol;
   final int maxTokens;
   final bool useResponsesApi;
+  final bool requestReasoning;
+  final String reasoningEffort;
+  final bool omitReasoning;
+  final bool omitReasoningEffort;
 
   /// Whether the connection forbids a `temperature` field. Aux calls pin their
   /// own temperature, but a provider that rejects the parameter outright
@@ -60,6 +64,10 @@ class AuxApiConfig {
     required this.protocol,
     this.maxTokens = 8000,
     this.useResponsesApi = false,
+    this.requestReasoning = false,
+    this.reasoningEffort = 'medium',
+    this.omitReasoning = false,
+    this.omitReasoningEffort = false,
     this.omitTemperature = false,
     this.extraRequestParameters = const [],
   });
@@ -195,6 +203,7 @@ class AuxLlmClient {
     bool omitReasoning = false,
     bool omitReasoningEffort = true,
     bool requestReasoning = false,
+    String? reasoningEffort,
     bool omitTopP = true,
     LlmCaptureContext? captureContext,
     AuxRawResponseSink? onRawResponse,
@@ -251,6 +260,7 @@ class AuxLlmClient {
         omitReasoning: omitReasoning,
         omitReasoningEffort: omitReasoningEffort,
         requestReasoning: requestReasoning,
+        reasoningEffort: reasoningEffort,
         omitTopP: omitTopP,
         captureContext: identifiedContext?.withAttempt(i + 1),
         onRawResponse: onRawResponse,
@@ -286,6 +296,7 @@ class AuxLlmClient {
     bool omitReasoning = false,
     bool omitReasoningEffort = true,
     bool requestReasoning = false,
+    String? reasoningEffort,
     LlmCaptureContext? captureContext,
   }) async {
     _requireConfigured(config);
@@ -322,6 +333,7 @@ class AuxLlmClient {
         omitReasoning: omitReasoning,
         omitReasoningEffort: omitReasoningEffort,
         requestReasoning: requestReasoning,
+        reasoningEffort: reasoningEffort,
         captureContext: identifiedContext?.withAttempt(i + 1),
         isCurrent: config.nativeSource?.isNative == true
             ? () => cancelToken?.isCancelled != true
@@ -440,6 +452,7 @@ class AuxLlmClient {
     bool omitReasoning = false,
     bool omitReasoningEffort = true,
     bool requestReasoning = false,
+    String? reasoningEffort,
     bool omitTopP = true,
     LlmCaptureContext? captureContext,
     AuxRawResponseSink? onRawResponse,
@@ -508,6 +521,7 @@ class AuxLlmClient {
           stream: false,
           requestReasoning: requestReasoning,
           useResponsesApi: config.useResponsesApi,
+          reasoningEffort: reasoningEffort,
           omitReasoning: omitReasoning,
           omitReasoningEffort: omitReasoningEffort,
           extraRequestParameters: config.extraRequestParameters,
@@ -587,6 +601,7 @@ class AuxLlmClient {
     bool omitReasoning = false,
     bool omitReasoningEffort = true,
     bool requestReasoning = false,
+    String? reasoningEffort,
     LlmCaptureContext? captureContext,
     bool Function()? isCurrent,
   }) async {
@@ -640,6 +655,7 @@ class AuxLlmClient {
           stream: true,
           requestReasoning: requestReasoning,
           useResponsesApi: config.useResponsesApi,
+          reasoningEffort: reasoningEffort,
           omitReasoning: omitReasoning,
           omitReasoningEffort: omitReasoningEffort,
           extraRequestParameters: config.extraRequestParameters,
