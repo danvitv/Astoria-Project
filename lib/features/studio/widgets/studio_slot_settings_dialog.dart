@@ -10,7 +10,7 @@ import '../../../shared/widgets/glaze_bottom_sheet.dart';
 import '../../../shared/widgets/menu_group.dart';
 import '../../../shared/widgets/sheet_view.dart';
 import '../studio_injection_points.dart';
-import 'studio_slot_override_controls.dart';
+import 'studio_slot_inherited_values.dart';
 
 /// Which Studio model slot is being configured.
 enum StudioSlot { finalGenerator, controller, cleaner, ledger }
@@ -201,9 +201,9 @@ class StudioSlotSettings {
 /// Per-slot generation settings, laid out like the LLM connection sheet:
 /// generation parameters, sampling, reasoning, extra request parameters.
 ///
-/// Every parameter sits under an "Override selected preset value" switch. With
-/// the switch off the row shows what [presetConfig] — the API connection bound
-/// to this slot — contributes instead.
+/// Slider switches mean "set this value in Studio"; off means inherit. Fields
+/// use an empty value for inheritance, while boolean and reasoning settings use
+/// explicit selectors so there is no second layer of override switches.
 ///
 /// Presented via [showModalBottomSheet] with [SheetView]; pops a
 /// [StudioSlotSettings] the caller applies through the pipeline notifier.
@@ -447,25 +447,136 @@ class _StudioSlotSettingsDialogState extends State<StudioSlotSettingsDialog> {
     _ => effort,
   };
 
-  Future<void> _openReasoningEffortSelector() async {
-    const options = ['auto', 'min', 'low', 'medium', 'high', 'max'];
+  String get _reasoningSelection {
+    if (!_requestReasoningOverride) return 'inherit';
+    if (!_requestReasoning || _omitReasoning) return 'off';
+    if (!_reasoningEffortOverride ||
+        _omitReasoningEffort ||
+        _reasoningEffort == 'auto') {
+      return 'auto';
+    }
+    return const {
+          'min',
+          'low',
+          'medium',
+          'high',
+          'max',
+        }.contains(_reasoningEffort)
+        ? _reasoningEffort
+        : 'auto';
+  }
+
+  String get _responsesSelection => !_useResponsesApiOverride
+      ? 'inherit'
+      : (_useResponsesApi ? 'responses' : 'chat');
+
+  String get _showReasoningSelection => !_showNativeReasoningOverride
+      ? 'inherit'
+      : (_showNativeReasoning ? 'show' : 'hide');
+
+  String _inheritLabel() => 'studio_slot_value_inherit'.tr();
+
+  String _inheritedLabel() => 'studio_slot_value_inherited'.tr();
+
+  String _reasoningSelectionLabel(String value) => switch (value) {
+    'inherit' => _inheritLabel(),
+    'off' => 'studio_slot_reasoning_off'.tr(),
+    _ => _reasoningEffortLabel(value),
+  };
+
+  Future<void> _openSelector({
+    required String title,
+    required String selected,
+    required List<({String value, String label})> options,
+    required ValueChanged<String> onSelected,
+  }) async {
     await GlazeBottomSheet.show<void>(
       context,
-      title: 'label_reasoning_effort'.tr(),
+      title: title,
       items: options.map((option) {
-        final active = option == _reasoningEffort;
+        final active = option.value == selected;
         return BottomSheetItem(
-          label: _reasoningEffortLabel(option),
+          label: option.label,
           icon: active ? Icons.check : null,
           iconColor: context.cs.primary,
           onTap: () {
             Navigator.of(context, rootNavigator: true).pop();
-            setState(() => _reasoningEffort = option);
+            setState(() => onSelected(option.value));
           },
         );
       }).toList(),
     );
   }
+
+  Future<void> _openReasoningSelector() => _openSelector(
+    title: 'studio_slot_settings_request_reasoning'.tr(),
+    selected: _reasoningSelection,
+    options: [
+      (value: 'inherit', label: _inheritLabel()),
+      (value: 'off', label: 'studio_slot_reasoning_off'.tr()),
+      for (final effort in const [
+        'auto',
+        'min',
+        'low',
+        'medium',
+        'high',
+        'max',
+      ])
+        (value: effort, label: _reasoningEffortLabel(effort)),
+    ],
+    onSelected: _setReasoningSelection,
+  );
+
+  void _setReasoningSelection(String value) {
+    if (value == 'inherit') {
+      _requestReasoningOverride = false;
+      _reasoningEffortOverride = false;
+      return;
+    }
+
+    _requestReasoningOverride = true;
+    _omitReasoning = false;
+    if (value == 'off') {
+      _requestReasoning = false;
+      _reasoningEffortOverride = false;
+      return;
+    }
+
+    _requestReasoning = true;
+    _reasoningEffortOverride = true;
+    _reasoningEffort = value;
+    _omitReasoningEffort = value == 'auto';
+  }
+
+  Future<void> _openResponsesSelector() => _openSelector(
+    title: 'label_use_responses_api'.tr(),
+    selected: _responsesSelection,
+    options: [
+      (value: 'inherit', label: _inheritLabel()),
+      (value: 'chat', label: 'studio_slot_transport_chat'.tr()),
+      (value: 'responses', label: 'studio_slot_transport_responses'.tr()),
+    ],
+    onSelected: (value) {
+      _useResponsesApiOverride = value != 'inherit';
+      if (_useResponsesApiOverride) _useResponsesApi = value == 'responses';
+    },
+  );
+
+  Future<void> _openShowReasoningSelector() => _openSelector(
+    title: 'label_reasoning'.tr(),
+    selected: _showReasoningSelection,
+    options: [
+      (value: 'inherit', label: _inheritLabel()),
+      (value: 'hide', label: 'studio_slot_reasoning_hide'.tr()),
+      (value: 'show', label: 'studio_slot_reasoning_show'.tr()),
+    ],
+    onSelected: (value) {
+      _showNativeReasoningOverride = value != 'inherit';
+      if (_showNativeReasoningOverride) {
+        _showNativeReasoning = value == 'show';
+      }
+    },
+  );
 
   void _save() {
     final maxTokens = _maxTokensOverride
@@ -496,8 +607,10 @@ class _StudioSlotSettingsDialogState extends State<StudioSlotSettingsDialog> {
         useResponsesApiOverride: _useResponsesApiOverride,
         reasoningEffort: _reasoningEffort,
         reasoningEffortOverride: _reasoningEffortOverride,
-        omitTemperature: _omitTemperature,
-        omitTopP: _omitTopP,
+        // The compact Studio switches now select override vs inheritance.
+        // Explicit field omission remains an API-preset concern.
+        omitTemperature: _temperatureOverride ? false : _omitTemperature,
+        omitTopP: _topPOverride ? false : _omitTopP,
         omitReasoning: _omitReasoning,
         omitReasoningEffort: _omitReasoningEffort,
         reasoningHistoryCount: reasoningHistoryCount < -1
@@ -559,48 +672,38 @@ class _StudioSlotSettingsDialogState extends State<StudioSlotSettingsDialog> {
     return MenuGroup(
       compact: true,
       header: 'studio_slot_settings_generation'.tr(),
-      description: 'studio_slot_override_hint'.tr(),
+      description: 'studio_slot_settings_inherit_hint'.tr(),
       items: [
-        ...studioSlotOverrideBlock(
+        MenuRangeItem(
           label: 'studio_slot_settings_temperature'.tr(),
-          overridden: _temperatureOverride,
-          onOverrideChanged: (v) => setState(() => _temperatureOverride = v),
-          inheritedValue: _inherited.agentDefault,
-          editor: MenuRangeItem(
-            label: 'studio_slot_settings_temperature'.tr(),
-            value: _temperature,
-            min: 0,
-            max: 2,
-            divisions: 200,
-            editableValue: true,
-            included: !_omitTemperature,
-            onIncludedChanged: (v) => setState(() => _omitTemperature = !v),
-            onChanged: (v) => setState(() => _temperature = v),
-          ),
+          description: _temperatureOverride ? null : _inherited.agentDefault,
+          value: _temperature,
+          min: 0,
+          max: 2,
+          divisions: 200,
+          editableValue: true,
+          included: _temperatureOverride,
+          onIncludedChanged: (v) => setState(() {
+            _temperatureOverride = v;
+            if (v) _omitTemperature = false;
+          }),
+          onChanged: (v) => setState(() => _temperature = v),
         ),
-        ...studioSlotOverrideBlock(
+        MenuFieldItem(
           label: 'studio_slot_settings_max_tokens'.tr(),
-          overridden: _maxTokensOverride,
-          onOverrideChanged: (v) => setState(() => _maxTokensOverride = v),
-          inheritedValue: _inherited.agentDefault,
-          editor: MenuFieldItem(
-            label: 'studio_slot_settings_max_tokens'.tr(),
-            controller: _maxTokensCtrl,
-            placeholder: '0',
-            keyboardType: TextInputType.number,
-          ),
+          controller: _maxTokensCtrl,
+          placeholder: _inheritedLabel(),
+          keyboardType: TextInputType.number,
+          onChanged: (value) =>
+              setState(() => _maxTokensOverride = value.trim().isNotEmpty),
         ),
-        ...studioSlotOverrideBlock(
+        MenuFieldItem(
           label: 'studio_slot_settings_timeout'.tr(),
-          overridden: _timeoutOverride,
-          onOverrideChanged: (v) => setState(() => _timeoutOverride = v),
-          inheritedValue: _inherited.agentDefault,
-          editor: MenuFieldItem(
-            label: 'studio_slot_settings_timeout'.tr(),
-            controller: _timeoutCtrl,
-            placeholder: '0',
-            keyboardType: TextInputType.number,
-          ),
+          controller: _timeoutCtrl,
+          placeholder: _inheritedLabel(),
+          keyboardType: TextInputType.number,
+          onChanged: (value) =>
+              setState(() => _timeoutOverride = value.trim().isNotEmpty),
         ),
       ],
     );
@@ -610,71 +713,65 @@ class _StudioSlotSettingsDialogState extends State<StudioSlotSettingsDialog> {
     return MenuGroup(
       compact: true,
       header: 'section_sampling'.tr(),
+      description: 'studio_slot_settings_slider_hint'.tr(),
       items: [
-        ...studioSlotOverrideBlock(
+        MenuRangeItem(
           label: 'studio_slot_settings_top_p'.tr(),
-          overridden: _topPOverride,
-          onOverrideChanged: (v) => setState(() => _topPOverride = v),
-          inheritedValue: _inherited.topP,
-          editor: MenuRangeItem(
-            label: 'studio_slot_settings_top_p'.tr(),
-            value: _topP,
-            min: 0,
-            max: 1,
-            divisions: 100,
-            editableValue: true,
-            included: !_omitTopP,
-            onIncludedChanged: (v) => setState(() => _omitTopP = !v),
-            onChanged: (v) => setState(() => _topP = v),
-          ),
+          description: _topPOverride ? null : _inherited.topP,
+          value: _topP,
+          min: 0,
+          max: 1,
+          divisions: 100,
+          editableValue: true,
+          included: _topPOverride,
+          onIncludedChanged: (v) => setState(() {
+            _topPOverride = v;
+            if (v) _omitTopP = false;
+          }),
+          onChanged: (v) => setState(() => _topP = v),
         ),
-        ...studioSlotOverrideBlock(
+        MenuRangeItem(
           label: 'studio_slot_settings_top_k'.tr(),
-          overridden: _topKOverride,
-          onOverrideChanged: (v) => setState(() => _topKOverride = v),
-          inheritedValue: _inherited.topK,
-          editor: MenuRangeItem(
-            label: 'studio_slot_settings_top_k'.tr(),
-            value: _topK.toDouble(),
-            min: 0,
-            max: 200,
-            divisions: 200,
-            editableValue: true,
-            decimalPlaces: 0,
-            onChanged: (v) => setState(() => _topK = v.round()),
-          ),
+          description: _topKOverride ? null : _inherited.topK,
+          value: _topK.toDouble(),
+          min: 0,
+          max: 200,
+          divisions: 200,
+          editableValue: true,
+          decimalPlaces: 0,
+          included: _topKOverride,
+          onIncludedChanged: (v) => setState(() => _topKOverride = v),
+          onChanged: (v) => setState(() => _topK = v.round()),
         ),
-        ...studioSlotOverrideBlock(
+        MenuRangeItem(
           label: 'studio_slot_settings_frequency_penalty'.tr(),
-          overridden: _frequencyPenaltyOverride,
-          onOverrideChanged: (v) =>
+          description: _frequencyPenaltyOverride
+              ? null
+              : _inherited.frequencyPenalty,
+          value: _frequencyPenalty,
+          min: -2,
+          max: 2,
+          divisions: 80,
+          editableValue: true,
+          included: _frequencyPenaltyOverride,
+          onIncludedChanged: (v) =>
               setState(() => _frequencyPenaltyOverride = v),
-          inheritedValue: _inherited.frequencyPenalty,
-          editor: MenuRangeItem(
-            label: 'studio_slot_settings_frequency_penalty'.tr(),
-            value: _frequencyPenalty,
-            min: -2,
-            max: 2,
-            divisions: 80,
-            editableValue: true,
-            onChanged: (v) => setState(() => _frequencyPenalty = v),
-          ),
+          onChanged: (v) => setState(() => _frequencyPenalty = v),
         ),
-        ...studioSlotOverrideBlock(
+        MenuRangeItem(
           label: 'studio_slot_settings_presence_penalty'.tr(),
-          overridden: _presencePenaltyOverride,
-          onOverrideChanged: (v) =>
+          description: _presencePenaltyOverride
+              ? null
+              : _inherited.presencePenalty,
+          value: _presencePenalty,
+          min: -2,
+          max: 2,
+          divisions: 80,
+          editableValue: true,
+          included: _presencePenaltyOverride,
+          onIncludedChanged: (v) =>
               setState(() => _presencePenaltyOverride = v),
-          inheritedValue: _inherited.presencePenalty,
-          editor: MenuRangeItem(
-            label: 'studio_slot_settings_presence_penalty'.tr(),
-            value: _presencePenalty,
-            min: -2,
-            max: 2,
-            divisions: 80,
-            editableValue: true,
-            onChanged: (v) => setState(() => _presencePenalty = v),
-          ),
+          onChanged: (v) => setState(() => _presencePenalty = v),
         ),
       ],
     );
@@ -685,61 +782,31 @@ class _StudioSlotSettingsDialogState extends State<StudioSlotSettingsDialog> {
       compact: true,
       header: 'studio_slot_settings_reasoning'.tr(),
       items: [
-        ...studioSlotOverrideBlock(
+        MenuSelectorItem(
           label: 'label_use_responses_api'.tr(),
-          overridden: _useResponsesApiOverride,
-          onOverrideChanged: (v) =>
-              setState(() => _useResponsesApiOverride = v),
-          inheritedValue: _inherited.useResponsesApi,
-          editor: MenuSwitchItem(
-            label: 'label_use_responses_api'.tr(),
-            description: 'desc_use_responses_api'.tr(),
-            value: _useResponsesApi,
-            onChanged: (v) => setState(() => _useResponsesApi = v),
-          ),
+          description: 'desc_use_responses_api'.tr(),
+          currentValue: switch (_responsesSelection) {
+            'chat' => 'studio_slot_transport_chat'.tr(),
+            'responses' => 'studio_slot_transport_responses'.tr(),
+            _ => _inheritLabel(),
+          },
+          onTap: _openResponsesSelector,
         ),
-        ...studioSlotOverrideBlock(
+        MenuSelectorItem(
           label: 'studio_slot_settings_request_reasoning'.tr(),
-          overridden: _requestReasoningOverride,
-          onOverrideChanged: (v) =>
-              setState(() => _requestReasoningOverride = v),
-          inheritedValue: _inherited.requestReasoning,
-          editor: MenuSwitchItem(
-            label: 'studio_slot_settings_request_reasoning'.tr(),
-            description: 'studio_slot_settings_request_reasoning_desc'.tr(),
-            value: _requestReasoning && !_omitReasoning,
-            onChanged: (v) => setState(() {
-              _requestReasoning = v;
-              _omitReasoning = false;
-            }),
-          ),
+          description: 'studio_slot_settings_request_reasoning_desc'.tr(),
+          currentValue: _reasoningSelectionLabel(_reasoningSelection),
+          onTap: _openReasoningSelector,
         ),
-        ...studioSlotOverrideBlock(
+        MenuSelectorItem(
           label: 'label_reasoning'.tr(),
-          overridden: _showNativeReasoningOverride,
-          onOverrideChanged: (v) =>
-              setState(() => _showNativeReasoningOverride = v),
-          inheritedValue: _inherited.showNativeReasoning,
-          editor: MenuSwitchItem(
-            label: 'label_reasoning'.tr(),
-            description: 'desc_reasoning'.tr(),
-            value: _showNativeReasoning,
-            onChanged: (v) => setState(() => _showNativeReasoning = v),
-          ),
-        ),
-        ...studioSlotOverrideBlock(
-          label: 'label_reasoning_effort'.tr(),
-          overridden: _reasoningEffortOverride,
-          onOverrideChanged: (v) =>
-              setState(() => _reasoningEffortOverride = v),
-          inheritedValue: _inherited.reasoningEffort,
-          editor: MenuSelectorItem(
-            label: 'label_reasoning_effort'.tr(),
-            currentValue: _reasoningEffortLabel(_reasoningEffort),
-            included: !_omitReasoningEffort,
-            onIncludedChanged: (v) => setState(() => _omitReasoningEffort = !v),
-            onTap: _openReasoningEffortSelector,
-          ),
+          description: 'desc_reasoning'.tr(),
+          currentValue: switch (_showReasoningSelection) {
+            'show' => 'studio_slot_reasoning_show'.tr(),
+            'hide' => 'studio_slot_reasoning_hide'.tr(),
+            _ => _inheritLabel(),
+          },
+          onTap: _openShowReasoningSelector,
         ),
         // Studio-only knobs: they shape the prompt this slot builds rather than
         // a request field the API preset could supply, so they carry no
