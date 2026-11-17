@@ -5,6 +5,7 @@ import '../../../../../core/db/repositories/preset_repo.dart';
 import '../../../../../core/db/repositories/studio_preset_repo.dart';
 import '../../../models/support_app_action.dart';
 import 'support_content_mutation.dart';
+import 'support_preset_knowledge.dart';
 
 /// Pure ID/count projection. In particular ordinary PresetRepo.getAll repairs
 /// rows, so it is deliberately never used for this metadata operation.
@@ -27,15 +28,18 @@ final class SupportContentCatalogAdapter implements SupportAppActionAdapter {
     SupportAppActionDefinition(
       name: 'astoria_content_catalog',
       description:
-          'List up to 32 content IDs and the total count; no names, titles, prompts or previews.',
+          'List content IDs/counts by domain, or read current native preset capability by knowledgeTopic. Supply exactly one selector; saved content and historical expansion are not inferred.',
       risk: SupportAppActionRisk.metadata,
       fields: {
         'domain': SupportAppActionField.choice(
           SupportContentDomain.values.map((d) => d.name),
         ),
+        'knowledgeTopic': SupportAppActionField.choice(
+          SupportPresetKnowledge.topics,
+        ),
         'offset': const SupportAppActionField.integer(0, 1000000),
       },
-      requiredFields: {'domain'},
+      requireAnyField: true,
     ),
     SupportAppActionDefinition(
       name: 'astoria_content_handles',
@@ -65,6 +69,42 @@ final class SupportContentCatalogAdapter implements SupportAppActionAdapter {
     if (definition == null) return null;
     SupportContentArguments.validate(definition, arguments);
     if (!context.current) return null;
+    if (action == 'astoria_content_catalog') {
+      final domain = arguments['domain'] as String?;
+      final topic = arguments['knowledgeTopic'] as String?;
+      if ((domain == null) == (topic == null)) {
+        throw const SupportAppActionRefused(
+          SupportAppActionCode.invalidArguments,
+        );
+      }
+      if (topic != null) {
+        final offset = arguments['offset'] as int? ?? 0;
+        final all = SupportPresetKnowledge.records(topic);
+        final page = offset >= all.length
+            ? const <SupportPresetKnowledgeRecord>[]
+            : all.skip(offset).take(16).toList(growable: false);
+        return SupportAppPreparedAction(
+          target: 'preset-knowledge:$topic',
+          observation: Object(),
+          observationIsCurrent: () => context.current,
+          execute: (current) async => SupportAppActionOutcome(
+            current()
+                ? SupportAppActionCode.completed
+                : SupportAppActionCode.stale,
+            data: current()
+                ? {
+                    'topic': topic,
+                    'records': page.map((record) => record.toJson()).toList(),
+                    'count': all.length,
+                    'offset': offset,
+                    'complete': offset + page.length >= all.length,
+                    'scope': 'currentNativeCapability',
+                  }
+                : const {},
+          ),
+        );
+      }
+    }
     final domain = SupportContentDomain.values.byName(
       arguments['domain']! as String,
     );

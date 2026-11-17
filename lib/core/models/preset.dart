@@ -86,8 +86,11 @@ abstract class Preset with _$Preset {
       _$PresetFromJson(_normalizePreset(json));
 }
 
-/// Canonical ids that always represent system (non-editable) blocks.
-const _staticBlockIds = <String>{
+/// Canonical ordinary-preset block ids resolved by the native prompt builder.
+/// These always represent system (non-editable) blocks.
+/// Shared with bounded capability/help projections so documentation cannot
+/// silently invent a second set of supported hard blocks.
+const staticPresetBlockIds = <String>{
   'worldInfoBefore',
   'worldInfoAfter',
   'char_card',
@@ -110,7 +113,8 @@ Map<String, dynamic> _normalizeBlock(Map<String, dynamic> json) {
   // created before this field was introduced are handled correctly.
   final id = n['id'] as String?;
   final alreadyStatic = _coerceBool(n['isStatic'], false);
-  n['isStatic'] = alreadyStatic || (id != null && _staticBlockIds.contains(id));
+  n['isStatic'] =
+      alreadyStatic || (id != null && staticPresetBlockIds.contains(id));
   n['appendToLastMessage'] = _coerceBool(n['appendToLastMessage'], false);
   n['sendEmptyBlock'] = _coerceBool(n['sendEmptyBlock'], false);
   n['depth'] = _coerceInt(n['depth']);

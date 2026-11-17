@@ -23,7 +23,7 @@ void main() {
             .read(supportAppActionRegistryProvider)
             .definitions,
       );
-      expect(definitions, hasLength(46));
+      expect(definitions, hasLength(63));
       for (final name in [
         'astoria_session_rename',
         'astoria_session_title_receipts',
@@ -65,14 +65,30 @@ void main() {
         expect(serialized, isNot(contains(absent)));
       }
       f.script(
-        f.screen.core.call('astoria_content_catalog', {'domain': 'character'}),
+        f.screen.core.call('astoria_content_catalog', {
+          'knowledgeTopic': 'studioContext',
+        }),
         next: (_) {
           final result = f.lastResult();
           expect(result['effect'], 'none');
           final data = result['data'] as Map;
-          expect(data['ids'], [DomainLoopFixture.character]);
-          expect(data.keys, isNot(contains('name')));
-          return f.screen.core.answer('Native ID metadata only.');
+          expect(data['scope'], 'currentNativeCapability');
+          final records = (data['records'] as List)
+              .map((value) => Map<String, dynamic>.from(value as Map))
+              .toList();
+          expect(
+            records.map((record) => record['id']),
+            contains('recalledMessages'),
+          );
+          expect(
+            records.singleWhere(
+              (record) => record['id'] == 'recalledMessages',
+            )['behavior'],
+            contains('not a macro'),
+          );
+          return f.screen.core.answer(
+            'Native preset capability metadata only.',
+          );
         },
       );
       await f.start(tester, confirmation: false);
