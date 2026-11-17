@@ -1,0 +1,124 @@
+import 'dart:convert';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:glaze_flutter/core/llm/diagnostics/generation_runtime_call_facts.dart';
+import 'package:glaze_flutter/core/llm/diagnostics/recorded_generation_runtime.dart';
+import 'package:glaze_flutter/core/llm/transport/chat_transport_request.dart';
+
+Map<String, dynamic> _payload({String completion = 'complete'}) {
+  final request = const ChatTransportRequest(
+    endpoint: 'https://private.invalid/v1',
+    apiKey: 'PRIVATE_KEY',
+    model: 'PRIVATE_MODEL',
+    messages: [
+      {'role': 'user', 'content': 'PRIVATE_PROMPT'},
+    ],
+    maxTokens: 321,
+    temperature: 0.7,
+    topP: 0.8,
+    topK: 40,
+    requestReasoning: true,
+    reasoningEffort: 'medium',
+  );
+  return GenerationRuntimeCallFacts.payload(
+    request: GenerationRuntimeCallFacts.constructedRequest(request),
+    elapsedMs: 25,
+    chunkCount: completion == 'complete' ? 2 : 0,
+    firstChunkMs: completion == 'complete' ? 5 : null,
+    maxChunkGapMs: completion == 'complete' ? 10 : 0,
+    contentOffset: completion == 'complete' ? 3 : 0,
+    reasoningOffset: completion == 'complete' ? 2 : 0,
+    completionReason: completion,
+    streamTermination: completion == 'complete' ? 'terminal' : null,
+    callbackFinishReason: completion == 'complete' ? 'stop' : null,
+  );
+}
+
+Map<String, Object?> _row({
+  String kind = 'transport_succeeded',
+  String status = 'ok',
+  int statusCode = 200,
+  String completion = 'complete',
+}) => {
+  'stage': 'main',
+  'attempt': 1,
+  '_diagnosticIdentityValid': 1,
+  'truncated': 0,
+  'parser_name': null,
+  'parser_code': null,
+  'parser_detail': null,
+  'kind': kind,
+  'status': status,
+  'status_code': statusCode,
+  'payload_json': jsonEncode(_payload(completion: completion)),
+};
+
+void main() {
+  test(
+    'ordinary main runtime exposes finite facts without request content',
+    () {
+      final result = RecordedGenerationRuntime.fromColumns(_row())!;
+      expect(result['finding'], 'recorded_generation_runtime_outcome');
+      expect(result['outcome'], 'completed');
+      final call = result['callFacts'] as Map<String, Object?>;
+      final request = call['constructedRequest'] as Map<String, Object?>;
+      expect(request['configuredOutputLimit'], 321);
+      expect(request['messageCount'], 1);
+      expect(request['requestReasoning'], isTrue);
+      expect(call['providerFinishReason'], 'unknown_not_attested');
+      expect(call['providerWireNormalization'], 'unknown_not_observed');
+      expect(call['providerSamplerBehavior'], 'unknown_not_observed');
+      final encoded = jsonEncode(result);
+      for (final private in [
+        'PRIVATE_KEY',
+        'PRIVATE_MODEL',
+        'PRIVATE_PROMPT',
+        'private.invalid',
+      ]) {
+        expect(encoded, isNot(contains(private)));
+      }
+    },
+  );
+
+  test('outcome columns and callback branch must agree exactly', () {
+    expect(
+      RecordedGenerationRuntime.fromColumns(
+        _row(
+          kind: 'transport_failed',
+          status: 'timeout',
+          statusCode: 0,
+          completion: 'timeout',
+        ),
+      )?['outcome'],
+      'failed',
+    );
+    expect(
+      RecordedGenerationRuntime.fromColumns(
+        _row(
+          kind: 'transport_failed',
+          status: 'http_4xx',
+          statusCode: 429,
+          completion: 'error',
+        ),
+      )?['transportStatus'],
+      'http_4xx',
+    );
+    expect(
+      RecordedGenerationRuntime.fromColumns(
+        _row(kind: 'transport_failed', status: 'timeout', statusCode: 0),
+      ),
+      isNull,
+    );
+    expect(
+      RecordedGenerationRuntime.fromColumns(
+        _row(
+          kind: 'transport_failed',
+          status: 'http_4xx',
+          statusCode: 200,
+          completion: 'error',
+        ),
+      ),
+      isNull,
+    );
+  });
+}

@@ -25,6 +25,7 @@ import '../../../core/llm/prompt/prompt_payload.dart';
 import '../../../core/llm/prompt/prompt_result.dart';
 import '../../../core/llm/context_calculator.dart';
 import '../../../core/llm/context_budget_guard.dart';
+import '../../../core/llm/diagnostics/generation_runtime_call_facts.dart';
 import '../../../core/llm/stream_accumulator.dart';
 import '../../../core/llm/studio_regex_applicator.dart';
 import '../../../core/llm/beauty_state_parser.dart';
@@ -841,12 +842,43 @@ class StreamGenerationService {
         messageId: regenTargetId ?? continueTargetId,
       );
 
+      final nativeSource = _nativeSource;
+      var nativeRequestOpen = true;
+      final request = ChatTransportRequest.fromApiConfig(
+        apiConfig,
+        savedConnectionAuth: nativeSource?.savedConnectionAuth,
+        nativeSourceIsCurrent: nativeSource?.bindNativeCurrent(
+          isCurrent: () =>
+              nativeRequestOpen && !_isAborted() && !cancelToken.isCancelled,
+        ),
+        messages: apiMessages,
+        sessionId: session.id,
+        previousMessages: previousApiMessages,
+        charName: inputs.character.name,
+        userName: inputs.persona?.name ?? 'User',
+        captureContext: captureContext,
+      );
+      final constructedRequestFacts =
+          GenerationRuntimeCallFacts.constructedRequest(request);
+      var chunkCount = 0;
+      int? firstChunkMs;
+      int? lastChunkAtMs;
+      var maxChunkGapMs = 0;
+      var contentOffset = 0;
+      var reasoningOffset = 0;
+      String? streamTermination;
+      String? callbackFinishReason;
+
       // One outcome per call. `onComplete` and `onError` are not exclusive on
       // every transport — an aborted stream can reach both — and the table is
       // keyed on `callId + attempt`, so a second write would collide with the
       // first rather than adding to it.
       var outcomeRecorded = false;
-      void recordOutcome({String? responseText, Object? error}) {
+      void recordOutcome({
+        String? responseText,
+        Object? error,
+        required String completionReason,
+      }) {
         if (outcomeRecorded) return;
         outcomeRecorded = true;
         unawaited(
@@ -862,37 +894,46 @@ class StreamGenerationService {
                 error: error,
               ),
               responseText: responseText,
+              extraPayload: GenerationRuntimeCallFacts.payload(
+                request: constructedRequestFacts,
+                elapsedMs: DateTime.now()
+                    .difference(startGenTime)
+                    .inMilliseconds,
+                chunkCount: chunkCount,
+                firstChunkMs: firstChunkMs,
+                maxChunkGapMs: maxChunkGapMs,
+                contentOffset: contentOffset,
+                reasoningOffset: reasoningOffset,
+                completionReason: completionReason,
+                streamTermination: streamTermination,
+                callbackFinishReason: callbackFinishReason,
+              ),
             ),
           ),
         );
       }
 
       _phase(GenerationPhase.waiting);
-      final nativeSource = _nativeSource;
-      var nativeRequestOpen = true;
       await transport
           .stream(
-            request: ChatTransportRequest.fromApiConfig(
-              apiConfig,
-              savedConnectionAuth: nativeSource?.savedConnectionAuth,
-              nativeSourceIsCurrent: nativeSource?.bindNativeCurrent(
-                isCurrent: () =>
-                    nativeRequestOpen &&
-                    !_isAborted() &&
-                    !cancelToken.isCancelled,
-              ),
-              messages: apiMessages,
-              sessionId: session.id,
-              previousMessages: previousApiMessages,
-              charName: inputs.character.name,
-              userName: inputs.persona?.name ?? 'User',
-              captureContext: captureContext,
-            ),
+            request: request,
             cancelToken: cancelToken,
             onUpdate: (delta, reasoningDelta) {
               if (_isAborted()) return;
               if (delta.isNotEmpty || reasoningDelta?.isNotEmpty == true) {
                 idleGuard.cancel();
+                final nowMs = DateTime.now().millisecondsSinceEpoch;
+                final elapsedMs = nowMs - startGenTime.millisecondsSinceEpoch;
+                firstChunkMs ??= elapsedMs;
+                final previous = lastChunkAtMs;
+                if (previous != null) {
+                  final gap = nowMs - previous;
+                  if (gap > maxChunkGapMs) maxChunkGapMs = gap;
+                }
+                lastChunkAtMs = nowMs;
+                chunkCount++;
+                contentOffset += delta.length;
+                reasoningOffset += reasoningDelta?.length ?? 0;
               }
               accumulator.consumeDelta(delta, reasoningDelta: reasoningDelta);
               // Reasoning-only output keeps the typing bubble on screen (the
@@ -911,10 +952,33 @@ class StreamGenerationService {
               if (_isAborted()) return;
               closeStreamPublishing();
               idleGuard.dispose();
+              if (rawResponseJson != null) {
+                try {
+                  final raw =
+                      jsonDecode(rawResponseJson) as Map<String, dynamic>;
+                  streamTermination = GenerationRuntimeCallFacts.termination(
+                    raw['astoria_stream_termination'],
+                  );
+                  final choices = raw['choices'] as List?;
+                  if (choices != null &&
+                      choices.isNotEmpty &&
+                      choices.first is Map) {
+                    callbackFinishReason =
+                        GenerationRuntimeCallFacts.finishReason(
+                          choices.first['finish_reason'],
+                        );
+                  }
+                } catch (_) {
+                  // Other transports can return a different raw payload shape.
+                }
+              }
               // The raw body when the transport kept one: the Response tab
               // pretty-prints it and reads the assistant text back out of it, so
               // the payload is worth more there than the assembled text alone.
-              recordOutcome(responseText: rawResponseJson ?? text);
+              recordOutcome(
+                responseText: rawResponseJson ?? text,
+                completionReason: 'complete',
+              );
               if (!apiConfig.stream &&
                   accumulator.text.isEmpty &&
                   accumulator.reasoning.isEmpty &&
@@ -1047,6 +1111,7 @@ class StreamGenerationService {
                     msg,
                     Duration(milliseconds: idleTimeoutMs),
                   ),
+                  completionReason: 'timeout',
                 );
                 if (continueTargetId != null) {
                   finalState = _continueFailure(msg, session, vsi);
@@ -1066,7 +1131,14 @@ class StreamGenerationService {
                 }
                 return;
               }
-              recordOutcome(error: error);
+              recordOutcome(
+                error: error,
+                completionReason: switch (callAttemptStatus(error)) {
+                  'timeout' => 'timeout',
+                  'cancelled' => 'cancelled',
+                  _ => 'error',
+                },
+              );
               final isCancelled =
                   (error is DioException &&
                       error.type == DioExceptionType.cancel) ||

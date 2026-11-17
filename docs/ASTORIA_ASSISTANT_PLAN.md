@@ -155,8 +155,8 @@ The structured result must distinguish:
 - proposed, confirmed and actually completed repair attempts.
 
 Connection diagnosis needs recorded protocol/HTTP/timeout evidence, not a key count.
-Generation diagnosis still needs complete call/stream/context/sampling/reasoning
-evidence beyond a linked saved outcome. Current saved Studio block rules use the
+Generation diagnosis still needs complete context-budget/trim and provider-wire
+evidence beyond linked saved outcomes. Current saved Studio block rules use the
 real codec/validator, and saved agent topology uses the actual phase splitter and
 ontology-declared requirements through native sources. These are separate limited
 observations. Native pre-generation phase decisions and controller/call outcomes
@@ -164,9 +164,13 @@ now carry exact recorded identity and stable retry attempts; ambiguous parent
 links refuse. Native secret-backed calls retain no raw prompt/output/error capture.
 This does not prove complete history, every post-generation branch, full dependency
 normalization, or root cause. Those gaps are not inferred from saved configuration.
-Actual constructed request parameters/context counts and callback counters now travel
-in the same recorded call event. The public configuredOutputLimit label preserves the
-saved maxTokens value without weakening whole-unit current redaction. Provider wire
+Actual constructed request parameters/message counts and callback counters now travel
+in the same recorded call event for both Studio calls and the ordinary main-model call.
+The ordinary projection is `recordedGenerationRuntime`; exact event/request linkage
+remains internal and missing or ambiguous captures are not guessed. The public
+configuredOutputLimit label preserves the saved maxTokens value without weakening
+whole-unit current redaction. Context-budget decisions and trim reasons are not yet
+recorded in this unit. Provider wire
 normalization, actual token use, sampler behavior and provider finish reasons remain
 unknown, not inferred from callbacks that may be synthetic.
 Required tracker failures must not be bypassed. Integrity diagnosis keeps
@@ -174,7 +178,7 @@ canonical books, drafts, derived catalogs, Ledger and canon assembly separate.
 Autonomous multi-session discovery uses the existing global consent while every
 observation retains exact session/run/call identity.
 
-#### Complete preset macro and insertion knowledge — pending
+#### Complete preset macro and insertion knowledge — implemented bounded catalog
 
 Astoria must know ALL supported macros and insertion points for ordinary and Studio
 presets, not just a curated subset. This includes raw recall injection, `{{lorebooks}}`,
@@ -188,6 +192,14 @@ catalog completeness and advice through the native Send path for both preset dom
 Distinguish a saved macro from evidence that it actually expanded in a recorded request.
 This knowledge does not grant execution, preset mutation or access to private expansion
 contents beyond the existing consent and source/publication guards.
+
+The native catalog now derives ordinary hard blocks, Studio routes/controller lanes,
+context slots and generated brief macros from the current runtime constants. It covers
+standard aliases and parameterized macros, placement modes and explicit empty/unavailable
+conditions, and identifies Raw Recall as automatic context rather than a macro. Astoria
+reads it through `astoria_content_catalog(knowledgeTopic: ...)`, so no extra native
+definition consumes the remaining registry slot. Focused catalog/diagnostic tests and
+the actual native tool-loop read pass; historical expansion remains unproven by design.
 
 A deterministic annotation of an already-admitted result is only an observation
 helper, **not** an internal specialist agent or a completed diagnostic product.

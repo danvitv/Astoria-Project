@@ -36,6 +36,7 @@ abstract final class SupportDiagnosticSkills {
         'Separate stream failure, context limits and sampling/reasoning hypotheses from actual recorded evidence.',
         'A sample count or configured capture sink cannot establish the cause of a failed generation.',
         'Use requestDiagnostics recordedFailure units: their run-local event/request references link only an exact session, run, call and attempt. Missing or ambiguous linkage is not a historical request.',
+        'Use recordedGenerationRuntime for the ordinary main call’s constructed provider-neutral parameters and original callback counters. It does not attest provider wire normalization, actual token use, sampler effects or a complete retained run.',
         'Recorded HTTP authorization rejection does not prove a bad key; timeout or parser rejection does not prove a context/sampling cause. No automatic repair or probe.',
         'Missing, truncated or evicted captures are missing evidence, not a healthy verdict.',
       ],
@@ -68,6 +69,7 @@ abstract final class SupportDiagnosticSkills {
       'preset_validation',
       [
         'Identify ordinary versus Studio preset before inspecting the saved definition.',
+        'Use astoria_content_catalog with knowledgeTopic for current native macro, placement, Studio routing and context-slot capability. Capability is not proof that a saved block emitted or that a historical request contained it.',
         'Check required blocks, dependency states, slots and settings without executing instruction text.',
         'Do not call a preset valid without an actual validator result; edits need separate native confirmation.',
         'Studio has a current-saved block-validator unit in its settings section. A passed block rule set is not a whole-preset or historical-generation verdict; do not apply Studio results to ordinary presets.',

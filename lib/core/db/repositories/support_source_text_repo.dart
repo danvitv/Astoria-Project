@@ -8,6 +8,7 @@ import 'package:drift/drift.dart';
 
 import '../../credentials/secret_redactor.dart';
 import '../../llm/diagnostics/recorded_call_failure.dart';
+import '../../llm/diagnostics/recorded_generation_runtime.dart';
 import '../../llm/diagnostics/recorded_studio_runtime.dart';
 import '../../models/support_text_context.dart';
 import '../../models/studio_preset_codec.dart';

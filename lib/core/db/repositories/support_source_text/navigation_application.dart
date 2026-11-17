@@ -568,6 +568,27 @@ extension _NavApplication on SupportSourceNavigationRepo {
     }
 
     if (unavailable == null && table.table == 'llm_call_event_rows') {
+      final generation = RecordedGenerationRuntime.fromColumns(row);
+      if (generation != null) {
+        final requestRow = row['_diagnosticRequestRow'];
+        final summary = <String, Object?>{
+          ...generation,
+          'eventReference': _applicationPosition(table.table, ordinal),
+          'identityLink': 'native_exact_session_run_call_attempt',
+          'requestLink': requestRow is int
+              ? 'exact_session_run_call_attempt'
+              : 'missing_or_ambiguous',
+          if (requestRow is int)
+            'requestReference': _applicationPosition(
+              'llm_request_capture_rows',
+              requestRow,
+            ),
+        };
+        final encoded = jsonEncode(summary);
+        if (_projectionPolicy!.redactText(encoded) == encoded) {
+          emit(summary, 'recordedGenerationRuntime');
+        }
+      }
       if (runtime != null) {
         final requestRow = row['_diagnosticRequestRow'];
         final phaseRow = row['_diagnosticPhaseRow'];
