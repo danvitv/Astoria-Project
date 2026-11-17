@@ -52,6 +52,29 @@ abstract final class MessageRecallQuery {
     return parts.join('\n\n');
   }
 
+  /// Lexical reranking text. Assistant wording is used only when the current
+  /// user turn clearly disputes or corrects the immediately preceding reply.
+  /// It supplies an antecedent for pronoun-only corrections; semantic search
+  /// and exact indexed sources still decide whether any evidence is admitted.
+  static String lexicalContinuity({
+    required String currentText,
+    List<ChatMessage> history = const [],
+  }) {
+    final current = project('user', currentText);
+    if (current.isEmpty || !_looksLikeCorrection(current)) return current;
+
+    final eligible = history.where(_eligible).toList();
+    if (eligible.isNotEmpty &&
+        eligible.last.role == 'user' &&
+        eligible.last.content == currentText) {
+      eligible.removeLast();
+    }
+    if (eligible.isEmpty || eligible.last.role != 'assistant') return current;
+    final antecedent = project('assistant', eligible.last.content);
+    if (antecedent.isEmpty) return current;
+    return '$current\n\nassistant: ${_bounded(antecedent, _recentChars)}';
+  }
+
   static bool _eligible(ChatMessage message) =>
       !message.isHidden &&
       !message.isTyping &&
@@ -66,6 +89,15 @@ abstract final class MessageRecallQuery {
           ).hasMatch(message.content)
       ? 1
       : 0;
+
+  static bool _looksLikeCorrection(String text) => RegExp(
+    r'вообще-то|на самом деле|неверн|неправ|'
+    r'(?:ты|вы)\s+забыл|я\s+же|разве\s+(?:мы|ты|вы)|'
+    r'памят[ьи][^.!?\n]{0,24}(?:подвод|измен)|'
+    r'\bactually\b|\bthat(?:\s+is|\x27s)\s+not\b|'
+    r'\byou\s+(?:forgot|misremembered)\b',
+    caseSensitive: false,
+  ).hasMatch(text);
 
   /// Only the query is projected. Saved/indexed evidence is never rewritten.
   static String project(String role, String content) {

@@ -128,7 +128,10 @@ class MessageRecallService {
           queryChunks.map((chunk) => chunk.vector).toList(),
           threshold,
           counters,
-          queryText: MessageRecallQuery.project('user', currentText),
+          queryText: MessageRecallQuery.lexicalContinuity(
+            currentText: currentText,
+            history: recentHistory,
+          ),
           participantAliases: participantAliases,
         ),
       );

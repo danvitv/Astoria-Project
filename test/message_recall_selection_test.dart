@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/llm/chat_message_embedding_service.dart';
 import 'package:glaze_flutter/core/llm/message_recall_selection.dart';
+import 'package:glaze_flutter/core/llm/message_recall_query.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 
 void main() {
@@ -143,5 +144,54 @@ void main() {
 
     expect(selected.single.entryId, 'matching-transport');
     expect(selected.single.continuityScore, greaterThan(.45));
+  });
+
+  test('pronoun correction reranks the chunk containing its antecedent', () {
+    const history = [
+      ChatMessage(
+        id: 'a-now',
+        role: 'assistant',
+        content: 'Предлагаю посмотреть «Призрака в доспехах» с Йоханссон.',
+      ),
+      ChatMessage(
+        id: 'u-now',
+        role: 'user',
+        content:
+            'Вообще-то мы вчера с тобой её разнесли. Совсем память подводит?',
+      ),
+    ];
+    final queryText = MessageRecallQuery.lexicalContinuity(
+      currentText: history.last.content,
+      history: history,
+    );
+    final counters = {'dimensionMismatch': 0, 'aboveThreshold': 0};
+    final selected = MessageRecallSelection.rank(
+      candidates: const [
+        MessageRecallCandidate(
+          entryId: 'nearby-wrong-slice',
+          chunkIndex: 8,
+          text: 'После планёрки они спустились к внедорожнику и уехали.',
+          vector: [1, 0],
+          messageIds: ['263'],
+        ),
+        MessageRecallCandidate(
+          entryId: 'movie-source',
+          chunkIndex: 5,
+          text:
+              'Акане выбрала «Призрака в доспехах» 2017 года с Йоханссон и включила фильм.',
+          vector: [0.99, 0.01],
+          messageIds: ['262'],
+        ),
+      ],
+      queryVectors: const [
+        [1, 0],
+      ],
+      threshold: .25,
+      counters: counters,
+      queryText: queryText,
+    );
+
+    expect(selected.first.entryId, 'movie-source');
+    expect(selected.first.chunkIndex, 5);
   });
 }

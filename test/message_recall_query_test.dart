@@ -147,4 +147,48 @@ void main() {
       isEmpty,
     );
   });
+
+  test(
+    'correction lexical query carries the preceding assistant antecedent',
+    () {
+      const history = [
+        ChatMessage(
+          id: 'a1',
+          role: 'assistant',
+          content: 'Давай посмотрим «Призрака в доспехах» с Йоханссон.',
+        ),
+        ChatMessage(
+          id: 'u1',
+          role: 'user',
+          content:
+              'Вообще-то мы вчера с тобой её разнесли. Совсем память подводит?',
+        ),
+      ];
+
+      final query = MessageRecallQuery.lexicalContinuity(
+        currentText: history.last.content,
+        history: history,
+      );
+      expect(query, contains('Вообще-то мы вчера'));
+      expect(query, contains('Призрака в доспехах'));
+      expect(query, contains('Йоханссон'));
+    },
+  );
+
+  test('ordinary lexical query does not inherit assistant assertions', () {
+    const history = [
+      ChatMessage(
+        id: 'a1',
+        role: 'assistant',
+        content: 'Непроверенное утверждение о красном мосте.',
+      ),
+      ChatMessage(id: 'u1', role: 'user', content: 'Продолжай.'),
+    ];
+    final query = MessageRecallQuery.lexicalContinuity(
+      currentText: history.last.content,
+      history: history,
+    );
+    expect(query, 'Продолжай.');
+    expect(query, isNot(contains('мосте')));
+  });
 }

@@ -30,6 +30,26 @@ MemoryEntry _entry({
 );
 
 void main() {
+  group('MemorySelector: keyword evidence', () {
+    test('one precise key is not diluted by a long generated key list', () {
+      final keys = ['Призрак в доспехах', for (var i = 0; i < 43; i++) 'key$i'];
+      final result = MemorySelector.select(
+        MemorySelectionInput(
+          entries: [_entry(id: 'movie', keys: keys)],
+          keywordMatchedTerms: const {
+            'movie': ['Призрак в доспехах'],
+          },
+          keywordWeight: 1,
+          vectorWeight: 0,
+          recencyBoost: false,
+          importanceBoost: false,
+        ),
+      );
+
+      expect(result.allScores.single.keywordScore, closeTo(0.6, 0.0001));
+    });
+  });
+
   group('MemorySelector: source-window exclusion', () {
     test('excludes entries whose messageIds overlap the visible window', () {
       final entries = [

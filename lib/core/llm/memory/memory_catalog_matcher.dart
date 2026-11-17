@@ -153,7 +153,7 @@ class MemoryCatalogMatcher {
     for (final raw in terms) {
       final term = raw.trim().toLowerCase();
       if (term.length < 3) continue;
-      if (scanText.contains(term)) matched.add(raw.trim());
+      if (memoryKeyMatchesGlaze(term, scanText)) matched.add(raw.trim());
     }
     matched.sort();
     return matched;

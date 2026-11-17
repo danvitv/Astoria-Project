@@ -432,15 +432,13 @@ class MemorySelector {
     );
   }
 
-  /// Default keyword matcher: case-insensitive substring across the
-  /// entries' own keys. Used by the isolate path where the scan text
-  /// is not precomputed.
+  /// Default keyword matcher across the entries' own keys. Uses the same
+  /// boundary and inflection behavior as the async catalog path.
   static List<String> defaultKeywordMatch(MemoryEntry entry, String scanText) {
-    final text = scanText.toLowerCase();
     final matched = <String>[];
     for (final key in entry.keys) {
       if (key.isEmpty) continue;
-      if (text.contains(key.toLowerCase())) matched.add(key);
+      if (memoryKeyMatchesGlaze(key.toLowerCase(), scanText)) matched.add(key);
     }
     return matched;
   }
@@ -497,7 +495,12 @@ class MemorySelector {
   static double _keywordBoost(List<String> matched, int totalKeys) {
     if (matched.isEmpty) return 0;
     final t = totalKeys <= 0 ? matched.length : totalKeys;
-    return (matched.length / t).clamp(0.0, 1.0);
+    final coverage = matched.length / t;
+    // A precise hit must not become negligible merely because an entry has a
+    // rich key list. Additional hits saturate quickly while full coverage still
+    // receives the complete configured keyword weight.
+    final hitStrength = 1.0 - math.pow(0.4, matched.length).toDouble();
+    return math.max(coverage, hitStrength).clamp(0.0, 1.0);
   }
 
   /// Jaccard overlap between query emotions and entry emotional tags (Phase G2).
@@ -602,13 +605,38 @@ class MemorySelector {
   }
 }
 
-/// Re-exports the glaze whole-word matcher for callers that want the
-/// same key matching behavior the legacy code used in the async path.
+/// Glaze whole-key matching with a conservative Russian-inflection fallback.
+/// Explicit regex keys retain their original regex semantics and never enter
+/// the normalization path.
 bool memoryKeyMatchesGlaze(String key, String scanText) {
-  return glazeCheckMatch(
+  final exact = glazeCheckMatch(
     key,
     scanText.toLowerCase(),
     false,
     WholeWordMode.glaze,
   );
+  if (exact || parseRegexKey(key) != null) return exact;
+
+  final keyTokens = _normalizedMemoryTokens(key);
+  if (keyTokens.isEmpty) return false;
+  final textTokens = _normalizedMemoryTokens(scanText);
+  if (textTokens.length < keyTokens.length) return false;
+  for (var start = 0; start <= textTokens.length - keyTokens.length; start++) {
+    var matches = true;
+    for (var offset = 0; offset < keyTokens.length; offset++) {
+      if (textTokens[start + offset] != keyTokens[offset]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
+  }
+  return false;
 }
+
+final _memorySearchWord = RegExp(r'[\p{L}\p{N}]+', unicode: true);
+
+List<String> _normalizedMemoryTokens(String text) => _memorySearchWord
+    .allMatches(text)
+    .map((match) => glazeNormalizeSearchToken(match.group(0)!))
+    .toList(growable: false);

@@ -5,6 +5,66 @@ const glazeBoundaries =
 
 enum WholeWordMode { no, yes, glaze }
 
+/// Conservative search normalization for common Russian inflections.
+///
+/// This is intentionally not a full lemmatizer. It only removes endings when
+/// at least four characters of the lexeme remain, which is suitable for
+/// retrieval reranking and memory-key matching without changing stored text.
+String glazeNormalizeSearchToken(String value) {
+  var out = value.toLowerCase().replaceAll('ё', 'е');
+  for (final suffix in _searchInflectionSuffixes) {
+    if (out.length - suffix.length >= 4 && out.endsWith(suffix)) {
+      return out.substring(0, out.length - suffix.length);
+    }
+  }
+  return out;
+}
+
+const _searchInflectionSuffixes = <String>[
+  'иями',
+  'ями',
+  'ами',
+  'ого',
+  'его',
+  'ему',
+  'ому',
+  'ыми',
+  'ими',
+  'ая',
+  'яя',
+  'ую',
+  'юю',
+  'ый',
+  'ий',
+  'ой',
+  'ое',
+  'ее',
+  'ые',
+  'ие',
+  'нула',
+  'нули',
+  'нул',
+  'ать',
+  'ять',
+  'ить',
+  'еть',
+  'ах',
+  'ях',
+  'ом',
+  'ем',
+  'ов',
+  'ев',
+  'ей',
+  'а',
+  'я',
+  'ы',
+  'и',
+  'у',
+  'ю',
+  'е',
+  'о',
+];
+
 /// A key written in SillyTavern's `/pattern/flags` regex form.
 class RegexKey {
   final String pattern;

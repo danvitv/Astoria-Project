@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import '../models/chat_message.dart';
+import 'glaze_matcher.dart';
 import 'message_recall_result.dart';
 import 'vector_math.dart';
 
@@ -227,16 +228,7 @@ final class _ContinuitySignals {
   ).hasMatch(text);
 
   static String _stem(String value) {
-    var out = value.toLowerCase().replaceAll('ё', 'е');
-    // Deliberately modest normalization: enough for common Russian inflection
-    // (`шлепая`/`шлепнул`) without pretending to be a full morphological model.
-    for (final suffix in _suffixes) {
-      if (out.length - suffix.length >= 4 && out.endsWith(suffix)) {
-        out = out.substring(0, out.length - suffix.length);
-        break;
-      }
-    }
-    return out;
+    return glazeNormalizeSearchToken(value);
   }
 
   static Set<String> _ngrams(Set<String> terms) {
@@ -249,54 +241,6 @@ final class _ContinuitySignals {
     }
     return result;
   }
-
-  static const _suffixes = <String>[
-    'иями',
-    'ями',
-    'ами',
-    'ого',
-    'ему',
-    'ому',
-    'ыми',
-    'ими',
-    'ая',
-    'яя',
-    'ую',
-    'юю',
-    'ый',
-    'ий',
-    'ой',
-    'ое',
-    'ее',
-    'ые',
-    'ие',
-    'нул',
-    'нула',
-    'нули',
-    'ать',
-    'ять',
-    'ить',
-    'еть',
-    'ая',
-    'яя',
-    'ами',
-    'ями',
-    'ах',
-    'ях',
-    'ом',
-    'ем',
-    'ов',
-    'ев',
-    'ей',
-    'а',
-    'я',
-    'ы',
-    'и',
-    'у',
-    'ю',
-    'е',
-    'о',
-  ];
 
   static const _stopwords = <String>{
     'этот',
