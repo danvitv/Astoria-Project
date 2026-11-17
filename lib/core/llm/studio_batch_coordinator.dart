@@ -7,6 +7,7 @@ import 'studio_message_builder.dart';
 import 'controller_batcher.dart';
 import 'studio_turn_config_snapshot.dart';
 import 'studio/studio_context.dart';
+import 'studio/studio_history_limiter.dart';
 import 'diagnostics/studio_runtime_diagnostics.dart';
 import 'transport/llm_capture_context.dart';
 
@@ -49,9 +50,11 @@ class StudioBatchCoordinator {
     String? apiConfigId,
     StudioTurnConfigSnapshot? turnConfig,
   }) async {
+    StudioHistorySelectionPlan? historySelection;
     final sharedMessages = _messageBuilder.buildSharedBatchMessages(
       context: context,
       batchContextSize: batchContextSize,
+      onHistorySelection: (plan) => historySelection = plan,
     );
     final perAgentTask = <String, String>{};
     for (final agent in group.agents) {
@@ -126,6 +129,7 @@ class StudioBatchCoordinator {
           charName: context.macroContext.charName,
           userName: context.macroContext.userName,
           diagnosticContext: lastCall,
+          studioHistorySelection: historySelection,
         );
         final parsed = _batcher.parseBatchResponse(result.text, group);
         if (_allOk(parsed)) {

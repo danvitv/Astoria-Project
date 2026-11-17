@@ -41,23 +41,82 @@ class StudioHistoryLimiter {
     int reasoningHistoryCount = 0,
     bool excludeReasoningFromContextBudget = false,
     String? historyWindowStartMessageId,
+  }) => planFinalHistory(
+    history,
+    preset,
+    pipelineOverride: pipelineOverride,
+    reasoningHistoryCount: reasoningHistoryCount,
+    excludeReasoningFromContextBudget: excludeReasoningFromContextBudget,
+    historyWindowStartMessageId: historyWindowStartMessageId,
+  ).messages;
+
+  static StudioHistorySelectionPlan planFinalHistory(
+    List<PromptMessage> history,
+    StudioPreset preset, {
+    int pipelineOverride = 0,
+    int reasoningHistoryCount = 0,
+    bool excludeReasoningFromContextBudget = false,
+    String? historyWindowStartMessageId,
   }) {
-    if (history.isEmpty) return const [];
+    final maxMessages = pipelineOverride > 0
+        ? pipelineOverride
+        : preset.maxFinalHistoryMessages;
+    if (history.isEmpty) {
+      return StudioHistorySelectionPlan(
+        messages: const [],
+        selectionPolicy: 'final_stable_window',
+        configuredMessageLimit: maxMessages,
+        tokenBudget: finalHistoryTokenBudget,
+      );
+    }
 
     final cleanedHistory = history.map(_cleanMessage).toList(growable: false);
     final persistedStart = cleanedHistory.indexWhere(
       (message) => message.sourceMessageId == historyWindowStartMessageId,
     );
     if (persistedStart >= 0) {
-      return cleanedHistory.sublist(persistedStart);
+      return _selectionPlan(
+        input: cleanedHistory,
+        selected: cleanedHistory.sublist(persistedStart),
+        selectionPolicy: 'final_stable_window',
+        configuredMessageLimit: maxMessages,
+        tokenBudget: finalHistoryTokenBudget,
+        reductionReason: persistedStart > 0
+            ? 'persisted_window_boundary'
+            : 'none',
+        reasoningHistoryCount: reasoningHistoryCount,
+        excludeReasoningFromContextBudget: excludeReasoningFromContextBudget,
+      );
     }
 
-    final maxMessages = pipelineOverride > 0
-        ? pipelineOverride
-        : preset.maxFinalHistoryMessages;
-    return _bootstrapWindow(
+    final selected = _bootstrapWindow(
       cleanedHistory,
       maxMessages: maxMessages,
+      reasoningHistoryCount: reasoningHistoryCount,
+      excludeReasoningFromContextBudget: excludeReasoningFromContextBudget,
+    );
+    final reduced = selected.length < cleanedHistory.length;
+    final messageLimit = maxMessages > 0 && cleanedHistory.length > maxMessages;
+    final tokenLimit =
+        _historyTokens(
+          cleanedHistory,
+          reasoningHistoryCount: reasoningHistoryCount,
+          excludeReasoningFromContextBudget: excludeReasoningFromContextBudget,
+        ) >
+        finalHistoryTokenBudget;
+    return _selectionPlan(
+      input: cleanedHistory,
+      selected: selected,
+      selectionPolicy: 'final_stable_window',
+      configuredMessageLimit: maxMessages,
+      tokenBudget: finalHistoryTokenBudget,
+      reductionReason: !reduced
+          ? 'none'
+          : messageLimit && tokenLimit
+          ? 'message_and_token_high_water'
+          : tokenLimit
+          ? 'token_high_water'
+          : 'message_high_water',
       reasoningHistoryCount: reasoningHistoryCount,
       excludeReasoningFromContextBudget: excludeReasoningFromContextBudget,
     );
@@ -192,32 +251,80 @@ class StudioHistoryLimiter {
   static List<PromptMessage> limitTrackerHistory(
     List<PromptMessage> history,
     int contextSize,
-  ) {
+  ) => planTrackerHistory(history, contextSize).messages;
+
+  static StudioHistorySelectionPlan planTrackerHistory(
+    List<PromptMessage> history,
+    int contextSize, {
+    String selectionPolicy = 'tracker_tail_window',
+  }) {
     final normalized = contextSize.clamp(1, maxTrackerContextSize);
-    if (history.length <= normalized) {
-      return history
-          .map(
-            (m) => PromptMessage(
-              role: m.role,
-              content: stripHtmlTags(m.content),
-              sourceMessageId: m.sourceMessageId,
-              imagePaths: m.imagePaths,
-            ),
-          )
-          .toList();
-    }
-    final trimmed = history.sublist(history.length - normalized);
-    return trimmed
-        .map(
-          (m) => PromptMessage(
-            role: m.role,
-            content: stripHtmlTags(m.content),
-            sourceMessageId: m.sourceMessageId,
-            imagePaths: m.imagePaths,
-          ),
-        )
-        .toList();
+    final selected = history.length <= normalized
+        ? history
+              .map(
+                (m) => PromptMessage(
+                  role: m.role,
+                  content: stripHtmlTags(m.content),
+                  sourceMessageId: m.sourceMessageId,
+                  imagePaths: m.imagePaths,
+                ),
+              )
+              .toList()
+        : history
+              .sublist(history.length - normalized)
+              .map(
+                (m) => PromptMessage(
+                  role: m.role,
+                  content: stripHtmlTags(m.content),
+                  sourceMessageId: m.sourceMessageId,
+                  imagePaths: m.imagePaths,
+                ),
+              )
+              .toList();
+    return _selectionPlan(
+      input: history,
+      selected: selected,
+      selectionPolicy: selectionPolicy,
+      configuredMessageLimit: normalized,
+      tokenBudget: 0,
+      reductionReason: selected.length < history.length
+          ? 'message_high_water'
+          : 'none',
+    );
   }
+
+  static StudioHistorySelectionPlan _selectionPlan({
+    required List<PromptMessage> input,
+    required List<PromptMessage> selected,
+    required String selectionPolicy,
+    required int configuredMessageLimit,
+    required int tokenBudget,
+    required String reductionReason,
+    int reasoningHistoryCount = 0,
+    bool excludeReasoningFromContextBudget = false,
+  }) => StudioHistorySelectionPlan(
+    messages: List.unmodifiable(selected),
+    selectionPolicy: selectionPolicy,
+    configuredMessageLimit: configuredMessageLimit,
+    tokenBudget: tokenBudget,
+    inputMessageCount: input.length,
+    inputTextCodeUnits: input.fold(0, (sum, item) => sum + item.content.length),
+    selectedTextCodeUnits: selected.fold(
+      0,
+      (sum, item) => sum + item.content.length,
+    ),
+    estimatedInputTokens: _historyTokens(
+      input,
+      reasoningHistoryCount: reasoningHistoryCount,
+      excludeReasoningFromContextBudget: excludeReasoningFromContextBudget,
+    ),
+    estimatedSelectedTokens: _historyTokens(
+      selected,
+      reasoningHistoryCount: reasoningHistoryCount,
+      excludeReasoningFromContextBudget: excludeReasoningFromContextBudget,
+    ),
+    reductionReason: reductionReason,
+  );
 
   /// Port of Marinara `stripHtmlTags`. Removes HTML/XML-like tags, collapses
   /// 3+ newlines to 2, trims. Conservative: only strips tags that start with
@@ -235,6 +342,32 @@ class StudioHistoryLimiter {
   static String stripFontTags(String text) {
     return text.replaceAll(_fontTagRegex, '');
   }
+}
+
+final class StudioHistorySelectionPlan {
+  const StudioHistorySelectionPlan({
+    required this.messages,
+    required this.selectionPolicy,
+    required this.configuredMessageLimit,
+    required this.tokenBudget,
+    this.inputMessageCount = 0,
+    this.inputTextCodeUnits = 0,
+    this.selectedTextCodeUnits = 0,
+    this.estimatedInputTokens = 0,
+    this.estimatedSelectedTokens = 0,
+    this.reductionReason = 'none',
+  });
+
+  final List<PromptMessage> messages;
+  final String selectionPolicy;
+  final int configuredMessageLimit;
+  final int tokenBudget;
+  final int inputMessageCount;
+  final int inputTextCodeUnits;
+  final int selectedTextCodeUnits;
+  final int estimatedInputTokens;
+  final int estimatedSelectedTokens;
+  final String reductionReason;
 }
 
 class StudioHistoryWindowPlan {

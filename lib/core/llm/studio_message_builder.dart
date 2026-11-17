@@ -55,6 +55,7 @@ class StudioMessageBuilder {
     Map<String, dynamic>? responseJsonSchema,
     bool isThinkController = false,
     bool isThinkingPass = false,
+    void Function(StudioHistorySelectionPlan plan)? onHistorySelection,
   }) {
     final point = _blockExpander.injectionPointForRun(agent, isFinalResponse);
     final spec = StudioControllerOntology.specForAgent(agent);
@@ -106,6 +107,34 @@ class StudioMessageBuilder {
           (block) => _briefMacroRenderer.hasStudioBriefMacro(block.content),
         );
     final messages = <Map<String, dynamic>>[];
+    StudioHistorySelectionPlan? historySelection;
+    List<PromptMessage> selectedHistory() {
+      final existing = historySelection;
+      if (existing != null) return existing.messages;
+      final plan = isFinalResponse
+          ? StudioHistoryLimiter.planFinalHistory(
+              context.history,
+              studioPreset,
+              pipelineOverride: finalContextOverride,
+              reasoningHistoryCount: reasoningHistoryCount,
+              excludeReasoningFromContextBudget:
+                  excludeReasoningFromContextBudget,
+              historyWindowStartMessageId: context
+                  .sessionVars[StudioHistoryLimiter.historyWindowStartVar],
+            )
+          : StudioHistoryLimiter.planTrackerHistory(
+              context.history,
+              trackerContextOverride > 0
+                  ? trackerContextOverride
+                  : StudioControllerOntology.contextSizeOf(
+                      StudioControllerOntology.specForAgent(agent),
+                    ),
+            );
+      historySelection = plan;
+      onHistorySelection?.call(plan);
+      return plan.messages;
+    }
+
     var emittedRuntimeDynamic = false;
     var emittedArcMacro = false;
     final arcContent = context.macroContext.arcContent?.trim() ?? '';
@@ -199,26 +228,7 @@ class StudioMessageBuilder {
       // unreliable. Checking type first fixes presets whose context blocks have
       // a non-empty mode (e.g. Loom Direct sets mode: 'direct' on history).
       if (block.type == StudioBlockType.history) {
-        final history = isFinalResponse
-            ? StudioHistoryLimiter.limitFinalHistory(
-                context.history,
-                studioPreset,
-                pipelineOverride: finalContextOverride,
-                reasoningHistoryCount: reasoningHistoryCount,
-                excludeReasoningFromContextBudget:
-                    excludeReasoningFromContextBudget,
-                historyWindowStartMessageId: context
-                    .sessionVars[StudioHistoryLimiter.historyWindowStartVar],
-              )
-            : StudioHistoryLimiter.limitTrackerHistory(
-                context.history,
-                trackerContextOverride > 0
-                    ? trackerContextOverride
-                    : StudioControllerOntology.contextSizeOf(
-                        StudioControllerOntology.specForAgent(agent),
-                      ),
-              );
-        messages.addAll(emitHistory(history));
+        messages.addAll(emitHistory(selectedHistory()));
         continue;
       }
       if (block.type == StudioBlockType.context && block.contextSlot != null) {
@@ -266,26 +276,7 @@ class StudioMessageBuilder {
         if (blockId == 'static_context') {
           messages.addAll(context.staticContext.map((m) => m.toApiMap()));
         } else if (blockId == 'chat_history') {
-          final history = isFinalResponse
-              ? StudioHistoryLimiter.limitFinalHistory(
-                  context.history,
-                  studioPreset,
-                  pipelineOverride: finalContextOverride,
-                  reasoningHistoryCount: reasoningHistoryCount,
-                  excludeReasoningFromContextBudget:
-                      excludeReasoningFromContextBudget,
-                  historyWindowStartMessageId: context
-                      .sessionVars[StudioHistoryLimiter.historyWindowStartVar],
-                )
-              : StudioHistoryLimiter.limitTrackerHistory(
-                  context.history,
-                  trackerContextOverride > 0
-                      ? trackerContextOverride
-                      : StudioControllerOntology.contextSizeOf(
-                          StudioControllerOntology.specForAgent(agent),
-                        ),
-                );
-          messages.addAll(emitHistory(history));
+          messages.addAll(emitHistory(selectedHistory()));
         } else if (blockId == 'dynamic_context') {
           _recordLorebookSlotClassifications(
             StudioContextSlot.dynamicContext,
@@ -480,6 +471,7 @@ class StudioMessageBuilder {
     required int finalContextOverride,
     required int reasoningHistoryCount,
     required bool excludeReasoningFromContextBudget,
+    void Function(StudioHistorySelectionPlan plan)? onHistorySelection,
   }) {
     final messages = buildAgentMessages(
       agent: finalAgent,
@@ -491,6 +483,7 @@ class StudioMessageBuilder {
       finalContextOverride: finalContextOverride,
       reasoningHistoryCount: reasoningHistoryCount,
       excludeReasoningFromContextBudget: excludeReasoningFromContextBudget,
+      onHistorySelection: onHistorySelection,
       isThinkingPass: true,
     );
     final thinkAgentId = StudioControllerOntology.specForAgent(agent)?.id;
@@ -837,16 +830,19 @@ class StudioMessageBuilder {
   List<Map<String, dynamic>> buildSharedBatchMessages({
     required StudioContext context,
     required int batchContextSize,
+    void Function(StudioHistorySelectionPlan plan)? onHistorySelection,
   }) {
     final messages = <Map<String, dynamic>>[
       ...context.staticContext.map((message) => message.toApiMap()),
       ...context.dynamicContext.map((message) => message.toApiMap()),
     ];
-    final history = StudioHistoryLimiter.limitTrackerHistory(
+    final plan = StudioHistoryLimiter.planTrackerHistory(
       context.history,
       batchContextSize,
+      selectionPolicy: 'batch_tail_window',
     );
-    messages.addAll(history.map((message) => message.toApiMap()));
+    onHistorySelection?.call(plan);
+    messages.addAll(plan.messages.map((message) => message.toApiMap()));
     return messages;
   }
 

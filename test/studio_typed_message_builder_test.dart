@@ -6,6 +6,7 @@ import 'package:glaze_flutter/core/llm/transport/llm_capture_context.dart';
 import 'package:glaze_flutter/core/llm/history_assembler.dart';
 import 'package:glaze_flutter/core/llm/macro_engine.dart';
 import 'package:glaze_flutter/core/llm/studio/studio_context.dart';
+import 'package:glaze_flutter/core/llm/studio/studio_history_limiter.dart';
 import 'package:glaze_flutter/core/llm/studio_brief_deduper.dart';
 import 'package:glaze_flutter/core/llm/studio_agent_executor.dart';
 import 'package:glaze_flutter/core/llm/studio_brief_parser.dart';
@@ -53,6 +54,7 @@ class _CapturingAgentRunner extends AgentRunner {
     void Function(String text)? onIntermediateUpdate,
     Future<void> Function()? beforeSend,
     LlmCaptureContext? diagnosticContext,
+    StudioHistorySelectionPlan? studioHistorySelection,
   }) async {
     capturedMessages = messages;
     capturedIsFinalResponse = isFinalResponse;
@@ -88,6 +90,7 @@ class _FailedThinkRunner extends _CapturingAgentRunner {
     void Function(String text)? onIntermediateUpdate,
     Future<void> Function()? beforeSend,
     LlmCaptureContext? diagnosticContext,
+    StudioHistorySelectionPlan? studioHistorySelection,
   }) async {
     calls++;
     return const AgentRunResult(text: '');
@@ -983,6 +986,7 @@ void main() {
   test(
     'type-based history resolution works even when mode is direct (Loom Direct fix)',
     () {
+      StudioHistorySelectionPlan? selection;
       final messages = builder.buildAgentMessages(
         agent: const StudioAgent(id: 'final'),
         context: context,
@@ -1001,6 +1005,7 @@ void main() {
         ),
         priorBriefs: const [],
         isFinalResponse: true,
+        onHistorySelection: (plan) => selection = plan,
       );
 
       expect(messages.map((message) => message['role']), ['user', 'assistant']);
@@ -1008,6 +1013,10 @@ void main() {
         'First',
         'Second',
       ]);
+      expect(selection, isNotNull);
+      expect(selection!.selectionPolicy, 'final_stable_window');
+      expect(selection!.inputMessageCount, 2);
+      expect(selection!.reductionReason, 'none');
     },
   );
 

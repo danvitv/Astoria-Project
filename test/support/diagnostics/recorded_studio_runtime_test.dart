@@ -5,6 +5,8 @@ import 'package:glaze_flutter/core/credentials/secret_redactor.dart';
 import 'package:glaze_flutter/core/llm/diagnostics/recorded_studio_runtime.dart';
 import 'package:glaze_flutter/core/llm/diagnostics/studio_runtime_call_facts.dart';
 import 'package:glaze_flutter/core/llm/diagnostics/studio_request_budget_facts.dart';
+import 'package:glaze_flutter/core/llm/history_assembler.dart';
+import 'package:glaze_flutter/core/llm/studio/studio_history_limiter.dart';
 import 'package:glaze_flutter/core/llm/transport/chat_transport_request.dart';
 
 void main() {
@@ -176,6 +178,59 @@ void main() {
       expect(jsonEncode(result), isNot(contains('PRIVATE_')));
     },
   );
+
+  test('recorded Studio history selection retains the exact finite reason', () {
+    final selection = StudioHistoryLimiter.planTrackerHistory(
+      List.generate(
+        5,
+        (index) => PromptMessage(
+          role: index.isEven ? 'user' : 'assistant',
+          content: 'message $index',
+        ),
+      ),
+      3,
+    );
+    final budget = StudioRequestBudgetFacts.fromRequest(
+      request,
+      contextSize: 8192,
+      historySelection: selection,
+    )!;
+    final withSelection = StudioRuntimeCallFacts.payload(
+      request: StudioRuntimeCallFacts.constructedRequest(request),
+      elapsedMs: 50,
+      chunkCount: 2,
+      firstChunkMs: 10,
+      maxChunkGapMs: 20,
+      contentOffset: 8,
+      reasoningOffset: 5,
+      completionReason: 'complete',
+      studioRequestBudget: budget,
+    );
+    expect(withSelection, isNotEmpty, reason: jsonEncode(budget));
+    expect(
+      StudioRuntimeCallFacts.fromSavedPayload(jsonEncode(withSelection)),
+      isNotNull,
+    );
+    final result = RecordedStudioRuntime.fromColumns({
+      ...completion,
+      'payload_json': jsonEncode(withSelection),
+    })!;
+    final call = result['callFacts'] as Map<String, Object?>;
+    final projected = call['studioRequestBudget'] as Map<String, Object?>;
+    expect(
+      projected['historyWindowDecision'],
+      'recorded_exact_local_selection',
+    );
+    expect(projected['historyInputMessageCount'], 5);
+    expect(projected['historySelectedMessageCount'], 3);
+    expect(projected['historyDroppedMessageCount'], 2);
+    expect(projected['historyReductionReason'], 'message_high_water');
+    expect(
+      call['contextEvidence'],
+      'recorded_studio_history_selection_not_provider_accounting',
+    );
+    expect(jsonEncode(result), isNot(contains('message 0')));
+  });
 
   final invalidPayloads = <String>[
     '{',

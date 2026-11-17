@@ -3,6 +3,7 @@ import 'package:glaze_flutter/core/llm/history_assembler.dart';
 import 'package:glaze_flutter/core/llm/studio/studio_history_limiter.dart';
 import 'package:glaze_flutter/core/llm/studio/studio_stream_interceptor.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
+import 'package:glaze_flutter/core/models/studio_config.dart';
 
 void main() {
   group('Studio history window rotation', () {
@@ -181,6 +182,33 @@ void main() {
 
       expect(included.didRotate, isTrue);
       expect(excluded.didRotate, isFalse);
+    });
+
+    test('final selection records the exact persisted-boundary reason', () {
+      final history = _alternatingPromptHistory(10);
+      final plan = StudioHistoryLimiter.planFinalHistory(
+        history,
+        const StudioPreset(id: 'test'),
+        historyWindowStartMessageId: 'm4',
+      );
+
+      expect(plan.messages, hasLength(6));
+      expect(plan.inputMessageCount, 10);
+      expect(plan.reductionReason, 'persisted_window_boundary');
+      expect(plan.selectionPolicy, 'final_stable_window');
+      expect(plan.estimatedSelectedTokens, greaterThan(0));
+    });
+
+    test('tracker selection records its clamped tail-window decision', () {
+      final plan = StudioHistoryLimiter.planTrackerHistory(
+        _alternatingPromptHistory(250),
+        500,
+      );
+
+      expect(plan.messages, hasLength(200));
+      expect(plan.configuredMessageLimit, 200);
+      expect(plan.reductionReason, 'message_high_water');
+      expect(plan.selectionPolicy, 'tracker_tail_window');
     });
   });
 }

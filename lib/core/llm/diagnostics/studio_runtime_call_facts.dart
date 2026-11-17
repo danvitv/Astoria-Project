@@ -152,6 +152,8 @@ abstract final class StudioRuntimeCallFacts {
     final candidate = <String, Object?>{
       versionKey: contextPlanning != null
           ? 2
+          : studioRequestBudget?['historySelectionPolicy'] != null
+          ? 4
           : studioRequestBudget != null
           ? 3
           : 1,
@@ -235,8 +237,18 @@ abstract final class StudioRuntimeCallFacts {
                 GenerationContextPlanningFacts.validate(context) == null)) ||
         (version == 3 &&
             (value.length != 4 ||
-                StudioRequestBudgetFacts.validate(studioBudget) == null)) ||
-        (version != 1 && version != 2 && version != 3)) {
+                StudioRequestBudgetFacts.validate(studioBudget) == null ||
+                StudioRequestBudgetFacts.validate(
+                      studioBudget,
+                    )?['historySelectionPolicy'] !=
+                    null)) ||
+        (version == 4 &&
+            (value.length != 4 ||
+                StudioRequestBudgetFacts.validate(
+                      studioBudget,
+                    )?['historySelectionPolicy'] ==
+                    null)) ||
+        (version != 1 && version != 2 && version != 3 && version != 4)) {
       return null;
     }
     final request = value['constructedRequest'];
@@ -322,12 +334,13 @@ abstract final class StudioRuntimeCallFacts {
       'streamObservation': Map<String, Object?>.unmodifiable(stream),
       if (version == 2)
         'contextPlanning': GenerationContextPlanningFacts.validate(context)!,
-      if (version == 3)
+      if (version == 3 || version == 4)
         'studioRequestBudget': StudioRequestBudgetFacts.validate(studioBudget)!,
       'requestEvidence': 'constructed_provider_neutral_request_only',
       'contextEvidence': switch (version) {
         2 => 'recorded_prompt_builder_plan_not_provider_accounting',
         3 => 'constructed_studio_request_budget_not_provider_accounting',
+        4 => 'recorded_studio_history_selection_not_provider_accounting',
         _ => 'constructed_message_counts_not_context_budget',
       },
       'streamEvidence': 'original_callback_counts_and_elapsed_time',

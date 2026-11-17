@@ -155,8 +155,8 @@ The structured result must distinguish:
 - proposed, confirmed and actually completed repair attempts.
 
 Connection diagnosis needs recorded protocol/HTTP/timeout evidence, not a key count.
-Generation diagnosis still needs provider-wire evidence and recorded Studio
-history-window selection reasons beyond linked saved outcomes. Current saved Studio block rules use the
+Generation diagnosis still needs provider-wire evidence beyond linked saved outcomes.
+Current saved Studio block rules use the
 real codec/validator, and saved agent topology uses the actual phase splitter and
 ontology-declared requirements through native sources. These are separate limited
 observations. Native pre-generation phase decisions and controller/call outcomes
@@ -176,9 +176,11 @@ reason. It carries no authored text or message ids and is a local estimate, not 
 token accounting. Provider wire normalization, actual token use, sampler behavior and
 provider finish reasons remain unknown, not inferred from callbacks that may be synthetic.
 Each native Studio transport event now also records its configured context window,
-output reserve, text-only estimated request occupancy and remaining budget. Image cost,
-provider accounting and the upstream Studio history-window decision remain explicitly
-unknown rather than reconstructed from the finished request.
+output reserve, text-only estimated request occupancy and remaining budget. When the
+actual routed prompt emits chat history, it additionally records the exact local
+selection policy, before/after counts, estimated history tokens and whether reduction
+came from the message high-water mark, token high-water mark, both, or a persisted
+stable-window boundary. Image cost and provider accounting remain explicitly unknown.
 Required tracker failures must not be bypassed. Integrity diagnosis keeps
 canonical books, drafts, derived catalogs, Ledger and canon assembly separate.
 Autonomous multi-session discovery uses the existing global consent while every

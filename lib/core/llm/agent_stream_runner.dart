@@ -22,6 +22,7 @@ import 'studio_controller_ontology.dart';
 import 'diagnostics/studio_runtime_diagnostics.dart';
 import 'diagnostics/studio_runtime_call_facts.dart';
 import 'diagnostics/studio_request_budget_facts.dart';
+import 'studio/studio_history_limiter.dart';
 
 /// The streaming state machine for a single Studio agent run, extracted
 /// from `AgentRunner._runAgentInner` (plan §7.1). Given an already-resolved
@@ -65,6 +66,7 @@ class AgentStreamRunner {
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
     void Function(String text)? onIntermediateUpdate,
     LlmCaptureContext? diagnosticContext,
+    StudioHistorySelectionPlan? studioHistorySelection,
   }) async {
     resolved.nativeSource?.requireCurrent();
     if (resolved.savedConnectionAuth != null &&
@@ -171,6 +173,7 @@ class AgentStreamRunner {
         : StudioRequestBudgetFacts.fromRequest(
             request,
             contextSize: resolved.contextSize,
+            historySelection: studioHistorySelection,
           );
     final transport = _pickTransport(resolved.protocol);
     final startedAt = DateTime.now();

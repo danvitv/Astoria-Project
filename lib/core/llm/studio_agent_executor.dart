@@ -7,6 +7,7 @@ import '../utils/error_format.dart';
 import 'agent_runner.dart';
 import 'studio_brief_parser.dart';
 import 'studio_message_builder.dart';
+import 'studio/studio_history_limiter.dart';
 import 'studio_stage_brief.dart';
 import 'controller_batcher.dart';
 import 'studio_turn_config_snapshot.dart';
@@ -99,6 +100,7 @@ class StudioAgentExecutor {
     try {
       final isThink = agent.reasoningMode == 'think-replacement';
       final settings = turnConfig?.pipelineSettings ?? _readPipelineSettings();
+      StudioHistorySelectionPlan? historySelection;
       if (isThink && (finalAgent == null || finalContext == null)) {
         throw StateError('Think controller requires the Main Writer context.');
       }
@@ -115,6 +117,7 @@ class StudioAgentExecutor {
               excludeReasoningFromContextBudget: settings
                   .studioAgent
                   .studioFinalExcludeReasoningFromContextBudget,
+              onHistorySelection: (plan) => historySelection = plan,
             )
           : _messageBuilder.buildAgentMessages(
               agent: agent,
@@ -124,6 +127,7 @@ class StudioAgentExecutor {
               priorBriefs: const [],
               isFinalResponse: false,
               trackerContextOverride: trackerContextOverride,
+              onHistorySelection: (plan) => historySelection = plan,
             );
       final result = await _runner.runAgent(
         agent: agent,
@@ -138,6 +142,7 @@ class StudioAgentExecutor {
         userName: context.macroContext.userName,
         onIntermediateUpdate: onIntermediateUpdate,
         diagnosticContext: diagnosticContext,
+        studioHistorySelection: historySelection,
       );
       return StudioStageBrief(
         agentId: agent.id,
@@ -208,6 +213,7 @@ class StudioAgentExecutor {
             (turnConfig?.pipelineSettings ?? _readPipelineSettings())
                 .studioAgent
                 .studioPostControllerContextSize;
+        StudioHistorySelectionPlan? historySelection;
         final messages = _messageBuilder.buildAgentMessages(
           agent: agent,
           trackerContextOverride: override,
@@ -217,6 +223,7 @@ class StudioAgentExecutor {
           priorBriefs: const [],
           isFinalResponse: false,
           mainResponse: mainResponse,
+          onHistorySelection: (plan) => historySelection = plan,
         );
         final result = await _runner.runAgent(
           agent: agent,
@@ -230,6 +237,7 @@ class StudioAgentExecutor {
           charName: context.macroContext.charName,
           userName: context.macroContext.userName,
           diagnosticContext: call?.withAttempt(attempt),
+          studioHistorySelection: historySelection,
         );
         final text = result.text.trim();
         return StudioStageBrief(
@@ -358,6 +366,7 @@ class StudioAgentExecutor {
     final settings = turnConfig?.pipelineSettings ?? _readPipelineSettings();
     final emittedLorebookClassifications = <String>{};
     final responseJsonSchema = <String, dynamic>{};
+    StudioHistorySelectionPlan? historySelection;
     final messages = _messageBuilder.buildAgentMessages(
       agent: agent,
       context: context,
@@ -372,6 +381,7 @@ class StudioAgentExecutor {
           settings.studioAgent.studioFinalExcludeReasoningFromContextBudget,
       emittedLorebookClassifications: emittedLorebookClassifications,
       responseJsonSchema: responseJsonSchema,
+      onHistorySelection: (plan) => historySelection = plan,
     );
     onLorebookClassificationsBuilt?.call(emittedLorebookClassifications);
     if (reasoningPrefill != null && reasoningPrefill.trim().isNotEmpty) {
@@ -390,6 +400,7 @@ class StudioAgentExecutor {
         thinking: normalizeThinkingPrefill(reasoningPrefill),
         controllerNativeReasoning: controllerNativeReasoning,
         responseJsonSchema: responseJsonSchema,
+        studioHistorySelection: historySelection,
         onMessagesBuilt: onMessagesBuilt,
         beforeSend: beforeSend,
         onFinalResponseUpdate: onFinalResponseUpdate,
@@ -412,6 +423,7 @@ class StudioAgentExecutor {
           : responseJsonSchema,
       beforeSend: beforeSend,
       onFinalResponseUpdate: onFinalResponseUpdate,
+      studioHistorySelection: historySelection,
     );
   }
 
@@ -434,6 +446,7 @@ class StudioAgentExecutor {
     required String thinking,
     String? controllerNativeReasoning,
     required Map<String, dynamic> responseJsonSchema,
+    StudioHistorySelectionPlan? studioHistorySelection,
     void Function(List<Map<String, dynamic>> messages)? onMessagesBuilt,
     Future<void> Function()? beforeSend,
     void Function(String text, String? reasoning)? onFinalResponseUpdate,
@@ -473,6 +486,7 @@ class StudioAgentExecutor {
                 controllerReasoning: controllerNativeReasoning,
               ),
             ),
+      studioHistorySelection: studioHistorySelection,
     );
     final combinedReasoning = combineThinkingReasoning(
       thinking,

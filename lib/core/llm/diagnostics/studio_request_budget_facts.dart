@@ -1,5 +1,6 @@
 import '../tokenizer.dart';
 import '../transport/chat_transport_request.dart';
+import '../studio/studio_history_limiter.dart';
 
 /// Bounded local budget estimate over the constructed Studio request. This is
 /// not provider token accounting and cannot reconstruct upstream history-window
@@ -14,6 +15,7 @@ abstract final class StudioRequestBudgetFacts {
   static Map<String, Object?>? fromRequest(
     ChatTransportRequest request, {
     required int contextSize,
+    StudioHistorySelectionPlan? historySelection,
   }) {
     if (request.messages.length > 4096 ||
         request.maxTokens < 0 ||
@@ -55,12 +57,18 @@ abstract final class StudioRequestBudgetFacts {
           : 'heuristic_4_code_units',
       'scope': 'constructed_studio_request_text_only',
       'imageCost': 'unknown_excluded_from_estimate',
-      'historyWindowDecision': 'unknown_upstream_not_reconstructed',
+      'historyWindowDecision': historySelection == null
+          ? 'unknown_upstream_not_reconstructed'
+          : 'recorded_exact_local_selection',
+      if (historySelection != null) ..._historySelection(historySelection),
     });
   }
 
   static Map<String, Object?>? validate(Object? value) {
-    if (value is! Map<String, Object?> || value.length != 9) return null;
+    if (value is! Map<String, Object?> ||
+        (value.length != 9 && value.length != 21)) {
+      return null;
+    }
     for (final key in const {
       'configuredContextWindow',
       'configuredOutputReserve',
@@ -76,9 +84,17 @@ abstract final class StudioRequestBudgetFacts {
         remaining > _countLimit ||
         !estimatorModes.contains(value['estimatorMode']) ||
         value['scope'] != 'constructed_studio_request_text_only' ||
-        value['imageCost'] != 'unknown_excluded_from_estimate' ||
-        value['historyWindowDecision'] !=
-            'unknown_upstream_not_reconstructed') {
+        value['imageCost'] != 'unknown_excluded_from_estimate') {
+      return null;
+    }
+    if ((value.length == 21 &&
+            (value['historyWindowDecision'] !=
+                    'recorded_exact_local_selection' ||
+                !_validateHistorySelection(value))) ||
+        (value.length == 9 &&
+            (value['historyWindowDecision'] !=
+                    'unknown_upstream_not_reconstructed' ||
+                value.containsKey('historySelectionPolicy')))) {
       return null;
     }
     final context = value['configuredContextWindow'] as int;
@@ -90,5 +106,65 @@ abstract final class StudioRequestBudgetFacts {
       return null;
     }
     return Map<String, Object?>.unmodifiable(value);
+  }
+
+  static Map<String, Object?> _historySelection(
+    StudioHistorySelectionPlan plan,
+  ) => Map.unmodifiable({
+    'historySelectionPolicy': plan.selectionPolicy,
+    'historyConfiguredMessageLimit': plan.configuredMessageLimit,
+    'historyTokenBudget': plan.tokenBudget,
+    'historyInputMessageCount': plan.inputMessageCount,
+    'historySelectedMessageCount': plan.messages.length,
+    'historyDroppedMessageCount': plan.inputMessageCount - plan.messages.length,
+    'historyInputTextCodeUnits': plan.inputTextCodeUnits,
+    'historySelectedTextCodeUnits': plan.selectedTextCodeUnits,
+    'historyEstimatedInputTokens': plan.estimatedInputTokens,
+    'historyEstimatedSelectedTokens': plan.estimatedSelectedTokens,
+    'historyReductionReason': plan.reductionReason,
+    'historyContentTransform': 'studio_history_sanitization',
+  });
+
+  static bool _validateHistorySelection(Map<String, Object?> value) {
+    if (!const {
+          'final_stable_window',
+          'tracker_tail_window',
+          'batch_tail_window',
+        }.contains(value['historySelectionPolicy']) ||
+        !const {
+          'none',
+          'message_high_water',
+          'token_high_water',
+          'message_and_token_high_water',
+          'persisted_window_boundary',
+        }.contains(value['historyReductionReason']) ||
+        value['historyContentTransform'] != 'studio_history_sanitization') {
+      return false;
+    }
+    for (final key in const {
+      'historyConfiguredMessageLimit',
+      'historyTokenBudget',
+      'historyInputMessageCount',
+      'historySelectedMessageCount',
+      'historyDroppedMessageCount',
+      'historyInputTextCodeUnits',
+      'historySelectedTextCodeUnits',
+      'historyEstimatedInputTokens',
+      'historyEstimatedSelectedTokens',
+    }) {
+      final number = value[key];
+      if (number is! int || number < 0 || number > _countLimit) return false;
+    }
+    final input = value['historyInputMessageCount'] as int;
+    final selected = value['historySelectedMessageCount'] as int;
+    final dropped = value['historyDroppedMessageCount'] as int;
+    final reason = value['historyReductionReason'];
+    if (selected > input || dropped != input - selected) return false;
+    if ((dropped == 0) != (reason == 'none')) return false;
+    if (value['historySelectionPolicy'] != 'final_stable_window' &&
+        value['historyTokenBudget'] != 0) {
+      return false;
+    }
+    return true;
   }
 }
