@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../transport/chat_transport_request.dart';
 import 'generation_context_planning_facts.dart';
+import 'studio_request_budget_facts.dart';
 
 /// Only fields read from the constructed request / original stream callbacks.
 /// This is not a provider body, token accounting or proof of sampler effects.
@@ -145,9 +146,15 @@ abstract final class StudioRuntimeCallFacts {
     String? streamTermination,
     String? callbackFinishReason,
     Map<String, Object?>? contextPlanning,
+    Map<String, Object?>? studioRequestBudget,
   }) {
+    if (contextPlanning != null && studioRequestBudget != null) return const {};
     final candidate = <String, Object?>{
-      versionKey: contextPlanning == null ? 1 : 2,
+      versionKey: contextPlanning != null
+          ? 2
+          : studioRequestBudget != null
+          ? 3
+          : 1,
       'constructedRequest': request,
       'streamObservation': {
         'elapsedMs': elapsedMs,
@@ -163,6 +170,7 @@ abstract final class StudioRuntimeCallFacts {
         'callbackFinishReason': finishReason(callbackFinishReason),
       },
       'contextPlanning': ?contextPlanning,
+      'studioRequestBudget': ?studioRequestBudget,
     };
     // Never let NaN, infinities, unknown strings or unbounded counts reach JSON.
     return validate(candidate) == null ? const {} : Map.unmodifiable(candidate);
@@ -220,11 +228,15 @@ abstract final class StudioRuntimeCallFacts {
     }
     final version = value[versionKey] as int;
     final context = value['contextPlanning'];
+    final studioBudget = value['studioRequestBudget'];
     if ((version == 1 && (value.length != 3 || context != null)) ||
         (version == 2 &&
             (value.length != 4 ||
                 GenerationContextPlanningFacts.validate(context) == null)) ||
-        (version != 1 && version != 2)) {
+        (version == 3 &&
+            (value.length != 4 ||
+                StudioRequestBudgetFacts.validate(studioBudget) == null)) ||
+        (version != 1 && version != 2 && version != 3)) {
       return null;
     }
     final request = value['constructedRequest'];
@@ -310,10 +322,14 @@ abstract final class StudioRuntimeCallFacts {
       'streamObservation': Map<String, Object?>.unmodifiable(stream),
       if (version == 2)
         'contextPlanning': GenerationContextPlanningFacts.validate(context)!,
+      if (version == 3)
+        'studioRequestBudget': StudioRequestBudgetFacts.validate(studioBudget)!,
       'requestEvidence': 'constructed_provider_neutral_request_only',
-      'contextEvidence': version == 2
-          ? 'recorded_prompt_builder_plan_not_provider_accounting'
-          : 'constructed_message_counts_not_context_budget',
+      'contextEvidence': switch (version) {
+        2 => 'recorded_prompt_builder_plan_not_provider_accounting',
+        3 => 'constructed_studio_request_budget_not_provider_accounting',
+        _ => 'constructed_message_counts_not_context_budget',
+      },
       'streamEvidence': 'original_callback_counts_and_elapsed_time',
       'lengthUnit': 'utf16_code_units_not_tokens',
       'completionMetadataSource': 'transport_callback_may_be_synthetic',

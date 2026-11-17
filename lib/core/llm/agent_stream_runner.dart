@@ -21,6 +21,7 @@ import 'transport/llm_request_capture.dart';
 import 'studio_controller_ontology.dart';
 import 'diagnostics/studio_runtime_diagnostics.dart';
 import 'diagnostics/studio_runtime_call_facts.dart';
+import 'diagnostics/studio_request_budget_facts.dart';
 
 /// The streaming state machine for a single Studio agent run, extracted
 /// from `AgentRunner._runAgentInner` (plan §7.1). Given an already-resolved
@@ -165,6 +166,12 @@ class AgentStreamRunner {
         resolved.savedConnectionAuth != null && runtime?.isCurrent == true
         ? StudioRuntimeCallFacts.constructedRequest(request)
         : null;
+    final studioRequestBudget = constructedRequestFacts == null
+        ? null
+        : StudioRequestBudgetFacts.fromRequest(
+            request,
+            contextSize: resolved.contextSize,
+          );
     final transport = _pickTransport(resolved.protocol);
     final startedAt = DateTime.now();
     final startedAtMs = startedAt.millisecondsSinceEpoch;
@@ -224,7 +231,7 @@ class AgentStreamRunner {
           callFacts: constructedRequestFacts == null
               ? const {}
               : StudioRuntimeCallFacts.payload(
-                  request: constructedRequestFacts!,
+                  request: constructedRequestFacts,
                   elapsedMs:
                       DateTime.now().millisecondsSinceEpoch - startedAtMs,
                   chunkCount: chunkCount,
@@ -235,13 +242,15 @@ class AgentStreamRunner {
                   completionReason: completionReason,
                   streamTermination: streamTermination,
                   callbackFinishReason: providerFinishReason,
+                  studioRequestBudget: studioRequestBudget,
                 ),
         );
       }
       if (!captureActive ||
           outcomeRecorded ||
-          !identical(LlmCallEventCapture.sink, eventSink))
+          !identical(LlmCallEventCapture.sink, eventSink)) {
         return;
+      }
       outcomeRecorded = true;
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       unawaited(

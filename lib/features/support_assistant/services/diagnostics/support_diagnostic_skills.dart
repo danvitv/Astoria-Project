@@ -55,6 +55,7 @@ abstract final class SupportDiagnosticSkills {
         'Read the native-labeled settings unit Current saved Studio agent topology for the actual phase splitter and ontology-declared requirements. Think without Main Writer, disabled requirements and legacy fallback are saved-snapshot observations, not a proved historical failure. Enabled tracker failure blocks the writer; never recommend bypassing it.',
         'Read Current saved Studio block validation from the settings contents. This native-labeled unit runs the app codec and block validator and reports finite rule codes/array indices, never authored error prose. Its scope excludes runtime normalization, full agent dependencies, connections and historical phases.',
         'Compare recorded tracker, writer, Cleaner, Ledger and Card Rewriter phases; current definitions do not prove an old assembled prompt.',
+        'Recorded Studio call facts can attest the constructed request’s local context-window occupancy and output reserve. They exclude image token cost, provider accounting and upstream history-window decisions, so do not invent a trim cause.',
         'Required tracker failure prevents the final writer; do not recommend bypassing mandatory controllers.',
         'Volatile operation logs and absent phase records cannot prove a complete successful turn.',
       ],

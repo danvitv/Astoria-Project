@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/credentials/secret_redactor.dart';
 import 'package:glaze_flutter/core/llm/diagnostics/recorded_studio_runtime.dart';
 import 'package:glaze_flutter/core/llm/diagnostics/studio_runtime_call_facts.dart';
+import 'package:glaze_flutter/core/llm/diagnostics/studio_request_budget_facts.dart';
 import 'package:glaze_flutter/core/llm/transport/chat_transport_request.dart';
 
 void main() {
@@ -135,6 +136,46 @@ void main() {
       1234,
     );
   });
+
+  test(
+    'Studio request budget is bounded local evidence, not provider truth',
+    () {
+      final budget = StudioRequestBudgetFacts.fromRequest(
+        request,
+        contextSize: 8192,
+      )!;
+      final withBudget = StudioRuntimeCallFacts.payload(
+        request: StudioRuntimeCallFacts.constructedRequest(request),
+        elapsedMs: 50,
+        chunkCount: 2,
+        firstChunkMs: 10,
+        maxChunkGapMs: 20,
+        contentOffset: 8,
+        reasoningOffset: 5,
+        completionReason: 'complete',
+        studioRequestBudget: budget,
+      );
+      final result = RecordedStudioRuntime.fromColumns({
+        ...completion,
+        'payload_json': jsonEncode(withBudget),
+      })!;
+      final call = result['callFacts'] as Map<String, Object?>;
+      final projected = call['studioRequestBudget'] as Map<String, Object?>;
+      expect(projected['configuredContextWindow'], 8192);
+      expect(projected['configuredOutputReserve'], 1234);
+      expect(projected['promptBudget'], 6958);
+      expect(projected['estimatedRequestTokens'], greaterThan(0));
+      expect(
+        projected['historyWindowDecision'],
+        'unknown_upstream_not_reconstructed',
+      );
+      expect(
+        call['contextEvidence'],
+        'constructed_studio_request_budget_not_provider_accounting',
+      );
+      expect(jsonEncode(result), isNot(contains('PRIVATE_')));
+    },
+  );
 
   final invalidPayloads = <String>[
     '{',
