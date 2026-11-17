@@ -169,6 +169,18 @@ class ContextCalculator {
           .whereType<String>()
           .where((id) => id.isNotEmpty)
           .toSet(),
+      tokenEstimatorMode: o200kBaseLoaded
+          ? 'o200k_with_item_fallback'
+          : 'heuristic_4_code_units',
+      historyInputMessageCount: historyMessages.length,
+      historyInputTextCodeUnits: historyMessages.fold(
+        0,
+        (total, message) => total + message.content.length,
+      ),
+      historyKeptTextCodeUnits: trimmedHistory.fold(
+        0,
+        (total, message) => total + message.content.length,
+      ),
     );
   }
 
@@ -305,6 +317,10 @@ class TokenBreakdown {
   final int fixedTotal;
   final int remaining;
   final Set<String> visibleMessageIds;
+  final String tokenEstimatorMode;
+  final int historyInputMessageCount;
+  final int historyInputTextCodeUnits;
+  final int historyKeptTextCodeUnits;
 
   const TokenBreakdown({
     required this.sourceTokens,
@@ -322,6 +338,10 @@ class TokenBreakdown {
     this.fixedTotal = 0,
     this.remaining = 0,
     this.visibleMessageIds = const {},
+    this.tokenEstimatorMode = 'heuristic_4_code_units',
+    this.historyInputMessageCount = 0,
+    this.historyInputTextCodeUnits = 0,
+    this.historyKeptTextCodeUnits = 0,
   });
 
   Map<String, dynamic> toJson() => {
@@ -340,6 +360,10 @@ class TokenBreakdown {
     'fixedTotal': fixedTotal,
     'remaining': remaining,
     'visibleMessageIds': visibleMessageIds.toList(),
+    'tokenEstimatorMode': tokenEstimatorMode,
+    'historyInputMessageCount': historyInputMessageCount,
+    'historyInputTextCodeUnits': historyInputTextCodeUnits,
+    'historyKeptTextCodeUnits': historyKeptTextCodeUnits,
   };
 
   factory TokenBreakdown.fromJson(Map<String, dynamic> json) => TokenBreakdown(
@@ -362,6 +386,11 @@ class TokenBreakdown {
     visibleMessageIds: (json['visibleMessageIds'] as List? ?? const [])
         .whereType<String>()
         .toSet(),
+    tokenEstimatorMode:
+        json['tokenEstimatorMode'] as String? ?? 'heuristic_4_code_units',
+    historyInputMessageCount: json['historyInputMessageCount'] as int? ?? 0,
+    historyInputTextCodeUnits: json['historyInputTextCodeUnits'] as int? ?? 0,
+    historyKeptTextCodeUnits: json['historyKeptTextCodeUnits'] as int? ?? 0,
   );
 
   /// Oldest message the prompt still carries — where the history the model
@@ -408,6 +437,10 @@ class TokenBreakdown {
       fixedTotal: fixedTotal,
       remaining: remaining,
       visibleMessageIds: visibleMessageIds,
+      tokenEstimatorMode: tokenEstimatorMode,
+      historyInputMessageCount: historyInputMessageCount,
+      historyInputTextCodeUnits: historyInputTextCodeUnits,
+      historyKeptTextCodeUnits: historyKeptTextCodeUnits,
     );
   }
 
@@ -430,6 +463,10 @@ class TokenBreakdown {
       fixedTotal: fixedTotal + tokens,
       remaining: remaining - tokens,
       visibleMessageIds: visibleMessageIds,
+      tokenEstimatorMode: tokenEstimatorMode,
+      historyInputMessageCount: historyInputMessageCount,
+      historyInputTextCodeUnits: historyInputTextCodeUnits,
+      historyKeptTextCodeUnits: historyKeptTextCodeUnits,
     );
   }
 

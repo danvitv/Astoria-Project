@@ -1,8 +1,10 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:glaze_flutter/core/llm/context_calculator.dart';
 import 'package:glaze_flutter/core/llm/diagnostics/generation_runtime_call_facts.dart';
 import 'package:glaze_flutter/core/llm/diagnostics/recorded_generation_runtime.dart';
+import 'package:glaze_flutter/core/llm/history_assembler.dart';
 import 'package:glaze_flutter/core/llm/transport/chat_transport_request.dart';
 
 Map<String, dynamic> _payload({String completion = 'complete'}) {
@@ -31,6 +33,29 @@ Map<String, dynamic> _payload({String completion = 'complete'}) {
     completionReason: completion,
     streamTermination: completion == 'complete' ? 'terminal' : null,
     callbackFinishReason: completion == 'complete' ? 'stop' : null,
+    contextPlanning: GenerationRuntimeCallFacts.contextPlanning(
+      breakdown: const TokenBreakdown(
+        sourceTokens: {'history': 20},
+        staticTotal: 40,
+        historyBudget: 100,
+        historyTokens: 20,
+        totalTokens: 60,
+        cutoffIndex: 1,
+        trimmedHistory: [
+          PromptMessage(role: 'user', content: 'kept'),
+          PromptMessage(role: 'assistant', content: 'also kept'),
+        ],
+        fixedTotal: 40,
+        remaining: 40,
+        tokenEstimatorMode: 'heuristic_4_code_units',
+        historyInputMessageCount: 3,
+        historyInputTextCodeUnits: 24,
+        historyKeptTextCodeUnits: 13,
+      ),
+      contextSize: 1000,
+      outputReserve: 200,
+      historyTrimMode: 'sliding',
+    ),
   );
 }
 
@@ -68,6 +93,19 @@ void main() {
       expect(call['providerFinishReason'], 'unknown_not_attested');
       expect(call['providerWireNormalization'], 'unknown_not_observed');
       expect(call['providerSamplerBehavior'], 'unknown_not_observed');
+      final context = call['contextPlanning'] as Map<String, Object?>;
+      expect(context['configuredContextWindow'], 1000);
+      expect(context['promptBudget'], 800);
+      expect(context['historyMessagesBefore'], 3);
+      expect(context['historyMessagesAfter'], 2);
+      expect(context['historyTextCodeUnitsBefore'], 24);
+      expect(context['historyTextCodeUnitsAfter'], 13);
+      expect(context['reductionReason'], 'sliding_budget_limit');
+      expect(
+        call['contextEvidence'],
+        'recorded_prompt_builder_plan_not_provider_accounting',
+      );
+      expect(result['contextBudgetEvidence'], 'recorded_prompt_builder_plan');
       final encoded = jsonEncode(result);
       for (final private in [
         'PRIVATE_KEY',
@@ -118,6 +156,20 @@ void main() {
           completion: 'error',
         ),
       ),
+      isNull,
+    );
+  });
+
+  test('context planning rejects inconsistent reduction metadata', () {
+    final payload = Map<String, dynamic>.from(_payload());
+    final context = Map<String, Object?>.from(payload['contextPlanning'] as Map)
+      ..['historyMessagesAfter'] = 3;
+    payload['contextPlanning'] = context;
+    expect(
+      RecordedGenerationRuntime.fromColumns({
+        ..._row(),
+        'payload_json': jsonEncode(payload),
+      }),
       isNull,
     );
   });

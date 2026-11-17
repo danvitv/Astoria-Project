@@ -61,6 +61,9 @@ abstract final class RecordedGenerationRuntime {
       'callFacts': callFacts,
       'runCompleteness': 'not_proven_by_retained_events',
       'actualTokenUse': 'unknown_not_recorded',
+      'contextBudgetEvidence': callFacts.containsKey('contextPlanning')
+          ? 'recorded_prompt_builder_plan'
+          : 'not_recorded',
       'automaticRepair': false,
     };
   }

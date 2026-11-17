@@ -1,9 +1,11 @@
 import '../transport/chat_transport_request.dart';
+import '../context_calculator.dart';
+import 'generation_context_planning_facts.dart';
 import 'studio_runtime_call_facts.dart';
 
 /// Provider-neutral request and callback facts shared by ordinary and Studio
-/// generation. The persisted v1 envelope keeps its historical Studio key so
-/// existing retained events remain readable; this facade adds no new schema.
+/// generation. The persisted envelope keeps its historical Studio version key:
+/// v1 remains readable, while v2 adds only validated context-planning counts.
 abstract final class GenerationRuntimeCallFacts {
   static Map<String, Object?> constructedRequest(
     ChatTransportRequest request,
@@ -20,6 +22,7 @@ abstract final class GenerationRuntimeCallFacts {
     required String completionReason,
     String? streamTermination,
     String? callbackFinishReason,
+    Map<String, Object?>? contextPlanning,
   }) => StudioRuntimeCallFacts.payload(
     request: request,
     elapsedMs: elapsedMs,
@@ -31,6 +34,19 @@ abstract final class GenerationRuntimeCallFacts {
     completionReason: completionReason,
     streamTermination: streamTermination,
     callbackFinishReason: callbackFinishReason,
+    contextPlanning: contextPlanning,
+  );
+
+  static Map<String, Object?> contextPlanning({
+    required TokenBreakdown breakdown,
+    required int contextSize,
+    required int outputReserve,
+    required String historyTrimMode,
+  }) => GenerationContextPlanningFacts.fromBreakdown(
+    breakdown: breakdown,
+    contextSize: contextSize,
+    outputReserve: outputReserve,
+    historyTrimMode: historyTrimMode,
   );
 
   static Map<String, Object?>? fromSavedPayload(Object? raw) =>

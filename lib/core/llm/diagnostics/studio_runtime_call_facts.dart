@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../transport/chat_transport_request.dart';
+import 'generation_context_planning_facts.dart';
 
 /// Only fields read from the constructed request / original stream callbacks.
 /// This is not a provider body, token accounting or proof of sampler effects.
@@ -143,9 +144,10 @@ abstract final class StudioRuntimeCallFacts {
     required String completionReason,
     String? streamTermination,
     String? callbackFinishReason,
+    Map<String, Object?>? contextPlanning,
   }) {
     final candidate = <String, Object?>{
-      versionKey: 1,
+      versionKey: contextPlanning == null ? 1 : 2,
       'constructedRequest': request,
       'streamObservation': {
         'elapsedMs': elapsedMs,
@@ -160,6 +162,7 @@ abstract final class StudioRuntimeCallFacts {
         'streamTermination': termination(streamTermination),
         'callbackFinishReason': finishReason(callbackFinishReason),
       },
+      'contextPlanning': ?contextPlanning,
     };
     // Never let NaN, infinities, unknown strings or unbounded counts reach JSON.
     return validate(candidate) == null ? const {} : Map.unmodifiable(candidate);
@@ -210,11 +213,18 @@ abstract final class StudioRuntimeCallFacts {
 
   static Map<String, Object?>? validate(Object? value) {
     if (value is! Map<String, Object?> ||
-        value.length != 3 ||
         value[versionKey] is! int ||
-        value[versionKey] != 1 ||
         !value.containsKey('constructedRequest') ||
         !value.containsKey('streamObservation')) {
+      return null;
+    }
+    final version = value[versionKey] as int;
+    final context = value['contextPlanning'];
+    if ((version == 1 && (value.length != 3 || context != null)) ||
+        (version == 2 &&
+            (value.length != 4 ||
+                GenerationContextPlanningFacts.validate(context) == null)) ||
+        (version != 1 && version != 2)) {
       return null;
     }
     final request = value['constructedRequest'];
@@ -298,8 +308,12 @@ abstract final class StudioRuntimeCallFacts {
               entry.value,
       }),
       'streamObservation': Map<String, Object?>.unmodifiable(stream),
+      if (version == 2)
+        'contextPlanning': GenerationContextPlanningFacts.validate(context)!,
       'requestEvidence': 'constructed_provider_neutral_request_only',
-      'contextEvidence': 'constructed_message_counts_not_context_budget',
+      'contextEvidence': version == 2
+          ? 'recorded_prompt_builder_plan_not_provider_accounting'
+          : 'constructed_message_counts_not_context_budget',
       'streamEvidence': 'original_callback_counts_and_elapsed_time',
       'lengthUnit': 'utf16_code_units_not_tokens',
       'completionMetadataSource': 'transport_callback_may_be_synthetic',

@@ -32,6 +32,13 @@ void main() {
       );
       // contextSize - maxTokens = 600, no static blocks => 600 budget.
       expect(breakdown.historyBudget, 600);
+      expect(breakdown.historyInputMessageCount, 1);
+      expect(breakdown.historyInputTextCodeUnits, 'hello there'.length);
+      expect(breakdown.historyKeptTextCodeUnits, 'hello there'.length);
+      expect(
+        breakdown.tokenEstimatorMode,
+        anyOf('o200k_with_item_fallback', 'heuristic_4_code_units'),
+      );
     });
 
     test('large memory does not starve the completion budget', () {
@@ -60,6 +67,8 @@ void main() {
         // History is fully cut off, but the calculator does not throw.
         expect(breakdown.cutoffIndex, 1);
         expect(breakdown.trimmedHistory, isEmpty);
+        expect(breakdown.historyInputMessageCount, 1);
+        expect(breakdown.historyKeptTextCodeUnits, 0);
       },
     );
 

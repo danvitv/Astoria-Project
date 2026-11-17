@@ -36,7 +36,7 @@ abstract final class SupportDiagnosticSkills {
         'Separate stream failure, context limits and sampling/reasoning hypotheses from actual recorded evidence.',
         'A sample count or configured capture sink cannot establish the cause of a failed generation.',
         'Use requestDiagnostics recordedFailure units: their run-local event/request references link only an exact session, run, call and attempt. Missing or ambiguous linkage is not a historical request.',
-        'Use recordedGenerationRuntime for the ordinary main call’s constructed provider-neutral parameters and original callback counters. It does not attest provider wire normalization, actual token use, sampler effects or a complete retained run.',
+        'Use recordedGenerationRuntime for the ordinary main call’s constructed provider-neutral parameters, prompt budget/history reduction plan and original callback counters. The context plan reports estimator mode and bounded counts, not authored text or provider token accounting. It does not attest provider wire normalization, actual token use, sampler effects or a complete retained run.',
         'Recorded HTTP authorization rejection does not prove a bad key; timeout or parser rejection does not prove a context/sampling cause. No automatic repair or probe.',
         'Missing, truncated or evicted captures are missing evidence, not a healthy verdict.',
       ],

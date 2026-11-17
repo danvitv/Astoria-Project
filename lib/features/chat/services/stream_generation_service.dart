@@ -860,6 +860,14 @@ class StreamGenerationService {
       );
       final constructedRequestFacts =
           GenerationRuntimeCallFacts.constructedRequest(request);
+      final contextPlanningFacts = studioConfig == null
+          ? GenerationRuntimeCallFacts.contextPlanning(
+              breakdown: promptResult.breakdown,
+              contextSize: apiConfig.contextSize,
+              outputReserve: apiConfig.maxTokens,
+              historyTrimMode: apiConfig.historyTrimMode,
+            )
+          : null;
       var chunkCount = 0;
       int? firstChunkMs;
       int? lastChunkAtMs;
@@ -907,6 +915,7 @@ class StreamGenerationService {
                 completionReason: completionReason,
                 streamTermination: streamTermination,
                 callbackFinishReason: callbackFinishReason,
+                contextPlanning: contextPlanningFacts,
               ),
             ),
           ),

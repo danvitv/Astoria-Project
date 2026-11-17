@@ -155,8 +155,8 @@ The structured result must distinguish:
 - proposed, confirmed and actually completed repair attempts.
 
 Connection diagnosis needs recorded protocol/HTTP/timeout evidence, not a key count.
-Generation diagnosis still needs complete context-budget/trim and provider-wire
-evidence beyond linked saved outcomes. Current saved Studio block rules use the
+Generation diagnosis still needs provider-wire evidence and Studio-specific context
+planning beyond linked saved outcomes. Current saved Studio block rules use the
 real codec/validator, and saved agent topology uses the actual phase splitter and
 ontology-declared requirements through native sources. These are separate limited
 observations. Native pre-generation phase decisions and controller/call outcomes
@@ -169,10 +169,12 @@ in the same recorded call event for both Studio calls and the ordinary main-mode
 The ordinary projection is `recordedGenerationRuntime`; exact event/request linkage
 remains internal and missing or ambiguous captures are not guessed. The public
 configuredOutputLimit label preserves the saved maxTokens value without weakening
-whole-unit current redaction. Context-budget decisions and trim reasons are not yet
-recorded in this unit. Provider wire
-normalization, actual token use, sampler behavior and provider finish reasons remain
-unknown, not inferred from callbacks that may be synthetic.
+whole-unit current redaction. The ordinary main-call unit now also records its
+prompt-builder context window/output reserve, prompt/history budgets, estimator mode,
+history message and UTF-16 counts before/after reduction, cutoff count and finite trim
+reason. It carries no authored text or message ids and is a local estimate, not provider
+token accounting. Provider wire normalization, actual token use, sampler behavior and
+provider finish reasons remain unknown, not inferred from callbacks that may be synthetic.
 Required tracker failures must not be bypassed. Integrity diagnosis keeps
 canonical books, drafts, derived catalogs, Ledger and canon assembly separate.
 Autonomous multi-session discovery uses the existing global consent while every
