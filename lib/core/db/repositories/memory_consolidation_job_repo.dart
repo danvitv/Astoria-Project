@@ -1153,6 +1153,50 @@ class MemoryConsolidationJobRepo {
             ]))
           .watch();
 
+  /// Cancelled jobs whose exact source snapshots have all since been accepted
+  /// by completed jobs in the same session branch. They remain durable history,
+  /// but no longer represent work the queue can usefully rebuild.
+  Stream<Set<String>> watchSupersededCancelledJobIds(String sessionId) {
+    final jobs = db.memoryConsolidationJobRows;
+    final items = db.memoryConsolidationJobItemRows;
+    return db
+        .customSelect(
+          '''
+SELECT cancelled.id
+FROM memory_consolidation_job_rows AS cancelled
+WHERE cancelled.session_id = ?
+  AND cancelled.status = 'cancelled'
+  AND EXISTS (
+    SELECT 1
+    FROM memory_consolidation_job_item_rows AS cancelled_item
+    WHERE cancelled_item.job_id = cancelled.id
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM memory_consolidation_job_item_rows AS cancelled_item
+    WHERE cancelled_item.job_id = cancelled.id
+      AND NOT EXISTS (
+        SELECT 1
+        FROM memory_consolidation_job_item_rows AS accepted_item
+        INNER JOIN memory_consolidation_job_rows AS completed
+          ON completed.id = accepted_item.job_id
+        WHERE completed.session_id = cancelled.session_id
+          AND completed.branch_id = cancelled.branch_id
+          AND completed.status = 'completed'
+          AND accepted_item.status = 'accepted'
+          AND accepted_item.memory_entry_id = cancelled_item.memory_entry_id
+          AND accepted_item.revision_id = cancelled_item.revision_id
+          AND accepted_item.fingerprint = cancelled_item.fingerprint
+      )
+  )
+''',
+          variables: [Variable.withString(sessionId)],
+          readsFrom: {jobs, items},
+        )
+        .watch()
+        .map((rows) => {for (final row in rows) row.read<String>('id')});
+  }
+
   /// One-shot read of this session's package jobs, newest first — the same
   /// ordering [watchSessionJobs] streams, for callers that need a snapshot
   /// (for example a scan dry run counting failed packages).

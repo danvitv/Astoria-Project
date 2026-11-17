@@ -384,6 +384,15 @@ final memoryConsolidationSessionJobsProvider = StreamProvider.autoDispose
           .watchSessionJobs(sessionId);
     });
 
+/// Cancelled package history that has been fully replaced by accepted exact
+/// source snapshots. The queue hides it because rebuilding it cannot add work.
+final memoryConsolidationSupersededJobsProvider = StreamProvider.autoDispose
+    .family<Set<String>, String>((ref, sessionId) {
+      return ref
+          .watch(memoryConsolidationJobRepoProvider)
+          .watchSupersededCancelledJobIds(sessionId);
+    });
+
 /// Source items of one package job, for queue counts on the panel.
 final memoryConsolidationJobItemsProvider = StreamProvider.autoDispose
     .family<List<MemoryConsolidationJobItemRow>, String>((ref, jobId) {

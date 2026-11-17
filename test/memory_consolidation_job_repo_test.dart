@@ -1,4 +1,5 @@
 import 'package:drift/native.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/memory_consolidation_job_repo.dart';
@@ -580,6 +581,67 @@ void main() {
     expect(items.last, hasLength(2));
     expect(items.last.map((item) => item.status), everyElement('pending'));
   });
+
+  test(
+    'superseded stream hides only fully accepted cancelled snapshots',
+    () async {
+      final cancelled = await createJob();
+      await repo.cancel(cancelled.id, reason: 'source_context_changed');
+
+      final superseded = <Set<String>>[];
+      final sub = repo
+          .watchSupersededCancelledJobIds('session-1')
+          .listen(superseded.add);
+      addTearDown(sub.cancel);
+      await Future<void>.delayed(Duration.zero);
+      expect(superseded.last, isEmpty);
+
+      now += 10;
+      final partial = await repo.createOrGet(
+        sessionId: 'session-1',
+        branchId: 'session-1',
+        requestKey: 'partial-replacement',
+        items: [sourceItems().first],
+      );
+      await (db.update(
+        db.memoryConsolidationJobRows,
+      )..where((row) => row.id.equals(partial.id))).write(
+        const MemoryConsolidationJobRowsCompanion(status: Value('completed')),
+      );
+      await (db.update(
+        db.memoryConsolidationJobItemRows,
+      )..where((row) => row.jobId.equals(partial.id))).write(
+        const MemoryConsolidationJobItemRowsCompanion(
+          status: Value('accepted'),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(superseded.last, isEmpty);
+
+      now += 10;
+      final remainder = await repo.createOrGet(
+        sessionId: 'session-1',
+        branchId: 'session-1',
+        requestKey: 'remainder-replacement',
+        items: [sourceItems().last],
+      );
+      await (db.update(
+        db.memoryConsolidationJobRows,
+      )..where((row) => row.id.equals(remainder.id))).write(
+        const MemoryConsolidationJobRowsCompanion(status: Value('completed')),
+      );
+      await (db.update(
+        db.memoryConsolidationJobItemRows,
+      )..where((row) => row.jobId.equals(remainder.id))).write(
+        const MemoryConsolidationJobItemRowsCompanion(
+          status: Value('accepted'),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(superseded.last, {cancelled.id});
+    },
+  );
 
   test('getSessionJobs lists one session newest first', () async {
     final first = await createJob();

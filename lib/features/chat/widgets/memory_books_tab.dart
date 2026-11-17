@@ -1056,6 +1056,11 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
             )
             .value ??
         const <String, int>{};
+    final supersededCancelled =
+        ref
+            .watch(memoryConsolidationSupersededJobsProvider(widget.sessionId))
+            .value ??
+        const <String>{};
     // Oldest first, so package numbers follow creation order and stay stable.
     final ordered = [...jobs]
       ..sort(
@@ -1064,17 +1069,20 @@ class _MemoryBooksTabState extends ConsumerState<MemoryBooksTab> {
             : a.createdAt.compareTo(b.createdAt),
       );
     var completed = 0;
+    var packageIndex = 0;
     final rows = <MemoryConsolidationQueueItem>[];
     for (final job in ordered) {
+      packageIndex++;
       if (job.status == 'completed') {
         completed++;
         continue;
       }
+      if (supersededCancelled.contains(job.id)) continue;
       rows.add(
         MemoryConsolidationQueueItem(
           jobId: job.id,
           status: job.status,
-          index: rows.length + completed + 1,
+          index: packageIndex,
           sourceCount: counts[job.id] ?? 0,
           lastError: job.lastError,
           attemptCount: job.attemptCount,
