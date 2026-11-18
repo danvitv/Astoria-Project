@@ -2,6 +2,7 @@ import '../../../../core/credentials/secret_redactor.dart';
 import '../../../../core/llm/transport/native_tool_types.dart';
 import '../../models/support_app_action.dart' show SupportAppActionCode;
 import 'support_diagnostic_metadata_finding.dart';
+import 'support_diagnostic_causal_source.dart';
 
 /// Passive run-local presentation, not an executor, parser or provenance store.
 /// Record ONLY after the original ROOT and call/result correlation check, before
@@ -12,6 +13,7 @@ final class SupportDiagnosticPresentation {
   static const footerCharacters = 8192;
   static const answerCharacters = NativeToolLimits.textCharacters;
   final _receipts = <_DiagnosticReceipt>[];
+  final _causal = <SupportDiagnosticCausalObservation>[];
   var _received = 0, _evicted = 0;
   var _persisted = 0, _uncertain = 0, _navigation = 0, _unknownEffect = 0;
   bool _started = false, _failed = false;
@@ -66,6 +68,15 @@ final class SupportDiagnosticPresentation {
             data,
           )
         : null;
+    if (ok && effect == 'none' && data is Map<String, Object?>) {
+      for (final observation in SupportDiagnosticCausalSource.observe(
+        call,
+        data,
+      )) {
+        if (_causal.length == retainedReceipts) break;
+        _causal.add(observation);
+      }
+    }
     _receipts.add(
       _DiagnosticReceipt(call.id, call.name, reportedOk, code, effect, finding),
     );
@@ -102,6 +113,26 @@ final class SupportDiagnosticPresentation {
         observations.add(line);
       }
     }
+    final causalLines = <String>[];
+    for (final observation in _causal) {
+      final value = observation.assessment.toJson(
+        evidenceId: observation.evidenceId,
+      );
+      final line =
+          '- Evidence `${observation.evidenceId}`; '
+          'observedFactCode=${value['observedFactCode']}; '
+          'factConfidence=confirmed_by_check; '
+          'causalDiagnosis=${value['causalDiagnosis']}; '
+          'causalStatementCode=${value['causalStatementCode']}; '
+          'alternatives=${(value['alternatives'] as List).join(', ')}; '
+          'missingEvidence=${(value['missingEvidence'] as List).join(', ')}; '
+          'nextSafeStep=${value['nextSafeStep']}.';
+      if (redactor.redactText(line) != line) {
+        hidden++;
+      } else {
+        causalLines.add(line);
+      }
+    }
     final heading = providerNarrative
         ? '### Ответ модели — гипотезы и предложения (UNCONFIRMED)'
         : '### Нативное фактическое завершение запроса';
@@ -118,11 +149,17 @@ final class SupportDiagnosticPresentation {
       else
         ...observations,
       '### Гипотезы и недостающие доказательства',
-      '- causalDiagnosis: insufficient_data. Метаданные не доказывают полную первопричину.',
+      if (causalLines.isEmpty)
+        '- causalDiagnosis: insufficient_data. Метаданные не доказывают полную первопричину.'
+      else ...[
+        ...causalLines,
+        '- probable_cause относится только к связанному записанному симптому; '
+            'это не доказательство полной первопричины и не результат воспроизведения.',
+      ],
       '- Полнота истории unknown; отсутствующие, усечённые (truncated) или '
           'вытесненные (evicted) данные не являются доказательством исправности.',
-      '- Source4 payloads не интерпретируются этим блоком: содержимое, '
-          'полнота и причины пропусков unknown; текст источников здесь не копируется.',
+      '- Произвольные Source4 payloads не интерпретируются: допускается только '
+          'строгая конечная проекция записанного runtime; текст источников не копируется.',
       if (hidden > 0)
         '- Не показано квитанций: $hidden (лимит или текущая редакция секретов); '
             'их ссылки и подробности unavailable.',

@@ -1,6 +1,9 @@
 import 'package:drift/drift.dart';
 
 import '../../support_report/support_report_error.dart';
+import '../../llm/diagnostics/recorded_diagnostic_causal_assessment.dart';
+import '../../llm/diagnostics/recorded_generation_runtime.dart';
+import '../../llm/diagnostics/recorded_studio_runtime.dart';
 import '../app_db.dart';
 import 'support_report_root_repo.dart';
 
@@ -71,14 +74,21 @@ final class SupportReportReadRepo {
       isCurrent,
     );
     _check(isCurrent);
-    final events = await _rows(
+    final rawEvents = await _rows(
       '''SELECT
         CASE WHEN kind IN ('transport_succeeded','transport_failed','parser_accepted','parser_rejected',
           'result_selected','pipeline_completed','pipeline_failed') THEN kind ELSE 'unknown' END AS kind,
         CASE WHEN status_code BETWEEN 100 AND 599 THEN status_code ELSE NULL END AS status_code,
-        truncated,attempt FROM llm_call_event_rows ORDER BY created_at_ms DESC LIMIT 65''',
+        status,truncated,attempt,stage,parser_name,parser_code,
+        CASE WHEN parser_detail IS NULL THEN NULL ELSE 'present' END AS parser_detail,
+        CASE WHEN length(payload_json)<=8192 THEN payload_json ELSE NULL END AS payload_json,
+        CASE WHEN length(coalesce(session_id,''))>0
+          AND length(coalesce(pipeline_run_id,''))>0
+          AND length(coalesce(call_id,''))>0 THEN 1 ELSE 0 END AS _diagnosticIdentityValid
+        FROM llm_call_event_rows ORDER BY created_at_ms DESC LIMIT 65''',
       isCurrent,
     );
+    final events = rawEvents.map(_projectEvent).toList(growable: false);
     _check(isCurrent);
     final repairs = supportSessionId == null
         ? <Map<String, Object?>>[]
@@ -191,6 +201,20 @@ final class SupportReportReadRepo {
     return List.unmodifiable(
       result.map((r) => Map<String, Object?>.unmodifiable(r.data)),
     );
+  }
+
+  Map<String, Object?> _projectEvent(Map<String, Object?> row) {
+    final runtime =
+        RecordedGenerationRuntime.fromColumns(row) ??
+        RecordedStudioRuntime.fromColumns(row);
+    final assessment = RecordedDiagnosticCausalAssessment.fromRuntime(runtime);
+    return Map.unmodifiable({
+      'kind': row['kind'],
+      'status_code': row['status_code'],
+      'truncated': row['truncated'],
+      'attempt': row['attempt'],
+      if (assessment != null) '_causalAssessment': assessment.toJson(),
+    });
   }
 
   void _check(bool Function() current) {

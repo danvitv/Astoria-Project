@@ -1,9 +1,11 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:glaze_flutter/core/credentials/secret_redactor.dart';
 import 'package:glaze_flutter/core/llm/context_calculator.dart';
 import 'package:glaze_flutter/core/llm/diagnostics/generation_runtime_call_facts.dart';
 import 'package:glaze_flutter/core/llm/diagnostics/recorded_generation_runtime.dart';
+import 'package:glaze_flutter/core/llm/diagnostics/recorded_runtime_source_projection.dart';
 import 'package:glaze_flutter/core/llm/history_assembler.dart';
 import 'package:glaze_flutter/core/llm/transport/chat_transport_request.dart';
 
@@ -158,6 +160,42 @@ void main() {
       ),
       isNull,
     );
+  });
+
+  test('Source4 projection survives native JSON-string secret scanning', () {
+    final runtime = RecordedGenerationRuntime.fromColumns(_row())!;
+    final projected = RecordedRuntimeSourceProjection.fromRuntime(runtime)!;
+    final encoded = jsonEncode({
+      'operation': 'astoria_source_read',
+      'pieces': [
+        {'complete': true, 'payload': projected},
+      ],
+    });
+
+    expect(projected['actualUsageEvidence'], 'unknown_not_recorded');
+    expect(projected, isNot(contains('actualTokenUse')));
+    expect(SecretRedactor().redactJson(encoded), encoded);
+  });
+
+  test('Source4 projection safely re-keys Studio budget unit names', () {
+    final projected = RecordedRuntimeSourceProjection.fromRuntime({
+      'callFacts': {
+        'studioRequestBudget': {
+          'estimatedRequestTokens': 20,
+          'estimatedRemainingTokens': 80,
+          'historyTokenBudget': 60,
+          'historyEstimatedInputTokens': 50,
+          'historyEstimatedSelectedTokens': 40,
+        },
+      },
+    })!;
+    final encoded = jsonEncode(projected);
+
+    expect(encoded, contains('estimatedRequestUnits'));
+    expect(encoded, contains('historyEstimatedSelectedUnits'));
+    expect(encoded, isNot(contains('Tokens')));
+    expect(encoded, isNot(contains('TokenBudget')));
+    expect(SecretRedactor().redactJson(encoded), encoded);
   });
 
   test('context planning rejects inconsistent reduction metadata', () {

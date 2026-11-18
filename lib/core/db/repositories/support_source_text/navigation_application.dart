@@ -570,48 +570,60 @@ extension _NavApplication on SupportSourceNavigationRepo {
     if (unavailable == null && table.table == 'llm_call_event_rows') {
       final generation = RecordedGenerationRuntime.fromColumns(row);
       if (generation != null) {
+        final sourceGeneration = RecordedRuntimeSourceProjection.fromRuntime(
+          generation,
+        );
         final requestRow = row['_diagnosticRequestRow'];
-        final summary = <String, Object?>{
-          ...generation,
-          'eventReference': _applicationPosition(table.table, ordinal),
-          'identityLink': 'native_exact_session_run_call_attempt',
-          'requestLink': requestRow is int
-              ? 'exact_session_run_call_attempt'
-              : 'missing_or_ambiguous',
-          if (requestRow is int)
-            'requestReference': _applicationPosition(
-              'llm_request_capture_rows',
-              requestRow,
-            ),
-        };
-        final encoded = jsonEncode(summary);
-        if (_projectionPolicy!.redactText(encoded) == encoded) {
+        final summary = sourceGeneration == null
+            ? null
+            : <String, Object?>{
+                ...sourceGeneration,
+                'eventReference': _applicationPosition(table.table, ordinal),
+                'identityLink': 'native_exact_session_run_call_attempt',
+                'requestLink': requestRow is int
+                    ? 'exact_session_run_call_attempt'
+                    : 'missing_or_ambiguous',
+                if (requestRow is int)
+                  'requestReference': _applicationPosition(
+                    'llm_request_capture_rows',
+                    requestRow,
+                  ),
+              };
+        final encoded = summary == null ? null : jsonEncode(summary);
+        if (encoded != null &&
+            _projectionPolicy!.redactText(encoded) == encoded) {
           emit(summary, 'recordedGenerationRuntime');
         }
       }
       if (runtime != null) {
+        final sourceRuntime = RecordedRuntimeSourceProjection.fromRuntime(
+          runtime,
+        );
         final requestRow = row['_diagnosticRequestRow'];
         final phaseRow = row['_diagnosticPhaseRow'];
-        final summary = <String, Object?>{
-          ...runtime,
-          'eventReference': _applicationPosition(table.table, ordinal),
-          'identityLink': 'native_exact_session_run_call_attempt',
-          'requestLink': requestRow is int
-              ? 'exact_session_run_call_attempt'
-              : 'missing_or_ambiguous',
-          if (requestRow is int)
-            'requestReference': _applicationPosition(
-              'llm_request_capture_rows',
-              requestRow,
-            ),
-          'phaseLink': phaseRow is int
-              ? 'exact_session_run_parent_call'
-              : 'missing_or_ambiguous',
-          if (phaseRow is int)
-            'phaseReference': _applicationPosition(table.table, phaseRow),
-        };
-        final encoded = jsonEncode(summary);
-        if (_projectionPolicy!.redactText(encoded) == encoded) {
+        final summary = sourceRuntime == null
+            ? null
+            : <String, Object?>{
+                ...sourceRuntime,
+                'eventReference': _applicationPosition(table.table, ordinal),
+                'identityLink': 'native_exact_session_run_call_attempt',
+                'requestLink': requestRow is int
+                    ? 'exact_session_run_call_attempt'
+                    : 'missing_or_ambiguous',
+                if (requestRow is int)
+                  'requestReference': _applicationPosition(
+                    'llm_request_capture_rows',
+                    requestRow,
+                  ),
+                'phaseLink': phaseRow is int
+                    ? 'exact_session_run_parent_call'
+                    : 'missing_or_ambiguous',
+                if (phaseRow is int)
+                  'phaseReference': _applicationPosition(table.table, phaseRow),
+              };
+        final encoded = summary == null ? null : jsonEncode(summary);
+        if (encoded != null &&
+            _projectionPolicy!.redactText(encoded) == encoded) {
           emit(summary, 'recordedStudioRuntime');
         }
       }

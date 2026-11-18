@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/credentials/secret_redactor.dart';
 import 'package:glaze_flutter/core/llm/transport/native_tool_transport.dart';
@@ -61,6 +63,50 @@ String presentation(
 void main() {
   test('neutral task has no diagnostic executor', () {
     expect(SupportDiagnosticAgent.select(const []), isNull);
+  });
+  test('recorded runtime source adds a bounded causal assessment', () {
+    final p = SupportDiagnosticPresentation()..start();
+    final c = call('astoria_source_read');
+    final runtime = <String, Object?>{
+      'finding': 'recorded_generation_runtime_outcome',
+      'outcome': 'completed',
+      'transportStatus': 'ok',
+      'attempt': 1,
+      'factConfidence': 'confirmed_by_check',
+      'causalDiagnosis': 'insufficient_data',
+      'scope': 'this_saved_main_call_event_only',
+      'method': 'native_recorded_request_and_callbacks',
+      'callFacts': {'providerFinishReason': 'length'},
+      'runCompleteness': 'not_proven_by_retained_events',
+      'actualUsageEvidence': 'unknown_not_recorded',
+      'automaticRepair': false,
+      'identityLink': 'native_exact_session_run_call_attempt',
+      'requestLink': 'exact_session_run_call_attempt',
+      'eventReference': 4,
+    };
+    final wire = {
+      'operation': 'astoria_source_read',
+      'status': 'ok',
+      'effect': 'none',
+      'pieces': [
+        {'complete': true, 'payload': runtime},
+      ],
+      'count': 1,
+      'total': null,
+      'complete': true,
+      'partial': false,
+      'nextCursor': null,
+      'incompleteReason': null,
+      'trust': 'untrusted_source_data',
+    };
+    p.record(c, metadataResult(c, {'sourceText': jsonEncode(wire)}));
+
+    final shown = presentation(p);
+    expect(shown, contains('factConfidence=confirmed_by_check'));
+    expect(shown, contains('causalDiagnosis=probable_cause'));
+    expect(shown, contains('provider_finish_length'));
+    expect(shown, contains('call_1:event-4'));
+    expect(shown, isNot(contains('providerFinishReason')));
   });
   test('explicit error repair or rename keeps the ordinary confirmed path', () {
     for (final question in [

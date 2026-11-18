@@ -184,6 +184,10 @@ actual routed prompt emits chat history, it additionally records the exact local
 selection policy, before/after counts, estimated history tokens and whether reduction
 came from the message high-water mark, token high-water mark, both, or a persisted
 stable-window boundary. Image cost and provider accounting remain explicitly unknown.
+Source4 re-keys only secret-scanner-colliding diagnostic labels at its JSON-string
+boundary, preserving values while leaving persisted payload versions unchanged. This
+prevents finite runtime units from being silently omitted without weakening whole-value
+secret redaction.
 Required tracker failures must not be bypassed. Integrity diagnosis keeps
 canonical books, drafts, derived catalogs, Ledger and canon assembly separate.
 Autonomous multi-session discovery uses the existing global consent while every
@@ -212,8 +216,8 @@ reads it through `astoria_content_catalog(knowledgeTopic: ...)`, so no extra nat
 definition consumes the remaining registry slot. Focused catalog/diagnostic tests and
 the actual native tool-loop read pass; historical expansion remains unproven by design.
 
-A deterministic annotation of an already-admitted result is only an observation
-helper, **not** an internal specialist agent or a completed diagnostic product.
+A deterministic annotation of an already-admitted result remains an observation
+helper, **not** an internal specialist agent or authority to repair.
 Actual bounded read-only specialists are connected in the original native Send
 loop: trusted built-in profiles narrow definitions and refuse effects before
 registry execution. Ten focused tests and five native/UI cases pass, including
@@ -221,17 +225,20 @@ the real source-description settlement branch and a refused snapshot before the
 file picker. Explicit positive repair requests retain ordinary native confirmations;
 diagnostic requests such as “change nothing” remain read-only. Specialists share
 original run/consent/Stop/transport bounds and cannot
-mutate/export/probe or recursively launch more agents. This is not full causal
+mutate/export/probe or recursively launch more agents. This is not universal causal
 diagnosis. Do not introduce a replacement reader graph or extra model call merely
 to rename a metadata helper. Add a reader only for a named missing evidence seam
 not already covered by the delivered typed source readers.
 
 The durable answer now separates model narrative from bounded native observations,
-missing evidence and effect accounting. Thirty focused pure/native UI cases pass;
-unsafe references are omitted whole, source payloads are not parsed as authority,
-and causal diagnosis remains insufficient_data. Full causal-quality presentation
-and optional report integration remain pending. Extend the report format only when required by that
-delivery; do not rebuild its crypto, recipient or save infrastructure.
+missing evidence and effect accounting. Exact admitted recorded-runtime units receive
+a finite native causal assessment: transport terminal branches and selected provider
+finish reasons can be `probable_cause` for the linked symptom only; normal completion,
+local history reduction and incomplete evidence remain `insufficient_data`. The footer
+shows evidence references, alternatives, missing evidence and the next safe check
+without retaining source prose. Separately approved support reports reuse the same
+finite assessments, attach report-local evidence ids and never include raw runtime
+payloads. This extends neither report crypto nor recipient/save authority.
 
 ### 2. Extended actions and conditional Undo — separate bounded slices
 

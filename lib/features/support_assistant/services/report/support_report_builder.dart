@@ -6,6 +6,7 @@ import '../../../../core/db/repositories/support_report_read_repo.dart';
 import '../../../../core/support_report/support_report_error.dart';
 import '../../../../core/support_report/support_report_json.dart';
 import 'support_report_models.dart';
+import 'support_report_diagnostic_projection.dart';
 import 'support_report_ownership.dart';
 import 'support_report_sanitizer.dart';
 
@@ -76,46 +77,20 @@ final class SupportReportBuilder {
       'retentionCompleteness': 'unknown',
       'timings': 'unknown',
     });
-    final evidence = <Map<String, Object?>>[
-      for (var i = 0; i < data.events.length && i < 64; i++)
-        {'evidenceId': 'event-${i + 1}', ...data.events[i]},
-    ];
-    add('events', 'Observed transport and parser facts', false, {
-      'records': evidence,
-      'hasMore': data.events.length > 64,
-      'retentionCompleteness': 'unknown',
-    });
-    final failures = evidence.where(
-      (e) => const [
-        'transport_failed',
-        'parser_rejected',
-        'pipeline_failed',
-      ].contains(e['kind']),
+    final diagnostic = SupportReportDiagnosticProjection.fromEvents(
+      data.events,
+    );
+    add(
+      'events',
+      'Observed transport and parser facts',
+      false,
+      diagnostic.events,
     );
     add(
       'diagnoses',
       'Deterministic evidence assessment',
       false,
-      {
-        'observedFailure': {
-          'certainty': failures.isEmpty ? 'insufficientEvidence' : 'confirmed',
-          'statement': failures.isEmpty
-              ? 'No failure observed in this bounded slice.'
-              : 'Failure records exist in this bounded slice.',
-          'evidenceIds': failures.map((e) => e['evidenceId']).toList(),
-          'alternatives': ['Earlier or uncaptured records are unknown.'],
-        },
-        'rootCause': {
-          'certainty': 'insufficientEvidence',
-          'evidenceIds': evidence.map((e) => e['evidenceId']).toList(),
-          'statement': 'Scalar metadata does not establish a root cause.',
-          'alternatives': [
-            'Provider or network failure',
-            'Parser incompatibility',
-            'Incomplete retained evidence',
-          ],
-        },
-      },
+      diagnostic.diagnoses,
       ['events'],
     );
     if (request.supportSessionId != null) {
