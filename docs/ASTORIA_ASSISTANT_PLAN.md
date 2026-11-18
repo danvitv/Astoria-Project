@@ -1,7 +1,7 @@
 # Astoria Assistant — active implementation plan
 
-Updated: 2026-11-05. This is the working plan, not a certificate of completion.
-Reviewed repository HEAD: `90adea16`, following `0cd6ff69` and `9538896e`.
+Updated: 2026-11-18. This is the working plan, not a certificate of completion.
+Historical reviewed repository HEAD: `90adea16`, following `0cd6ff69` and `9538896e`.
 Astoria WIP checkpoint: `e6260978`. Current review covers documentation and bounded
 tests, not implementation resumption. The small Rewrite continuation and its
 permissions below are historical, not authorization for the next task.
@@ -36,11 +36,21 @@ verified through native Send; Memory's pushed handoff preserves its original tab
 Rout.my image custody and downstream error-publication guards are verified synthetic
 slices. Desktop OAuth and bounded definition freezing are also verified. Twenty-eight
 affected catalog/wizard regressions pass; original source and confirmation guards remain.
-The requested dev-channel APK passed in 118.9s (159.6 MB), after custom Memory checks.
+The requested historical dev-channel APK passed in 118.9s (159.6 MB), after custom Memory checks.
 OpenRouter and NovelAI image custody are verified through synthetic native consumers
 and publication checks; those later changes are not in that artifact. Other credential
-families and extended actions remain open. No additional APK build is authorized.
+families and extended actions remain open. The 2026-11-18 instruction separately
+authorizes one new local APK build from the current branch; it does not authorize
+installation, launch, tester distribution, upload or publication.
 No application launch is requested.
+
+Current continuation checkpoint is `486de592`. The assistant diagnostic chain now
+includes preset knowledge, ordinary/Studio context planning, exact Studio history
+selection, provider completion facts, bounded causal presentation and support-report
+projection. The Memory and sync commits already present on this branch are product
+capabilities that Astoria must understand and operate through typed native seams where
+safe; excluding separate Memory/sync implementation work did not exclude this required
+assistant integration.
 
 Naistera's synthetic native slice is now verified: original public HTTP catalog ->
 queued physical preferences -> original picker/model selection and late-CURRENT denial
@@ -240,7 +250,32 @@ without retaining source prose. Separately approved support reports reuse the sa
 finite assessments, attach report-local evidence ids and never include raw runtime
 payloads. This extends neither report crypto nor recipient/save authority.
 
-### 2. Extended actions and conditional Undo — separate bounded slices
+### 2. Integrate current-branch Memory and sync behavior — required next
+
+Astoria must be updated for the Memory and sync behavior already implemented on this
+branch. This is integration with accepted owners, not a second Memory/sync subsystem.
+The connected read surface and advice must explain and diagnose:
+
+- the accepted Memory event registry's cloud-sync participation, metadata convergence,
+  timestamp normalization and collision-preserving event identity;
+- post-sync consolidation reconciliation, including pending/running recovery and the
+  distinction between current, cancelled and superseded cancelled packages;
+- recall behavior affected by the shared Russian key matcher and query expansion,
+  while keeping selected evidence, configured capability and historical expansion
+  distinct;
+- sync/auth/conflict state relevant to those records, without treating an empty sample,
+  local count or current manifest as proof of complete remote convergence.
+
+Use the existing event-registry, consolidation-job, sync-controller/engine and recall
+owners. Add only bounded typed projections and exact actions that those owners can
+attest. Preserve app-data consent, source-currentness, collision-safe identities,
+timestamp units, CAS/ABA fences, encrypted journals and conditional Undo. Astoria must
+not expose Memory prose, cloud credentials, raw manifests or generic sync mutation.
+Any repair or retry needs a separately confirmed native operation with an exact owner
+seam; diagnosis alone stays read-only. Verify the usable path through native Send and
+the actual connected definition set without consuming the final definition slot.
+
+### 3. Extended actions and conditional Undo — separate bounded slices
 
 Remaining scope includes roleplay session/message operations, composite deletions,
 global selections/bindings, extended Memory entry/draft/revision/index jobs,
@@ -297,7 +332,7 @@ The ordinary base is now 63; seven actual profile/compatibility cases pass. Opti
 sources/backups can exceed the ceiling and
 therefore use complete family selection, never a truncated catalog.
 
-### 3. Remaining credential-family migration
+### 4. Remaining credential-family migration
 
 The assistant vault/broker/redaction path is integrated; complete migration of
 every original secret family is not established. Inventory only the family being
