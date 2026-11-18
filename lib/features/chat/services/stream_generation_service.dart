@@ -33,6 +33,7 @@ import '../../../core/llm/idle_timeout_guard.dart';
 import '../../../core/llm/transport/call_attempt_outcome.dart';
 import '../../../core/llm/transport/chat_transport_request.dart';
 import '../../../core/llm/transport/chat_transport.dart';
+import '../../../core/llm/transport/chat_transport_completion_metadata.dart';
 import '../../../core/llm/transport/llm_call_event.dart';
 import '../../../core/llm/transport/llm_capture_context.dart';
 import '../../../core/llm/transport/transport_factory.dart';
@@ -844,6 +845,7 @@ class StreamGenerationService {
 
       final nativeSource = _nativeSource;
       var nativeRequestOpen = true;
+      ChatTransportCompletionMetadata? transportCompletion;
       final request = ChatTransportRequest.fromApiConfig(
         apiConfig,
         savedConnectionAuth: nativeSource?.savedConnectionAuth,
@@ -857,6 +859,7 @@ class StreamGenerationService {
         charName: inputs.character.name,
         userName: inputs.persona?.name ?? 'User',
         captureContext: captureContext,
+        completionMetadataSink: (metadata) => transportCompletion = metadata,
       );
       final constructedRequestFacts =
           GenerationRuntimeCallFacts.constructedRequest(request);
@@ -916,6 +919,7 @@ class StreamGenerationService {
                 streamTermination: streamTermination,
                 callbackFinishReason: callbackFinishReason,
                 contextPlanning: contextPlanningFacts,
+                transportCompletion: transportCompletion,
               ),
             ),
           ),

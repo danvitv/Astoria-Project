@@ -8,6 +8,7 @@ import 'package:glaze_flutter/core/llm/diagnostics/studio_request_budget_facts.d
 import 'package:glaze_flutter/core/llm/history_assembler.dart';
 import 'package:glaze_flutter/core/llm/studio/studio_history_limiter.dart';
 import 'package:glaze_flutter/core/llm/transport/chat_transport_request.dart';
+import 'package:glaze_flutter/core/llm/transport/chat_transport_completion_metadata.dart';
 
 void main() {
   const event = <String, Object?>{
@@ -176,6 +177,53 @@ void main() {
         'constructed_studio_request_budget_not_provider_accounting',
       );
       expect(jsonEncode(result), isNot(contains('PRIVATE_')));
+    },
+  );
+
+  test(
+    'provider-wire completion overrides no facts and exposes no raw value',
+    () {
+      final withWire = StudioRuntimeCallFacts.payload(
+        request: StudioRuntimeCallFacts.constructedRequest(request),
+        elapsedMs: 50,
+        chunkCount: 2,
+        firstChunkMs: 10,
+        maxChunkGapMs: 20,
+        contentOffset: 8,
+        reasoningOffset: 5,
+        completionReason: 'complete',
+        transportCompletion: ChatTransportCompletionMetadata.provider(
+          wireProtocol: 'anthropic_messages',
+          finishReasonSource: 'anthropic_stop_reason',
+          termination: 'message_stop',
+          finishReason: 'max_tokens',
+        ),
+      );
+      final result = RecordedStudioRuntime.fromColumns({
+        ...completion,
+        'payload_json': jsonEncode(withWire),
+      })!;
+      final call = result['callFacts'] as Map<String, Object?>;
+      expect(call['providerFinishReason'], 'length');
+      expect(
+        call['completionMetadataSource'],
+        'provider_wire_parser_finite_projection',
+      );
+      expect(
+        call['providerWireNormalization'],
+        'observed_by_anthropic_messages',
+      );
+      expect(jsonEncode(result), isNot(contains('max_tokens')));
+
+      final mismatched =
+          jsonDecode(jsonEncode(withWire)) as Map<String, dynamic>;
+      final stream =
+          mismatched['streamObservation'] as Map<String, dynamic>;
+      stream['wireFinishReasonSource'] = 'gemini_finish_reason';
+      expect(
+        StudioRuntimeCallFacts.fromSavedPayload(jsonEncode(mismatched)),
+        isNull,
+      );
     },
   );
 

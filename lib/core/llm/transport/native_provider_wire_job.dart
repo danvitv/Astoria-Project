@@ -241,6 +241,10 @@ final class _NativeWireJob {
       });
       check();
       completed = true;
+      ChatTransportCompletionCapture.record(
+        projection.completionMetadata,
+        sink: request.completionMetadataSink,
+      );
       onComplete?.call(text, reasoning, rawResponseJson: raw);
       check();
     } on NativeProviderTransportException catch (error) {

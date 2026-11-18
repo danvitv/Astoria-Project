@@ -94,6 +94,7 @@ final class MemoryCustomApiTransport implements ChatTransport {
             omitReasoningEffort: request.omitReasoningEffort,
             requestReasoning: request.requestReasoning,
             receiveTimeoutMs: request.receiveTimeoutMs,
+            completionMetadataSink: request.completionMetadataSink,
           ),
           cancelToken: token,
           onUpdate: (text, reasoning) {

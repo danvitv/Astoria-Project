@@ -155,6 +155,7 @@ final class PrivateTextRequestPlan {
       receiveTimeoutMs: 120000,
       sessionIdMode: 'off',
       useSystemInstruction: input.useSystemInstruction,
+      completionMetadataSink: input.completionMetadataSink,
     );
     this.protocol = protocol;
     recipient = endpoint;

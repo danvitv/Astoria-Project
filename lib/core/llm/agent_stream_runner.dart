@@ -12,6 +12,7 @@ import 'reasoning_stripper.dart';
 import 'stream_accumulator.dart';
 import 'transport/call_attempt_outcome.dart';
 import 'transport/chat_transport.dart';
+import 'transport/chat_transport_completion_metadata.dart';
 import 'transport/chat_stream_exception.dart';
 import 'transport/chat_transport_request.dart';
 import 'transport/transport_factory.dart';
@@ -145,6 +146,7 @@ class AgentStreamRunner {
 
     CancelToken? agentCancelToken;
     var nativeRequestOpen = true;
+    ChatTransportCompletionMetadata? transportCompletion;
     final request = buildRequest(
       agent: agent,
       messages: messages,
@@ -161,6 +163,7 @@ class AgentStreamRunner {
           nativeRequestOpen &&
           !cancelToken.isCancelled &&
           agentCancelToken?.isCancelled != true,
+      completionMetadataSink: (metadata) => transportCompletion = metadata,
     );
     // Snapshot only the ACTUAL constructed request, before a transport can
     // reshape/normalize it. Native authority never enables raw request capture.
@@ -246,6 +249,7 @@ class AgentStreamRunner {
                   streamTermination: streamTermination,
                   callbackFinishReason: providerFinishReason,
                   studioRequestBudget: studioRequestBudget,
+                  transportCompletion: transportCompletion,
                 ),
         );
       }
@@ -597,6 +601,8 @@ class AgentStreamRunner {
     Map<String, dynamic>? responseJsonSchema,
     LlmCaptureContext? captureContext,
     bool Function()? isCurrent,
+    void Function(ChatTransportCompletionMetadata metadata)?
+    completionMetadataSink,
   }) {
     final hasInlineReasoningTags =
         resolved.reasoningTagStart?.isNotEmpty == true &&
@@ -657,6 +663,7 @@ class AgentStreamRunner {
             sessionId: sessionId,
             isFinalResponse: isFinalResponse,
           ),
+      completionMetadataSink: completionMetadataSink,
     );
   }
 }

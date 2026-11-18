@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/llm/transport/chat_transport_request.dart';
+import 'package:glaze_flutter/core/llm/transport/chat_transport_completion_metadata.dart';
 import 'package:glaze_flutter/core/llm/transport/llm_protocol.dart';
 import 'package:glaze_flutter/core/llm/transport/openai_chat_transport.dart';
 import 'package:glaze_flutter/core/models/extra_request_parameter.dart';
@@ -22,12 +23,15 @@ ChatTransportRequest _req({
   bool omitFrequencyPenalty = false,
   bool omitPresencePenalty = false,
   bool requestReasoning = false,
+  bool stream = true,
   String reasoningEffort = 'medium',
   List<Map<String, dynamic>> messages = const [
     {'role': 'user', 'content': 'hi'},
   ],
   List<ExtraRequestParameter> extraRequestParameters = const [],
   Map<String, dynamic>? responseJsonSchema,
+  void Function(ChatTransportCompletionMetadata metadata)?
+  completionMetadataSink,
 }) {
   return ChatTransportRequest(
     endpoint: endpoint,
@@ -40,6 +44,7 @@ ChatTransportRequest _req({
     topK: topK,
     frequencyPenalty: frequencyPenalty,
     presencePenalty: presencePenalty,
+    stream: stream,
     omitTopK: omitTopK,
     omitFrequencyPenalty: omitFrequencyPenalty,
     omitPresencePenalty: omitPresencePenalty,
@@ -50,6 +55,7 @@ ChatTransportRequest _req({
     receiveTimeoutMs: receiveTimeoutMs,
     responseJsonSchema: responseJsonSchema,
     extraRequestParameters: extraRequestParameters,
+    completionMetadataSink: completionMetadataSink,
   );
 }
 
@@ -64,7 +70,9 @@ class _RecordingAdapter implements HttpClientAdapter {
   ) async {
     this.options = options;
     return ResponseBody.fromBytes(
-      utf8.encode('{"choices":[{"message":{"content":"ok"}}]}'),
+      utf8.encode(
+        '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}',
+      ),
       200,
       headers: {
         Headers.contentTypeHeader: ['application/json'],
@@ -96,13 +104,22 @@ void main() {
     final dio = Dio(BaseOptions(receiveTimeout: const Duration(seconds: 120)))
       ..httpClientAdapter = adapter;
     final transport = OpenAiChatTransport(dio: dio);
+    ChatTransportCompletionMetadata? completion;
 
     await transport.stream(
-      request: _req(receiveTimeoutMs: 0),
+      request: _req(
+        receiveTimeoutMs: 0,
+        stream: false,
+        completionMetadataSink: (metadata) => completion = metadata,
+      ),
       onComplete: (_, _, {rawResponseJson}) {},
     );
 
     expect(adapter.options?.receiveTimeout, Duration.zero);
+    expect(completion?.wireProtocol, 'openai_chat');
+    expect(completion?.finishReason, 'stop');
+    expect(completion?.finishReasonSource, 'openai_finish_reason');
+    expect(completion?.termination, 'one_shot_response');
   });
 
   group('session_id', () {

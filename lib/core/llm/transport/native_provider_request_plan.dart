@@ -229,6 +229,7 @@ ChatTransportRequest _nativeKeyedCopy(
   // Retain metadata so the UNCHANGED private text plan can refuse capture input.
   // The new general wire never installs diagnostic capture behavior.
   captureContext: input.captureContext,
+  completionMetadataSink: input.completionMetadataSink,
 );
 
 ChatTransportRequest _nativeOpenRouterCache(ChatTransportRequest request) {
@@ -296,6 +297,7 @@ ChatTransportRequest _nativeCacheOffCopy(
   userName: r.userName,
   responseJsonSchema: r.responseJsonSchema,
   useSystemInstruction: r.useSystemInstruction,
+  completionMetadataSink: r.completionMetadataSink,
 );
 
 Object? _nativeJson(String input) {

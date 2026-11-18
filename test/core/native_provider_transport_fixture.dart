@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:glaze_flutter/core/llm/transport/chat_transport.dart';
 import 'package:glaze_flutter/core/llm/transport/chat_transport_request.dart';
+import 'package:glaze_flutter/core/llm/transport/chat_transport_completion_metadata.dart';
 import 'package:glaze_flutter/core/llm/transport/native_provider_transport.dart';
 
 import 'native_provider_fixture.dart';
@@ -194,6 +195,8 @@ final class NativeTransportHarness {
     List<Map<String, dynamic>>? tools,
     List<Map<String, dynamic>>? messages,
     SavedConnectionAuth? auth,
+    void Function(ChatTransportCompletionMetadata metadata)?
+    completionMetadataSink,
   }) => ChatTransportRequest(
     endpoint: endpoint ?? core.row.endpoint,
     apiKey: key ?? '',
@@ -214,6 +217,7 @@ final class NativeTransportHarness {
     showNativeReasoning: true,
     responseJsonSchema: schema,
     tools: tools,
+    completionMetadataSink: completionMetadataSink,
   );
 
   Future<void> run({

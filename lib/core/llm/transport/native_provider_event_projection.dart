@@ -17,6 +17,9 @@ final class _NativeEventProjection {
   final _responseReasoning = <String, StringBuffer>{};
   int _reasoningCharacters = 0;
   bool _chatFinished = false;
+  Object? _finishReason;
+  String? _finishReasonSource;
+  String? _termination;
 
   _NativeProjectionDelta frame(_NativeFrame frame) {
     _nativeRequire(!decoder.terminal);
@@ -27,6 +30,7 @@ final class _NativeEventProjection {
       } on PrivateTextFailure catch (failure) {
         _nativeFail(_privateReason(failure.reason));
       }
+      _termination = 'done_marker';
       return const _NativeProjectionDelta('', '');
     }
     final object = _nativeJson(frame.payload);
@@ -48,6 +52,7 @@ final class _NativeEventProjection {
     } on PrivateTextFailure catch (failure) {
       _nativeFail(_privateReason(failure.reason));
     }
+    _observeCompletion(event);
     final text = StringBuffer();
     for (final item in projected) {
       if (protocol == LlmProtocol.anthropic) {
@@ -163,6 +168,78 @@ final class _NativeEventProjection {
       NativeProviderTransportReason.unexpectedEof,
     );
     decoder.terminal = true;
+    _termination ??= 'stream_eof_after_output';
+  }
+
+  ChatTransportCompletionMetadata get completionMetadata =>
+      ChatTransportCompletionMetadata.provider(
+        wireProtocol: switch (protocol) {
+          LlmProtocol.anthropic => 'anthropic_messages',
+          LlmProtocol.gemini => 'gemini_generate_content',
+          LlmProtocol.openaiResponses => 'openai_responses',
+          _ => 'openai_chat',
+        },
+        finishReasonSource:
+            _finishReasonSource ??
+            switch (protocol) {
+              LlmProtocol.anthropic => 'anthropic_stop_reason_absent',
+              LlmProtocol.gemini => 'gemini_finish_reason_absent',
+              LlmProtocol.openaiResponses => 'responses_status_absent',
+              _ => 'openai_finish_reason_absent',
+            },
+        termination: _termination ?? 'stream_eof_after_output',
+        finishReason: _finishReason,
+      );
+
+  void _observeCompletion(Map<String, dynamic> event) {
+    if (protocol == LlmProtocol.anthropic) {
+      if (event['type'] == 'message_delta') {
+        final delta = event['delta'];
+        if (delta is Map && delta['stop_reason'] != null) {
+          _finishReason = delta['stop_reason'];
+          _finishReasonSource = 'anthropic_stop_reason';
+        }
+      } else if (event['type'] == 'message_stop') {
+        _termination = 'message_stop';
+      }
+      return;
+    }
+    if (protocol == LlmProtocol.gemini) {
+      final candidates = event['candidates'];
+      if (candidates is List && candidates.isNotEmpty) {
+        final candidate = candidates.first;
+        if (candidate is Map && candidate['finishReason'] != null) {
+          _finishReason = candidate['finishReason'];
+          _finishReasonSource = 'gemini_finish_reason';
+        }
+      }
+      return;
+    }
+    if (protocol == LlmProtocol.openaiResponses) {
+      if (event['type'] == 'response.completed') {
+        _termination = 'response_completed';
+        final response = event['response'];
+        if (response is Map) {
+          final incomplete = response['incomplete_details'];
+          if (incomplete is Map && incomplete['reason'] != null) {
+            _finishReason = incomplete['reason'];
+            _finishReasonSource = 'responses_incomplete_reason';
+          } else if (response['status'] != null) {
+            _finishReason = response['status'];
+            _finishReasonSource = 'responses_status';
+          }
+        }
+      }
+      return;
+    }
+    final choices = event['choices'];
+    if (choices is List && choices.isNotEmpty) {
+      final choice = choices.first;
+      if (choice is Map && choice['finish_reason'] != null) {
+        _finishReason = choice['finish_reason'];
+        _finishReasonSource = 'openai_finish_reason';
+      }
+    }
   }
 }
 

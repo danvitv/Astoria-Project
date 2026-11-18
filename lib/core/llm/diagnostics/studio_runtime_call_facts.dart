@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../transport/chat_transport_request.dart';
+import '../transport/chat_transport_completion_metadata.dart';
 import 'generation_context_planning_facts.dart';
 import 'studio_request_budget_facts.dart';
 
@@ -63,6 +64,43 @@ abstract final class StudioRuntimeCallFacts {
     'content_filter',
     'tool_calls',
     'function_call',
+  };
+  static const _wireProtocols = {
+    'openai_chat',
+    'openai_responses',
+    'anthropic_messages',
+    'gemini_generate_content',
+  };
+  static const _wireFinishReasons = {
+    'stop',
+    'length',
+    'content_filter',
+    'tool_calls',
+    'function_call',
+    'stop_sequence',
+    'refusal',
+    'pause_turn',
+    'other',
+  };
+  static const _wireReasonSources = {
+    'openai_finish_reason',
+    'openai_finish_reason_absent',
+    'anthropic_stop_reason',
+    'anthropic_stop_reason_absent',
+    'gemini_finish_reason',
+    'gemini_finish_reason_absent',
+    'responses_status',
+    'responses_incomplete_reason',
+    'responses_status_absent',
+  };
+  static const _wireTerminations = {
+    'done_marker',
+    'finish_reason_eof',
+    'message_stop',
+    'response_completed',
+    'stream_eof_after_output',
+    'one_shot_response',
+    'one_shot_sse_body',
   };
 
   static Map<String, Object?> constructedRequest(ChatTransportRequest request) {
@@ -147,6 +185,7 @@ abstract final class StudioRuntimeCallFacts {
     String? callbackFinishReason,
     Map<String, Object?>? contextPlanning,
     Map<String, Object?>? studioRequestBudget,
+    ChatTransportCompletionMetadata? transportCompletion,
   }) {
     if (contextPlanning != null && studioRequestBudget != null) return const {};
     final candidate = <String, Object?>{
@@ -170,6 +209,12 @@ abstract final class StudioRuntimeCallFacts {
             : 'error',
         'streamTermination': termination(streamTermination),
         'callbackFinishReason': finishReason(callbackFinishReason),
+        if (transportCompletion != null) ...{
+          'wireProtocol': transportCompletion.wireProtocol,
+          'wireFinishReason': transportCompletion.finishReason,
+          'wireFinishReasonSource': transportCompletion.finishReasonSource,
+          'wireTermination': transportCompletion.termination,
+        },
       },
       'contextPlanning': ?contextPlanning,
       'studioRequestBudget': ?studioRequestBudget,
@@ -270,8 +315,17 @@ abstract final class StudioRuntimeCallFacts {
             'completionBranch': _completions,
             'streamTermination': _terminations,
             'callbackFinishReason': _finishReasons,
+            'wireProtocol': _wireProtocols,
+            'wireFinishReason': _wireFinishReasons,
+            'wireFinishReasonSource': _wireReasonSources,
+            'wireTermination': _wireTerminations,
           },
-          const {'firstChunkMs', 'streamTermination', 'callbackFinishReason'},
+          const {
+            'firstChunkMs',
+            'streamTermination',
+            'callbackFinishReason',
+            'wireFinishReason',
+          },
         )) {
       return null;
     }
@@ -291,12 +345,18 @@ abstract final class StudioRuntimeCallFacts {
     }
     if (request.length != requiredRequest.length ||
         !request.keys.toSet().containsAll(requiredRequest) ||
-        stream.length != 9 ||
+        (stream.length != 9 && stream.length != 13) ||
         !stream.keys.toSet().containsAll({
           ..._streamNumbers.keys,
           'completionBranch',
           'streamTermination',
           'callbackFinishReason',
+          if (stream.length == 13) ...{
+            'wireProtocol',
+            'wireFinishReason',
+            'wireFinishReasonSource',
+            'wireTermination',
+          },
         })) {
       return null;
     }
@@ -319,7 +379,9 @@ abstract final class StudioRuntimeCallFacts {
                 65536) ||
         (stream['completionBranch'] != 'complete' &&
             (stream['streamTermination'] != null ||
-                stream['callbackFinishReason'] != null))) {
+                stream['callbackFinishReason'] != null ||
+                stream.length == 13)) ||
+        (stream.length == 13 && !_wireMetadataConsistent(stream))) {
       return null;
     }
     return {
@@ -345,9 +407,15 @@ abstract final class StudioRuntimeCallFacts {
       },
       'streamEvidence': 'original_callback_counts_and_elapsed_time',
       'lengthUnit': 'utf16_code_units_not_tokens',
-      'completionMetadataSource': 'transport_callback_may_be_synthetic',
-      'providerFinishReason': 'unknown_not_attested',
-      'providerWireNormalization': 'unknown_not_observed',
+      'completionMetadataSource': stream.length == 13
+          ? 'provider_wire_parser_finite_projection'
+          : 'transport_callback_may_be_synthetic',
+      'providerFinishReason': stream.length == 13
+          ? stream['wireFinishReason'] ?? 'not_reported_by_provider'
+          : 'unknown_not_attested',
+      'providerWireNormalization': stream.length == 13
+          ? 'observed_by_${stream['wireProtocol']}'
+          : 'unknown_not_observed',
       'providerSamplerBehavior': 'unknown_not_observed',
     };
   }
@@ -387,5 +455,21 @@ abstract final class StudioRuntimeCallFacts {
       }
     }
     return true;
+  }
+
+  static bool _wireMetadataConsistent(Map<String, Object?> stream) {
+    final protocol = stream['wireProtocol'];
+    final source = stream['wireFinishReasonSource'];
+    final finish = stream['wireFinishReason'];
+    if (source is! String || (finish == null) != source.endsWith('_absent')) {
+      return false;
+    }
+    return switch (protocol) {
+      'openai_chat' => source.startsWith('openai_'),
+      'openai_responses' => source.startsWith('responses_'),
+      'anthropic_messages' => source.startsWith('anthropic_'),
+      'gemini_generate_content' => source.startsWith('gemini_'),
+      _ => false,
+    };
   }
 }

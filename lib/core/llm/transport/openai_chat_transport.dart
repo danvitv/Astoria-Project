@@ -9,6 +9,7 @@ import '../converters/reasoning_effort.dart';
 import '../converters/structured_response.dart';
 import 'chat_stream_exception.dart';
 import 'chat_transport.dart';
+import 'chat_transport_completion_metadata.dart';
 import 'chat_transport_request.dart';
 import 'endpoint_normalizer.dart';
 import 'endpoint_resolution_cache.dart';
@@ -130,6 +131,7 @@ class OpenAiChatTransport implements ChatTransport {
             omitReasoning: omitReasoning,
             receiveTimeoutMs: request.receiveTimeoutMs,
             unwrapStructured: request.responseJsonSchema != null,
+            completionMetadataSink: request.completionMetadataSink,
           );
         } else {
           await _streamResponse(
@@ -141,6 +143,7 @@ class OpenAiChatTransport implements ChatTransport {
             onComplete,
             omitReasoning: omitReasoning,
             receiveTimeoutMs: request.receiveTimeoutMs,
+            completionMetadataSink: request.completionMetadataSink,
           );
         }
         return;
@@ -247,6 +250,8 @@ class OpenAiChatTransport implements ChatTransport {
     ChatTransportOnComplete? onComplete, {
     bool omitReasoning = false,
     int? receiveTimeoutMs,
+    void Function(ChatTransportCompletionMetadata metadata)?
+    completionMetadataSink,
   }) async {
     final response = await _dio.post<ResponseBody>(
       url,
@@ -436,6 +441,17 @@ class OpenAiChatTransport implements ChatTransport {
     if (!doneReceived && buffer.isNotEmpty) consumeLine(buffer);
     if (cancelToken?.isCancelled == true) return;
     if (doneReceived || finishReason != null) {
+      ChatTransportCompletionCapture.record(
+        ChatTransportCompletionMetadata.provider(
+          wireProtocol: 'openai_chat',
+          finishReasonSource: finishReason == null
+              ? 'openai_finish_reason_absent'
+              : 'openai_finish_reason',
+          termination: doneReceived ? 'done_marker' : 'finish_reason_eof',
+          finishReason: finishReason,
+        ),
+        sink: completionMetadataSink,
+      );
       onComplete?.call(
         fullText,
         fullReasoning.isNotEmpty ? fullReasoning : null,
@@ -464,6 +480,8 @@ class OpenAiChatTransport implements ChatTransport {
     bool omitReasoning = false,
     int? receiveTimeoutMs,
     bool unwrapStructured = false,
+    void Function(ChatTransportCompletionMetadata metadata)?
+    completionMetadataSink,
   }) async {
     final response = await _dio.post<dynamic>(
       url,
@@ -498,6 +516,14 @@ class OpenAiChatTransport implements ChatTransport {
       } catch (_) {}
       if (data == null && trimmed.contains('data:')) {
         final agg = _aggregateSseString(trimmed);
+        ChatTransportCompletionCapture.record(
+          ChatTransportCompletionMetadata.provider(
+            wireProtocol: 'openai_chat',
+            finishReasonSource: 'openai_finish_reason_absent',
+            termination: 'one_shot_sse_body',
+          ),
+          sink: completionMetadataSink,
+        );
         onComplete?.call(
           agg.$1,
           (omitReasoning || agg.$2.isEmpty) ? null : agg.$2,
@@ -535,6 +561,20 @@ class OpenAiChatTransport implements ChatTransport {
     final unwrapped = unwrapStructured
         ? unwrapStructuredResponse(content)
         : content;
+    ChatTransportCompletionCapture.record(
+      ChatTransportCompletionMetadata.provider(
+        wireProtocol: 'openai_chat',
+        finishReasonSource:
+            choice is Map<String, dynamic> && choice['finish_reason'] != null
+            ? 'openai_finish_reason'
+            : 'openai_finish_reason_absent',
+        termination: 'one_shot_response',
+        finishReason: choice is Map<String, dynamic>
+            ? choice['finish_reason']
+            : null,
+      ),
+      sink: completionMetadataSink,
+    );
     onComplete?.call(
       unwrapped,
       reasoning,

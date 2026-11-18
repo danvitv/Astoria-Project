@@ -155,7 +155,8 @@ The structured result must distinguish:
 - proposed, confirmed and actually completed repair attempts.
 
 Connection diagnosis needs recorded protocol/HTTP/timeout evidence, not a key count.
-Generation diagnosis still needs provider-wire evidence beyond linked saved outcomes.
+Generation diagnosis now retains a finite provider-wire completion projection for
+linked ordinary and Studio calls.
 Current saved Studio block rules use the
 real codec/validator, and saved agent topology uses the actual phase splitter and
 ontology-declared requirements through native sources. These are separate limited
@@ -173,8 +174,10 @@ whole-unit current redaction. The ordinary main-call unit now also records its
 prompt-builder context window/output reserve, prompt/history budgets, estimator mode,
 history message and UTF-16 counts before/after reduction, cutoff count and finite trim
 reason. It carries no authored text or message ids and is a local estimate, not provider
-token accounting. Provider wire normalization, actual token use, sampler behavior and
-provider finish reasons remain unknown, not inferred from callbacks that may be synthetic.
+token accounting. The OpenAI Chat/Responses, Anthropic Messages and Gemini protocol
+parsers now attach only their finite wire family, termination, normalized finish reason
+and reason source. Missing fields remain unknown, and callback payloads do not gain
+provider authority. Actual token use and sampler behavior remain unknown.
 Each native Studio transport event now also records its configured context window,
 output reserve, text-only estimated request occupancy and remaining budget. When the
 actual routed prompt emits chat history, it additionally records the exact local

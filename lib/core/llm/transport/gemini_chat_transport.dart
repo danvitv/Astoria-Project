@@ -9,6 +9,7 @@ import '../converters/gemini_messages.dart';
 import '../converters/structured_response.dart';
 import '../converters/thinking_budget.dart';
 import 'chat_transport.dart';
+import 'chat_transport_completion_metadata.dart';
 import 'chat_transport_request.dart';
 import 'endpoint_normalizer.dart';
 import 'extra_request_parameters.dart';
@@ -204,6 +205,7 @@ class GeminiChatTransport implements ChatTransport {
             omitReasoning:
                 !(request.showNativeReasoning ?? !request.omitReasoning),
             receiveTimeoutMs: request.receiveTimeoutMs,
+            completionMetadataSink: request.completionMetadataSink,
           );
         } else {
           await _oneShotResponse(
@@ -216,6 +218,7 @@ class GeminiChatTransport implements ChatTransport {
                 !(request.showNativeReasoning ?? !request.omitReasoning),
             receiveTimeoutMs: request.receiveTimeoutMs,
             unwrapStructured: request.responseJsonSchema != null,
+            completionMetadataSink: request.completionMetadataSink,
           );
         }
         return; // success — no retry needed
@@ -247,6 +250,8 @@ class GeminiChatTransport implements ChatTransport {
     ChatTransportOnComplete? onComplete,
     bool omitReasoning = false,
     int? receiveTimeoutMs,
+    void Function(ChatTransportCompletionMetadata metadata)?
+    completionMetadataSink,
   }) async {
     final response = await _dio.post<ResponseBody>(
       url,
@@ -273,6 +278,7 @@ class GeminiChatTransport implements ChatTransport {
     var fullReasoning = '';
     Map<String, dynamic>? lastUsage;
     String? lastRawPayload;
+    String? finishReason;
     var anyDelta = false;
 
     final completer = Completer<void>();
@@ -309,6 +315,8 @@ class GeminiChatTransport implements ChatTransport {
             final json = jsonDecode(payload) as Map<String, dynamic>;
             final candidates = json['candidates'];
             if (candidates is List && candidates.isNotEmpty) {
+              final reason = candidates[0]['finishReason'];
+              if (reason is String && reason.isNotEmpty) finishReason = reason;
               final content = candidates[0]['content'];
               final parts = content is Map ? content['parts'] : null;
               if (parts is List) {
@@ -364,6 +372,17 @@ class GeminiChatTransport implements ChatTransport {
       );
     }
 
+    ChatTransportCompletionCapture.record(
+      ChatTransportCompletionMetadata.provider(
+        wireProtocol: 'gemini_generate_content',
+        finishReasonSource: finishReason == null
+            ? 'gemini_finish_reason_absent'
+            : 'gemini_finish_reason',
+        termination: 'stream_eof_after_output',
+        finishReason: finishReason,
+      ),
+      sink: completionMetadataSink,
+    );
     onComplete?.call(
       fullText,
       fullReasoning.isEmpty ? null : fullReasoning,
@@ -394,6 +413,8 @@ class GeminiChatTransport implements ChatTransport {
     bool omitReasoning = false,
     int? receiveTimeoutMs,
     bool unwrapStructured = false,
+    void Function(ChatTransportCompletionMetadata metadata)?
+    completionMetadataSink,
   }) async {
     final response = await _dio.post<dynamic>(
       url,
@@ -454,6 +475,23 @@ class GeminiChatTransport implements ChatTransport {
     final finalText = unwrapStructured
         ? unwrapStructuredResponse(textBuf.toString())
         : textBuf.toString();
+    final firstCandidate = candidates is List && candidates.isNotEmpty
+        ? candidates.first
+        : null;
+    final finishReason = firstCandidate is Map
+        ? firstCandidate['finishReason']
+        : null;
+    ChatTransportCompletionCapture.record(
+      ChatTransportCompletionMetadata.provider(
+        wireProtocol: 'gemini_generate_content',
+        finishReasonSource: finishReason == null
+            ? 'gemini_finish_reason_absent'
+            : 'gemini_finish_reason',
+        termination: 'one_shot_response',
+        finishReason: finishReason,
+      ),
+      sink: completionMetadataSink,
+    );
     onComplete?.call(
       finalText,
       reasoningBuf.isEmpty ? null : reasoningBuf.toString(),

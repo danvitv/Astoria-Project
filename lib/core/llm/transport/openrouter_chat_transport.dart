@@ -116,6 +116,7 @@ class OpenRouterChatTransport implements ChatTransport {
       responseJsonSchema: input.responseJsonSchema,
       extraRequestParameters: input.extraRequestParameters,
       captureContext: input.captureContext,
+      completionMetadataSink: input.completionMetadataSink,
     );
   }
 

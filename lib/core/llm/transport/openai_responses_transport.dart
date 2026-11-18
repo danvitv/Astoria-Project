@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import '../../utils/error_format.dart';
 import '../converters/reasoning_effort.dart';
 import 'chat_transport.dart';
+import 'chat_transport_completion_metadata.dart';
 import 'chat_transport_request.dart';
 import 'endpoint_normalizer.dart';
 import 'extra_request_parameters.dart';
@@ -190,6 +191,8 @@ class OpenAiResponsesTransport implements ChatTransport {
     var text = '';
     var reasoning = '';
     String? rawResponseJson;
+    Object? responseStatus;
+    Object? incompleteReason;
     await for (final chunk in responseBody.stream) {
       if (cancelToken?.isCancelled == true) return;
       buffer += utf8.decode(chunk, allowMalformed: true);
@@ -216,6 +219,11 @@ class OpenAiResponsesTransport implements ChatTransport {
             }
           } else if (type == 'response.completed') {
             final completed = event['response'];
+            if (completed is Map) {
+              responseStatus = completed['status'];
+              final details = completed['incomplete_details'];
+              if (details is Map) incompleteReason = details['reason'];
+            }
             rawResponseJson = jsonEncode(completed ?? event);
           }
         } catch (_) {}
@@ -229,6 +237,21 @@ class OpenAiResponsesTransport implements ChatTransport {
         message: 'Responses stream ended without output',
       );
     }
+    ChatTransportCompletionCapture.record(
+      ChatTransportCompletionMetadata.provider(
+        wireProtocol: 'openai_responses',
+        finishReasonSource: incompleteReason != null
+            ? 'responses_incomplete_reason'
+            : responseStatus != null
+            ? 'responses_status'
+            : 'responses_status_absent',
+        termination: responseStatus != null
+            ? 'response_completed'
+            : 'stream_eof_after_output',
+        finishReason: incompleteReason ?? responseStatus,
+      ),
+      sink: request.completionMetadataSink,
+    );
     onComplete?.call(
       text,
       reasoning.isEmpty ? null : reasoning,
@@ -270,6 +293,21 @@ class OpenAiResponsesTransport implements ChatTransport {
         ? raw
         : jsonDecode(raw as String) as Map<String, dynamic>;
     final parsed = _parseOutput(data);
+    final incomplete = data['incomplete_details'];
+    final incompleteReason = incomplete is Map ? incomplete['reason'] : null;
+    ChatTransportCompletionCapture.record(
+      ChatTransportCompletionMetadata.provider(
+        wireProtocol: 'openai_responses',
+        finishReasonSource: incompleteReason != null
+            ? 'responses_incomplete_reason'
+            : data['status'] != null
+            ? 'responses_status'
+            : 'responses_status_absent',
+        termination: 'one_shot_response',
+        finishReason: incompleteReason ?? data['status'],
+      ),
+      sink: request.completionMetadataSink,
+    );
     onComplete?.call(
       parsed.$1,
       parsed.$2.isEmpty ? null : parsed.$2,

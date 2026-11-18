@@ -2,6 +2,7 @@ import '../../models/extra_request_parameter.dart';
 import '../../models/api_config.dart';
 import '../../credentials/native_provider_credentials.dart';
 import 'llm_capture_context.dart';
+import 'chat_transport_completion_metadata.dart';
 
 /// Provider-neutral input for [ChatTransport.stream].
 ///
@@ -113,6 +114,11 @@ class ChatTransportRequest {
   /// Diagnostic-only identity. It is never serialized into a provider body.
   final LlmCaptureContext? captureContext;
 
+  /// Runtime-only finite completion observation. Never serialized into a
+  /// provider request or persisted directly.
+  final void Function(ChatTransportCompletionMetadata metadata)?
+  completionMetadataSink;
+
   /// Whether `session_id` belongs in the body for an OpenAI-shaped request.
   /// The setting is a toggle — `'always'` or `'off'`. `'openrouter'` is the
   /// retired default (send only to openrouter.ai, where it drives sticky
@@ -167,6 +173,7 @@ class ChatTransportRequest {
     this.useSystemInstruction = true,
     this.extraRequestParameters = const [],
     this.captureContext,
+    this.completionMetadataSink,
   });
 
   /// Maps the request-level options from [apiConfig] while allowing callers to
@@ -186,6 +193,8 @@ class ChatTransportRequest {
     LlmCaptureContext? captureContext,
     SavedConnectionAuth? savedConnectionAuth,
     bool Function()? nativeSourceIsCurrent,
+    void Function(ChatTransportCompletionMetadata metadata)?
+    completionMetadataSink,
   }) => ChatTransportRequest(
     endpoint: apiConfig.endpoint,
     savedConnectionId: apiConfig.id,
@@ -226,6 +235,7 @@ class ChatTransportRequest {
     useSystemInstruction: apiConfig.useSystemInstruction,
     extraRequestParameters: apiConfig.extraRequestParameters,
     captureContext: captureContext,
+    completionMetadataSink: completionMetadataSink,
   );
 
   /// Same request with a rewritten conversation. Every other option is carried
@@ -275,5 +285,6 @@ class ChatTransportRequest {
     useSystemInstruction: useSystemInstruction,
     extraRequestParameters: extraRequestParameters,
     captureContext: captureContext,
+    completionMetadataSink: completionMetadataSink,
   );
 }

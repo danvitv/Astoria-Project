@@ -12,6 +12,7 @@ import '../converters/prompt_post_processing.dart';
 import '../converters/structured_response.dart';
 import 'anthropic_chat_transport.dart';
 import 'chat_transport.dart';
+import 'chat_transport_completion_metadata.dart';
 import 'chat_transport_request.dart';
 import 'gemini_chat_transport.dart';
 import 'llm_protocol.dart';

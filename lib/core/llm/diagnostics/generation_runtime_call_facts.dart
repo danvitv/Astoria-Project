@@ -1,4 +1,5 @@
 import '../transport/chat_transport_request.dart';
+import '../transport/chat_transport_completion_metadata.dart';
 import '../context_calculator.dart';
 import 'generation_context_planning_facts.dart';
 import 'studio_runtime_call_facts.dart';
@@ -23,6 +24,7 @@ abstract final class GenerationRuntimeCallFacts {
     String? streamTermination,
     String? callbackFinishReason,
     Map<String, Object?>? contextPlanning,
+    ChatTransportCompletionMetadata? transportCompletion,
   }) => StudioRuntimeCallFacts.payload(
     request: request,
     elapsedMs: elapsedMs,
@@ -35,6 +37,7 @@ abstract final class GenerationRuntimeCallFacts {
     streamTermination: streamTermination,
     callbackFinishReason: callbackFinishReason,
     contextPlanning: contextPlanning,
+    transportCompletion: transportCompletion,
   );
 
   static Map<String, Object?> contextPlanning({

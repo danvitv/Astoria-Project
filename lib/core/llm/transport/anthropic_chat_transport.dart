@@ -9,6 +9,7 @@ import '../converters/claude_messages.dart';
 import '../converters/cache_breakpoint_marker.dart';
 import '../converters/thinking_budget.dart';
 import 'chat_transport.dart';
+import 'chat_transport_completion_metadata.dart';
 import 'chat_transport_request.dart';
 import 'endpoint_normalizer.dart';
 import 'endpoint_resolution_cache.dart';
@@ -119,6 +120,7 @@ class AnthropicChatTransport implements ChatTransport {
             onComplete: onComplete,
             omitReasoning: omitReasoning,
             receiveTimeoutMs: request.receiveTimeoutMs,
+            completionMetadataSink: request.completionMetadataSink,
           );
         } else {
           await _oneShotResponse(
@@ -130,6 +132,7 @@ class AnthropicChatTransport implements ChatTransport {
             onComplete: onComplete,
             omitReasoning: omitReasoning,
             receiveTimeoutMs: request.receiveTimeoutMs,
+            completionMetadataSink: request.completionMetadataSink,
           );
         }
         return;
@@ -306,6 +309,8 @@ class AnthropicChatTransport implements ChatTransport {
     ChatTransportOnComplete? onComplete,
     bool omitReasoning = false,
     int? receiveTimeoutMs,
+    void Function(ChatTransportCompletionMetadata metadata)?
+    completionMetadataSink,
   }) async {
     final response = await _dio.post<ResponseBody>(
       url,
@@ -336,6 +341,7 @@ class AnthropicChatTransport implements ChatTransport {
     final usage = <String, dynamic>{};
     var doneReceived = false;
     String? lastRawJsonPayload;
+    String? stopReason;
 
     final completer = Completer<void>();
     StreamSubscription<List<int>>? subscription;
@@ -391,10 +397,25 @@ class AnthropicChatTransport implements ChatTransport {
                 }
               }
             } else if (type == 'message_delta') {
+              final delta = json['delta'];
+              if (delta is Map && delta['stop_reason'] is String) {
+                stopReason = delta['stop_reason'] as String;
+              }
               final u = json['usage'] as Map<String, dynamic>?;
               if (u != null) usage.addAll(u);
             } else if (type == 'message_stop') {
               if (cancelToken == null || !cancelToken.isCancelled) {
+                ChatTransportCompletionCapture.record(
+                  ChatTransportCompletionMetadata.provider(
+                    wireProtocol: 'anthropic_messages',
+                    finishReasonSource: stopReason == null
+                        ? 'anthropic_stop_reason_absent'
+                        : 'anthropic_stop_reason',
+                    termination: 'message_stop',
+                    finishReason: stopReason,
+                  ),
+                  sink: completionMetadataSink,
+                );
                 onComplete?.call(
                   fullText,
                   fullReasoning.isNotEmpty ? fullReasoning : null,
@@ -443,6 +464,17 @@ class AnthropicChatTransport implements ChatTransport {
     if (cancelToken?.isCancelled == true) return;
 
     if (!doneReceived && (fullText.isNotEmpty || fullReasoning.isNotEmpty)) {
+      ChatTransportCompletionCapture.record(
+        ChatTransportCompletionMetadata.provider(
+          wireProtocol: 'anthropic_messages',
+          finishReasonSource: stopReason == null
+              ? 'anthropic_stop_reason_absent'
+              : 'anthropic_stop_reason',
+          termination: 'stream_eof_after_output',
+          finishReason: stopReason,
+        ),
+        sink: completionMetadataSink,
+      );
       onComplete?.call(
         fullText,
         fullReasoning.isNotEmpty ? fullReasoning : null,
@@ -480,6 +512,8 @@ class AnthropicChatTransport implements ChatTransport {
     ChatTransportOnComplete? onComplete,
     bool omitReasoning = false,
     int? receiveTimeoutMs,
+    void Function(ChatTransportCompletionMetadata metadata)?
+    completionMetadataSink,
   }) async {
     final response = await _dio.post<dynamic>(
       url,
@@ -534,6 +568,17 @@ class AnthropicChatTransport implements ChatTransport {
       }
     }
 
+    ChatTransportCompletionCapture.record(
+      ChatTransportCompletionMetadata.provider(
+        wireProtocol: 'anthropic_messages',
+        finishReasonSource: data['stop_reason'] == null
+            ? 'anthropic_stop_reason_absent'
+            : 'anthropic_stop_reason',
+        termination: 'one_shot_response',
+        finishReason: data['stop_reason'],
+      ),
+      sink: completionMetadataSink,
+    );
     onComplete?.call(
       textBuf.toString(),
       reasoningBuf.isEmpty ? null : reasoningBuf.toString(),

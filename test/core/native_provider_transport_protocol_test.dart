@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/llm/transport/openai_chat_transport.dart';
 import 'package:glaze_flutter/core/llm/transport/openrouter_chat_transport.dart';
+import 'package:glaze_flutter/core/llm/transport/chat_transport_completion_metadata.dart';
 
 import 'native_provider_transport_fixture.dart';
 
@@ -17,7 +18,10 @@ void main() {
             row: nativeTransportRow(protocol, stream: streaming),
           );
           await h.store();
-          final request = h.request();
+          ChatTransportCompletionMetadata? completionMetadata;
+          final request = h.request(
+            completionMetadataSink: (metadata) => completionMetadata = metadata,
+          );
           if (!streaming) {
             h.response = nativeTransportJson(protocol);
             h.contentType = 'application/json';
@@ -68,6 +72,14 @@ void main() {
           expect(h.completions.single.$1, 'Visible text ');
           expect(h.completions.single.$2, 'Reasoning text ');
           expect(h.completions.single.$3, isNot(contains(nativeCanary)));
+          expect(completionMetadata, isNotNull);
+          expect(completionMetadata!.finishReason, 'stop');
+          expect(completionMetadata!.wireProtocol, switch (protocol) {
+            'anthropic' => 'anthropic_messages',
+            'gemini' => 'gemini_generate_content',
+            'openai_responses' => 'openai_responses',
+            _ => 'openai_chat',
+          });
           final raw = jsonDecode(h.completions.single.$3!) as Map;
           expect(
             raw.keys,
@@ -162,12 +174,14 @@ void main() {
       final h = NativeTransportHarness('openrouter');
       await h.store();
       final auth = h.core.reference();
+      void completionSink(ChatTransportCompletionMetadata _) {}
       final request = ChatTransportRequest.fromApiConfig(
         h.core.row,
         savedConnectionAuth: auth,
         messages: const [
           {'role': 'user', 'content': 'original'},
         ],
+        completionMetadataSink: completionSink,
       );
       final rewritten = request.withMessages(const [
         {'role': 'user', 'content': 'rewritten'},
@@ -177,6 +191,11 @@ void main() {
       expect(identical(request.savedConnectionAuth, auth), isTrue);
       expect(identical(rewritten.savedConnectionAuth, auth), isTrue);
       expect(identical(routed.savedConnectionAuth, auth), isTrue);
+      expect(
+        identical(rewritten.completionMetadataSink, completionSink),
+        isTrue,
+      );
+      expect(identical(routed.completionMetadataSink, completionSink), isTrue);
       expect(routed.savedConnectionId, h.core.row.id);
       final body = OpenAiChatTransport.buildBody(
         routed,
