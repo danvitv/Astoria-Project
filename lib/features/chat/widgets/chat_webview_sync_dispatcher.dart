@@ -237,6 +237,25 @@ class ChatWebViewSyncDispatcher {
       current: current,
     );
 
+    // Stop/recovery and an immediate retry can be coalesced into one Flutter
+    // rebuild: WebView then observes busy → busy rather than the idle edge in
+    // between. Treat a changed in-place target as a new run. Otherwise the
+    // previous normal generation's virtual `__streaming__` bubble survives
+    // beside the durable recovered message until a later full resync.
+    final busyTargetHandoff =
+        state.wasBusy &&
+        current.isBusy &&
+        (old.regenTargetId != current.regenTargetId ||
+            old.continuationTargetId != current.continuationTargetId);
+    if (busyTargetHandoff) {
+      if (old.regenTargetId == null && old.continuationTargetId == null) {
+        bridge.removeMessage(streamingId);
+      }
+      // Make the existing rising-edge path establish a fresh stream epoch and
+      // flags for the new run, even though no idle widget frame was painted.
+      state.wasBusy = false;
+    }
+
     // Level-reconcile the native-side streaming flags too. If the previous
     // generation's falling edge was missed while the WebView was not ready or
     // during a session switch, `streamingSent` can stay true. The next user

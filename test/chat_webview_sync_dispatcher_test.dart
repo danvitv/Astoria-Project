@@ -539,6 +539,43 @@ void main() {
       },
     );
 
+    test(
+      'busy normal generation to targeted retry retires old placeholder',
+      () {
+        final bridge = _FakeBridge();
+        final syncState = ChatWebViewSyncState()
+          ..wasBusy = true
+          ..streamingSent = true
+          ..streamEpoch = 4;
+        final dispatcher = ChatWebViewSyncDispatcher(state: syncState);
+        final recovered = _assistant('failed');
+
+        final result = dispatcher.dispatch(
+          bridge: bridge,
+          old: _fields(isGenerating: true, messages: const []),
+          current: _fields(
+            isGenerating: true,
+            regenTargetId: recovered.id,
+            messages: [recovered],
+          ),
+          oldMessages: const [],
+          newMessages: [recovered],
+          streamingId: '__streaming__',
+          onSyncExtBlockPanels: () async {},
+          appendMessage: (_) async {},
+          buildStreamingPlaceholder: () => _assistant('__streaming__'),
+        );
+
+        expect(bridge.removedMessages, ['__streaming__']);
+        expect(syncState.streamEpoch, 5);
+        expect(syncState.wasBusy, isTrue);
+        expect(syncState.streamingSent, isFalse);
+        expect(syncState.regenStreamingSent, isFalse);
+        expect(result.runMessageSync, isTrue);
+        expect(result.appendPlaceholder, isFalse);
+      },
+    );
+
     test('pushes the search as soon as the query changes', () {
       final bridge = _FakeBridge();
       final dispatcher = ChatWebViewSyncDispatcher(
@@ -1113,6 +1150,7 @@ ChatWebViewWidgetFields _fields({
   String? sessionId = 's1',
   bool isPostGenRunning = false,
   bool isSendPending = false,
+  String? regenTargetId,
   String? continuationTargetId,
   List<ChatOverlayBlurRegion> blurRegions = const [],
   List<dynamic> memoryDrafts = const [],
@@ -1169,7 +1207,7 @@ ChatWebViewWidgetFields _fields({
   isGenerating: isGenerating,
   isGeneratingImage: false,
   isPostGenRunning: isPostGenRunning,
-  regenTargetId: null,
+  regenTargetId: regenTargetId,
   greetingTotal: 0,
   messages: messages,
   buildThemeMap: () => const {},
