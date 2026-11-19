@@ -20,6 +20,7 @@ extension _RoleplaySessionCatalog on _RoleplaySelectionProjection {
         $_activityMetadata
         SELECT ${_RoleplaySelectionProjection._columns}
         FROM chat_sessions s
+        INNER JOIN chat_message_payloads payload ON payload.session_id=s.session_id
         LEFT JOIN characters c ON c.char_id = s.character_id
         JOIN session_activity a ON a.session_id = s.session_id
         WHERE ${_RoleplaySelectionProjection._visible}
@@ -55,21 +56,21 @@ extension _RoleplaySessionCatalog on _RoleplaySelectionProjection {
   // Match chat history/sessionPreviewAndTime BEFORE paging: newest message or
   // branch/creation event, not updated_at (which also changes on settings edits).
   // Only scalar timestamps leave SQLite; no message/vars/preview body is read.
-  static const _activityMetadata = '''
-    WITH session_times AS (
-      SELECT session_id,
-        CASE WHEN json_valid(messages_json)
-          THEN COALESCE(json_extract(messages_json, '\$[0].timestamp'), 0)
-          ELSE 0 END AS first_ms,
-        CASE WHEN json_valid(messages_json)
-          THEN COALESCE(json_extract(messages_json, '\$[#-1].timestamp'), 0)
-          ELSE 0 END AS last_ms,
-        CASE WHEN json_valid(session_vars_json) THEN
-          CASE WHEN json_type(session_vars_json, '\$.branchedAt') = 'text'
-            AND length(json_extract(session_vars_json, '\$.branchedAt')) <= 256
-            THEN trim(json_extract(session_vars_json, '\$.branchedAt')) END
-          END AS branch_text
-      FROM chat_sessions
+  static final String _activityMetadata =
+      '''
+    WITH ${ChatMessageStorageSql.metadataCte}, session_times AS (
+       SELECT s.session_id,
+          CASE WHEN payload.integrity_ok = 1
+            THEN COALESCE(payload.first_timestamp, 0) ELSE 0 END AS first_ms,
+          CASE WHEN payload.integrity_ok = 1
+            THEN COALESCE(payload.last_timestamp, 0) ELSE 0 END AS last_ms,
+         CASE WHEN json_valid(s.session_vars_json) THEN
+           CASE WHEN json_type(s.session_vars_json, '\$.branchedAt') = 'text'
+             AND length(json_extract(s.session_vars_json, '\$.branchedAt')) <= 256
+             THEN trim(json_extract(s.session_vars_json, '\$.branchedAt')) END
+           END AS branch_text
+       FROM chat_sessions s
+       INNER JOIN chat_message_payloads payload ON payload.session_id=s.session_id
     ), session_activity AS (
       SELECT session_id, MAX(
         CASE WHEN typeof(last_ms) = 'integer' THEN last_ms ELSE 0 END,

@@ -4,6 +4,7 @@ import '../../credentials/secret_redactor.dart';
 import '../../models/support_consent_selection.dart';
 import '../app_db.dart';
 import 'support_repo.dart';
+import 'chat_message_storage_sql.dart';
 
 part 'support_consent_selection/roleplay_selection_projection.dart';
 part 'support_consent_selection/roleplay_session_catalog.dart';

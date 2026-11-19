@@ -14,6 +14,7 @@ import 'ledger_reconciliation_run_repo.dart';
 import 'reconciliation_state_codec.dart';
 import 'support_repo.dart';
 import 'tracker_repo.dart';
+import 'chat_message_storage_sql.dart';
 
 part 'session_repair/contract.dart';
 part 'session_repair/raw_store.dart';

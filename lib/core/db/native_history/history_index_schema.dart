@@ -27,6 +27,35 @@ final historyIndexTriggers = <String, String>{
     UPDATE history_source_generations SET revision=revision+1,alive=0,state='incomplete',
       checkpoint=0,integrity=NULL WHERE session_id=OLD.session_id;
     END''',
+  'history_message_storage_insert':
+      '''CREATE TRIGGER IF NOT EXISTS history_message_storage_insert
+    AFTER INSERT ON chat_message_storage_rows BEGIN
+    UPDATE history_source_generations SET revision=revision+1,state='incomplete',
+      checkpoint=0,integrity=NULL WHERE session_id=NEW.session_id;
+    END''',
+  'history_message_storage_update':
+      '''CREATE TRIGGER IF NOT EXISTS history_message_storage_update
+    AFTER UPDATE OF active_generation ON chat_message_storage_rows BEGIN
+    UPDATE history_source_generations SET revision=revision+1,state='incomplete',
+      checkpoint=0,integrity=NULL WHERE session_id=NEW.session_id;
+    END''',
+  'history_message_storage_delete':
+      '''CREATE TRIGGER IF NOT EXISTS history_message_storage_delete
+    AFTER DELETE ON chat_message_storage_rows BEGIN
+    UPDATE history_source_generations SET revision=revision+1,state='incomplete',
+      checkpoint=0,integrity=NULL WHERE session_id=OLD.session_id;
+    END''',
+  for (final event in ['INSERT', 'UPDATE', 'DELETE'])
+    'history_message_rows_${event.toLowerCase()}':
+        '''CREATE TRIGGER IF NOT EXISTS history_message_rows_${event.toLowerCase()}
+    AFTER $event ON chat_message_rows BEGIN
+    UPDATE history_source_generations SET revision=revision+1,state='incomplete',
+      checkpoint=0,integrity=NULL
+      WHERE session_id=${event == 'DELETE' ? 'OLD' : 'NEW'}.session_id
+        AND EXISTS (SELECT 1 FROM chat_message_storage_rows AS storage
+          WHERE storage.session_id=${event == 'DELETE' ? 'OLD' : 'NEW'}.session_id
+            AND storage.active_generation=${event == 'DELETE' ? 'OLD' : 'NEW'}.storage_generation);
+    END''',
   for (final event in ['INSERT', 'UPDATE', 'DELETE'])
     'history_character_${event.toLowerCase()}':
         '''CREATE TRIGGER IF NOT EXISTS history_character_${event.toLowerCase()}

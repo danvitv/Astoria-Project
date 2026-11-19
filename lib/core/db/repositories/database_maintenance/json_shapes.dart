@@ -8,6 +8,7 @@ const _maintenanceJsonRoots = <String, String>{
   'characters.gallery_json': 'array',
   'characters.extensions_json': 'object',
   'chat_sessions.messages_json': 'array',
+  'chat_message_rows.message_json': 'object',
   'chat_sessions.session_vars_json': 'object',
   'chat_sessions.authors_note_json': 'object',
   'chat_sessions.last_scroll_anchor_json': 'object',

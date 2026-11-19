@@ -104,6 +104,8 @@ final class _LedgerAnalysisReader {
           ],
           readsFrom: {
             owner._db.chatSessions,
+            owner._db.chatMessageStorageRows,
+            owner._db.chatMessageRows,
             owner._db.supportSessions,
             owner._db.llmRequestCaptureRows,
             owner._db.llmCallEventRows,
@@ -118,15 +120,21 @@ final class _LedgerAnalysisReader {
 
   // Every body stays inside SQLite. CASE substitutes safe JSON BEFORE any JSON
   // operation. LIMIT 33 is an overflow sentinel, never a sampled success.
-  static final String _sql = r'''
+  static final String _sql =
+      '''
 WITH RECURSIVE
 args AS (SELECT ? AS target, ? AS parent, ? AS instruction),
+${ChatMessageStorageSql.targetPayloadCte('(SELECT target FROM args)')},
+'''
+      r'''
 chat AS MATERIALIZED (
-  SELECT c.updated_at, length(CAST(c.messages_json AS BLOB)) AS bytes,
-    CASE WHEN length(CAST(c.messages_json AS BLOB)) <= 524288 THEN
-      CASE WHEN json_valid(c.messages_json) THEN c.messages_json ELSE 'null' END
+  SELECT c.updated_at, length(CAST(payload.messages_json AS BLOB)) AS bytes,
+    CASE WHEN length(CAST(payload.messages_json AS BLOB)) <= 524288 THEN
+      CASE WHEN json_valid(payload.messages_json) THEN payload.messages_json ELSE 'null' END
       ELSE 'null' END AS j
-  FROM chat_sessions c, args WHERE c.session_id = args.target
+  FROM chat_sessions c
+  JOIN chat_message_payloads payload ON payload.session_id=c.session_id,
+    args WHERE c.session_id = args.target
 ),
 head AS MATERIALIZED (
   SELECT *, CASE WHEN json_type(j) = 'array'

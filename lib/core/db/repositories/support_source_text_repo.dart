@@ -20,6 +20,7 @@ import '../../support/source_navigation.dart' as nav;
 import '../../preferences/saved_preferences_owner.dart';
 import '../../preferences/saved_preferences_read_port.dart';
 import '../../preferences/saved_preferences_codec.dart';
+import 'chat_message_storage_sql.dart';
 import '../app_db.dart';
 import 'memory_consolidation_job_repo.dart';
 import 'support_source_text/support_source_json.dart';

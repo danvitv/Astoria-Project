@@ -5,6 +5,7 @@ import '../../models/support_text_context.dart';
 import '../../support/support_payload_cipher.dart';
 import '../app_db.dart';
 import 'support_repo.dart';
+import 'chat_message_storage_sql.dart';
 
 part 'support_text_context/support_text_reader.dart';
 part 'support_text_context/roleplay_text_reader.dart';

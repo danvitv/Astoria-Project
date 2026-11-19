@@ -5,8 +5,10 @@ import 'package:drift/drift.dart' show Variable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/db/repositories/history_source_index_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/chat_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/support_source_text_repo.dart';
 import 'package:glaze_flutter/core/db/native_history/history_index_schema.dart';
+import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/support/source_navigation.dart' as nav;
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 
@@ -37,6 +39,59 @@ void main() {
   tearDown(() => f.close());
 
   test(
+    'row-backed history builds and invalidates through native worker',
+    () async {
+      final chats = ChatRepo(f.db);
+      const session = ChatSession(
+        id: 'row-history',
+        characterId: 'row-character',
+        sessionIndex: 0,
+        messages: [
+          ChatMessage(id: 'row-user', role: 'user', content: 'first'),
+          ChatMessage(
+            id: 'row-assistant',
+            role: 'assistant',
+            content: 'second',
+          ),
+        ],
+      );
+      expect(await chats.insertIfAbsent(session), isTrue);
+
+      final built = await f.db.historySourceIndex.maintain(
+        sessionId: session.id,
+        isCurrent: () => true,
+      );
+      expect(built.state, HistoryIndexMaintenanceState.ready);
+      expect(built.candidates, 2);
+
+      await chats.mutateMessage(
+        sessionId: session.id,
+        messageId: 'row-assistant',
+        updatedAt: 2,
+        mutate: (message) => message.copyWith(content: 'changed'),
+      );
+      expect(
+        (await f.db.historySourceIndex.observe(session.id))['status'],
+        'incomplete',
+      );
+      final rebuilt = await f.db.historySourceIndex.maintain(
+        sessionId: session.id,
+        isCurrent: () => true,
+      );
+      expect(rebuilt.state, HistoryIndexMaintenanceState.ready);
+      final units = await f.db
+          .customSelect(
+            'SELECT raw_json FROM history_message_units '
+            'WHERE session_id=? ORDER BY native_order',
+            variables: [Variable.withString(session.id)],
+          )
+          .get();
+      expect(units.length, 2);
+      expect(units.last.read<String>('raw_json'), contains('changed'));
+    },
+  );
+
+  test(
     'migration 137 -> 139 preserves exact canonical bytes; production worker seam',
     () async {
       const original =
@@ -60,8 +115,8 @@ void main() {
       final migrated = AppDatabase.fixedNativeFile(File(f.sourcePath));
       try {
         await migrated.customSelect('SELECT 1').get();
-        expect(migrated.schemaVersion, 139);
-        expect(migrated.allTables.length, 64);
+        expect(migrated.schemaVersion, 145);
+        expect(migrated.allTables.length, 73);
         final before =
             (await migrated
                     .customSelect(
@@ -182,13 +237,13 @@ void main() {
         );
         try {
           await migrated.customSelect('SELECT 1').get();
-          expect(migrated.schemaVersion, 139);
+          expect(migrated.schemaVersion, 145);
           expect(
             (await migrated.customSelect('PRAGMA user_version').getSingle())
                 .read<int>('user_version'),
-            139,
+            145,
           );
-          expect(migrated.allTables.length, 64);
+          expect(migrated.allTables.length, 73);
           expect(
             (await migrated
                     .customSelect(
@@ -196,7 +251,7 @@ void main() {
                     )
                     .getSingle())
                 .read<int>('n'),
-            64,
+            73,
           );
           expect(await canonical(), utf8.encode(original));
           final columns = await migrated
@@ -220,7 +275,7 @@ void main() {
                     )
                     .getSingle())
                 .read<int>('incarnation'),
-            clock,
+            (clock as int) + 2,
           );
           final after = await migrated
               .customSelect(

@@ -21,6 +21,7 @@ extension _RoleplaySessionMetadata on _RoleplaySelectionProjection {
       final row = await db
           .customSelect(
             '''
+        WITH ${ChatMessageStorageSql.targetPayloadCte('?')}
         SELECT ${_RoleplaySelectionProjection._columns},
           s.rowid AS native_identity, c.rowid AS parent_native_identity,
           s.updated_at,
@@ -30,16 +31,18 @@ extension _RoleplaySessionMetadata on _RoleplaySelectionProjection {
             c.variant_order BETWEEN 0 AND 1000000 AND
             (c.variant_group_id IS NULL OR typeof(c.variant_group_id) = 'text')
             THEN 1 ELSE 0 END AS readable_identity,
-          CASE WHEN typeof(s.messages_json) != 'text' THEN 2
-            WHEN NOT json_valid(s.messages_json) THEN 2
-            WHEN json_type(s.messages_json) != 'array' THEN 2
-            ELSE 0 END AS readable_source,
-          CASE WHEN json_valid(s.messages_json) THEN
-            CASE WHEN json_type(s.messages_json) = 'array'
-              THEN json_array_length(s.messages_json) END
-            END AS stored_message_count
-        FROM chat_sessions s INNER JOIN characters c ON c.char_id = s.character_id
-        WHERE s.session_id = ? AND typeof(s.character_id) = 'text'
+           CASE WHEN typeof(payload.messages_json) != 'text' THEN 2
+             WHEN NOT json_valid(payload.messages_json) THEN 2
+             WHEN json_type(payload.messages_json) != 'array' THEN 2
+             ELSE 0 END AS readable_source,
+           CASE WHEN json_valid(payload.messages_json) THEN
+             CASE WHEN json_type(payload.messages_json) = 'array'
+               THEN json_array_length(payload.messages_json) END
+             END AS stored_message_count
+        FROM chat_sessions s
+        INNER JOIN chat_message_payloads payload ON payload.session_id=s.session_id
+        INNER JOIN characters c ON c.char_id = s.character_id
+        WHERE typeof(s.character_id) = 'text'
           AND typeof(c.hidden) = 'integer' AND c.hidden = 0 LIMIT 1
       ''',
             variables: [Variable.withString(id!)],

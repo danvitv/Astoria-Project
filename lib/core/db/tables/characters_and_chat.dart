@@ -103,6 +103,70 @@ class ChatSessions extends Table {
   Set<Column> get primaryKey => {sessionId};
 }
 
+/// Presence marks a session whose canonical messages live in
+/// [ChatMessageRows]. Legacy sessions have no state row and continue to use
+/// `chat_sessions.messages_json` until the separate lazy-migration slice.
+@DataClassName('ChatMessageStorageStateRow')
+class ChatMessageStorageRows extends Table {
+  @override
+  String get tableName => 'chat_message_storage_rows';
+
+  TextColumn get sessionId => text().references(
+    ChatSessions,
+    #sessionId,
+    onDelete: KeyAction.cascade,
+  )();
+  IntColumn get activeGeneration => integer().withDefault(const Constant(1))();
+  IntColumn get revision => integer().withDefault(const Constant(1))();
+  IntColumn get messageCount => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {sessionId};
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK (active_generation > 0 AND revision > 0 AND message_count >= 0)',
+  ];
+}
+
+/// Canonical per-message storage for row-backed chat sessions. [messageJson]
+/// retains the complete ChatMessage codec while indexed projections support
+/// ordered and identity-bounded operations without parsing unrelated messages.
+@DataClassName('ChatMessageRow')
+@TableIndex(
+  name: 'idx_chat_message_rows_position',
+  columns: {#sessionId, #storageGeneration, #positionKey},
+  unique: true,
+)
+@TableIndex(
+  name: 'idx_chat_message_rows_message_id',
+  columns: {#sessionId, #storageGeneration, #messageId},
+)
+class ChatMessageRows extends Table {
+  @override
+  String get tableName => 'chat_message_rows';
+
+  IntColumn get rowId => integer().autoIncrement()();
+  TextColumn get sessionId => text().references(
+    ChatSessions,
+    #sessionId,
+    onDelete: KeyAction.cascade,
+  )();
+  IntColumn get storageGeneration => integer()();
+  IntColumn get positionKey => integer()();
+  TextColumn get messageId => text()();
+  TextColumn get role => text()();
+  IntColumn get messageTimestamp => integer().nullable()();
+  TextColumn get messageJson => text()();
+  IntColumn get updatedAt => integer().withDefault(const Constant(0))();
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK (storage_generation > 0 AND position_key > 0 '
+        "AND role <> '' AND message_json <> '')",
+  ];
+}
+
 @DataClassName('PersonaRow')
 class Personas extends Table {
   @override

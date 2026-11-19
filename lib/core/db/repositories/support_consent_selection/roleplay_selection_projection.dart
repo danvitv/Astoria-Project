@@ -17,15 +17,13 @@ final class _RoleplaySelectionProjection {
     CASE WHEN length(c.variant_name) <= 256 THEN c.variant_name END AS variant_label,
     CASE WHEN length(c.variant_group_id) <= 256 THEN c.variant_group_id END AS variant_group_id,
     c.variant_order,
-    CASE WHEN length(s.messages_json) > ${SupportConsentSelectionRepo.maxRoleplaySourceChars} THEN 1
-         WHEN NOT json_valid(s.messages_json) THEN 2
-         WHEN json_type(s.messages_json) != 'array' THEN 2
-         WHEN json_array_length(s.messages_json) > ${SupportConsentSelectionRepo.maxSourceMessages} THEN 1
+    CASE WHEN payload.payload_characters > ${SupportConsentSelectionRepo.maxRoleplaySourceChars} THEN 1
+         WHEN payload.integrity_ok != 1 THEN 2
+         WHEN payload.message_count > ${SupportConsentSelectionRepo.maxSourceMessages} THEN 1
          ELSE 0 END AS source_status,
-    CASE WHEN length(s.messages_json) > ${SupportConsentSelectionRepo.maxRoleplaySourceChars} THEN NULL
-         WHEN NOT json_valid(s.messages_json) THEN NULL
-         WHEN json_type(s.messages_json) != 'array' THEN NULL
-         ELSE json_array_length(s.messages_json) END AS message_count
+    CASE WHEN payload.payload_characters > ${SupportConsentSelectionRepo.maxRoleplaySourceChars} THEN NULL
+         WHEN payload.integrity_ok != 1 THEN NULL
+         ELSE payload.message_count END AS message_count
   ''';
   static const _visible = '(c.char_id IS NULL OR c.hidden = 0)';
 
@@ -93,9 +91,11 @@ final class _RoleplaySelectionProjection {
         final header = await db
             .customSelect(
               '''
+          WITH ${ChatMessageStorageSql.targetPayloadCte('?')}
           SELECT $_columns FROM chat_sessions s
+          INNER JOIN chat_message_payloads payload ON payload.session_id=s.session_id
           LEFT JOIN characters c ON c.char_id = s.character_id
-          WHERE s.session_id = ? AND $_visible LIMIT 1
+          WHERE $_visible LIMIT 1
         ''',
               variables: [Variable.withString(id)],
             )
@@ -170,15 +170,16 @@ final class _RoleplaySelectionProjection {
     }
   }
 
-  static const _messageSql =
+  static final String _messageSql =
       '''
-    WITH target AS (
-      SELECT CASE WHEN length(messages_json) > ${SupportConsentSelectionRepo.maxRoleplaySourceChars} THEN '[]'
+    WITH ${ChatMessageStorageSql.targetPayloadCte('?')}, target AS (
+      SELECT CASE WHEN payload_characters > ${SupportConsentSelectionRepo.maxRoleplaySourceChars} THEN '[]'
+                  WHEN integrity_ok != 1 THEN '[]'
                   WHEN NOT json_valid(messages_json) THEN '[]'
                   WHEN json_type(messages_json) != 'array' THEN '[]'
                   WHEN json_array_length(messages_json) > ${SupportConsentSelectionRepo.maxSourceMessages} THEN '[]'
                   ELSE messages_json END AS bounded_json
-      FROM chat_sessions WHERE session_id = ? LIMIT 1
+       FROM chat_message_payloads LIMIT 1
     ), entries AS (
       SELECT e.key AS native_order, e.type AS entry_type,
              CASE WHEN e.type = 'object' THEN e.value ELSE '{}' END AS o

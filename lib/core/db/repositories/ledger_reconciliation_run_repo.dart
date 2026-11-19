@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import '../../models/chat_message.dart';
 import '../../utils/cast_helpers.dart';
 import '../app_db.dart';
+import 'chat_message_storage_repo.dart';
 import 'lorebook_use_manifest_repo.dart';
 
 /// A versioned, exact projection of one message variation.
@@ -1000,7 +1001,9 @@ class LedgerReconciliationRunRepo {
     }
     try {
       final beforeLedger = _decodeCanonicalRowList(effect.beforeLedgerJson);
-      final beforeKnowledge = _decodeCanonicalRowList(effect.beforeKnowledgeJson);
+      final beforeKnowledge = _decodeCanonicalRowList(
+        effect.beforeKnowledgeJson,
+      );
       final afterLedger = _decodeCanonicalRowList(effect.afterLedgerJson);
       final afterKnowledge = _decodeCanonicalRowList(effect.afterKnowledgeJson);
       final before = ReconciliationStateSnapshot._canonical(
@@ -1012,11 +1015,7 @@ class LedgerReconciliationRunRepo {
         knowledgeJson: effect.afterKnowledgeJson,
       );
       final expectedEffects = _canonicalJson({
-        'ledger': _diffRows(
-          beforeLedger,
-          afterLedger,
-          identityKey: 'name',
-        ),
+        'ledger': _diffRows(beforeLedger, afterLedger, identityKey: 'name'),
         'knowledge': _diffRows(
           beforeKnowledge,
           afterKnowledge,
@@ -1055,14 +1054,10 @@ class LedgerReconciliationRunRepo {
         _db.chatSessions,
       )..where((row) => row.sessionId.equals(run.sessionId))).getSingleOrNull();
       if (session == null) return null;
-      final decoded = jsonDecode(session.messagesJson);
-      if (decoded is! List) return null;
-      final messages = decoded
-          .whereType<Map<Object?, Object?>>()
-          .map(
-            (value) => ChatMessage.fromJson(Map<String, dynamic>.from(value)),
-          )
-          .toList(growable: false);
+      final messages = await ChatMessageStorageRepo(
+        _db,
+      ).loadMessagesBySessionId(run.sessionId);
+      if (messages == null) return null;
       final selected = <ChatMessage>[];
       var previousIndex = -1;
       for (final anchor in anchors) {
@@ -1557,18 +1552,18 @@ class LedgerReconciliationRunRepo {
       _db.chatSessions,
     )..where((row) => row.sessionId.equals(sessionId))).getSingleOrNull();
     if (session == null) return false;
-    final messages = jsonDecode(session.messagesJson);
-    if (messages is! List) return false;
+    final messages = await ChatMessageStorageRepo(
+      _db,
+    ).loadMessagesBySessionId(sessionId);
+    if (messages == null) return false;
     final assistantIndex = messages.indexWhere(
-      (message) => message is Map && message['id'] == assistantMessageId,
+      (message) => message.id == assistantMessageId,
     );
     if (assistantIndex < 0 || assistantIndex + 1 >= messages.length) {
       return false;
     }
     final accepting = messages[assistantIndex + 1];
-    return accepting is Map &&
-        accepting['id'] == userMessageId &&
-        accepting['role'] == 'user';
+    return accepting.id == userMessageId && accepting.role == 'user';
   }
 
   bool _same(
@@ -1674,16 +1669,13 @@ final class _ReconciliationEvidence {
     final indexed = <String, (int, Map<Object?, Object?>)>{};
     if (session == null) return indexed;
     try {
-      final decoded = jsonDecode(session.messagesJson);
-      if (decoded is! List) return indexed;
-      for (final entry in decoded.indexed) {
-        final message = entry.$2;
-        if (message is Map && message['id'] is String) {
-          indexed.putIfAbsent(
-            message['id'] as String,
-            () => (entry.$1, message),
-          );
-        }
+      final messages = await ChatMessageStorageRepo(
+        db,
+      ).loadMessagesBySessionId(sessionId);
+      if (messages == null) return indexed;
+      for (final entry in messages.indexed) {
+        final message = entry.$2.toJson();
+        indexed.putIfAbsent(entry.$2.id, () => (entry.$1, message));
       }
     } catch (_) {}
     return indexed;

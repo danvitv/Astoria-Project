@@ -9,6 +9,7 @@ import '../../../core/db/repositories/character_folder_repo.dart';
 import '../../../core/db/repositories/extension_presets_repository.dart';
 import '../../../core/db/repositories/info_blocks_repository.dart';
 import '../../../core/db/repositories/card_evolution_collector_run_repo.dart';
+import '../../../core/db/repositories/chat_message_storage_repo.dart';
 import '../../../core/db/repositories/ledger_reconciliation_run_repo.dart';
 import '../../../core/db/repositories/session_lorebook_embedding_job_repo.dart';
 import '../../../core/db/repositories/summary_repo.dart';
@@ -1297,19 +1298,13 @@ class ReconciliationStateSyncStore
       throw StateError('Divergent reconciliation chains have no live head');
     }
 
-    final chat = await _db
-        .customSelect(
-          'SELECT messages_json FROM chat_sessions WHERE session_id = ?',
-          variables: [Variable.withString(sessionId)],
-        )
-        .getSingleOrNull();
-    if (chat == null) {
+    final messages = await ChatMessageStorageRepo(
+      _db,
+    ).loadMessagesBySessionId(sessionId);
+    if (messages == null) {
       throw StateError('Cannot resolve reconciliation chains without chat');
     }
-    final messageIds = (jsonDecode(chat.read<String>('messages_json')) as List)
-        .cast<Map<String, dynamic>>()
-        .map((message) => message['id'] as String)
-        .toList();
+    final messageIds = messages.map((message) => message.id).toList();
     final localHead = localVisible.last;
     final incomingHead = incomingVisible.last;
     final localEndpoint = messageIds.indexOf(localHead.endMessageId);
@@ -1522,18 +1517,16 @@ class ReconciliationStateSyncStore
     )..where((row) => row.sessionId.equals(sessionId))).getSingleOrNull();
     if (session == null) return result;
     try {
-      final messages = jsonDecode(session.messagesJson);
-      if (messages is! List) return result;
+      final messages = await ChatMessageStorageRepo(
+        _db,
+      ).loadMessagesBySessionId(sessionId);
+      if (messages == null) return result;
       for (var i = 0; i < messages.length; i++) {
         final message = messages[i];
-        if (message is! Map || message['id'] is! String) continue;
-        final id = message['id'] as String;
+        final id = message.id;
         if (result.containsKey(id)) continue;
         final next = i + 1 < messages.length ? messages[i + 1] : null;
-        result[id] =
-            next is Map && next['role'] == 'user' && next['id'] is String
-            ? next['id'] as String
-            : null;
+        result[id] = next != null && next.role == 'user' ? next.id : null;
       }
     } catch (_) {}
     return result;

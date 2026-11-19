@@ -43,10 +43,54 @@ final class _RepairImage {
   );
 }
 
+List<dynamic> _repairMessagePayloads(_RepairImage image, AppDatabase db) {
+  final storage = image.rows(db.chatMessageStorageRows);
+  if (storage.isEmpty) {
+    final decoded = jsonDecode(
+      image.rows(db.chatSessions).single['messages_json'] as String,
+    );
+    _repairRequire(decoded is List, SessionRepairIssue.invalidShape);
+    return decoded as List<dynamic>;
+  }
+  _repairRequire(storage.length == 1, SessionRepairIssue.invalidShape);
+  final generation = storage.single['active_generation'];
+  final expectedCount = storage.single['message_count'];
+  _repairRequire(
+    generation is int && generation > 0 && expectedCount is int,
+    SessionRepairIssue.invalidShape,
+  );
+  final rows =
+      image
+          .rows(db.chatMessageRows)
+          .where((row) => row['storage_generation'] == generation)
+          .toList()
+        ..sort(
+          (a, b) =>
+              (a['position_key'] as int).compareTo(b['position_key'] as int),
+        );
+  _repairRequire(rows.length == expectedCount, SessionRepairIssue.invalidShape);
+  return rows
+      .map((row) {
+        final decoded = jsonDecode(row['message_json'] as String);
+        _repairRequire(
+          decoded is Map<String, dynamic> &&
+              decoded['id'] == row['message_id'] &&
+              decoded['role'] == row['role'] &&
+              decoded['timestamp'] == row['message_timestamp'],
+          SessionRepairIssue.invalidShape,
+        );
+        return decoded;
+      })
+      .toList(growable: false);
+}
+
 final class _RepairRawStore {
   const _RepairRawStore(this.db);
   final AppDatabase db;
-  static const maxRows = 64, maxRowBytes = 65536, maxImageBytes = 524288;
+  static const maxRows = 64,
+      maxMessageRows = 4096,
+      maxRowBytes = 65536,
+      maxImageBytes = 524288;
   String q(String name) {
     _repairRequire(
       RegExp(r'^[a-z_][a-z0-9_]*$').hasMatch(name),
@@ -101,6 +145,12 @@ final class _RepairRawStore {
     String id,
     bool Function() current,
   ) async {
+    // Message rows replaced one legacy aggregate row. Keep the total image and
+    // per-row byte fences, but do not turn the generic 64-row relation bound
+    // into an accidental 64-message chat limit.
+    final rowLimit = identical(table, db.chatMessageRows)
+        ? maxMessageRows
+        : maxRows;
     final schema = await checked(
       current,
       () => db
@@ -124,14 +174,14 @@ final class _RepairRawStore {
       current,
       () => db
           .customSelect(
-            'SELECT ($size) AS bytes FROM ${q(table.actualTableName)} WHERE ${q(column)} IS ? COLLATE BINARY LIMIT ${maxRows + 1}',
+            'SELECT ($size) AS bytes FROM ${q(table.actualTableName)} WHERE ${q(column)} IS ? COLLATE BINARY LIMIT ${rowLimit + 1}',
             variables: [Variable<String>(id)],
             readsFrom: {table},
           )
           .get(),
     );
     _repairRequire(
-      sizes.length <= maxRows &&
+      sizes.length <= rowLimit &&
           sizes.every(
             (r) =>
                 r.data['bytes'] is int &&
@@ -144,7 +194,7 @@ final class _RepairRawStore {
       current,
       () => db
           .customSelect(
-            'SELECT $order FROM ${q(table.actualTableName)} WHERE ${q(column)} IS ? COLLATE BINARY AND ($size) <= $maxRowBytes ORDER BY $order LIMIT ${maxRows + 1}',
+            'SELECT $order FROM ${q(table.actualTableName)} WHERE ${q(column)} IS ? COLLATE BINARY AND ($size) <= $maxRowBytes ORDER BY $order LIMIT ${rowLimit + 1}',
             variables: [Variable<String>(id)],
             readsFrom: {table},
           )
@@ -195,6 +245,8 @@ final class _RepairRawStore {
     );
     final char = sessions.rows.single['character_id'] as String;
     final specs = <(TableInfo<Table, dynamic>, String, String)>[
+      (db.chatMessageStorageRows, 'session_id', target),
+      (db.chatMessageRows, 'session_id', target),
       (db.characters, 'char_id', char),
       (db.characterRevisionRows, 'character_id', char),
       (db.trackerRows, 'session_id', target),

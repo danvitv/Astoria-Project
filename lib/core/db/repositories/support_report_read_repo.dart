@@ -6,6 +6,7 @@ import '../../llm/diagnostics/recorded_generation_runtime.dart';
 import '../../llm/diagnostics/recorded_studio_runtime.dart';
 import '../app_db.dart';
 import 'support_report_root_repo.dart';
+import 'chat_message_storage_sql.dart';
 
 /// Narrow report read domain. SQL is exclusively here; no schema enumeration,
 /// complete table dumping, credential values, transport JSON or journal bodies.
@@ -105,12 +106,15 @@ final class SupportReportReadRepo {
     if (gameSessionId != null && (includeTitles || includeProse)) {
       personal.addAll(
         await _rows(
-          '''SELECT
+          '''WITH ${ChatMessageStorageSql.targetPayloadCte('?')}
+          SELECT
           ${includeTitles ? 'CASE WHEN length(c.name)<=4096 THEN c.name ELSE NULL END' : 'NULL'} AS title,
-          ${includeProse ? 'CASE WHEN length(s.messages_json)<=131072 THEN s.messages_json ELSE NULL END' : 'NULL'} AS history,
-          ${includeProse ? 'length(s.messages_json)' : '0'} AS history_characters
-          FROM chat_sessions s JOIN characters c ON c.char_id=s.character_id
-          WHERE s.session_id=? AND c.hidden=0 LIMIT 1''',
+          ${includeProse ? 'CASE WHEN length(payload.messages_json)<=131072 THEN payload.messages_json ELSE NULL END' : 'NULL'} AS history,
+          ${includeProse ? 'length(payload.messages_json)' : '0'} AS history_characters
+          FROM chat_sessions s
+          JOIN chat_message_payloads payload ON payload.session_id=s.session_id
+          JOIN characters c ON c.char_id=s.character_id
+           WHERE c.hidden=0 LIMIT 1''',
           isCurrent,
           [Variable<String>(gameSessionId)],
         ),

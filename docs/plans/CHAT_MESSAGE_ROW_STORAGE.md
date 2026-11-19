@@ -1,6 +1,6 @@
 # Построчное хранение сообщений чата
 
-**Статус:** рабочий план, реализация не начата.  
+**Статус:** срезы A–B реализованы локально; C–E остаются в плане.
 **Дата:** 2026-11-19.  
 **Исходная точка:** `c75db9e4` (`fix(chat): reduce long-session regeneration stalls`).  
 **Область:** `chat_sessions.messages_json`, `ChatRepo`, prompt assembly,

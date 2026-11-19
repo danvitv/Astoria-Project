@@ -17,6 +17,7 @@ import 'session_lorebook_embedding_job_repo.dart';
 import 'session_lorebook_evolution_repo.dart';
 import 'session_lorebook_revision_repo.dart';
 import 'session_deletion_queries.dart';
+import 'chat_message_storage_repo.dart';
 
 /// The only durable request shape accepted by manual apply.  It is stored in
 /// the immutable operation-revision snapshot; callers never provide it.
@@ -108,6 +109,14 @@ class ManualRewriteApplyRepo {
             'staleSessionCharacter',
           );
         }
+        final messagesJson = await ChatMessageStorageRepo(
+          _db,
+        ).materializeMessagesJson(job.chatSessionId);
+        if (messagesJson == null) {
+          return const ManualRewriteApplyOutcome.blocked(
+            'chatAnchorUnavailable',
+          );
+        }
 
         final proposal = await (_db.select(
           _db.cardEvolutionProposalRuns,
@@ -122,7 +131,7 @@ class ManualRewriteApplyRepo {
                 jobId: job.id,
                 sessionId: job.chatSessionId,
                 characterId: job.characterId,
-                messagesJson: session.messagesJson,
+                messagesJson: messagesJson,
               )) {
             await CardEvolutionProposalRunRepo(
               _db,
@@ -301,7 +310,7 @@ class ManualRewriteApplyRepo {
                 ),
               );
         }
-        final anchor = _latestAcceptedAnchor(session.messagesJson);
+        final anchor = _latestAcceptedAnchor(messagesJson);
         if (anchor == null) {
           return const ManualRewriteApplyOutcome.blocked(
             'chatAnchorUnavailable',
@@ -682,16 +691,16 @@ class ManualRewriteApplyRepo {
             createdAt: Value(now),
           ),
         );
-    final rebound =
-        await SessionDeletionQueries.trackInventoryMutation(
-          _db,
-          () => (_db.update(_db.chatSessions)..where(
+    final rebound = await SessionDeletionQueries.trackInventoryMutation(
+      _db,
+      () =>
+          (_db.update(_db.chatSessions)..where(
                 (row) =>
                     row.sessionId.equals(session.sessionId) &
                     row.characterId.equals(source.id),
               ))
               .write(ChatSessionsCompanion(characterId: Value(fork.id))),
-        );
+    );
     if (rebound != 1) throw const _ApplyBlocked('staleSessionCharacter');
     return fork;
   }

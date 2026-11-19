@@ -263,6 +263,12 @@ class SessionDeletionQueries {
         ))
         .go();
     await (_db.delete(
+      _db.chatMessageRows,
+    )..where((row) => row.sessionId.equals(sessionId))).go();
+    await (_db.delete(
+      _db.chatMessageStorageRows,
+    )..where((row) => row.sessionId.equals(sessionId))).go();
+    await (_db.delete(
       _db.chatSessions,
     )..where((row) => row.sessionId.equals(sessionId))).go();
   }

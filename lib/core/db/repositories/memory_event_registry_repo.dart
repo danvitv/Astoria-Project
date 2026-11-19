@@ -10,6 +10,7 @@ import '../../models/memory_entry_revisions.dart';
 import '../../models/memory_source_manifest.dart';
 import '../../models/session_branch_identity.dart';
 import '../app_db.dart';
+import 'chat_message_storage_repo.dart';
 
 class MemoryEventSourceInput {
   final String id;
@@ -289,7 +290,9 @@ class MemoryEventRegistryRepo {
         );
         if (branchIdentity == null) return;
         final branchId = branchIdentity.branchId;
-        final history = _decodeHistory(session.messagesJson);
+        final history = await ChatMessageStorageRepo(
+          db,
+        ).loadMessagesBySessionId(sessionId);
         final entries = await _readEntries(sessionId);
         final events =
             await (db.select(db.memoryEventRows)..where(
@@ -319,36 +322,36 @@ class MemoryEventRegistryRepo {
                 entries: entries,
                 history: history,
               );
-        if (current) continue;
-        final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-        await _insertInvalidation(
-          sessionId: sessionId,
-          branchId: branchId,
-          targetType: 'event',
-          targetId: event.id,
-          reason: 'source_context_changed',
-          createdAt: now,
-        );
-        final links =
-            await (db.select(db.memoryEventLinkRows)..where(
-                  (row) =>
-                      row.sessionId.equals(sessionId) &
-                      row.branchId.equals(branchId) &
-                      (row.fromEventId.equals(event.id) |
-                          row.toEventId.equals(event.id)),
-                ))
-                .get();
-        for (final link in links) {
+          if (current) continue;
+          final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
           await _insertInvalidation(
             sessionId: sessionId,
             branchId: branchId,
-            targetType: 'link',
-            targetId: link.id,
-            reason: 'endpoint_source_context_changed',
+            targetType: 'event',
+            targetId: event.id,
+            reason: 'source_context_changed',
             createdAt: now,
           );
+          final links =
+              await (db.select(db.memoryEventLinkRows)..where(
+                    (row) =>
+                        row.sessionId.equals(sessionId) &
+                        row.branchId.equals(branchId) &
+                        (row.fromEventId.equals(event.id) |
+                            row.toEventId.equals(event.id)),
+                  ))
+                  .get();
+          for (final link in links) {
+            await _insertInvalidation(
+              sessionId: sessionId,
+              branchId: branchId,
+              targetType: 'link',
+              targetId: link.id,
+              reason: 'endpoint_source_context_changed',
+              createdAt: now,
+            );
+          }
         }
-      }
       });
 
   Future<void> _insertInvalidation({
@@ -418,7 +421,9 @@ class MemoryEventRegistryRepo {
           !isCurrent()) {
         return false;
       }
-      final history = _decodeHistory(session.messagesJson);
+      final history = await ChatMessageStorageRepo(
+        db,
+      ).loadMessagesBySessionId(event.sessionId);
       if (history == null) return false;
       final existing = await (db.select(
         db.memoryEventRows,
@@ -685,7 +690,9 @@ class MemoryEventRegistryRepo {
         if (branchIdentity?.branchId != events.first.branchId) {
           throw const _PackageAcceptAborted();
         }
-        final history = _decodeHistory(session.messagesJson);
+        final history = await ChatMessageStorageRepo(
+          db,
+        ).loadMessagesBySessionId(events.first.sessionId);
         final entries = await _readEntries(events.first.sessionId);
         if (history == null || entries == null) {
           throw const _PackageAcceptAborted();
@@ -789,21 +796,6 @@ class MemoryEventRegistryRepo {
       }
       return entries;
     } catch (_) {
-      return null;
-    }
-  }
-
-  static List<ChatMessage>? _decodeHistory(String json) {
-    try {
-      final decoded = jsonDecode(json);
-      if (decoded is! List) return null;
-      return decoded
-          .map(
-            (item) =>
-                ChatMessage.fromJson(Map<String, dynamic>.from(item as Map)),
-          )
-          .toList(growable: false);
-    } on Object {
       return null;
     }
   }

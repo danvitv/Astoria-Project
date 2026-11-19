@@ -10,10 +10,14 @@ import '../../models/chat_message.dart';
 import '../app_db.dart';
 import 'session_deletion_queries.dart';
 import 'card_evolution_proposal_run_repo.dart';
+import 'chat_message_storage_repo.dart';
 
 class SessionDeletionRepo implements SessionDeletionStore {
   final AppDatabase _db;
   final SessionMutationStarted? _onMutationStarted;
+  late final ChatMessageStorageRepo _messageStorage = ChatMessageStorageRepo(
+    _db,
+  );
 
   SessionDeletionRepo(this._db, {SessionMutationStarted? onMutationStarted})
     : _onMutationStarted = onMutationStarted;
@@ -48,9 +52,8 @@ class SessionDeletionRepo implements SessionDeletionStore {
                 .getSingleOrNull();
         if (row == null) return null;
 
-        final existingMessages = (jsonDecode(row.messagesJson) as List<dynamic>)
-            .map((item) => ChatMessage.fromJson(item as Map<String, dynamic>))
-            .toList();
+        final storage = await _messageStorage.load(row);
+        final existingMessages = storage.materialized;
         final sessionVars = row.sessionVarsJson == null
             ? <String, dynamic>{}
             : Map<String, dynamic>.from(
@@ -68,9 +71,11 @@ class SessionDeletionRepo implements SessionDeletionStore {
               (previous + existingMessages.length).toString();
         }
 
-        final messagesJson = jsonEncode(
-          replacementMessages.map((message) => message.toJson()).toList(),
-        );
+        final messagesJson = storage.isRowBacked
+            ? null
+            : jsonEncode(
+                replacementMessages.map((message) => message.toJson()).toList(),
+              );
         final sessionVarsJson = !resetBranchStamp && !countDeletedMessages
             ? row.sessionVarsJson
             : sessionVars.isEmpty
@@ -89,10 +94,20 @@ class SessionDeletionRepo implements SessionDeletionStore {
           _db.chatSessions,
         )..where((table) => table.sessionId.equals(sessionId))).write(
           ChatSessionsCompanion(
-            messagesJson: Value(messagesJson),
+            messagesJson: messagesJson == null
+                ? const Value.absent()
+                : Value(messagesJson),
             sessionVarsJson: Value(sessionVarsJson),
           ),
         );
+        if (storage.isRowBacked) {
+          await _messageStorage.replaceMessages(
+            sessionId: sessionId,
+            before: storage,
+            messages: replacementMessages,
+            updatedAt: row.updatedAt,
+          );
+        }
         await SessionDeletionQueries(_db).deleteMessageDerivedRows(
           sessionId: sessionId,
           characterId: row.characterId,

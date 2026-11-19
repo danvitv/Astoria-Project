@@ -13,10 +13,10 @@ final class _RoleplayTextReader {
     WHEN json_type(messages_json) != 'array' THEN '[]'
     WHEN json_array_length(messages_json) > ${SupportTextContextRepo.maxSourceMessages} THEN '[]'
     ELSE messages_json END''';
-  static const _entries =
+  static final String _entries =
       '''
-      WITH target AS (
-        SELECT $_boundedJson AS j FROM chat_sessions WHERE session_id = ? LIMIT 1
+      WITH ${ChatMessageStorageSql.targetPayloadCte('?')}, target AS (
+         SELECT $_boundedJson AS j FROM chat_message_payloads LIMIT 1
       ), entries AS (
         SELECT e.key AS native_order,
           CASE WHEN e.type = 'object' THEN e.value ELSE '{}' END AS o
@@ -38,7 +38,8 @@ final class _RoleplayTextReader {
     final header = await db
         .customSelect(
           '''
-      SELECT s.rowid AS native_identity,
+       WITH ${ChatMessageStorageSql.targetPayloadCte('?')}
+       SELECT s.rowid AS native_identity,
         CASE WHEN typeof(s.session_index) = 'integer' AND s.session_index BETWEEN 0 AND 1000000
           THEN s.session_index END AS session_index,
         CASE WHEN typeof(c.char_id) = 'text' AND length(c.char_id) <= 256
@@ -51,14 +52,16 @@ final class _RoleplayTextReader {
           THEN 1 ELSE 0 END AS group_valid,
         CASE WHEN typeof(c.variant_order) = 'integer' AND c.variant_order BETWEEN 0 AND 1000000
           THEN c.variant_order END AS variant_order,
-        CASE WHEN typeof(s.messages_json) != 'text' THEN 2
-          WHEN length(CAST(s.messages_json AS BLOB)) > ${SupportTextContextRepo.maxRoleplaySourceBytes} THEN 1
-          WHEN NOT json_valid(s.messages_json) THEN 2
-          WHEN json_type(s.messages_json) != 'array' THEN 2
-          WHEN json_array_length(s.messages_json) > ${SupportTextContextRepo.maxSourceMessages} THEN 1
+        CASE WHEN typeof(payload.messages_json) != 'text' THEN 2
+          WHEN length(CAST(payload.messages_json AS BLOB)) > ${SupportTextContextRepo.maxRoleplaySourceBytes} THEN 1
+          WHEN NOT json_valid(payload.messages_json) THEN 2
+          WHEN json_type(payload.messages_json) != 'array' THEN 2
+          WHEN json_array_length(payload.messages_json) > ${SupportTextContextRepo.maxSourceMessages} THEN 1
           ELSE 0 END AS source_status
-      FROM chat_sessions s INNER JOIN characters c ON c.char_id = s.character_id
-      WHERE s.session_id = ? AND typeof(s.character_id) = 'text'
+      FROM chat_sessions s
+      INNER JOIN chat_message_payloads payload ON payload.session_id=s.session_id
+      INNER JOIN characters c ON c.char_id = s.character_id
+       WHERE typeof(s.character_id) = 'text'
         AND typeof(c.hidden) = 'integer' AND c.hidden = 0 LIMIT 1
     ''',
           variables: [Variable.withString(sessionId)],

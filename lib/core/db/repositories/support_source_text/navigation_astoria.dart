@@ -155,7 +155,8 @@ extension _NavAstoria on SupportSourceNavigationRepo {
       after = row.read<int>('ordinal');
       examined++;
       final id = row.data['id'];
-      if (!SupportSourceJson.identity(id) ||
+      if (id is! String ||
+          !SupportSourceJson.identity(id) ||
           !const ['user', 'assistant', 'system'].contains(row.data['role'])) {
         omitted = true;
         continue;

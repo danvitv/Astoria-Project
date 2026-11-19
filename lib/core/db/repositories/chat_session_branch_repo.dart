@@ -12,6 +12,7 @@ import '../app_db.dart';
 import 'session_canon_checkpoint_repo.dart';
 import 'session_lorebook_embedding_job_repo.dart';
 import 'session_deletion_queries.dart';
+import 'chat_message_storage_repo.dart';
 
 final class ChatSessionBranchResult {
   const ChatSessionBranchResult({
@@ -31,11 +32,13 @@ final class ChatSessionBranchResult {
 class ChatSessionBranchRepo {
   ChatSessionBranchRepo(this.db)
     : _checkpointRepo = SessionCanonCheckpointRepo(db),
-      _embeddingJobRepo = SessionLorebookEmbeddingJobRepo(db);
+      _embeddingJobRepo = SessionLorebookEmbeddingJobRepo(db),
+      _messageStorage = ChatMessageStorageRepo(db);
 
   final AppDatabase db;
   final SessionCanonCheckpointRepo _checkpointRepo;
   final SessionLorebookEmbeddingJobRepo _embeddingJobRepo;
+  final ChatMessageStorageRepo _messageStorage;
 
   /// Whether a branch of [sourceSessionId] needs its own card variant.
   ///
@@ -124,10 +127,14 @@ class ChatSessionBranchRepo {
       authorsNote: sourceSession.authorsNote,
       updatedAt: now,
     );
-    await SessionDeletionQueries.trackInventoryMutation(
-      db,
-      () => db.into(db.chatSessions).insert(_sessionCompanion(session)),
-    );
+    await SessionDeletionQueries.trackInventoryMutation(db, () async {
+      await db.into(db.chatSessions).insert(_sessionCompanion(session));
+      await _messageStorage.createForSession(
+        sessionId: session.id,
+        messages: session.messages,
+        updatedAt: now,
+      );
+    });
     final root = await _checkpointRepo.appendRootInTransaction(
       sessionId: session.id,
       characterId: character.id,
@@ -421,9 +428,7 @@ class ChatSessionBranchRepo {
         sessionId: session.id,
         characterId: session.characterId,
         sessionIndex: session.sessionIndex,
-        messagesJson: jsonEncode(
-          session.messages.map((message) => message.toJson()).toList(),
-        ),
+        messagesJson: '[]',
         updatedAt: Value(normalizeTimestampSeconds(session.updatedAt)),
         sessionVarsJson: Value(jsonEncode(session.sessionVars)),
         authorsNoteJson: Value(

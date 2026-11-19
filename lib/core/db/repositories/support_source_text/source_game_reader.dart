@@ -9,9 +9,9 @@ extension _SourceGameReader on SupportSourceTextRepo {
     WHEN json_type(messages_json) != 'array' THEN '[]'
     WHEN json_array_length(messages_json) > 2000 THEN '[]'
     ELSE messages_json END''';
-  static const _entries =
-      '''WITH target AS (
-    SELECT $_bounded AS j FROM chat_sessions WHERE session_id = ? LIMIT 1
+  static final String _entries =
+      '''WITH ${ChatMessageStorageSql.targetPayloadCte('?')}, target AS (
+     SELECT $_bounded AS j FROM chat_message_payloads LIMIT 1
   ), entries AS (
     SELECT e.key AS native_order, CASE WHEN e.type = 'object' THEN e.value ELSE '{}' END AS o
     FROM target, json_each(target.j) e
@@ -28,13 +28,14 @@ extension _SourceGameReader on SupportSourceTextRepo {
     guard();
     final shape = await _db
         .customSelect(
-          '''SELECT CASE
+          '''WITH ${ChatMessageStorageSql.targetPayloadCte('?')}
+      SELECT CASE
       WHEN typeof(messages_json) != 'text' THEN 0
       WHEN length(CAST(messages_json AS BLOB)) > 2097152 THEN 2
       WHEN NOT json_valid(messages_json) THEN 0
       WHEN json_type(messages_json) != 'array' THEN 0
       WHEN json_array_length(messages_json) > 2000 THEN 2 ELSE 1 END AS valid
-      FROM chat_sessions WHERE session_id = ? LIMIT 1''',
+       FROM chat_message_payloads LIMIT 1''',
           variables: [Variable.withString(id)],
         )
         .getSingleOrNull();

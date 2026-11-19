@@ -95,10 +95,8 @@ final class _RepairLedgerValidation {
     ).firstMatch(raw);
     if (match == null) return SessionRepairIssue.incompleteEvidence;
     try {
-      final decoded = jsonDecode(
-        image.rows(db.chatSessions).single['messages_json'] as String,
-      );
-      if (decoded is! List || decoded.any((m) => m is! Map<String, dynamic>)) {
+      final decoded = _repairMessagePayloads(image, db);
+      if (decoded.any((m) => m is! Map<String, dynamic>)) {
         return SessionRepairIssue.malformedPayload;
       }
       final found = decoded

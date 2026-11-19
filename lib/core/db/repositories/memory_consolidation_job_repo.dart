@@ -11,6 +11,7 @@ import '../../utils/id_generator.dart';
 import '../../utils/time_helpers.dart';
 import '../app_db.dart';
 import 'memory_event_registry_repo.dart';
+import 'chat_message_storage_repo.dart';
 
 typedef MemoryConsolidationSourceIdentity = ({
   String memoryEntryId,
@@ -834,16 +835,12 @@ class MemoryConsolidationJobRepo {
           db.memoryBookRows,
         )..where((row) => row.sessionId.equals(sessionId))).getSingleOrNull();
         if (session != null && book != null) {
-          final historyJson = jsonDecode(session.messagesJson);
+          final history = await ChatMessageStorageRepo(
+            db,
+          ).loadMessagesBySessionId(sessionId);
           final entriesJson = jsonDecode(book.entriesJson);
-          if (historyJson is List && entriesJson is List) {
-            currentHistory = historyJson
-                .map(
-                  (item) => ChatMessage.fromJson(
-                    Map<String, dynamic>.from(item as Map),
-                  ),
-                )
-                .toList(growable: false);
+          if (history != null && entriesJson is List) {
+            currentHistory = history;
             final decodedEntries = <String, MemoryEntry>{};
             for (final item in entriesJson) {
               final memoryEntry = MemoryEntry.fromJson(

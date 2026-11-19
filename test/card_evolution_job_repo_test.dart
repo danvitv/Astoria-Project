@@ -464,7 +464,7 @@ void main() {
       final version = await upgraded
           .customSelect('PRAGMA user_version')
           .getSingle();
-      expect(version.read<int>('user_version'), 144);
+      expect(version.read<int>('user_version'), 145);
       final indexes =
           (await upgraded
                   .customSelect(

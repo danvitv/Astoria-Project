@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../models/character.dart';
+import '../../models/chat_message.dart';
 import '../../models/tracker.dart';
 import '../../services/card_rewriter/card_evolution_cadence.dart';
 import '../../services/card_rewriter/card_rewrite_operation_parser.dart';
@@ -15,6 +16,7 @@ import '../../llm/prompt/exact_lorebook_manifest.dart';
 import '../../utils/cast_helpers.dart';
 import '../../utils/id_generator.dart';
 import '../app_db.dart';
+import 'chat_message_storage_repo.dart';
 import 'card_evolution_collector_run_repo.dart';
 import 'character_knowledge_fact_repo.dart';
 import 'ledger_reconciliation_run_repo.dart';
@@ -1099,12 +1101,24 @@ class CardEvolutionRepo {
           CardEvolutionSelectionFailure.sessionMissing,
         );
       }
-      final messages = jsonDecode(session.messagesJson);
-      if (messages is! List) {
+      List<ChatMessage>? storedMessages;
+      try {
+        storedMessages = await ChatMessageStorageRepo(
+          db,
+        ).loadMessagesBySessionId(sessionId);
+      } on Object {
         return const CardEvolutionSelection.failed(
           CardEvolutionSelectionFailure.messagesMalformed,
         );
       }
+      if (storedMessages == null) {
+        return const CardEvolutionSelection.failed(
+          CardEvolutionSelectionFailure.messagesMalformed,
+        );
+      }
+      final messages = <dynamic>[
+        for (final message in storedMessages) message.toJson(),
+      ];
       final runRepo = LedgerReconciliationRunRepo(db);
       final validRuns = await runRepo.readSession(sessionId);
       if (validRuns.isEmpty &&

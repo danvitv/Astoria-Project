@@ -157,12 +157,9 @@ final class _RepairInspectionReader {
 
   List<ChatMessage> messages(_RepairImage image) {
     try {
-      final value = jsonDecode(
-        image.rows(db.chatSessions).single['messages_json'] as String,
-      );
-      _repairRequire(value is List, SessionRepairIssue.invalidShape);
+      final value = _repairMessagePayloads(image, db);
       final messages = <ChatMessage>[];
-      for (final item in value as List) {
+      for (final item in value) {
         _repairRequire(
           item is Map<String, dynamic> &&
               item['id'] is String &&

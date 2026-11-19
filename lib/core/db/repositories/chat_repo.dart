@@ -8,6 +8,7 @@ import '../app_db.dart';
 import '../database_transaction_guard.dart';
 import '../../llm/prompt/exact_lorebook_manifest.dart';
 import 'lorebook_use_manifest_repo.dart';
+import 'chat_message_storage_repo.dart';
 import 'session_deletion_queries.dart';
 import 'support_repo.dart';
 import '../../models/support_models.dart';
@@ -60,6 +61,9 @@ class ChatRepo implements SyncChatStore {
   final AppDatabase _db;
   final SessionMutationStarted? _onMutationStarted;
   ChatRepo(this._db, {this._onMutationStarted});
+  late final ChatMessageStorageRepo _messageStorage = ChatMessageStorageRepo(
+    _db,
+  );
   bool usesDatabase(AppDatabase database) => identical(_db, database);
 
   /// Read-only native maintenance projection; not a chat/UI hydration path.
@@ -91,24 +95,26 @@ class ChatRepo implements SyncChatStore {
       _db.transaction(action);
 
   Future<List<ChatSession>> getByCharacterId(String charId) async {
-    final rows = await (_db.select(
-      _db.chatSessions,
-    )..where((t) => t.characterId.equals(charId))).get();
-    return rows.map(_toModel).toList();
+    return _db.transaction(() async {
+      final rows = await (_db.select(
+        _db.chatSessions,
+      )..where((t) => t.characterId.equals(charId))).get();
+      return _materializeSessions(rows);
+    });
   }
 
-  /// Lightweight per-character session listing: scans message counts without
-  /// deserializing every message (see [_toMetadata]). Use this when only
+  /// Lightweight per-character session listing: projects message metadata
+  /// without deserializing every message. Use this when only
   /// session indexes/counts are needed (e.g. the "Open chat" picker) — the
   /// full [getByCharacterId] decodes all messages and is noticeably slower for
   /// characters with large histories.
   Future<List<SessionMetadata>> getMetadataByCharacterId(String charId) async {
-    final rows =
-        await (_db.select(_db.chatSessions)
-              ..where((t) => t.characterId.equals(charId))
-              ..orderBy([(t) => OrderingTerm(expression: t.sessionIndex)]))
-            .get();
-    return rows.map(_toMetadata).toList();
+    final rows = await _sessionMetadataQuery(
+      where: 's.character_id = ?',
+      variables: [Variable.withString(charId)],
+      orderBy: 's.session_index',
+    ).get();
+    return rows.map(_projectedMetadata).toList();
   }
 
   /// How many chat sessions one character has, aggregated in SQL.
@@ -148,10 +154,12 @@ class ChatRepo implements SyncChatStore {
   }
 
   Future<List<ChatSession>> getAllSessions() async {
-    final rows = await (_db.select(
-      _db.chatSessions,
-    )..orderBy([(t) => OrderingTerm.desc(t.updatedAt)])).get();
-    return rows.map(_toModel).toList();
+    return _db.transaction(() async {
+      final rows = await (_db.select(
+        _db.chatSessions,
+      )..orderBy([(t) => OrderingTerm.desc(t.updatedAt)])).get();
+      return _materializeSessions(rows);
+    });
   }
 
   @override
@@ -255,15 +263,20 @@ class ChatRepo implements SyncChatStore {
       final rows = await _db
           .customSelect(
             r'''SELECT session_id, session_index,
-         CASE WHEN length(CAST(messages_json AS BLOB)) <= 524288 THEN
-           CASE WHEN json_valid(messages_json) THEN
-             CASE WHEN json_type(messages_json) = 'array'
-               THEN json_array_length(messages_json) ELSE 0 END
-             ELSE 0 END
-           ELSE 0 END AS message_count
-        FROM chat_sessions ORDER BY updated_at DESC, session_id LIMIT ? OFFSET ?''',
+         CASE WHEN storage.session_id IS NOT NULL THEN storage.message_count
+           WHEN length(CAST(session.messages_json AS BLOB)) <= 524288 THEN
+             CASE WHEN json_valid(session.messages_json) THEN
+               CASE WHEN json_type(session.messages_json) = 'array'
+                 THEN json_array_length(session.messages_json) ELSE 0 END
+               ELSE 0 END
+             ELSE 0 END AS message_count
+        FROM chat_sessions session
+        LEFT JOIN chat_message_storage_rows storage
+          ON storage.session_id = session.session_id
+        ORDER BY session.updated_at DESC, session.session_id
+        LIMIT ? OFFSET ?''',
             variables: [Variable.withInt(limit), Variable.withInt(offset)],
-            readsFrom: {_db.chatSessions},
+            readsFrom: {_db.chatSessions, _db.chatMessageStorageRows},
           )
           .get();
       requireCurrent();
@@ -284,8 +297,42 @@ class ChatRepo implements SyncChatStore {
   // Project only fields used by the list. Session variables and the last message
   // can contain large Studio payloads/swipes even in a short chat; transferring
   // and decoding either whole JSON object makes draft notifications expensive.
-  Selectable<QueryRow> _sessionMetadataQuery() => _db.customSelect(
+  Selectable<QueryRow> _sessionMetadataQuery({
+    String? where,
+    List<Variable<Object>> variables = const [],
+    String orderBy = 's.updated_at DESC',
+  }) => _db.customSelect(
     '''
+WITH source AS (
+  SELECT
+    s.*,
+    st.session_id AS row_storage_session_id,
+    CASE WHEN st.session_id IS NULL
+      THEN json_array_length(s.messages_json)
+      ELSE st.message_count
+    END AS stored_message_count,
+    CASE WHEN st.session_id IS NULL
+      THEN json_extract(s.messages_json, '\$[0].timestamp')
+      ELSE (
+        SELECT m.message_timestamp FROM chat_message_rows m
+        WHERE m.session_id = s.session_id
+          AND m.storage_generation = st.active_generation
+        ORDER BY m.position_key LIMIT 1
+      )
+    END AS stored_first_timestamp,
+    CASE WHEN st.session_id IS NULL
+      THEN json_extract(s.messages_json, '\$[#-1]')
+      ELSE (
+        SELECT m.message_json FROM chat_message_rows m
+        WHERE m.session_id = s.session_id
+          AND m.storage_generation = st.active_generation
+        ORDER BY m.position_key DESC LIMIT 1
+      )
+    END AS last_message_json
+  FROM chat_sessions s
+  LEFT JOIN chat_message_storage_rows st ON st.session_id = s.session_id
+  ${where == null ? '' : 'WHERE $where'}
+)
 SELECT
   session_id,
   character_id,
@@ -299,24 +346,29 @@ SELECT
     CASE WHEN json_type(session_vars_json, '\$.branchedAt') = 'text'
       THEN json_extract(session_vars_json, '\$.branchedAt') END
   END AS branched_at,
-  json_array_length(messages_json) AS message_count,
-  json_extract(messages_json, '\$[0].timestamp') AS first_timestamp,
-  json_extract(messages_json, '\$[#-1].timestamp') AS last_timestamp,
-  json_extract(messages_json, '\$[#-1].continuationOffset') AS continuation_offset,
-  CASE json_type(messages_json, '\$[#-1].content')
-    WHEN 'text' THEN json_extract(messages_json, '\$[#-1].content')
+  stored_message_count AS message_count,
+  stored_first_timestamp AS first_timestamp,
+  json_extract(last_message_json, '\$.timestamp') AS last_timestamp,
+  json_extract(last_message_json, '\$.continuationOffset') AS continuation_offset,
+  CASE json_type(last_message_json, '\$.content')
+    WHEN 'text' THEN json_extract(last_message_json, '\$.content')
     WHEN 'array' THEN (
       SELECT group_concat(json_extract(part.value, '\$.text'), ' ')
-      FROM json_each(json_extract(messages_json, '\$[#-1].content')) AS part
+      FROM json_each(json_extract(last_message_json, '\$.content')) AS part
       WHERE part.type = 'object'
         AND json_extract(part.value, '\$.type') = 'text'
         AND json_type(part.value, '\$.text') = 'text'
     )
   END AS last_content
-FROM chat_sessions
-ORDER BY updated_at DESC
+FROM source s
+ORDER BY $orderBy
 ''',
-    readsFrom: {_db.chatSessions},
+    variables: variables,
+    readsFrom: {
+      _db.chatSessions,
+      _db.chatMessageStorageRows,
+      _db.chatMessageRows,
+    },
   );
 
   Stream<List<SessionMetadata>> watchAllSessionMetadata() {
@@ -347,10 +399,14 @@ ORDER BY updated_at DESC
 
   @override
   Future<ChatSession?> getById(String sessionId) async {
-    final row = await (_db.select(
-      _db.chatSessions,
-    )..where((t) => t.sessionId.equals(sessionId))).getSingleOrNull();
-    return row != null ? _toModel(row) : null;
+    return _db.transaction(() async {
+      final row = await (_db.select(
+        _db.chatSessions,
+      )..where((t) => t.sessionId.equals(sessionId))).getSingleOrNull();
+      if (row == null) return null;
+      final storage = await _messageStorage.load(row);
+      return _toModel(row, messages: storage.materialized);
+    });
   }
 
   @override
@@ -361,9 +417,35 @@ ORDER BY updated_at DESC
     void Function()? settle;
     try {
       settle = _onMutationStarted?.call(session.id);
-      await _db
-          .into(_db.chatSessions)
-          .insertOnConflictUpdate(_toCompanion(session));
+      await _db.transaction(() async {
+        final existing =
+            await (_db.select(_db.chatSessions)
+                  ..where((table) => table.sessionId.equals(session.id)))
+                .getSingleOrNull();
+        if (existing == null) {
+          // Import/sync/recovery creation remains legacy-backed until those
+          // boundaries explicitly adopt row storage. Ordinary app-created
+          // sessions use insertIfAbsent below.
+          await _db.into(_db.chatSessions).insert(_toCompanion(session));
+          return;
+        }
+        final storage = await _messageStorage.load(existing);
+        if (!storage.isRowBacked) {
+          await _db
+              .into(_db.chatSessions)
+              .insertOnConflictUpdate(_toCompanion(session));
+          return;
+        }
+        await _messageStorage.replaceMessages(
+          sessionId: session.id,
+          before: storage,
+          messages: session.messages,
+          updatedAt: normalizeTimestampSeconds(session.updatedAt),
+        );
+        await (_db.update(_db.chatSessions)
+              ..where((table) => table.sessionId.equals(session.id)))
+            .write(_toCompanion(session, includeMessages: false));
+      });
     } finally {
       settle?.call();
       inventory();
@@ -375,13 +457,21 @@ ORDER BY updated_at DESC
   Future<bool> insertIfAbsent(ChatSession session) async {
     final inventory = SessionDeletionQueries.beginInventoryMutation(_db);
     try {
-      final inserted = await _db
-          .into(_db.chatSessions)
-          .insertReturningOrNull(
-            _toCompanion(session),
-            mode: InsertMode.insertOrIgnore,
-          );
-      return inserted != null;
+      return _db.transaction(() async {
+        final inserted = await _db
+            .into(_db.chatSessions)
+            .insertReturningOrNull(
+              _toCompanion(session, includeMessages: false),
+              mode: InsertMode.insertOrIgnore,
+            );
+        if (inserted == null) return false;
+        await _messageStorage.createForSession(
+          sessionId: session.id,
+          messages: session.messages,
+          updatedAt: normalizeTimestampSeconds(session.updatedAt),
+        );
+        return true;
+      });
     } finally {
       inventory();
     }
@@ -397,6 +487,13 @@ ORDER BY updated_at DESC
     required ChatMessage message,
     required int updatedAt,
   }) async {
+    if (await _messageStorage.stateFor(sessionId) != null) {
+      return _appendRowBackedUserMessage(
+        sessionId: sessionId,
+        message: message,
+        updatedAt: updatedAt,
+      );
+    }
     while (true) {
       final snapshot = await (_db.select(
         _db.chatSessions,
@@ -458,6 +555,14 @@ ORDER BY updated_at DESC
   }) async {
     if (expectedPrecedingAssistant.sessionId != sessionId) {
       return null;
+    }
+    if (await _messageStorage.stateFor(sessionId) != null) {
+      return _appendRowBackedAcceptedUserMessage(
+        sessionId: sessionId,
+        message: message,
+        expectedPrecedingAssistant: expectedPrecedingAssistant,
+        updatedAt: updatedAt,
+      );
     }
     while (true) {
       final snapshot = await (_db.select(
@@ -556,6 +661,123 @@ ORDER BY updated_at DESC
     }
   }
 
+  Future<ChatSession?> _appendRowBackedUserMessage({
+    required String sessionId,
+    required ChatMessage message,
+    required int updatedAt,
+  }) => _db.transaction(() async {
+    final row = await (_db.select(
+      _db.chatSessions,
+    )..where((table) => table.sessionId.equals(sessionId))).getSingleOrNull();
+    if (row == null) return null;
+    final storage = await _messageStorage.load(row);
+    if (!storage.isRowBacked) return null;
+    final messages = List<ChatMessage>.from(storage.materialized)..add(message);
+    await _messageStorage.replaceMessages(
+      sessionId: sessionId,
+      before: storage,
+      messages: messages,
+      updatedAt: updatedAt,
+    );
+    await (_db.update(
+      _db.chatSessions,
+    )..where((table) => table.sessionId.equals(sessionId))).write(
+      ChatSessionsCompanion(
+        draft: const Value(''),
+        updatedAt: Value(updatedAt),
+      ),
+    );
+    return _toModel(
+      row.copyWith(draft: const Value(''), updatedAt: updatedAt),
+      messages: messages,
+    );
+  });
+
+  Future<ChatSession?> _appendRowBackedAcceptedUserMessage({
+    required String sessionId,
+    required ChatMessage message,
+    required LorebookUseGenerationIdentity expectedPrecedingAssistant,
+    required int updatedAt,
+  }) => _db.transaction(() async {
+    final row = await (_db.select(
+      _db.chatSessions,
+    )..where((table) => table.sessionId.equals(sessionId))).getSingleOrNull();
+    if (row == null) return null;
+    final storage = await _messageStorage.load(row);
+    if (!storage.isRowBacked) return null;
+    final messages = List<ChatMessage>.from(storage.materialized);
+
+    if (messages.any((existing) => existing.id == message.id)) {
+      if ((row.draft ?? '').isNotEmpty) {
+        await (_db.update(_db.chatSessions)
+              ..where((table) => table.sessionId.equals(sessionId)))
+            .write(const ChatSessionsCompanion(draft: Value('')));
+      }
+      return _toModel(
+        row.draft == null || row.draft!.isEmpty
+            ? row
+            : row.copyWith(draft: const Value('')),
+        messages: messages,
+      );
+    }
+
+    final preceding = messages.lastOrNull;
+    if (preceding == null ||
+        preceding.role != 'assistant' ||
+        preceding.id != expectedPrecedingAssistant.messageId ||
+        preceding.swipeId != expectedPrecedingAssistant.swipeId ||
+        preceding.agentSwipeId != expectedPrecedingAssistant.agentSwipeId) {
+      return null;
+    }
+
+    final manifest =
+        await (_db.select(_db.lorebookUseManifests)
+              ..where((table) => table.sessionId.equals(sessionId))
+              ..where(
+                (table) => table.messageId.equals(
+                  expectedPrecedingAssistant.messageId,
+                ),
+              )
+              ..where(
+                (table) =>
+                    table.swipeId.equals(expectedPrecedingAssistant.swipeId),
+              )
+              ..where(
+                (table) => table.agentSwipeId.equals(
+                  expectedPrecedingAssistant.agentSwipeId,
+                ),
+              ))
+            .getSingleOrNull();
+
+    messages.add(message);
+    await _messageStorage.replaceMessages(
+      sessionId: sessionId,
+      before: storage,
+      messages: messages,
+      updatedAt: updatedAt,
+    );
+    await (_db.update(
+      _db.chatSessions,
+    )..where((table) => table.sessionId.equals(sessionId))).write(
+      ChatSessionsCompanion(
+        draft: const Value(''),
+        updatedAt: Value(updatedAt),
+      ),
+    );
+    if (manifest != null) {
+      await LorebookUseManifestRepo(_db).insertVariationAcceptance(
+        acceptanceId: 'variation:$sessionId:${message.id}',
+        identity: expectedPrecedingAssistant,
+        acceptedByUserMessageId: message.id,
+        acceptedAt: updatedAt,
+      );
+    }
+    return _toModel(
+      row.copyWith(draft: const Value(''), updatedAt: updatedAt),
+      messages: messages,
+    );
+  });
+
   /// Updates only the draft column, and only if [expectedMessageCount] still
   /// matches the row. A delayed input debounce from before Send must not write
   /// an old draft over a session that has since gained the user message.
@@ -567,15 +789,23 @@ ORDER BY updated_at DESC
     required String draft,
     required int expectedMessageCount,
   }) async {
-    final changed =
-        await (_db.update(_db.chatSessions)..where(
-              (t) =>
-                  t.sessionId.equals(sessionId) &
-                  const CustomExpression<int>(
-                    'json_array_length(messages_json)',
-                  ).equals(expectedMessageCount),
-            ))
-            .write(ChatSessionsCompanion(draft: Value(draft)));
+    final changed = await _db.customUpdate(
+      '''UPDATE chat_sessions SET draft = ?
+         WHERE session_id = ? AND
+         CASE WHEN EXISTS (
+           SELECT 1 FROM chat_message_storage_rows storage
+           WHERE storage.session_id = chat_sessions.session_id
+         ) THEN (
+           SELECT storage.message_count FROM chat_message_storage_rows storage
+           WHERE storage.session_id = chat_sessions.session_id
+         ) ELSE json_array_length(messages_json) END = ?''',
+      variables: [
+        Variable.withString(draft),
+        Variable.withString(sessionId),
+        Variable.withInt(expectedMessageCount),
+      ],
+      updates: {_db.chatSessions},
+    );
     return changed == 1 ? draft : null;
   }
 
@@ -697,13 +927,11 @@ ORDER BY updated_at DESC
       )..where((t) => t.sessionId.equals(sessionId))).getSingleOrNull();
       if (row == null) return null;
 
-      final current = _toModel(row);
+      final storage = await _messageStorage.load(row);
+      final current = _toModel(row, messages: storage.materialized);
       final updated = mutate(current);
       if (updated == null) return null;
       if (beforeWrite != null) await beforeWrite(current, updated);
-      final messagesJson = jsonEncode(
-        updated.messages.map((e) => e.toJson()).toList(),
-      );
       final sessionVarsJson = _sessionVarsJsonWithDelta(
         row.sessionVarsJson,
         current.sessionVars,
@@ -717,11 +945,27 @@ ORDER BY updated_at DESC
           : null;
       final durableUpdatedAt = updatedAt ?? updated.updatedAt;
 
+      String? messagesJson;
+      if (storage.isRowBacked) {
+        await _messageStorage.replaceMessages(
+          sessionId: sessionId,
+          before: storage,
+          messages: updated.messages,
+          updatedAt: durableUpdatedAt,
+        );
+      } else {
+        messagesJson = jsonEncode(
+          updated.messages.map((e) => e.toJson()).toList(),
+        );
+      }
+
       await (_db.update(
         _db.chatSessions,
       )..where((t) => t.sessionId.equals(sessionId))).write(
         ChatSessionsCompanion(
-          messagesJson: Value(messagesJson),
+          messagesJson: messagesJson != null
+              ? Value(messagesJson)
+              : const Value.absent(),
           sessionVarsJson: Value(sessionVarsJson),
           authorsNoteJson: Value(authorsNoteJson),
           draft: Value(updated.draft),
@@ -732,7 +976,7 @@ ORDER BY updated_at DESC
 
       return _toModel(
         row.copyWith(
-          messagesJson: messagesJson,
+          messagesJson: messagesJson ?? row.messagesJson,
           sessionVarsJson: Value(sessionVarsJson),
           authorsNoteJson: Value(authorsNoteJson),
           draft: Value(updated.draft),
@@ -766,7 +1010,8 @@ ORDER BY updated_at DESC
                 .getSingleOrNull();
         if (row == null) return null;
 
-        final latest = _toModel(row);
+        final storage = await _messageStorage.load(row);
+        final latest = _toModel(row, messages: storage.materialized);
         final messages = List<ChatMessage>.from(latest.messages);
         if (canCommit != null && !canCommit(latest)) return null;
         ChatMessage? committed;
@@ -821,9 +1066,19 @@ ORDER BY updated_at DESC
         if (canCommit != null && !canCommit(latest)) {
           throw const _GenerationCommitRetired();
         }
-        final messagesJson = jsonEncode(
-          updated.messages.map((e) => e.toJson()).toList(),
-        );
+        String? messagesJson;
+        if (storage.isRowBacked) {
+          await _messageStorage.replaceMessages(
+            sessionId: generatedSession.id,
+            before: storage,
+            messages: updated.messages,
+            updatedAt: generatedSession.updatedAt,
+          );
+        } else {
+          messagesJson = jsonEncode(
+            updated.messages.map((e) => e.toJson()).toList(),
+          );
+        }
         final sessionVarsJson = _sessionVarsJsonWithDelta(
           row.sessionVarsJson,
           latest.sessionVars,
@@ -840,7 +1095,9 @@ ORDER BY updated_at DESC
           _db.chatSessions,
         )..where((table) => table.sessionId.equals(generatedSession.id))).write(
           ChatSessionsCompanion(
-            messagesJson: Value(messagesJson),
+            messagesJson: messagesJson != null
+                ? Value(messagesJson)
+                : const Value.absent(),
             sessionVarsJson: Value(sessionVarsJson),
             authorsNoteJson: Value(authorsNoteJson),
             draft: Value(updated.draft),
@@ -891,13 +1148,14 @@ ORDER BY updated_at DESC
 
         return _toModel(
           row.copyWith(
-            messagesJson: messagesJson,
+            messagesJson: messagesJson ?? row.messagesJson,
             sessionVarsJson: Value(sessionVarsJson),
             authorsNoteJson: Value(authorsNoteJson),
             draft: Value(updated.draft),
             lastScrollAnchorJson: Value(lastScrollAnchorJson),
             updatedAt: generatedSession.updatedAt,
           ),
+          messages: updated.messages,
         );
       });
     } on _GenerationCommitRetired {
@@ -1005,6 +1263,30 @@ ORDER BY updated_at DESC
     }
   }
 
+  Future<bool> _mutateLastMessageById({
+    required String sessionId,
+    required String messageId,
+    required ChatMessage? Function(ChatMessage message) mutate,
+  }) async {
+    var changed = false;
+    final result = await _mutateSession(
+      sessionId: sessionId,
+      mutate: (session) {
+        final messages = List<ChatMessage>.from(session.messages);
+        for (var index = messages.length - 1; index >= 0; index--) {
+          if (messages[index].id != messageId) continue;
+          final updated = mutate(messages[index]);
+          if (updated == null) return null;
+          messages[index] = updated;
+          changed = true;
+          return session.copyWith(messages: messages);
+        }
+        return null;
+      },
+    );
+    return changed && result != null;
+  }
+
   /// Atomically updates a single message's content and appends a new swipe.
   ///
   /// Used by the POST-cleaner (Stage 4) to replace the assistant text while
@@ -1020,51 +1302,21 @@ ORDER BY updated_at DESC
     required String messageId,
     required String newContent,
     required String previousContent,
-  }) async {
-    return _db.transaction(() async {
-      final row = await (_db.select(
-        _db.chatSessions,
-      )..where((t) => t.sessionId.equals(sessionId))).getSingleOrNull();
-      if (row == null) return false;
-
-      final messages = (jsonDecode(row.messagesJson) as List<dynamic>)
-          .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
-          .toList();
-
-      var found = false;
-      for (var i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].id == messageId) {
-          final msg = messages[i];
-          final swipes = List<String>.from(msg.swipes);
-          // Preserve original as previous swipe, add cleaned as new swipe.
-          if (swipes.isNotEmpty) {
-            swipes[swipes.length - 1] = previousContent;
-          }
-          swipes.add(newContent);
-          messages[i] = msg.copyWith(
-            content: newContent,
-            swipes: swipes,
-            swipeId: swipes.length - 1,
-          );
-          found = true;
-          break;
-        }
-      }
-
-      if (!found) return false;
-
-      await (_db.update(
-        _db.chatSessions,
-      )..where((t) => t.sessionId.equals(sessionId))).write(
-        ChatSessionsCompanion(
-          messagesJson: Value(
-            jsonEncode(messages.map((e) => e.toJson()).toList()),
-          ),
-        ),
+  }) => _mutateLastMessageById(
+    sessionId: sessionId,
+    messageId: messageId,
+    mutate: (message) {
+      final swipes = List<String>.from(message.swipes);
+      // Preserve original as previous swipe, add cleaned as new swipe.
+      if (swipes.isNotEmpty) swipes[swipes.length - 1] = previousContent;
+      swipes.add(newContent);
+      return message.copyWith(
+        content: newContent,
+        swipes: swipes,
+        swipeId: swipes.length - 1,
       );
-      return true;
-    });
-  }
+    },
+  );
 
   /// Atomically appends a new green swipe carrying [cleanedText] to a
   /// message, then sets that swipe as the active content. Used by the
@@ -1077,60 +1329,26 @@ ORDER BY updated_at DESC
     required String sessionId,
     required String messageId,
     required String cleanedText,
-  }) async {
-    return _db.transaction(() async {
-      final row = await (_db.select(
-        _db.chatSessions,
-      )..where((t) => t.sessionId.equals(sessionId))).getSingleOrNull();
-      if (row == null) return false;
-
-      final messages = (jsonDecode(row.messagesJson) as List<dynamic>)
-          .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
-          .toList();
-
-      var found = false;
-      for (var i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].id == messageId) {
-          final msg = messages[i];
-          final swipes = List<String>.from(msg.swipes);
-          final swipesMeta = List<Map<String, dynamic>>.from(msg.swipesMeta);
-          // Ensure swipes/swipesMeta are seeded from the current content if
-          // the message predated the swipes model (single-content fallback).
-          if (swipes.isEmpty) {
-            swipes.add(msg.content);
-          }
-          while (swipesMeta.length < swipes.length) {
-            swipesMeta.add(<String, dynamic>{});
-          }
-          // Append the cleaned text as a new green swipe.
-          swipes.add(cleanedText);
-          swipesMeta.add(<String, dynamic>{});
-          final newSwipeId = swipes.length - 1;
-          messages[i] = msg.copyWith(
-            content: cleanedText,
-            swipes: swipes,
-            swipesMeta: swipesMeta,
-            swipeId: newSwipeId,
-          );
-          found = true;
-          break;
-        }
+  }) => _mutateLastMessageById(
+    sessionId: sessionId,
+    messageId: messageId,
+    mutate: (message) {
+      final swipes = List<String>.from(message.swipes);
+      final swipesMeta = List<Map<String, dynamic>>.from(message.swipesMeta);
+      if (swipes.isEmpty) swipes.add(message.content);
+      while (swipesMeta.length < swipes.length) {
+        swipesMeta.add(<String, dynamic>{});
       }
-
-      if (!found) return false;
-
-      await (_db.update(
-        _db.chatSessions,
-      )..where((t) => t.sessionId.equals(sessionId))).write(
-        ChatSessionsCompanion(
-          messagesJson: Value(
-            jsonEncode(messages.map((e) => e.toJson()).toList()),
-          ),
-        ),
+      swipes.add(cleanedText);
+      swipesMeta.add(<String, dynamic>{});
+      return message.copyWith(
+        content: cleanedText,
+        swipes: swipes,
+        swipesMeta: swipesMeta,
+        swipeId: swipes.length - 1,
       );
-      return true;
-    });
-  }
+    },
+  );
 
   /// Atomically appends a nested agent swipe ([kind]: 'cleaned' | 'final') to
   /// a message and sets it as the active agent swipe. Used by the POST-cleaner
@@ -1153,123 +1371,71 @@ ORDER BY updated_at DESC
     String? genTime,
     int? tokens,
     List<Map<String, dynamic>> studioOutputs = const [],
-  }) async {
-    return _db.transaction(() async {
-      final row = await (_db.select(
-        _db.chatSessions,
-      )..where((t) => t.sessionId.equals(sessionId))).getSingleOrNull();
-      if (row == null) return false;
-
-      final messages = (jsonDecode(row.messagesJson) as List<dynamic>)
-          .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
-          .toList();
-
-      var found = false;
-      for (var i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].id == messageId) {
-          final msg = messages[i];
-          final agentSwipes = List<AgentSwipe>.from(msg.agentSwipes);
-
-          // Lazy migration: if agentSwipes is empty and we're adding a
-          // 'cleaned' swipe, backfill a 'final' from the current content.
-          if (agentSwipes.isEmpty && kind == 'cleaned') {
-            agentSwipes.add(
-              AgentSwipe(
-                content: msg.content,
-                kind: 'final',
-                reasoning: msg.reasoning,
-                genTime: msg.genTime,
-                tokens: msg.tokens,
-                time: msg.time,
-                studioOutputs: msg.studioOutputs,
-              ),
-            );
-          }
-
-          // A 'cleaned' swipe's parent is always the original 'final' swipe,
-          // never a previous 'cleaned' swipe. This matters for Re-run cleaner:
-          // each re-run must re-clean the original final text, not a previous
-          // (already shortened) cleaned swipe. Find the last 'final' swipe in
-          // the list (the lazy-migration block above backfills one at index 0
-          // when needed). Fall back to the last swipe only if no 'final' is
-          // present at all (defensive — should not happen in practice).
-          var parentSwipeId = kind == 'cleaned' && agentSwipes.isNotEmpty
-              ? agentSwipes.lastIndexWhere((s) => s.kind == 'final')
-              : null;
-          if (kind == 'cleaned' &&
-              parentSwipeId == null &&
-              agentSwipes.isNotEmpty) {
-            parentSwipeId = agentSwipes.length - 1;
-          }
-
-          // Inherit studioOutputs from the parent 'final' swipe so that
-          // switching to the 'cleaned' blue swipe keeps the Studio regen
-          // button visible (showStudioFinalRegen depends on studioOutputs).
-          final effectiveStudioOutputs = studioOutputs.isNotEmpty
-              ? studioOutputs
-              : (kind == 'cleaned' && parentSwipeId != null
-                    ? agentSwipes[parentSwipeId].studioOutputs
-                    : const <Map<String, dynamic>>[]);
-          final effectiveReasoning =
-              reasoning ??
-              (kind == 'cleaned' && parentSwipeId != null
-                  ? agentSwipes[parentSwipeId].reasoning
-                  : null);
-
-          final appendedSwipe = AgentSwipe(
-            content: content,
-            kind: kind,
-            reasoning: effectiveReasoning,
-            genTime: genTime,
-            tokens: tokens,
-            time: kind == 'cleaned' && parentSwipeId != null
-                ? agentSwipes[parentSwipeId].time
-                : null,
-            studioOutputs: effectiveStudioOutputs,
-            parentSwipeId: parentSwipeId,
-          );
-          agentSwipes.add(appendedSwipe);
-
-          messages[i] = msg.copyWith(
-            content: content,
-            // The new swipe becomes the active swipe — sync the top-level
-            // rendered genTime/tokens so the chat bubble badge matches the
-            // swipe (mirrors updateAgentSwipeContent's isActive branch).
-            // Without this, appendAgentSwipe leaves the message's genTime/
-            // tokens pointing at the previous (parent) swipe, so the badge
-            // shows stale values or null after a cleaner finalize via the
-            // applyCleanedText fallback path.
-            genTime: genTime ?? msg.genTime,
-            tokens: tokens ?? msg.tokens,
-            time: appendedSwipe.time,
-            agentSwipes: agentSwipes,
-            agentSwipeId: agentSwipes.length - 1,
-            swipesMeta: _syncAgentSwipesToMeta(
-              msg.swipesMeta,
-              msg.swipeId,
-              agentSwipes,
-              agentSwipes.length - 1,
-            ),
-          );
-          found = true;
-          break;
-        }
-      }
-
-      if (!found) return false;
-
-      await (_db.update(
-        _db.chatSessions,
-      )..where((t) => t.sessionId.equals(sessionId))).write(
-        ChatSessionsCompanion(
-          messagesJson: Value(
-            jsonEncode(messages.map((e) => e.toJson()).toList()),
+  }) => _mutateLastMessageById(
+    sessionId: sessionId,
+    messageId: messageId,
+    mutate: (message) {
+      final agentSwipes = List<AgentSwipe>.from(message.agentSwipes);
+      if (agentSwipes.isEmpty && kind == 'cleaned') {
+        agentSwipes.add(
+          AgentSwipe(
+            content: message.content,
+            kind: 'final',
+            reasoning: message.reasoning,
+            genTime: message.genTime,
+            tokens: message.tokens,
+            time: message.time,
+            studioOutputs: message.studioOutputs,
           ),
+        );
+      }
+      var parentSwipeId = kind == 'cleaned' && agentSwipes.isNotEmpty
+          ? agentSwipes.lastIndexWhere((swipe) => swipe.kind == 'final')
+          : null;
+      if (kind == 'cleaned' &&
+          parentSwipeId == null &&
+          agentSwipes.isNotEmpty) {
+        parentSwipeId = agentSwipes.length - 1;
+      }
+      final effectiveStudioOutputs = studioOutputs.isNotEmpty
+          ? studioOutputs
+          : (kind == 'cleaned' && parentSwipeId != null
+                ? agentSwipes[parentSwipeId].studioOutputs
+                : const <Map<String, dynamic>>[]);
+      final effectiveReasoning =
+          reasoning ??
+          (kind == 'cleaned' && parentSwipeId != null
+              ? agentSwipes[parentSwipeId].reasoning
+              : null);
+      final appendedSwipe = AgentSwipe(
+        content: content,
+        kind: kind,
+        reasoning: effectiveReasoning,
+        genTime: genTime,
+        tokens: tokens,
+        time: kind == 'cleaned' && parentSwipeId != null
+            ? agentSwipes[parentSwipeId].time
+            : null,
+        studioOutputs: effectiveStudioOutputs,
+        parentSwipeId: parentSwipeId,
+      );
+      agentSwipes.add(appendedSwipe);
+      return message.copyWith(
+        content: content,
+        genTime: genTime ?? message.genTime,
+        tokens: tokens ?? message.tokens,
+        time: appendedSwipe.time,
+        agentSwipes: agentSwipes,
+        agentSwipeId: agentSwipes.length - 1,
+        swipesMeta: _syncAgentSwipesToMeta(
+          message.swipesMeta,
+          message.swipeId,
+          agentSwipes,
+          agentSwipes.length - 1,
         ),
       );
-      return true;
-    });
-  }
+    },
+  );
 
   /// Atomically updates the content (and optional genTime/tokens) of an
   /// existing nested agent swipe in place, without appending a new one.
@@ -1295,66 +1461,35 @@ ORDER BY updated_at DESC
     required String content,
     String? genTime,
     int? tokens,
-  }) async {
-    return _db.transaction(() async {
-      final row = await (_db.select(
-        _db.chatSessions,
-      )..where((t) => t.sessionId.equals(sessionId))).getSingleOrNull();
-      if (row == null) return false;
-
-      final messages = (jsonDecode(row.messagesJson) as List<dynamic>)
-          .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
-          .toList();
-
-      var found = false;
-      for (var i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].id != messageId) continue;
-        final msg = messages[i];
-        if (agentSwipeId < 0 || agentSwipeId >= msg.agentSwipes.length) {
-          return false;
-        }
-        final agentSwipes = List<AgentSwipe>.from(msg.agentSwipes);
-        final prev = agentSwipes[agentSwipeId];
-        agentSwipes[agentSwipeId] = prev.copyWith(
-          content: content,
-          genTime: genTime ?? prev.genTime,
-          tokens: tokens ?? prev.tokens,
-        );
-
-        // When this is the active swipe, also update the top-level rendered
-        // content so the chat list + bubble match the swipe (mirrors
-        // appendAgentSwipe which writes `content: content` on the message).
-        final isActive = msg.agentSwipeId == agentSwipeId;
-        messages[i] = msg.copyWith(
-          content: isActive ? content : msg.content,
-          genTime: isActive ? (genTime ?? msg.genTime) : msg.genTime,
-          tokens: isActive ? (tokens ?? msg.tokens) : msg.tokens,
-          agentSwipes: agentSwipes,
-          swipesMeta: _syncAgentSwipesToMeta(
-            msg.swipesMeta,
-            msg.swipeId,
-            agentSwipes,
-            msg.agentSwipeId,
-          ),
-        );
-        found = true;
-        break;
+  }) => _mutateLastMessageById(
+    sessionId: sessionId,
+    messageId: messageId,
+    mutate: (message) {
+      if (agentSwipeId < 0 || agentSwipeId >= message.agentSwipes.length) {
+        return null;
       }
-
-      if (!found) return false;
-
-      await (_db.update(
-        _db.chatSessions,
-      )..where((t) => t.sessionId.equals(sessionId))).write(
-        ChatSessionsCompanion(
-          messagesJson: Value(
-            jsonEncode(messages.map((e) => e.toJson()).toList()),
-          ),
+      final agentSwipes = List<AgentSwipe>.from(message.agentSwipes);
+      final previous = agentSwipes[agentSwipeId];
+      agentSwipes[agentSwipeId] = previous.copyWith(
+        content: content,
+        genTime: genTime ?? previous.genTime,
+        tokens: tokens ?? previous.tokens,
+      );
+      final isActive = message.agentSwipeId == agentSwipeId;
+      return message.copyWith(
+        content: isActive ? content : message.content,
+        genTime: isActive ? (genTime ?? message.genTime) : message.genTime,
+        tokens: isActive ? (tokens ?? message.tokens) : message.tokens,
+        agentSwipes: agentSwipes,
+        swipesMeta: _syncAgentSwipesToMeta(
+          message.swipesMeta,
+          message.swipeId,
+          agentSwipes,
+          message.agentSwipeId,
         ),
       );
-      return true;
-    });
-  }
+    },
+  );
 
   /// Atomically removes a nested agent swipe and resets the active swipe to
   /// the last remaining one (typically the parent 'final'). Used by the
@@ -1374,70 +1509,39 @@ ORDER BY updated_at DESC
     required String sessionId,
     required String messageId,
     required int agentSwipeId,
-  }) async {
-    return _db.transaction(() async {
-      final row = await (_db.select(
-        _db.chatSessions,
-      )..where((t) => t.sessionId.equals(sessionId))).getSingleOrNull();
-      if (row == null) return false;
-
-      final messages = (jsonDecode(row.messagesJson) as List<dynamic>)
-          .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
-          .toList();
-
-      var found = false;
-      for (var i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].id != messageId) continue;
-        final msg = messages[i];
-        if (agentSwipeId < 0 || agentSwipeId >= msg.agentSwipes.length) {
-          return false;
-        }
-        // Never remove the last remaining swipe — preserve the parent 'final'.
-        if (msg.agentSwipes.length <= 1) return false;
-
-        final agentSwipes = List<AgentSwipe>.from(msg.agentSwipes)
-          ..removeAt(agentSwipeId);
-        // Clamp active to the last remaining swipe (parent 'final' when the
-        // caller removed a 'cleaned' sub-swipe).
-        final newActiveId = (msg.agentSwipeId >= agentSwipes.length)
-            ? agentSwipes.length - 1
-            : (msg.agentSwipeId > agentSwipeId
-                  ? msg.agentSwipeId - 1
-                  : msg.agentSwipeId);
-        final active = agentSwipes[newActiveId];
-
-        messages[i] = msg.copyWith(
-          content: active.content,
-          genTime: active.genTime,
-          tokens: active.tokens,
-          time: active.time,
-          agentSwipes: agentSwipes,
-          agentSwipeId: newActiveId,
-          swipesMeta: _syncAgentSwipesToMeta(
-            msg.swipesMeta,
-            msg.swipeId,
-            agentSwipes,
-            newActiveId,
-          ),
-        );
-        found = true;
-        break;
+  }) => _mutateLastMessageById(
+    sessionId: sessionId,
+    messageId: messageId,
+    mutate: (message) {
+      if (agentSwipeId < 0 ||
+          agentSwipeId >= message.agentSwipes.length ||
+          message.agentSwipes.length <= 1) {
+        return null;
       }
-
-      if (!found) return false;
-
-      await (_db.update(
-        _db.chatSessions,
-      )..where((t) => t.sessionId.equals(sessionId))).write(
-        ChatSessionsCompanion(
-          messagesJson: Value(
-            jsonEncode(messages.map((e) => e.toJson()).toList()),
-          ),
+      final agentSwipes = List<AgentSwipe>.from(message.agentSwipes)
+        ..removeAt(agentSwipeId);
+      final newActiveId = message.agentSwipeId >= agentSwipes.length
+          ? agentSwipes.length - 1
+          : (message.agentSwipeId > agentSwipeId
+                ? message.agentSwipeId - 1
+                : message.agentSwipeId);
+      final active = agentSwipes[newActiveId];
+      return message.copyWith(
+        content: active.content,
+        genTime: active.genTime,
+        tokens: active.tokens,
+        time: active.time,
+        agentSwipes: agentSwipes,
+        agentSwipeId: newActiveId,
+        swipesMeta: _syncAgentSwipesToMeta(
+          message.swipesMeta,
+          message.swipeId,
+          agentSwipes,
+          newActiveId,
         ),
       );
-      return true;
-    });
-  }
+    },
+  );
 
   /// Sync [agentSwipes] + [agentSwipeId] into `swipesMeta[swipeId]` so that
   /// green-swipe round-trips preserve agent swipes even without an explicit
@@ -1492,95 +1596,6 @@ ORDER BY updated_at DESC
     }
   }
 
-  SessionMetadata _toMetadata(ChatSessionRow c) {
-    final json = c.messagesJson;
-
-    // Lightweight scan: count top-level objects and find last object start
-    // without deserializing the entire messages array.
-    int messageCount = 0;
-    String lastContent = '';
-    int lastTimestamp = 0;
-
-    if (json.length > 2) {
-      final (count, startIdx) = _scanTopLevelObjects(json);
-      messageCount = count;
-
-      if (startIdx >= 0) {
-        final lastBrace = json.lastIndexOf('}');
-        if (lastBrace > startIdx) {
-          try {
-            final lastMsg =
-                jsonDecode(json.substring(startIdx, lastBrace + 1))
-                    as Map<String, dynamic>;
-            final rawContent = lastMsg['content'];
-            if (rawContent is String) {
-              lastContent = rawContent;
-            } else if (rawContent is List) {
-              final parts = <String>[];
-              for (final p in rawContent) {
-                if (p is Map && p['type'] == 'text') {
-                  final t = p['text'];
-                  if (t is String) parts.add(t);
-                }
-              }
-              lastContent = parts.join(' ');
-            }
-            // A continued message grew at its tail, so the row must preview
-            // from the continuation boundary rather than the head (INV-CM7).
-            lastContent = previewSource(
-              lastContent,
-              lastMsg['continuationOffset'] as int?,
-            );
-            if (lastContent.length > 250) {
-              lastContent = lastContent.substring(0, 250);
-            }
-            lastTimestamp = (lastMsg['timestamp'] as int?) ?? 0;
-          } catch (_) {}
-        }
-      }
-    }
-
-    String? sessionName;
-    int? branchedAt;
-    if (c.sessionVarsJson != null && c.sessionVarsJson!.isNotEmpty) {
-      try {
-        final vars = jsonDecode(c.sessionVarsJson!) as Map;
-        sessionName = vars['sessionName'] as String?;
-        final b = vars['branchedAt'];
-        if (b is String) branchedAt = int.tryParse(b);
-      } catch (_) {}
-    }
-
-    // Origin event: a branch stamp wins over the creation time (the first
-    // message timestamp). Reported alongside — never folded into
-    // lastMessageTimestamp — so the cloud-sync metadata hash stays stable.
-    int originTimestamp = 0;
-    String? originKind;
-    if (branchedAt != null && branchedAt > 0) {
-      originTimestamp = branchedAt;
-      originKind = 'branched';
-    } else {
-      final firstTs = _firstMessageTimestamp(json);
-      if (firstTs > 0) {
-        originTimestamp = firstTs;
-        originKind = 'created';
-      }
-    }
-
-    return SessionMetadata(
-      sessionId: c.sessionId,
-      characterId: c.characterId,
-      sessionIndex: c.sessionIndex,
-      updatedAt: normalizeTimestampSeconds(c.updatedAt),
-      messageCount: messageCount,
-      lastMessageContent: lastContent,
-      lastMessageTimestamp: lastTimestamp,
-      sessionName: sessionName,
-      originTimestamp: originTimestamp,
-      originKind: originKind,
-    );
-  }
-
   SessionMetadata _projectedMetadata(QueryRow row) {
     // Offsets are Dart UTF-16 positions, not SQLite character positions. Keep
     // continuation slicing here so emoji before the boundary remain correct.
@@ -1614,87 +1629,6 @@ ORDER BY updated_at DESC
     );
   }
 
-  /// Timestamp (ms) of the first top-level message object, or 0. String-aware
-  /// brace scan that stops at the first object — cheap enough for the
-  /// metadata listing, which otherwise decodes only the last message.
-  static int _firstMessageTimestamp(String json) {
-    int depth = 0;
-    int start = -1;
-    bool inString = false;
-    for (int i = 0; i < json.length; i++) {
-      final ch = json.codeUnitAt(i);
-      if (inString) {
-        if (ch == 0x5C /* \ */ ) {
-          i++;
-        } else if (ch == 0x22 /* " */ ) {
-          inString = false;
-        }
-        continue;
-      }
-      if (ch == 0x22 /* " */ ) {
-        inString = true;
-      } else if (ch == 0x5B /* [ */ ) {
-        depth++;
-      } else if (ch == 0x7B /* { */ ) {
-        depth++;
-        if (depth == 2 && start < 0) start = i;
-      } else if (ch == 0x5D /* ] */ ) {
-        depth--;
-      } else if (ch == 0x7D /* } */ ) {
-        depth--;
-        if (start >= 0 && depth == 1) {
-          try {
-            final obj =
-                jsonDecode(json.substring(start, i + 1))
-                    as Map<String, dynamic>;
-            return (obj['timestamp'] as int?) ?? 0;
-          } catch (_) {
-            return 0;
-          }
-        }
-      }
-    }
-    return 0;
-  }
-
-  /// Single-pass scan of a JSON array string.
-  /// Returns (objectCount, lastObjectStartIndex) without full deserialization.
-  static (int, int) _scanTopLevelObjects(String json) {
-    int count = 0;
-    int lastStart = -1;
-    int depth = 0;
-    bool inString = false;
-
-    for (int i = 0; i < json.length; i++) {
-      final ch = json.codeUnitAt(i);
-      if (inString) {
-        if (ch == 0x5C /* \ */ ) {
-          i++; // skip escaped char
-        } else if (ch == 0x22 /* " */ ) {
-          inString = false;
-        }
-        continue;
-      }
-      switch (ch) {
-        case 0x22: // "
-          inString = true;
-        case 0x5B: // [
-          depth++;
-        case 0x5D: // ]
-          depth--;
-        case 0x7B: // {
-          depth++;
-          if (depth == 2) {
-            count++;
-            lastStart = i;
-          }
-        case 0x7D: // }
-          depth--;
-      }
-    }
-    return (count, lastStart);
-  }
-
   ChatSession _toModel(ChatSessionRow c, {List<ChatMessage>? messages}) =>
       ChatSession(
         id: c.sessionId,
@@ -1717,11 +1651,26 @@ ORDER BY updated_at DESC
             : {},
       );
 
-  ChatSessionsCompanion _toCompanion(ChatSession m) => ChatSessionsCompanion(
+  Future<List<ChatSession>> _materializeSessions(
+    List<ChatSessionRow> rows,
+  ) async {
+    final storage = await _messageStorage.loadMany(rows);
+    return [
+      for (final row in rows)
+        _toModel(row, messages: storage[row.sessionId]!.materialized),
+    ];
+  }
+
+  ChatSessionsCompanion _toCompanion(
+    ChatSession m, {
+    bool includeMessages = true,
+  }) => ChatSessionsCompanion(
     sessionId: Value(m.id),
     characterId: Value(m.characterId),
     sessionIndex: Value(m.sessionIndex),
-    messagesJson: Value(jsonEncode(m.messages.map((e) => e.toJson()).toList())),
+    messagesJson: includeMessages
+        ? Value(jsonEncode(m.messages.map((e) => e.toJson()).toList()))
+        : const Value('[]'),
     updatedAt: Value(normalizeTimestampSeconds(m.updatedAt)),
     sessionVarsJson: Value(
       m.sessionVars.isNotEmpty ? jsonEncode(m.sessionVars) : null,

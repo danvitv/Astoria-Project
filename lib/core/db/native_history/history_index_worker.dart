@@ -46,6 +46,8 @@ final class _HistoryIndexWorker {
       if (!_writing &&
           (update.tableName.startsWith('history_') ||
               update.tableName == 'chat_sessions' ||
+              update.tableName == 'chat_message_storage_rows' ||
+              update.tableName == 'chat_message_rows' ||
               update.tableName == 'characters')) {
         _ready.clear();
         _discardBuild();
@@ -87,7 +89,7 @@ final class _HistoryIndexWorker {
       }
       final rows = db.select(
         "SELECT name,CASE WHEN octet_length(sql)<=8192 THEN sql END AS sql FROM sqlite_master WHERE name LIKE 'history_%' "
-        "OR name LIKE 'idx_history_%' OR name LIKE 'idx_navigation_%' OR name='idx_trackers_session_scope' ORDER BY name LIMIT 32",
+        "OR name LIKE 'idx_history_%' OR name LIKE 'idx_navigation_%' OR name='idx_trackers_session_scope' ORDER BY name LIMIT 64",
       );
       final names = rows.map((r) => r['name']).toSet();
       if (!names.containsAll(const {
@@ -183,8 +185,13 @@ final class _HistoryIndexWorker {
 
   Map<String, Object?>? _generation(String session) {
     final rows = db.select(
-      'SELECT g.*,s.rowid AS source_rowid,typeof(s.messages_json) AS source_type '
-      'FROM history_source_generations g INNER JOIN chat_sessions s ON s.session_id=g.session_id '
+      '''SELECT g.*,
+        CASE WHEN storage.session_id IS NULL THEN s.rowid ELSE storage.rowid END AS source_rowid,
+        CASE WHEN storage.session_id IS NULL THEN typeof(s.messages_json) ELSE 'rows' END AS source_type,
+        storage.active_generation AS storage_generation
+      FROM history_source_generations g
+      INNER JOIN chat_sessions s ON s.session_id=g.session_id
+      LEFT JOIN chat_message_storage_rows storage ON storage.session_id=s.session_id '''
       'WHERE g.session_id=? AND g.alive=1 LIMIT 1',
       [session],
     );
@@ -269,7 +276,8 @@ final class _HistoryIndexWorker {
       if (operation == 'start') {
         if (_build != null) throw StateError('Maintenance busy');
         final generation = _generation(session);
-        if (generation == null || generation['source_type'] != 'text') {
+        if (generation == null ||
+            !const {'text', 'rows'}.contains(generation['source_type'])) {
           throw const FormatException();
         }
         _ready.remove(session);
@@ -294,15 +302,16 @@ final class _HistoryIndexWorker {
             generation == null ||
             generation['incarnation'] != build.incarnation ||
             generation['revision'] != build.revision ||
-            generation['checkpoint'] != build.framer.offset ||
+            generation['checkpoint'] != build.checkpoint ||
             generation['source_rowid'] != build.rowid ||
-            generation['source_type'] != 'text') {
+            generation['source_type'] != build.sourceType ||
+            generation['storage_generation'] != build.storageGeneration) {
           _discardBuild();
           return jsonEncode({'status': 'incomplete', 'restart': true});
         }
         return jsonEncode({
           'status': 'incomplete',
-          'checkpoint': build.framer.offset,
+          'checkpoint': build.checkpoint,
         });
       }
       final build = _build;

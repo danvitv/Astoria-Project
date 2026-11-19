@@ -14,6 +14,7 @@ import '../../models/memory_source_manifest.dart';
 import '../../models/session_branch_identity.dart';
 import 'embedding_repo.dart';
 import 'memory_event_registry_repo.dart';
+import 'chat_message_storage_repo.dart';
 
 /// Builds the bounded, immutable input for one consolidation request.
 ///
@@ -69,7 +70,9 @@ class MemoryConsolidationPackBuilder {
       sessionVarsJson: session?.sessionVarsJson,
     );
     if (identity == null || identity.branchId != branchId) return null;
-    final history = _decodeHistory(session!.messagesJson);
+    final history = await ChatMessageStorageRepo(
+      db,
+    ).loadMessagesBySessionId(session!.sessionId);
     if (history == null) return null;
     final entries = _decodeEntries(row.entriesJson);
     if (entries == null) return null;
@@ -577,21 +580,6 @@ class MemoryConsolidationPackBuilder {
 
   static String _sourceIdentity(MemoryConsolidationSource source) =>
       '${source.memoryEntryId}\u0000${source.revisionId}\u0000${source.fingerprint}';
-
-  static List<ChatMessage>? _decodeHistory(String json) {
-    try {
-      final decoded = jsonDecode(json);
-      if (decoded is! List) return null;
-      return decoded
-          .map(
-            (item) =>
-                ChatMessage.fromJson(Map<String, dynamic>.from(item as Map)),
-          )
-          .toList(growable: false);
-    } on Object {
-      return null;
-    }
-  }
 
   static int _serializedContextCharacters({
     required String packId,

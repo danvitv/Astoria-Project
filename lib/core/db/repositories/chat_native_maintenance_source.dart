@@ -40,12 +40,23 @@ final class _ChatNativeMaintenanceReader {
       final rowSize = db.chatSessions.$columns
           .map((column) => 'coalesce(length(CAST("${column.name}" AS BLOB)),0)')
           .join(' + ');
+      const rowMessageBytes = '''CASE WHEN storage.session_id IS NULL THEN 0
+        ELSE coalesce((SELECT sum(length(CAST(message.message_json AS BLOB)))
+          FROM chat_message_rows AS message
+          WHERE message.session_id=session.session_id
+            AND message.storage_generation=storage.active_generation),0) END''';
       final size = await db
           .customSelect(
-            'SELECT ($rowSize) AS bytes '
-            'FROM chat_sessions WHERE session_id IS ? COLLATE BINARY LIMIT 2',
+            'SELECT (($rowSize) + $rowMessageBytes) AS bytes '
+            'FROM chat_sessions AS session LEFT JOIN chat_message_storage_rows AS storage '
+            'ON storage.session_id=session.session_id '
+            'WHERE session.session_id IS ? COLLATE BINARY LIMIT 2',
             variables: [Variable<String>(id)],
-            readsFrom: {db.chatSessions},
+            readsFrom: {
+              db.chatSessions,
+              db.chatMessageStorageRows,
+              db.chatMessageRows,
+            },
           )
           .get();
       if (!current() ||
@@ -56,14 +67,28 @@ final class _ChatNativeMaintenanceReader {
       }
       final rows = await db
           .customSelect(
-            'SELECT * FROM chat_sessions WHERE session_id IS ? COLLATE BINARY '
-            'AND ($rowSize) <= 65536 LIMIT 2',
+            'SELECT session.* FROM chat_sessions AS session '
+            'LEFT JOIN chat_message_storage_rows AS storage '
+            'ON storage.session_id=session.session_id '
+            'WHERE session.session_id IS ? COLLATE BINARY '
+            'AND (($rowSize) + $rowMessageBytes) <= 65536 LIMIT 2',
             variables: [Variable<String>(id)],
-            readsFrom: {db.chatSessions},
+            readsFrom: {
+              db.chatSessions,
+              db.chatMessageStorageRows,
+              db.chatMessageRows,
+            },
           )
           .get();
       if (!current() || rows.length != 1) return null;
-      final session = rows.single.data;
+      final session = Map<String, Object?>.from(rows.single.data);
+      if (await ChatMessageStorageRepo(db).stateFor(id) != null) {
+        final messagesJson = await ChatMessageStorageRepo(
+          db,
+        ).materializeMessagesJson(id);
+        if (!current() || messagesJson == null) return null;
+        session['messages_json'] = messagesJson;
+      }
       for (final column in db.chatSessions.$columns) {
         final value = session[column.name];
         if (value == null
