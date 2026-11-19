@@ -85,6 +85,7 @@ abstract final class SupportDiagnosticSkills {
       'data_integrity_and_fix',
       [
         'Separate Memory book settings, approved entries, drafts, derived catalog and canon assembly.',
+        'For Memory consolidation, read Saved Memory consolidation packages under applicationData Maintenance status. Distinguish a cancelled package from one whose exact sources were already accepted. A work-limit result is unknown, and local queue status does not establish sync success or the cause of cancellation.',
         'Use bounded integrity checks; physical checks and recorded hashes do not prove narrative truth or universal health.',
         'Respect sample/page/truncation limits. An empty page is not proof of an empty database.',
         'Only propose an available exact native repair; fresh confirmation and a retained conditional Undo receipt remain required.',

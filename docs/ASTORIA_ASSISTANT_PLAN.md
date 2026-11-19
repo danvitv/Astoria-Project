@@ -275,6 +275,17 @@ Any repair or retry needs a separately confirmed native operation with an exact 
 seam; diagnosis alone stays read-only. Verify the usable path through native Send and
 the actual connected definition set without consuming the final definition slot.
 
+First slice: `applicationData` → Maintenance status → Saved Memory consolidation
+packages reads local queue status, attempt count, epoch-second timestamps and an
+allowlisted reason. Cancelled packages use the same exact source-coverage rule as
+the Memory queue: accepted entry, revision and fingerprint in the same session and
+branch. Above the bounded work limit, coverage is unknown, not a non-match.
+`source_context_changed` does not attest that sync caused the cancellation, and a
+saved running status does not attest a live worker. No private draft text, raw errors,
+database identities or new tool definitions are exposed. Verified on a synthetic file
+through the native Source4 navigation and result envelope; full Send and live sync
+remain unverified for this slice.
+
 ### 3. Extended actions and conditional Undo — separate bounded slices
 
 Remaining scope includes roleplay session/message operations, composite deletions,

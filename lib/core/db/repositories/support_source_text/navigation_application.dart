@@ -541,6 +541,34 @@ extension _NavApplication on SupportSourceNavigationRepo {
       );
     }
 
+    if (table.section == 'memoryConsolidationJobs' && unavailable == null) {
+      final coverage = row['status'] == 'cancelled'
+          ? await MemoryConsolidationJobRepo(
+              _db,
+            ).readSavedCancellationCoverage(ordinal)
+          : 'not_applicable';
+      _guard();
+      _rootValidation?._check();
+      if (coverage == 'unknown_changed')
+        _fail(SupportSourceReadFailure.changed);
+      final summary = {
+        'jobStatus': row['status'],
+        'attemptCount': row['attempt_count'],
+        'createdAtEpochSeconds': row['created_at'],
+        'updatedAtEpochSeconds': row['updated_at'],
+        'reasonCode': row['reasonCode'],
+        'cancellationCoverage': coverage,
+        'scope': 'local_saved_queue_only',
+      };
+      final encoded = jsonEncode(summary);
+      if (_projectionPolicy!.redactText(encoded) != encoded) {
+        emit({'status': 'projection_unavailable'}, 'projectionStatus');
+      } else {
+        emit(summary, 'savedMemoryConsolidationJob');
+      }
+      return result;
+    }
+
     void flatten(Object? value, String field) {
       if (value is Map<String, Object?>) {
         var index = 0;

@@ -1153,6 +1153,30 @@ class MemoryConsolidationJobRepo {
             ]))
           .watch();
 
+  static const _supersededCancelled = '''
+cancelled.status = 'cancelled'
+  AND EXISTS (
+    SELECT 1 FROM memory_consolidation_job_item_rows AS cancelled_item
+    WHERE cancelled_item.job_id = cancelled.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM memory_consolidation_job_item_rows AS cancelled_item
+    WHERE cancelled_item.job_id = cancelled.id
+      AND NOT EXISTS (
+        SELECT 1 FROM memory_consolidation_job_item_rows AS accepted_item
+        INNER JOIN memory_consolidation_job_rows AS completed
+          ON completed.id = accepted_item.job_id
+        WHERE completed.session_id = cancelled.session_id
+          AND completed.branch_id = cancelled.branch_id
+          AND completed.status = 'completed'
+          AND accepted_item.status = 'accepted'
+          AND accepted_item.memory_entry_id = cancelled_item.memory_entry_id
+          AND accepted_item.revision_id = cancelled_item.revision_id
+          AND accepted_item.fingerprint = cancelled_item.fingerprint
+      )
+  )
+''';
+
   /// Cancelled jobs whose exact source snapshots have all since been accepted
   /// by completed jobs in the same session branch. They remain durable history,
   /// but no longer represent work the queue can usefully rebuild.
@@ -1165,36 +1189,38 @@ class MemoryConsolidationJobRepo {
 SELECT cancelled.id
 FROM memory_consolidation_job_rows AS cancelled
 WHERE cancelled.session_id = ?
-  AND cancelled.status = 'cancelled'
-  AND EXISTS (
-    SELECT 1
-    FROM memory_consolidation_job_item_rows AS cancelled_item
-    WHERE cancelled_item.job_id = cancelled.id
-  )
-  AND NOT EXISTS (
-    SELECT 1
-    FROM memory_consolidation_job_item_rows AS cancelled_item
-    WHERE cancelled_item.job_id = cancelled.id
-      AND NOT EXISTS (
-        SELECT 1
-        FROM memory_consolidation_job_item_rows AS accepted_item
-        INNER JOIN memory_consolidation_job_rows AS completed
-          ON completed.id = accepted_item.job_id
-        WHERE completed.session_id = cancelled.session_id
-          AND completed.branch_id = cancelled.branch_id
-          AND completed.status = 'completed'
-          AND accepted_item.status = 'accepted'
-          AND accepted_item.memory_entry_id = cancelled_item.memory_entry_id
-          AND accepted_item.revision_id = cancelled_item.revision_id
-          AND accepted_item.fingerprint = cancelled_item.fingerprint
-      )
-  )
+  AND ($_supersededCancelled)
 ''',
           variables: [Variable.withString(sessionId)],
           readsFrom: {jobs, items},
         )
         .watch()
         .map((rows) => {for (final row in rows) row.read<String>('id')});
+  }
+
+  /// Source readers use the same exact rule as the queue. Decline the expensive
+  /// match on large stores rather than call an incomplete search a non-match.
+  /// The row position comes from a native, visibility-checked saved-data read.
+  Future<String> readSavedCancellationCoverage(int rowPosition) async {
+    final row = await db
+        .customSelect(
+          '''
+      SELECT CASE
+        WHEN EXISTS (SELECT 1 FROM memory_consolidation_job_rows LIMIT 1 OFFSET 512)
+          OR EXISTS (SELECT 1 FROM memory_consolidation_job_item_rows LIMIT 1 OFFSET 8192)
+          OR EXISTS (SELECT 1 FROM memory_consolidation_job_item_rows
+                     WHERE job_id = cancelled.id LIMIT 1 OFFSET 64)
+          THEN 'unknown_work_limit'
+        WHEN $_supersededCancelled THEN 'superseded'
+        ELSE 'not_superseded'
+      END AS coverage
+      FROM memory_consolidation_job_rows AS cancelled
+      WHERE rowid = ? AND status = 'cancelled'
+      ''',
+          variables: [Variable.withInt(rowPosition)],
+        )
+        .getSingleOrNull();
+    return row?.read<String>('coverage') ?? 'unknown_changed';
   }
 
   /// One-shot read of this session's package jobs, newest first — the same

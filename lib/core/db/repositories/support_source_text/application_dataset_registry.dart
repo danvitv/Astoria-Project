@@ -469,7 +469,7 @@ const _applicationDatasets = [
   ),
   _ApplicationDataset(
     'maintenanceStatus',
-    'Cleanup, cursor and lease status (non-authorizing)',
+    'Maintenance status: cleanup, cursors, leases and Memory consolidation',
     [
       _ApplicationTable(
         'cleanup',
@@ -492,6 +492,21 @@ const _applicationDatasets = [
         'ledger_reconciliation_leases',
         'purpose,lease_expires_at,acquired_at',
         session: 'session_id',
+      ),
+      _ApplicationTable(
+        'memoryConsolidationJobs',
+        'Saved Memory consolidation packages (local queue status only)',
+        'memory_consolidation_job_rows',
+        'status,attempt_count,created_at,updated_at',
+        session: 'session_id',
+        expressions: {
+          'reasonCode': '''CASE WHEN t.last_error IS NULL THEN NULL
+            WHEN t.last_error IN ('cancelled_by_user','rejected_by_user',
+              'source_context_changed','mode_disabled','context_changed',
+              'worker_stopped','item_failed','package_generation_failed',
+              'source_pack_exceeds_context_budget','lease_expired') THEN t.last_error
+            ELSE 'unknown' END''',
+        },
       ),
     ],
   ),
