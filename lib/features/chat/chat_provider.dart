@@ -1342,7 +1342,9 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
 
     final clearedMsg = prevAssistant.copyWith(
       content: '',
-      reasoning: null,
+      // Writer-only regeneration keeps the completed Think visible above the
+      // empty streaming body. Only a full regeneration discards that phase.
+      reasoning: studioFinalOnly ? prevAssistant.reasoning : null,
       isTyping: true,
       genTime: null,
       tokens: null,
@@ -1693,7 +1695,11 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     // letting it claim the model is writing while the prompt is still being
     // assembled. Every later transition is published from the stage that
     // owns it; the pipeline resets to idle on the way out.
-    setGenerationPhase(ref, arg, GenerationPhase.preparing);
+    setGenerationPhase(
+      ref,
+      arg,
+      studioFinalOnly ? GenerationPhase.writer : GenerationPhase.preparing,
+    );
     final pipeline = GenerationPipeline(
       ref: ref,
       charId: arg,

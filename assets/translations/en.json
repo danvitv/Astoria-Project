@@ -567,6 +567,7 @@
   "gen_phase_retrieving": "Recalling memory & lore…",
   "gen_phase_prompt": "Building prompt…",
   "gen_phase_agents": "Running agents…",
+  "gen_phase_writer": "Preparing final Writer…",
   "gen_phase_waiting": "Waiting for the model…",
   "gen_phase_reasoning": "Thinking…",
   "gen_phase_streaming": "Generating…",

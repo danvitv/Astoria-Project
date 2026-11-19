@@ -262,7 +262,9 @@ class StreamGenerationService {
         }
       }
 
-      _phase(GenerationPhase.preparing);
+      _phase(
+        studioFinalOnly ? GenerationPhase.writer : GenerationPhase.preparing,
+      );
       final builder = _ref.read(promptPayloadBuilderProvider);
       final inputs = await builder.collectGenerationContext(
         charId: _charId,
@@ -281,7 +283,9 @@ class StreamGenerationService {
             : regenTargetId,
         shouldAbort: _isAborted,
         cancelToken: cancelToken,
-        onPhase: _phase,
+        // Context/currentness still has to be rebuilt and fingerprinted, but a
+        // Writer-only retry must not look like it restarted retrieval/Think.
+        onPhase: studioFinalOnly ? (_) {} : _phase,
       );
       timing('context collected');
       if (_isAborted()) {
@@ -331,7 +335,7 @@ class StreamGenerationService {
               historyWindowStartMessageId: inputs
                   .sessionVars[StudioHistoryLimiter.historyWindowStartVar],
             );
-      _phase(GenerationPhase.prompt);
+      _phase(studioFinalOnly ? GenerationPhase.writer : GenerationPhase.prompt);
       timing('prompt preparation started');
       final payload = studioConfig == null
           ? await builder.buildOrdinaryFromGenerationContext(
@@ -519,7 +523,9 @@ class StreamGenerationService {
           sessionId: session.id,
           totalAgents: studioPreset.agents.length,
         );
-        _phase(GenerationPhase.agents);
+        _phase(
+          studioFinalOnly ? GenerationPhase.writer : GenerationPhase.agents,
+        );
         final startGenTime = DateTime.now();
         DateTime? finalStartTime;
         bool studioFrameScheduled = false;

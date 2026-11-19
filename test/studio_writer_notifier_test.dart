@@ -10,6 +10,7 @@ import 'package:glaze_flutter/core/db/app_db.dart';
 import 'package:glaze_flutter/core/llm/studio_turn_config_snapshot.dart';
 import 'package:glaze_flutter/core/llm/studio/studio_writer_checkpoint.dart';
 import 'package:glaze_flutter/core/llm/studio_stage_brief.dart';
+import 'package:glaze_flutter/core/llm/generation_phase.dart';
 import 'package:glaze_flutter/core/models/character.dart';
 import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/pipeline_settings.dart';
@@ -21,6 +22,7 @@ import 'package:glaze_flutter/features/chat/chat_provider.dart';
 import 'package:glaze_flutter/features/chat/chat_session_service.dart';
 import 'package:glaze_flutter/features/chat/chat_state.dart';
 import 'package:glaze_flutter/features/chat/services/studio_writer_pending.dart';
+import 'package:glaze_flutter/features/chat/state/generation_phase_provider.dart';
 
 const _guidance = 'Use the saved instruction';
 
@@ -32,6 +34,7 @@ const _target = ChatMessage(
   id: 'assistant',
   role: 'assistant',
   content: 'Selected final',
+  reasoning: '<thinking>Completed Think phase</thinking>',
   timestamp: 2,
   swipes: ['Sibling final', 'Selected final'],
   swipeId: 1,
@@ -227,7 +230,12 @@ void main() {
       hasLength(1),
     );
     expect(optimistic.messages.last.guidanceText, _guidance);
+    expect(optimistic.messages.last.reasoning, _target.reasoning);
     expect(optimistic.messages.last.isTyping, isTrue);
+    expect(
+      container.read(generationPhaseProvider('c1')),
+      GenerationPhase.writer,
+    );
     _expectSameSession(
       await container.read(chatRepoProvider).getById('s1'),
       before,

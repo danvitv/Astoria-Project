@@ -584,6 +584,7 @@
   "gen_phase_retrieving": "Поиск в памяти и лорбуках…",
   "gen_phase_prompt": "Сборка промпта…",
   "gen_phase_agents": "Работают агенты…",
+  "gen_phase_writer": "Подготовка финального Writer…",
   "gen_phase_waiting": "Ожидание ответа модели…",
   "gen_phase_reasoning": "Размышление…",
   "gen_phase_streaming": "Генерация…",

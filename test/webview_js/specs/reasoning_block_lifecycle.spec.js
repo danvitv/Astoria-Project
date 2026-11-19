@@ -100,6 +100,24 @@ test('regenerating with a non-reasoning model drops the box', async ({
   expect(await hasReasoning(page)).toBe(false);
 });
 
+test('Writer-only regeneration keeps completed reasoning above its typing body', async ({
+  page,
+}) => {
+  await boot(page);
+  await replyWithReasoning(page);
+
+  await update(page, '', {
+    reasoning: 'The room is cold, so she would want the light near.',
+    isTyping: true,
+    swipeIndex: 0,
+    swipeTotal: 1,
+  });
+
+  expect(await hasReasoning(page)).toBe(true);
+  expect(await reasoningText(page)).toContain('The room is cold');
+  await expect(page.locator('.typing-text')).toBeVisible();
+});
+
 test('swiping back to the reasoning variation rebuilds the box', async ({
   page,
 }) => {

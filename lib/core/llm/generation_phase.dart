@@ -22,6 +22,10 @@ enum GenerationPhase {
   /// Studio tracker agents are running before the final writer.
   agents,
 
+  /// A saved Studio controller/Think phase is being handed directly to the
+  /// final writer. Context is validated, but tracker agents do not run again.
+  writer,
+
   /// Request sent; no token has come back yet.
   waiting,
 
@@ -42,6 +46,7 @@ enum GenerationPhase {
     GenerationPhase.retrieving => 'gen_phase_retrieving',
     GenerationPhase.prompt => 'gen_phase_prompt',
     GenerationPhase.agents => 'gen_phase_agents',
+    GenerationPhase.writer => 'gen_phase_writer',
     GenerationPhase.waiting => 'gen_phase_waiting',
     GenerationPhase.reasoning => 'gen_phase_reasoning',
     GenerationPhase.streaming => 'gen_phase_streaming',
