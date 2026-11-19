@@ -52,9 +52,9 @@ class TriggeredEntry {
 
 /// A nested swipe variation produced by the Studio pipeline (POST-cleaner
 /// rewrite, final-regen, etc.). Stored as a colour-coded sub-swipe under a
-/// [ChatMessage]; `kind` drives the WebView colour coding ('cleaned' = blue,
-/// 'final' = white). `parentSwipeId` links a sub-swipe to its parent green
-/// swipe index for diffing.
+/// [ChatMessage]. Every nested Studio swipe is blue in the WebView; `kind`
+/// preserves whether it came from the final writer or POST-cleaner.
+/// `parentSwipeId` links a sub-swipe to its parent outer swipe for diffing.
 class AgentSwipe {
   final String content;
   final String kind;

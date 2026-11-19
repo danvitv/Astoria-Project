@@ -1,6 +1,6 @@
 // Studio's original and POST-cleaner versions share one outer variation.
-// Regression: both were painted blue, and a metadata-only update hid the
-// nested switcher even though both versions were still stored.
+// Both belong to the blue nested Studio level; ordinary outer swipes use the
+// neutral switcher. A metadata-only update must not hide nested navigation.
 export const studioSwipes = {
   original: 'She set the lamp down.',
   cleaned: 'She placed the lamp on the table.',

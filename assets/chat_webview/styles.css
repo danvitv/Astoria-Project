@@ -999,11 +999,10 @@
   text-align: center;
 }
 
-/* Keep finals in the theme's normal text color; only a cleaned swipe is blue. */
+/* The ordinary outer swipe is neutral; every nested Studio result is blue.
+   `final` and `cleaned` still remain distinct data kinds for persistence and
+   navigation, but color identifies the nested level rather than its producer. */
 .agent-switcher {
-  color: var(--text-color, #e0e0e0);
-}
-.agent-switcher[data-agent-swipe-kind="cleaned"] {
   border-color: rgba(120, 180, 255, 0.25);
   color: rgb(120, 180, 255);
 }

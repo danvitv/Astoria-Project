@@ -26,10 +26,12 @@ async function update(page, fields) {
   }, fields);
 }
 
-test('the original is neutral white and the cleaned version is blue', async ({ page }) => {
+test('final and cleaned Studio results are blue; the outer swipe is neutral', async ({ page }) => {
   await boot(page);
   await expect(page.locator(switcher)).toHaveAttribute('data-agent-swipe-kind', 'final');
-  await expect(page.locator(switcher)).toHaveCSS('color', 'rgb(224, 224, 224)');
+  await expect(page.locator(switcher)).toHaveCSS('color', 'rgb(120, 180, 255)');
+  const outerColor = await page.locator('[data-kind="swipe"]').evaluate(el => getComputedStyle(el).color);
+  expect(outerColor).not.toBe('rgb(120, 180, 255)');
   await update(page, {
     text: studioSwipes.cleaned, agentSwipeIndex: 1,
     agentSwipeTotal: 2, agentSwipeKinds: studioSwipes.kinds,
@@ -38,7 +40,7 @@ test('the original is neutral white and the cleaned version is blue', async ({ p
   await expect(page.locator(`${switcher} .msg-switcher-count`)).toHaveText('2/2');
   await expect(page.locator(switcher)).toHaveCSS('color', 'rgb(120, 180, 255)');
   await update(page, { text: studioSwipes.original, agentSwipeIndex: 0 });
-  await expect(page.locator(switcher)).toHaveCSS('color', 'rgb(224, 224, 224)');
+  await expect(page.locator(switcher)).toHaveCSS('color', 'rgb(120, 180, 255)');
   await expect(page.locator('[data-kind="swipe"] .msg-switcher-count')).toHaveText('1/2');
 });
 
@@ -70,10 +72,11 @@ test('single-version replies never show a nested switcher', async ({ page }) => 
   await expect(page.locator(switcher)).toHaveCount(0);
 });
 
-test('the original stays readable with a light theme', async ({ page }) => {
+test('the outer swipe follows a light theme while nested Studio stays blue', async ({ page }) => {
   await boot(page);
-  await page.evaluate(() => document.documentElement.style.setProperty('--text-color', '#202020'));
-  await expect(page.locator(switcher)).toHaveCSS('color', 'rgb(32, 32, 32)');
+  await page.evaluate(() => document.documentElement.style.setProperty('--text-gray', '#202020'));
+  await expect(page.locator('[data-kind="swipe"]')).toHaveCSS('color', 'rgb(32, 32, 32)');
+  await expect(page.locator(switcher)).toHaveCSS('color', 'rgb(120, 180, 255)');
 });
 
 test('a writer error with no nested swipes offers localized Final only alongside full regeneration', async ({ page }) => {
