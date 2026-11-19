@@ -11,8 +11,8 @@ repository. Never open a PR against or push Astoria work to `hydall/Glaze`,
 
 | Branch | Build channel | Purpose |
 |---|---|---|
-| `dev` | `dev` | Default branch and current development builds |
-| `main` / `master` | `stable` | Production branch when created |
+| `master` | `stable` | Default branch and tested stable source |
+| `dev` | `dev` | Current development and dev-channel builds |
 | `feat/*`, `fix/*` | `dev` when built by CI | Optional isolated work based on `dev` |
 
 When asked to work directly on `dev`, verify the branch and push only to
@@ -23,8 +23,8 @@ history. Preserve authorship and existing history; do not force-push shared
 branches. Regenerate after editing a Freezed/Drift model with
 `dart run build_runner build`.
 
-`main` or `master` can be cut from a tested `dev` revision only when the
-maintainer requests it. Building from that branch alone does not publish a
+Promote a tested `dev` revision to `master` only when the maintainer requests
+it. Updating `master` or building from it does not by itself publish a binary
 release. Follow `docs/ASTORIA_LICENSE_AUDIT.md` before distributing proprietary
 binaries.
 

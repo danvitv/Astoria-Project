@@ -228,12 +228,13 @@ When editing files matching a pattern below, READ the corresponding rule file FI
 
 ## Workflow
 
-- `origin` is the public standalone `danvitv/Astoria-Project`; `dev` is its
-  default branch. Work on `dev` when the maintainer requests it; use feature
-  branches from `dev` for isolated changes. PRs, if used, target this
-  repository's `dev`, never Glaze. See `docs/WORKFLOW.md`.
-- `main` / `master` are reserved for tested stable builds; neither has been
-  created/published yet.
+- `origin` is the public standalone `danvitv/Astoria-Project`; `master` is its
+  default stable branch and `dev` is the development branch. Do ordinary work
+  on `dev`, using feature branches from `dev` for isolated changes. PRs normally
+  target this repository's `dev`, never Glaze. Promote tested revisions from
+  `dev` to `master` only when the maintainer requests it. See `docs/WORKFLOW.md`.
+- `master` is the stable source branch. A commit reaching `master` does not by
+  itself publish binaries.
   Public downloads require the rights and release-process work tracked in
   `docs/ASTORIA_LICENSE_AUDIT.md`. Channel semantics: `docs/RELEASE_CHANNELS.md`.
 - PR CI (`.github/workflows/ci.yml`) runs analyzer, tests and WebView render

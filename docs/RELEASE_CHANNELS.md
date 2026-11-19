@@ -1,15 +1,15 @@
 # Astoria build channels
 
-The public source repository defaults to `dev`. `main` / `master` are reserved
-for tested stable builds and have not been created. Both manual build workflows
-derive `BUILD_CHANNEL` from the selected branch and pass it to Flutter and the
-native Android/iOS build steps:
+The public source repository uses `master` as its default stable branch and
+`dev` for ongoing development. Both manual build workflows derive
+`BUILD_CHANNEL` from the selected branch and pass it to Flutter and the native
+Android/iOS build steps:
 
 | Branch | Channel | Android applicationId | iOS bundle ID | Windows data folder | Drive root |
 |---|---|---|---|---|---|
+| `master` | `stable` | `app.astoria.flutter` | `com.danvitv.astoria` | `Astoria` | `Astoria` |
 | `dev` | `dev` | `app.astoria.flutter.dev` | `com.danvitv.astoria.dev` | `Astoria-dev` | `Astoria-dev` |
 | feature / other working branch | `dev` | `app.astoria.flutter.dev` | `com.danvitv.astoria.dev` | `Astoria-dev` | `Astoria-dev` |
-| `main` / `master` (future) | `stable` | `app.astoria.flutter` | `com.danvitv.astoria` | `Astoria` | `Astoria` |
 
 A local Flutter build without `--dart-define=BUILD_CHANNEL=...` defaults to
 `dev`; Android Gradle and iOS `Channel.xcconfig` default to `dev` as well.
@@ -42,7 +42,7 @@ bundle ID must match the build:
 | Channel | Actions secret for iOS OAuth client ID |
 |---|---|
 | `dev` | `GDRIVE_IOS_CLIENT_ID` (existing dev secret) |
-| `stable` (`main` / `master`) | `GDRIVE_IOS_CLIENT_ID_RELEASE` (create before building) |
+| `stable` (`master`) | `GDRIVE_IOS_CLIENT_ID_RELEASE` (create before building) |
 
 The iOS jobs of both manual workflows select the corresponding secret and
 generate the reversed Google URL scheme from it before building. If that
