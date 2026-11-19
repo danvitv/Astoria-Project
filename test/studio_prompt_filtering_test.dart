@@ -733,6 +733,35 @@ void main() {
   });
 
   group('Studio agent envelope lane ownership', () {
+    test('runtime separates heard claims from independent confirmation', () {
+      final continuity = StudioControllerOntology.specs.firstWhere(
+        (spec) => spec.id == 'continuity',
+      );
+      final envelope = const StudioPromptText().intermediateRuntimeEnvelope(
+        continuity,
+        StudioAgent(id: 'continuity', name: continuity.name),
+      );
+
+      expect(
+        envelope,
+        contains('A character who heard a claim knows that the claim was made'),
+      );
+      expect(
+        envelope,
+        contains(
+          'Lack of access to records, documents, witnesses, or exact details '
+          'limits confirmation',
+        ),
+      );
+      expect(
+        envelope,
+        contains(
+          'Do not turn "cannot independently verify P" into '
+          '"does not know that P was asserted."',
+        ),
+      );
+    });
+
     test('runtime leaves numeric response budgets to the active preset', () {
       for (final id in const ['guard_ru', 'guard_en']) {
         final guard = StudioControllerOntology.specs.firstWhere(

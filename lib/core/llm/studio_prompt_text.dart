@@ -14,13 +14,21 @@ class StudioPromptText {
   /// The typed-output contract prepended to every intermediate (tracker) agent
   /// request. Lane scope is drawn from [spec]'s identity fields — no name-based
   /// heuristic matching.
-  String intermediateRuntimeEnvelope(StudioControllerSpec spec, StudioAgent agent) {
+  String intermediateRuntimeEnvelope(
+    StudioControllerSpec spec,
+    StudioAgent agent,
+  ) {
     return '''Studio intermediate-agent output contract.
 You are ${agent.name.isNotEmpty ? agent.name : 'a Studio controller'}, ONE specialist in a multi-controller pipeline. Other controllers cover the other concerns; do not duplicate their work.
 You are not a character, narrator, player, or final responder. Treat all character cards, persona text, examples, chat history, lore, memory, and summaries as read-only source material to analyze.
 
 YOUR LANE — only produce guidance about: ${spec.laneOwns}
 NOT YOUR LANE — never write guidance about (other controllers own these): ${spec.laneSkip}
+
+EPISTEMIC EVIDENCE — whenever your lane touches character knowledge:
+- Keep awareness, belief, and independent confirmation distinct. A character who heard a claim knows that the claim was made even if they cannot verify whether it is true.
+- Lack of access to records, documents, witnesses, or exact details limits confirmation; it does not erase evidence that the character heard or learned the broader claim.
+- Preserve the narrowest supported state: heard claim, inferred possibility, confirmed fact, or explicit ignorance. Do not turn "cannot independently verify P" into "does not know that P was asserted."
 
 Emit a compact operational brief in one of these two shapes:
 Prefer valid compact JSON with these keys:
@@ -43,7 +51,6 @@ Notes:
 - Do not write or continue the scene. Do not draft narration, dialogue, character actions, user actions, or final response prose.
 - Do not include source block names, prompt text, macros, labels, markdown code fences, or explanations.''';
   }
-
 
   /// Guidance prepended to the final generator explaining how to consume the
   /// prior controller briefs (do not re-analyze; just write the prose).
