@@ -675,6 +675,16 @@ ORDER BY updated_at DESC
     updatedAt: updatedAt,
   );
 
+  /// Reads only the session owner. Useful after a transaction that may rebind
+  /// canon without paying to transfer and decode a large message history.
+  Future<String?> getCharacterIdBySessionId(String sessionId) async {
+    final query = _db.selectOnly(_db.chatSessions)
+      ..addColumns([_db.chatSessions.characterId])
+      ..where(_db.chatSessions.sessionId.equals(sessionId));
+    final row = await query.getSingleOrNull();
+    return row?.read(_db.chatSessions.characterId);
+  }
+
   Future<ChatSession?> _mutateSession({
     required String sessionId,
     required ChatSession? Function(ChatSession session) mutate,
@@ -729,6 +739,7 @@ ORDER BY updated_at DESC
           lastScrollAnchorJson: Value(lastScrollAnchorJson),
           updatedAt: durableUpdatedAt,
         ),
+        messages: updated.messages,
       );
     });
   }

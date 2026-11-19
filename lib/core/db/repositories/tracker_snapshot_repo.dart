@@ -103,6 +103,55 @@ class TrackerSnapshotRepo {
     return bootstrap == null ? null : _rowToModel(bootstrap);
   }
 
+  /// Returns the newest committed snapshot whose complete variation anchor is
+  /// still present in [messages]. Transcript order decides "newest"; snapshot
+  /// timestamps do not, because an older turn can be regenerated later.
+  ///
+  /// Keep tracker JSON out of the anchor scan. Deletion used to probe one row
+  /// per message while walking backwards, which turns a legacy/no-snapshot
+  /// chat into hundreds of sequential queries. This performs one lightweight
+  /// anchor read and decodes only the winning snapshot.
+  Future<TrackerSnapshot?> getLatestCommittedForMessages(
+    String sessionId,
+    Iterable<ChatMessage> messages,
+  ) async {
+    final query = db.selectOnly(db.trackerSnapshots)
+      ..addColumns([
+        db.trackerSnapshots.messageId,
+        db.trackerSnapshots.swipeId,
+        db.trackerSnapshots.agentSwipeId,
+      ])
+      ..where(
+        db.trackerSnapshots.sessionId.equals(sessionId) &
+            db.trackerSnapshots.committed.equals(1) &
+            db.trackerSnapshots.messageId.isNotValue(''),
+      );
+    final rows = await query.get();
+    final anchors = {
+      for (final row in rows)
+        (
+          row.read(db.trackerSnapshots.messageId)!,
+          row.read(db.trackerSnapshots.swipeId)!,
+          row.read(db.trackerSnapshots.agentSwipeId)!,
+        ),
+    };
+    for (final message in messages.toList().reversed) {
+      if (anchors.contains((
+        message.id,
+        message.swipeId,
+        message.agentSwipeId,
+      ))) {
+        return getByAnchor(
+          sessionId: sessionId,
+          messageId: message.id,
+          swipeId: message.swipeId,
+          agentSwipeId: message.agentSwipeId,
+        );
+      }
+    }
+    return null;
+  }
+
   /// Upsert a snapshot for the anchor `(sessionId, messageId, swipeId,
   /// agentSwipeId)`. Re-runs replace the prior snapshot for the same anchor
   /// (dedupe by PK) so duplicates never accumulate.

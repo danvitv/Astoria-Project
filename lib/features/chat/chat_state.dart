@@ -14,15 +14,13 @@ class ChatState {
   /// button stays pressable through the post-gen window.
   final bool isPostGenRunning;
 
-  /// True from the moment a send is painted optimistically until the run it
-  /// starts publishes [isGenerating] (or the send is rolled back).
+  /// True from the moment a send is painted optimistically, or regeneration is
+  /// accepted, until the run publishes [isGenerating] (or preparation stops).
   ///
-  /// The user's bubble is on screen during that window but nothing is
-  /// generating yet, so the WebView would otherwise stamp a Regenerate button
-  /// under a message whose reply is already on its way. Every consumer treats
-  /// this as "busy" exactly the way it treats [isGenerating]; nothing in the
-  /// generation path branches on it, so a leaked `true` can only withhold that
-  /// one button, never block a run.
+  /// Nothing is generating yet, so the WebView uses this as immediate busy
+  /// acknowledgement while durable writes and prompt preflight settle. Every
+  /// consumer treats it as "busy" exactly like [isGenerating]; generation
+  /// ownership never branches on it.
   final bool isSendPending;
 
   final String? error;

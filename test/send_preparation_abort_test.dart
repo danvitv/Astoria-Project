@@ -211,7 +211,16 @@ void main() {
             isFalse,
           );
         } else if (action == 'regenerate') {
-          await notifier.regenerateLastAssistant();
+          final regenerate = notifier.regenerateLastAssistant();
+          expect(
+            container.read(chatProvider('c')).requireValue.isSendPending,
+            isTrue,
+          );
+          await regenerate;
+          expect(
+            container.read(chatProvider('c')).requireValue.isSendPending,
+            isFalse,
+          );
         } else {
           await notifier.continueMessage();
         }

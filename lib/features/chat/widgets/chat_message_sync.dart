@@ -33,10 +33,10 @@ class ChatMessageSync {
   /// [busy] suppresses `setLastMessage`, whose only job is to stamp the
   /// Regenerate button under a trailing user message. That button belongs to
   /// an idle chat: a reply already on its way is not idle. It covers the
-  /// streaming window (`isGenerating`) *and* the send window before it
+  /// streaming window (`isGenerating`) *and* the preparation window before it
   /// (`ChatState.isSendPending`) — the optimistic user bubble is a tail
   /// append, so gating on `isGenerating` alone flashed a Regenerate button
-  /// under the message for as long as the durable append took.
+  /// under the message for as long as durable preparation took.
   /// [sessionSwitching] short-circuits the diff entirely so a session
   /// switch can complete its full reset.
   Future<void> sync({

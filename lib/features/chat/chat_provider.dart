@@ -1204,18 +1204,44 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     bool studioFinalOnly = false,
     String? expectedMessageId,
   }) async {
+    final preparation = state.value;
+    final expectedSessionId = preparation?.session?.id;
     final expectedFinalTarget = studioFinalOnly
-        ? state.value?.messages.lastOrNull
+        ? preparation?.messages.lastOrNull
         : null;
-    await _withForegroundMutation(
-      () => _regenerateLastAssistant(
-        guidanceText: guidanceText,
-        studioFinalOnly: studioFinalOnly,
-        expectedMessageId: expectedMessageId,
-        expectedFinalTarget: expectedFinalTarget,
-        expectedSessionId: state.value?.session?.id,
-      ),
-    );
+    final canPaintPreparation =
+        preparation?.session != null &&
+        preparation!.isGenerating == false &&
+        preparation.isGeneratingImage == false &&
+        preparation.isPostGenRunning == false;
+    if (canPaintPreparation) {
+      setGenerationPhase(ref, arg, GenerationPhase.preparing);
+      state = AsyncData(
+        preparation.copyWith(
+          isSendPending: true,
+          generationStartTime: DateTime.now(),
+        ),
+      );
+    }
+    try {
+      await _withForegroundMutation(
+        () => _regenerateLastAssistant(
+          guidanceText: guidanceText,
+          studioFinalOnly: studioFinalOnly,
+          expectedMessageId: expectedMessageId,
+          expectedFinalTarget: expectedFinalTarget,
+          expectedSessionId: expectedSessionId,
+        ),
+      );
+    } finally {
+      final current = state.value;
+      if (current != null &&
+          current.session?.id == expectedSessionId &&
+          current.isSendPending) {
+        state = AsyncData(current.copyWith(isSendPending: false));
+        setGenerationPhase(ref, arg, GenerationPhase.idle);
+      }
+    }
   }
 
   Future<void> _regenerateLastAssistant({
@@ -1290,6 +1316,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       state = AsyncData(
         current.copyWith(
           isGenerating: true,
+          isSendPending: false,
           generationStartTime: DateTime.now(),
         ),
       );

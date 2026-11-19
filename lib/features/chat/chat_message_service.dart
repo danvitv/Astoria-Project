@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/llm/tokenizer.dart';
 import '../../core/models/chat_message.dart';
 import '../../core/models/tracker.dart';
-import '../../core/models/tracker_snapshot.dart';
 import '../../core/utils/time_helpers.dart';
 import '../../core/state/db_provider.dart';
 import '../../core/state/chat_source_mutation_provider.dart';
@@ -234,6 +233,7 @@ class ChatMessageService {
       final updated = plan.session;
       final invalidatedMessageIds = plan.invalidatedMessageIds;
       var wakeLoreEmbeddingWorker = false;
+      ChatSession? durableDeleted;
 
       await chatRepo.transaction(() async {
         // A reply can land between the optimistic plan and this transaction.
@@ -254,23 +254,11 @@ class ChatMessageService {
         // Pick the rollback base in the same transaction as the row validation.
         // A concurrent swipe changes the relevant snapshot without changing the
         // message id; a pre-transaction lookup could restore the wrong ledger.
-        TrackerSnapshot? fallbackSnapshot;
-        for (final message
-            in current.messages
-                .take(plan.earliestDeletedIndex)
-                .toList()
-                .reversed) {
-          final candidate = await snapshotRepo.getByAnchor(
-            sessionId: session.id,
-            messageId: message.id,
-            swipeId: message.swipeId,
-            agentSwipeId: message.agentSwipeId,
-          );
-          if (candidate?.committed == true) {
-            fallbackSnapshot = candidate;
-            break;
-          }
-        }
+        final fallbackSnapshot = await snapshotRepo
+            .getLatestCommittedForMessages(
+              session.id,
+              current.messages.take(plan.earliestDeletedIndex),
+            );
         await _ref
             .read(cardEvolutionProposalRunRepoProvider)
             .cancelPendingForMessageMutationInTransaction(
@@ -326,7 +314,8 @@ class ChatMessageService {
           }
         }
         await trackerRepo.replaceLedgerState(session.id, committedBase);
-        final survivors = await _writeDeletion(session, plan);
+        durableDeleted = await _writeDeletion(session, plan);
+        final survivors = durableDeleted?.messages ?? const <ChatMessage>[];
         await _ref
             .read(embeddingRepoProvider)
             .invalidateChatMessageGroupsForMessages(
@@ -339,6 +328,17 @@ class ChatMessageService {
               sessionId: session.id,
               survivingMessages: survivors,
             );
+        if (canonRollback.rolledBack && durableDeleted != null) {
+          final reboundCharacterId = await chatRepo.getCharacterIdBySessionId(
+            session.id,
+          );
+          if (reboundCharacterId != null &&
+              reboundCharacterId != durableDeleted!.characterId) {
+            durableDeleted = durableDeleted!.copyWith(
+              characterId: reboundCharacterId,
+            );
+          }
+        }
         wakeLoreEmbeddingWorker = canonRollback.shouldWakeLoreEmbeddingWorker;
       });
 
@@ -353,7 +353,7 @@ class ChatMessageService {
         await _ref.read(infoBlocksProvider(session.id).notifier).refresh();
       }
 
-      final durable = await chatRepo.getById(session.id) ?? updated;
+      final durable = durableDeleted ?? updated;
       ChatSessionService.updateCache(durable);
       return durable;
     } finally {
@@ -361,7 +361,7 @@ class ChatMessageService {
     }
   }
 
-  /// Applies [plan] to the durable row and returns the surviving messages.
+  /// Applies [plan] to the durable row and returns the shortened durable session.
   ///
   /// The transaction verified the row still has the planned message order;
   /// trim that suffix from the current durable row rather than replacing its
@@ -373,7 +373,7 @@ class ChatMessageService {
   ///
   /// Index-based trimming also handles legacy messages with empty ids, because
   /// the transaction verified their positions against the planned snapshot.
-  Future<List<ChatMessage>> _writeDeletion(
+  Future<ChatSession?> _writeDeletion(
     ChatSession session,
     MessageDeletionPlan plan,
   ) async {
@@ -395,9 +395,7 @@ class ChatMessageService {
         return current.copyWith(messages: remaining, sessionVars: vars);
       },
     );
-    // No row: the session was deleted from under the delete. Nothing survives,
-    // and the rollback below has nothing to reconcile against.
-    return durable?.messages ?? const [];
+    return durable;
   }
 
   ChatSession toggleMessageHidden(ChatSession session, int index) {

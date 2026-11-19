@@ -67,9 +67,9 @@ class ChatWebViewWidget extends ConsumerStatefulWidget {
   final bool isGeneratingImage;
   final bool isPostGenRunning;
 
-  /// Mirrors [ChatState.isSendPending] — a send is painted but its generation
-  /// has not been published yet. Treated as busy wherever [isGenerating] is,
-  /// so the just-sent user message does not flash a Regenerate button.
+  /// Mirrors [ChatState.isSendPending] while a send or regeneration is accepted
+  /// but its generation has not been published yet. Treated as busy wherever
+  /// [isGenerating] is, providing immediate preparation feedback.
   final bool isSendPending;
   final double bottomInset;
 
