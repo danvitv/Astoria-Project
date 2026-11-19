@@ -1,160 +1,172 @@
 <p align="center">
-  <img src="assets/logos/astoria.png" width="256" alt="Astoria cat logo">
+  <img src="assets/logos/astoria-sticker.png" width="320" alt="Astoria black cat logo with amber eyes">
 </p>
 
-# Astoria Project
+<h1 align="center">Astoria</h1>
 
-[GitHub: danvitv](https://github.com/danvitv)
+<p align="center">
+  A local-first, cross-platform AI roleplay client built with Flutter.
+</p>
 
-[Русский](README.ru.md)
-
-Astoria is a local, user-friendly AI roleplay chat client. It works with any OpenAI-compatible (Chat Completion) LLM provider, and keeps your data on your own device.
+<p align="center">
+  <a href="README.ru.md">Русский</a> ·
+  <a href="LICENSE">AGPL-3.0</a> ·
+  <a href="docs/ARCHITECTURE.md">Architecture</a>
+</p>
 
 > [!WARNING]
-> Astoria is still under heavy development. The app is not yet stable and may contain bugs.
->
-> 🧪 **Disclaimer**: This app was **vibecoded** using a plethora of models. Curb your expectations.
+> Astoria is an **early development preview**. Data formats, features and UI may
+> change, and bugs may cause data loss. Keep backups of anything important.
 
-## ✨ Key Features
+## Current status
 
-- **User-Friendly Installation and Interface** — You don't need an IT degree to use the app. Just install it and start chatting.
-- **Actually Working User Statistics** — Gain insights into how many messages you've sent, how many tokens you've burned, and how many hours you've spent chatting.
-- **Native Reasoning Model Support** — No complex regex needed. Native reasoning is properly parsed and injected into a separate block that is not sent back to the model. If your preset has its own reasoning tags, Astoria can parse those too.
-- **Customizable Theming** — Change colors, fonts, and background images, then export your theme as a JSON file to share with others. Material 3 throughout, with separate desktop and mobile layouts.
-- **Background Generation** — Astoria can generate responses in the background and notify you once they are ready.
-- **Lorebooks and Memory** — Attach lorebooks, memory books, author's notes, and personas to keep long-running roleplay coherent.
-- **Image Generation** — Generate images from inside the app and wire image output into roleplay flows and extension blocks.
-- **Cloud Sync** — Optional Dropbox and Google Drive sync for moving your local data between devices.
-- **Local-First Storage** — Characters, sessions, presets, API configuration, personas, lorebooks, and extension data all live in a local SQLite database.
-- **Extensions (ExtBlocks)** — Automate post-generation actions: info blocks, image generation, JS scripts, and interactive HTML panels. *(under development)*
-- **Astoria Studio** — A multi-agent pipeline for improving response quality: cleanup, fact-checking, entity tracking, and constraint enforcement. *(under development)*
+Astoria is usable as a development build, but it is not a finished or
+device-certified release. The current focus is Windows and Android; iOS, macOS
+and Linux targets are present but receive less runtime validation. Web is not a
+supported target.
 
-## 🤝 Basic SillyTavern Compatibility
+There are currently **no official public binaries**. Build from source using the
+instructions below. Release artifacts will eventually be published in
+[Astoria-Project-Release](https://github.com/danvitv/Astoria-Project-Release/releases).
 
-- **Presets** — All JSON presets from SillyTavern are compatible with Astoria. Import your own presets to get started.
-- **Advanced Macro System** — Basic macro support is available (full SillyTavern compatibility is in progress). Variables (setvars/getvars), random choices, dice rolls, and character/user data substitution are fully supported.
-- **Character Card Compatibility** — Import and export character cards in SillyTavern V2 format (JSON and PNG).
-- **Lorebooks (World Info)** — Full support for lorebooks to enhance your roleplay experience.
-- **Regex Support** — Full support for regex scripts, including those built into your favorite presets.
+## What works today
 
-## 🧩 Extensions
+- **Roleplay chat** — streaming generation, regeneration, swipe alternatives,
+  editing, branching, background generation and reasoning-content handling.
+- **Characters and prompts** — SillyTavern V2 character cards, presets,
+  lorebooks, personas, author's notes, regex scripts and a broad macro set.
+- **Long-session context** — Memory Books, summaries, Links and Studio Ledger
+  help retain relevant facts and scene state. Review flows remain explicit where
+  generated memory can change durable data.
+- **Astoria Studio** — configurable multi-stage generation with specialist
+  agents, controllers, final writers, canon state and reconciliation tooling.
+- **Astoria Assistant** — an integrated support workspace with its own model
+  connection, bounded diagnostics, source navigation, selected app actions and
+  encrypted support-report export. It is useful now, but its original product
+  plan and credential migration are not complete.
+- **Extensions (ExtBlocks)** — post-generation info blocks, image generation,
+  sandboxed JavaScript and interactive HTML panels with deny-by-default
+  capabilities.
+- **Image generation** — provider-backed image generation inside chat and
+  extension workflows.
+- **Themes and layouts** — light/dark themes, custom colors, fonts and
+  backgrounds, with desktop and mobile layouts.
+- **Local statistics and storage** — chats, characters, presets and related app
+  data are stored in a local SQLite database.
+- **Optional sync** — Dropbox and Google Drive integrations can move backups
+  between devices.
 
-Astoria includes a sandboxed extension system for post-generation automation and interactive UI blocks.
+Compatibility is practical rather than absolute. Astoria imports and exports
+SillyTavern V2 cards and supports common presets, lorebooks, regex scripts and
+macros, but it is not a drop-in implementation of every SillyTavern feature.
 
-- **Post-generation blocks** — Run `infoblock`, `imageGen`, `jsRunner`, and `interactive` blocks after assistant messages and after user messages.
-- **Interactive panels** — Render extension-owned HTML panels under assistant messages without giving scripts same-origin access to the app.
-- **JS extension SDK** — Sandboxed scripts can use `window.glaze.*` APIs for variables, text generation, prompt injection, audio, command execution, toasts, and more.
-- **Capability permissions** — Every bridge method is gated by explicit per-preset capabilities. The default is deny.
-- **Scoped variables** — Extensions can use `chat`, `character`, `global`, and `message` variable scopes through dedicated storage APIs.
+## Privacy and safety
 
-See `docs/ARCHITECTURE.md` section 9 and `docs/INVARIANTS.md` for the bridge architecture and security invariants.
+Astoria is local-first, not offline-only. Your database and media remain on your
+device unless you use sync or export features, but prompts and selected context
+are sent to the model provider you configure. Image providers likewise receive
+their generation inputs.
 
-## 📥 Installation
+Astoria Assistant can read application data only after its single app-data
+consent is enabled. Credential material is excluded from its source readers, and
+support-report export has a separate preview and approval flow. The assistant's
+legacy credential cleanup is still unfinished, so do not treat this preview as a
+security-audited product.
 
-When builds are available, download them from [Astoria releases](https://github.com/danvitv/Astoria-Project-Release/releases).
+Imported presets and extensions may contain regexes, scripts or interactive
+content. Review material from sources you do not trust before enabling it.
 
-- **Android** — Install the APK directly on your device.
-- **iOS** — Sideload the IPA using [AltStore](https://altstore.io/) or a similar tool. App Store distribution is not yet available.
-- **Windows** — Download the Windows build and run it directly on your PC.
-- **Linux** — Download the published AppImage, the `.tar.zst` archive, or the DEB or pacman package when available for the release.
-- **macOS** — Prebuilt releases are not currently available.
+## Build from source
 
-Backups from **SillyTavern** (`.zip`) can be imported via **Menu → Backups**.
+### Requirements
 
-## 🛠️ Development
-
-Built with Flutter, using local SQLite storage, native desktop support, and a sandboxed extension runtime. Powered by Riverpod, Drift/SQLite, Dio, GoRouter, and a WebView-based chat renderer.
-
-### 📋 Prerequisites
-
-- [Flutter](https://docs.flutter.dev/get-started/install) 3.44+ (or newer, compatible with Dart 3.12+)
-- A toolchain for the platform you want to build — [Android Studio](https://developer.android.com/studio) for Android, Xcode for iOS/macOS, Visual Studio with the C++ desktop workload for Windows
+- Flutter 3.44+ with Dart 3.12+
 - Git
+- The native toolchain for your target platform:
+  - Visual Studio with the C++ desktop workload for Windows
+  - Android Studio / Android SDK for Android
+  - Xcode for iOS and macOS
+  - Flutter's Linux desktop dependencies for Linux
 
-### 🏗️ Setup
+### Setup
 
 ```bash
 git clone https://github.com/danvitv/Astoria-Project.git
 cd Astoria-Project
 flutter pub get
-```
-
-A `.env` file in the project root is **required to build** — it is declared as an asset in `pubspec.yaml`, so the build fails if it is missing:
-
-```bash
 cp .env.example .env
+flutter run -d windows # or android, ios, macos, linux
 ```
 
-It holds the OAuth credentials for cloud sync. Leaving the values empty is fine — the app builds and runs, and only Dropbox / Google Drive sync stays unavailable.
+The `.env` file is included in the Flutter asset bundle and must exist. Empty
+values are valid; Dropbox and Google Drive sign-in will simply remain
+unavailable. Never commit your populated `.env` file.
 
-### 🚀 Dev Run
+### Checks and builds
 
 ```bash
-flutter run -d windows   # or: -d android, -d ios, -d macos, -d linux
+flutter analyze
+flutter test
+flutter build windows
 ```
 
-### 🏭 Builds
+For an ARM64 Android release build on Windows:
 
 ```powershell
-.\scripts\build_android_arm64.ps1  # Android release, ARM64 only
-flutter build windows    # Windows
-flutter build ios        # iOS
+.\scripts\build_android_arm64.ps1
 ```
 
-### ⚙️ Code Generation
-
-Drift, Freezed, and JSON-serializable models are generated. After editing any of them:
+After changing Drift, Freezed or JSON-serializable models, regenerate code:
 
 ```bash
 dart run build_runner build
 ```
 
-### 🧪 Tests and Analysis
+See [the project workflow](docs/WORKFLOW.md),
+[build notes](docs/BUILD_NOTES.md) and
+[release channels](docs/RELEASE_CHANNELS.md) for platform-specific details.
 
-```bash
-flutter analyze
-flutter test
-```
+## Technology
 
-## 📚 Project Layout
+Astoria uses Flutter, Riverpod, Drift/SQLite, Dio, GoRouter and a WebView-based
+chat renderer. The main source areas are:
 
 ```text
-lib/
-  main.dart                 # Entry point
-  app.dart                  # App router and boot-time initialization
-  core/                     # Models, services, providers, LLM pipeline, navigation
-  features/
-    chat/                   # Chat UI, WebView bridge, generation flow
-    extensions/             # Post-generation blocks and JS bridge SDK
-    character_list/         # Character CRUD and editor
-    lorebooks/              # Lorebook UI and management
-    presets/                # Prompt preset editor
-    image_gen/              # Image generation UI and services
-    cloud_sync/             # Dropbox / Google Drive sync
-    settings/               # API, app, and theme settings
-  shared/                   # Shell, theme, shared widgets
-assets/chat_webview/        # WebView HTML/JS/CSS renderer and bridge assets
-assets/translations/        # Localization files
-docs/                       # Architecture, invariants, rules, workflow, build notes
-test/                       # Unit, characterization, extension, and asset-guard tests
+lib/core/                 models, database, providers and shared services
+lib/features/chat/        chat UI, generation and WebView bridge
+lib/features/studio/      multi-stage Studio workflows
+lib/features/memory/      Memory Books and consolidation flows
+lib/features/extensions/  ExtBlocks and sandbox bridge
+lib/features/image_gen/   image generation providers and UI
+lib/features/cloud_sync/  Dropbox and Google Drive integration
+lib/features/support_assistant/  Astoria Assistant
+assets/chat_webview/      message renderer and bridge assets
+docs/                     architecture, invariants and development notes
+test/                     unit, widget, integration and regression tests
 ```
 
-Primary technical references: `docs/ARCHITECTURE.md`, `docs/INVARIANTS.md`, `docs/rules/`, `docs/WORKFLOW.md`, and `docs/BUILD_NOTES.md` for Windows build and dependency-override context.
+Start with [Architecture](docs/ARCHITECTURE.md) and
+[Invariants](docs/INVARIANTS.md) before changing storage, generation or extension
+security boundaries.
 
-## 🙏 Credits
+## Credits
 
-- [SillyImages](https://github.com/0xl0cal/sillyimages) — reference for the inline image generation implementation and its providers.
-- [SillyTavern-CharacterLibrary](https://github.com/Sillyanonymous/SillyTavern-CharacterLibrary) — reference for JanitorAI extraction through a browser.
-- [Marinara Engine](https://github.com/Pasta-Devs/Marinara-Engine) — inspiration for the agentic workflow.
-- [Lumiverse](https://github.com/prolix-oc/Lumiverse) — inspiration for the agentic workflow.
+- [SillyImages](https://github.com/0xl0cal/sillyimages) — reference for inline
+  image-generation providers.
+- [SillyTavern-CharacterLibrary](https://github.com/Sillyanonymous/SillyTavern-CharacterLibrary)
+  — reference for browser-based JanitorAI extraction.
+- [Marinara Engine](https://github.com/Pasta-Devs/Marinara-Engine) and
+  [Lumiverse](https://github.com/prolix-oc/Lumiverse) — inspiration for agentic
+  generation workflows.
 
-### 🧪 Testers
+### Testers
 
-The people who find the bugs before the release does — the app's own Hall of Fame
-(**Menu → About Astoria → Hall of Fame**):
+The people who find the bugs before the release does — Astoria's Hall of Fame:
 
-**nightsyr** *(honorary tester)*, Саша Белый, múrx, lina, ShikiN, N K, Сатаник1155.
+**nightsyr** *(honorary tester)*, Саша Белый, múrx, lina, ShikiN, N K,
+Сатаник1155.
 
-## 📜 License
+## License
 
-This project is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+Astoria is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+Third-party components and assets remain subject to their respective licenses.
