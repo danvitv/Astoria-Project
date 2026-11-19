@@ -136,6 +136,8 @@ export class Renderer {
     if (messageData.swipeTotal != null) section.dataset.swipeTotal = String(messageData.swipeTotal);
     if (messageData.agentSwipeIndex != null) section.dataset.agentSwipeId = String(messageData.agentSwipeIndex);
     if (messageData.agentSwipeTotal != null) section.dataset.agentSwipeTotal = String(messageData.agentSwipeTotal);
+    section._agentSwipeKinds = messageData.agentSwipeKinds;
+    section._studioFinalOnly = messageData.studioFinalOnly;
     if (messageData.greetingTotal != null) section.dataset.greetingTotal = String(messageData.greetingTotal);
     // Mirrors swipeId: the greeting arrows need the current index to know when
     // they sit on an edge, since greeting navigation no longer wraps around.
@@ -600,13 +602,12 @@ if (messageData.isEditing) classes.push('editing');
 
     const isChar = this._roleKey(m.role) === 'char';
     const hasSwipes = isChar && m.swipeTotal && m.swipeTotal > 1;
-    const hasAgentSwipes = isChar && m.agentSwipeFinalCount && m.agentSwipeFinalCount > 1;
+    const hasAgentSwipes = isChar && m.agentSwipeTotal > 1;
     const hasGreetings = isChar && m.messageIndex === 0 && m.greetingTotal && m.greetingTotal > 1;
     // `isSendPending` is the window between the user's bubble being painted
     // and its generation being published: nothing streams yet, but the reply
     // is on its way, so this message is not one to offer a re-roll of.
-    const showRegen = ((!isChar && m.isLast) || m.isError)
-      && !m.isGenerating && !m.isSendPending && !m.isEditing;
+    const showRegen = !m.isGenerating && !m.isSendPending && !m.isEditing && !m.isTyping;
 
     if (hasSwipes) {
       center.appendChild(this._createSwitcher(m.id, m.swipeIndex || 0, m.swipeTotal, 'swipe'));
@@ -614,9 +615,9 @@ if (messageData.isEditing) classes.push('editing');
       center.appendChild(this._createSwitcher(m.id, m.greetingIndex || 0, m.greetingTotal, 'greeting'));
     }
 
-    // Nested swipes: blue sub-swipe switcher (final/cleaned/regen-final).
     if (hasAgentSwipes) {
-      center.appendChild(this._createSwitcher(m.id, m.agentSwipeIndex || 0, m.agentSwipeTotal, 'agent-swipe'));
+      const index = m.agentSwipeIndex || 0;
+      center.appendChild(this._createSwitcher(m.id, index, m.agentSwipeTotal, 'agent-swipe', m.agentSwipeKinds?.[index]));
     }
 
     // Rerun cleaner: re-runs POST-cleaner against the final (agentSwipes[0])
@@ -646,22 +647,8 @@ if (messageData.isEditing) classes.push('editing');
     }
 
     if (showRegen) {
-      const regen = document.createElement('div');
-      regen.className = 'msg-regenerate';
-      if (hasSwipes || hasGreetings || hasAgentSwipes) regen.classList.add('icon-only');
-      regen.dataset.action = 'regenerate';
-      regen.dataset.messageId = m.id;
-      regen.dataset.mode = 'magic';
-      regen.title = 'Regenerate';
-      regen.innerHTML = ICON.regen;
-      if (!hasSwipes && !hasGreetings && !hasAgentSwipes) {
-        const span = document.createElement('span');
-        span.textContent = '↻';
-        // text label; Flutter side may localize
-        span.textContent = 'Regenerate';
-        regen.appendChild(span);
-      }
-      center.appendChild(regen);
+      this._appendRegenerateControls(center, m.id, (!isChar && m.isLast) || m.isError,
+        isChar && m.isLast ? m.studioFinalOnly : null, hasSwipes || hasGreetings || hasAgentSwipes);
     }
 
     footer.appendChild(center);
@@ -681,11 +668,52 @@ if (messageData.isEditing) classes.push('editing');
     return footer;
   }
 
-  _createSwitcher(messageId, index, total, kind) {
+  _appendRegenerateControls(center, messageId, showRegular, finalOnly, compact) {
+    center.classList.toggle('has-studio-final-only', !!finalOnly);
+    if (showRegular || finalOnly) {
+      const regen = document.createElement('div');
+      regen.className = 'msg-regenerate';
+      if (!showRegular) regen.classList.add('studio-extra-regenerate');
+      regen.dataset.action = 'regenerate';
+      regen.dataset.messageId = messageId;
+      regen.dataset.mode = 'magic';
+      regen.title = 'Regenerate';
+      regen.innerHTML = ICON.regen;
+      if (compact || !showRegular) {
+        regen.classList.add('icon-only');
+      } else {
+        const label = document.createElement('span');
+        label.textContent = 'Regenerate';
+        regen.appendChild(label);
+      }
+      center.appendChild(regen);
+    }
+    if (!finalOnly) return;
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'msg-regenerate studio-final-only';
+    button.dataset.action = 'regenerate';
+    button.dataset.messageId = messageId;
+    button.dataset.mode = 'final';
+    button.title = finalOnly.title;
+    button.innerHTML = ICON.regen;
+    button.firstElementChild.setAttribute('aria-hidden', 'true');
+    const label = document.createElement('span');
+    label.className = 'studio-final-only-label';
+    label.textContent = finalOnly.label;
+    button.appendChild(label);
+    center.appendChild(button);
+  }
+
+  _createSwitcher(messageId, index, total, kind, agentSwipeKind) {
     const wrap = document.createElement('div');
     wrap.className = 'msg-switcher';
     wrap.dataset.kind = kind;
-    if (kind === 'agent-swipe') wrap.classList.add('agent-switcher');
+    if (kind === 'agent-swipe') {
+      wrap.classList.add('agent-switcher');
+      wrap.dataset.agentSwipeKind = agentSwipeKind || 'final';
+    }
 
     const prev = document.createElement('div');
     prev.className = 'msg-switcher-btn prev';

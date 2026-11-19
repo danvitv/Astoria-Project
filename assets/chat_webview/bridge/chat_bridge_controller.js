@@ -200,6 +200,7 @@ export class Bridge {
   setGenerating(value) {
     const wasGenerating = this.isGenerating;
     this.isGenerating = !!value;
+    this._syncRegenerationVisibility();
     this._syncGenerationTimer();
     // A cancelled generation trims its empty placeholder, so the list can
     // shrink right here — possibly below the scroll range a hidden header
@@ -208,12 +209,16 @@ export class Bridge {
   }
 
   /* The send window that precedes a generation: the user's message is painted
-   * and the durable append is still in flight. Nothing else in the page reads
-   * it — it only keeps the elapsed clock honest, so the bubble does not sit
-   * there without one for as long as that write takes. */
+   * and the durable append is still in flight. The clock already runs, but
+   * the Studio regeneration controls must no longer be offered. */
   setSendPending(value) {
     this.isSendPending = !!value;
+    this._syncRegenerationVisibility();
     this._syncGenerationTimer();
+  }
+
+  _syncRegenerationVisibility() {
+    this.virtualList.container.classList.toggle('regeneration-busy', this.isGenerating || this.isSendPending);
   }
 
   setPostGenRunning(value) {
@@ -911,10 +916,24 @@ export class Bridge {
       this.renderer.updateImageAttachmentHidden(section, !!msg.imageHidden);
     }
 
+    const outerSwipeChanged = msg.swipeIndex !== undefined
+      && String(msg.swipeIndex) !== (section.dataset.swipeId || '0');
     if (msg.swipeIndex !== undefined) section.dataset.swipeId = String(msg.swipeIndex);
     if (msg.swipeTotal !== undefined) section.dataset.swipeTotal = String(msg.swipeTotal);
-    if (msg.agentSwipeIndex !== undefined) section.dataset.agentSwipeId = String(msg.agentSwipeIndex);
-    if (msg.agentSwipeTotal !== undefined) section.dataset.agentSwipeTotal = String(msg.agentSwipeTotal);
+    if (msg.agentSwipeIndex !== undefined || outerSwipeChanged) {
+      section.dataset.agentSwipeId = String(msg.agentSwipeIndex ?? 0);
+    }
+    if (msg.agentSwipeTotal !== undefined || outerSwipeChanged) {
+      section.dataset.agentSwipeTotal = String(msg.agentSwipeTotal ?? 0);
+    }
+    // Metadata-only updates omit nested state. An outer variation change is
+    // different: it must not inherit the old variation's kinds or checkpoint.
+    if (msg.agentSwipeKinds !== undefined || outerSwipeChanged || msg.agentSwipeTotal <= 1) {
+      section._agentSwipeKinds = msg.agentSwipeTotal <= 1 ? undefined : msg.agentSwipeKinds;
+    }
+    if (msg.studioFinalOnly !== undefined || outerSwipeChanged) {
+      section._studioFinalOnly = msg.studioFinalOnly;
+    }
     if (msg.greetingTotal !== undefined) section.dataset.greetingTotal = String(msg.greetingTotal);
     if (msg.greetingIndex !== undefined) section.dataset.greetingId = String(msg.greetingIndex);
 
@@ -952,20 +971,24 @@ export class Bridge {
     const isLast = section.dataset.isLast === 'true';
     const isError = msg.isError !== undefined ? !!msg.isError : section.classList.contains('error');
     const isGenerating = msg.isGenerating !== undefined ? !!msg.isGenerating : !!this.isGenerating;
+    const isSendPending = msg.isSendPending !== undefined ? !!msg.isSendPending : !!this.isSendPending;
     const swipeIndex = msg.swipeIndex !== undefined ? msg.swipeIndex : parseInt(section.dataset.swipeId || '0', 10);
     const swipeTotal = msg.swipeTotal !== undefined ? msg.swipeTotal : parseInt(section.dataset.swipeTotal || '0', 10);
     const agentSwipeIndex = msg.agentSwipeIndex !== undefined ? msg.agentSwipeIndex : parseInt(section.dataset.agentSwipeId || '0', 10);
     const agentSwipeTotal = msg.agentSwipeTotal !== undefined ? msg.agentSwipeTotal : parseInt(section.dataset.agentSwipeTotal || '0', 10);
-    const agentSwipeFinalCount = msg.agentSwipeFinalCount !== undefined ? msg.agentSwipeFinalCount : 0;
     const greetingIndex = msg.greetingIndex !== undefined ? msg.greetingIndex : parseInt(section.dataset.greetingId || '0', 10);
     const greetingTotal = msg.greetingTotal !== undefined ? msg.greetingTotal : parseInt(section.dataset.greetingTotal || '0', 10);
     const messageIndex = parseInt(section.dataset.messageIndex || '-1', 10);
     const hasSwipes = isChar && swipeTotal > 1;
-    const hasAgentSwipes = isChar && agentSwipeFinalCount > 1;
+    const hasAgentSwipes = isChar && agentSwipeTotal > 1;
     const hasGreetings = isChar && messageIndex === 0 && greetingTotal > 1;
-    const showRegen = ((!isChar && isLast) || isError) && !isGenerating && !isEditing;
+    const showRegen = !isGenerating && !isSendPending && !isEditing && !msg.isTyping
+      && !section.querySelector('.typing-container');
+    const finalOnlyFocused = document.activeElement?.matches('.studio-final-only')
+      && center.contains(document.activeElement);
 
     center.innerHTML = '';
+    center.classList.remove('has-studio-final-only');
 
     if (hasSwipes) {
       center.appendChild(this.renderer._createSwitcher(section.dataset.messageId, swipeIndex || 0, swipeTotal, 'swipe'));
@@ -973,9 +996,9 @@ export class Bridge {
       center.appendChild(this.renderer._createSwitcher(section.dataset.messageId, greetingIndex || 0, greetingTotal, 'greeting'));
     }
 
-    // Nested swipes: blue sub-swipe switcher.
     if (hasAgentSwipes) {
-      center.appendChild(this.renderer._createSwitcher(section.dataset.messageId, agentSwipeIndex || 0, agentSwipeTotal, 'agent-swipe'));
+      center.appendChild(this.renderer._createSwitcher(section.dataset.messageId, agentSwipeIndex, agentSwipeTotal,
+        'agent-swipe', section._agentSwipeKinds?.[agentSwipeIndex]));
     }
 
     if (isChar && isLast && !isGenerating && !isEditing && agentSwipeTotal >= 1) {
@@ -999,62 +1022,24 @@ export class Bridge {
     }
 
     if (showRegen) {
-      const regen = document.createElement('div');
-      regen.className = 'msg-regenerate';
-      if (hasSwipes || hasGreetings || hasAgentSwipes) regen.classList.add('icon-only');
-      regen.dataset.action = 'regenerate';
-      regen.dataset.messageId = section.dataset.messageId;
-      regen.dataset.mode = 'magic';
-      regen.title = 'Regenerate';
-      regen.innerHTML = ICON.regen;
-      if (!hasSwipes && !hasGreetings && !hasAgentSwipes) {
-        const span = document.createElement('span');
-        span.textContent = 'Regenerate';
-        regen.appendChild(span);
-      }
-      center.appendChild(regen);
+      this.renderer._appendRegenerateControls(center, section.dataset.messageId, (!isChar && isLast) || isError,
+        isChar && isLast ? section._studioFinalOnly : null, hasSwipes || hasGreetings || hasAgentSwipes);
+      if (finalOnlyFocused) center.querySelector('.studio-final-only')?.focus({ preventScroll: true });
     }
   }
 
   setLastMessage(newLastId) {
-    // Clear previous last — char or user
-    const prevLast = document.querySelector('.message-section[data-is-last="true"]');
-    if (prevLast) {
-      delete prevLast.dataset.isLast;
-      const center = prevLast.querySelector('.msg-center-controls');
-      if (center) {
-        center.querySelector('.msg-regenerate')?.remove();
-        center.querySelector('.msg-guided-swipe-btn')?.remove();
-      }
+    // A virtualized section stays alive offscreen and may be mounted again
+    // later. Clear all stale last markers, including those outside the DOM.
+    for (const { el } of this.virtualList.items) {
+      if (el.dataset.isLast !== 'true' || el.dataset.messageId === newLastId) continue;
+      delete el.dataset.isLast;
+      this._syncMessageControls(el, {});
     }
-    if (!newLastId) return;
-    const newLast = document.querySelector(`[data-message-id="${newLastId}"]`);
+    const newLast = this.virtualList.itemMap.get(newLastId)?.el;
     if (!newLast) return;
     newLast.dataset.isLast = 'true';
-
-    // For user messages: inject regen button directly into DOM
-    if (newLast.classList.contains('user')) {
-      let center = newLast.querySelector('.msg-center-controls');
-      if (!center) {
-        center = document.createElement('div');
-        center.className = 'msg-center-controls';
-        const footer = newLast.querySelector('.msg-footer');
-        if (footer) footer.appendChild(center);
-      }
-      if (!center.querySelector('.msg-regenerate')) {
-        const regen = document.createElement('div');
-        regen.className = 'msg-regenerate';
-        regen.dataset.action = 'regenerate';
-        regen.dataset.messageId = newLastId;
-        regen.dataset.mode = 'magic';
-        regen.innerHTML = (typeof ICON !== 'undefined' && ICON.regen) ? ICON.regen : '<svg viewBox="0 0 24 24"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>';
-        const span = document.createElement('span');
-        span.textContent = 'Regenerate';
-        regen.appendChild(span);
-        center.appendChild(regen);
-      }
-    }
-    // For char messages: renderer rebuilds controls on next render; flag is enough.
+    this._syncMessageControls(newLast, {});
   }
 
   removeMessage(messageId) {
@@ -1526,6 +1511,7 @@ export class Bridge {
     container.classList.toggle('hide-token-count', !!s.hideTokenCount);
     // Re-run cleaner is a Studio-only affordance — hide it when Studio is off.
     container.classList.toggle('hide-rerun-cleaner', !s.studioEnabled);
+    container.classList.toggle('studio-enabled', !!s.studioEnabled);
     // Battery saver kills the overlay backdrop-filter strips too.
     this._renderOverlayBlurRegions();
   }
@@ -1574,7 +1560,9 @@ export class Bridge {
   }
 
   stopEdit(messageId) {
-    this._editController.stopEdit(messageId, this.virtualList.itemMap.get(messageId)?.el);
+    const section = this.virtualList.itemMap.get(messageId)?.el;
+    this._editController.stopEdit(messageId, section);
+    if (section?.classList.contains('char')) this._syncMessageControls(section, {});
   }
 
   setBackgroundImage(url, blur) {

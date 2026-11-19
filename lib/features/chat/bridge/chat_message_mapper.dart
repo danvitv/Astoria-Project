@@ -1,3 +1,4 @@
+import 'package:easy_localization/easy_localization.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:glaze_flutter/core/llm/macro_engine.dart';
 import 'package:glaze_flutter/core/llm/regex_service.dart';
@@ -89,6 +90,14 @@ class ChatMessageMapper {
   }) {
     final isAssistant = m.role == 'assistant' || m.role == 'character';
     final isUser = m.role == 'user';
+    // The checkpoint belongs to the selected outer variation, not to the
+    // currently displayed final or cleaned sub-swipe. Send no prompt data.
+    final hasStudioWriterCheckpoint =
+        isAssistant &&
+        m.swipeId >= 0 &&
+        m.swipeId < m.swipesMeta.length &&
+        m.swipesMeta[m.swipeId]['studioWriterCheckpoint']
+            is Map<Object?, Object?>;
 
     String content = m.content;
     // Expand macros for display (mirrors reference Glaze ChatMessage.vue,
@@ -226,15 +235,24 @@ class ChatMessageMapper {
         'personaName': m.personaName,
       if (m.swipes.isNotEmpty) 'swipeIndex': m.swipeId,
       if (m.swipes.isNotEmpty) 'swipeTotal': m.swipes.length,
-      // Nested swipes (blue sub-swipes): agentSwipes[].
-      if (m.agentSwipes.isNotEmpty) 'agentSwipeIndex': m.agentSwipeId,
-      if (m.agentSwipes.isNotEmpty) 'agentSwipeTotal': m.agentSwipes.length,
+      // Exact nested state for this outer variation, including zero so a
+      // message update can clear the previous variation's controls.
+      if (isAssistant || m.agentSwipes.isNotEmpty) ...{
+        'agentSwipeIndex': m.agentSwipeId,
+        'agentSwipeTotal': m.agentSwipes.length,
+      },
       if (m.agentSwipes.length > 1)
         'agentSwipeKinds': m.agentSwipes.map((s) => s.kind).toList(),
-      // Show the blue switcher when there are ≥2 agent swipes (any kind).
-      // This includes final+cleaned (POST-cleaner) and 2+ finals (regen).
+      // Historical bridge field; the switcher now reads agentSwipeTotal.
       if (m.agentSwipes.length > 1)
         'agentSwipeFinalCount': m.agentSwipes.length,
+      if (isAssistant)
+        'studioFinalOnly': hasStudioWriterCheckpoint
+            ? {
+                'label': 'studio_final_only'.tr(),
+                'title': 'studio_final_only_hint'.tr(),
+              }
+            : null,
       if (m.genTime != null) 'genTime': m.genTime,
       if (m.time != null && m.time!.isNotEmpty) 'gameTime': m.time,
       if (m.tokens != null) 'tokens': m.tokens,

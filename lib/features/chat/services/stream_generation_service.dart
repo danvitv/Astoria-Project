@@ -17,6 +17,8 @@ import '../../../core/llm/prompt_isolate.dart';
 import '../../../core/llm/prompt/main_model_context_snapshot.dart';
 import '../../../core/llm/prompt/exact_lorebook_manifest.dart';
 import '../../../core/llm/studio/studio_stream_interceptor.dart';
+import '../../../core/llm/studio/studio_writer_checkpoint.dart';
+import '../../../core/llm/studio_agent_executor.dart';
 import '../../../core/llm/prompt/prompt_build_stale_exception.dart';
 import '../../../core/llm/studio/studio_history_limiter.dart';
 import '../../../core/llm/studio/studio_context.dart';
@@ -39,6 +41,8 @@ import '../../../core/llm/transport/llm_capture_context.dart';
 import '../../../core/llm/transport/transport_factory.dart';
 import '../../../core/utils/error_format.dart';
 import '../../../core/utils/cast_helpers.dart';
+import '../../../core/utils/time_helpers.dart';
+import 'studio_writer_pending.dart';
 import '../../../core/llm/tokenizer.dart';
 import '../../../core/llm/studio_turn_config_snapshot.dart';
 import '../../../core/state/studio_turn_config_resolver.dart';
@@ -129,6 +133,7 @@ class StreamGenerationService {
     String guidanceType = 'GENERATION',
     String? regenTargetId,
     String? continueTargetId,
+    bool studioFinalOnly = false,
     required ChatState currentState,
     StudioTurnConfigSnapshot? studioTurnConfig,
   }) async {
@@ -146,6 +151,57 @@ class StreamGenerationService {
     timing('generation entered');
     final cancelToken = CancelToken();
     var studioWasActive = false;
+    StudioWriterCheckpoint? completedPregen;
+    final source = StudioWriterCheckpoint.sourceFor(session, guidanceText);
+    ChatState fail(String message) {
+      if (continueTargetId != null) {
+        return _continueFailure(message, session, vsi);
+      }
+      if (studioFinalOnly) {
+        return ChatState(
+          session: saveSession ?? session,
+          error: message,
+          visibleStartIndex: vsi,
+        );
+      }
+      final checkpoint = completedPregen;
+      final briefs = checkpoint?.briefs;
+      final think = briefs
+          ?.where((brief) => brief.isThinkReplacement)
+          .firstOrNull;
+      final reasoning = think == null
+          ? null
+          : StudioAgentExecutor.combineThinkingReasoning(
+              StudioAgentExecutor.normalizeThinkingPrefill(think.brief),
+              null,
+              controllerReasoning: think.nativeReasoning,
+            );
+      final outputs = StudioStreamInterceptor.studioOutputsToJson(briefs ?? []);
+      if (regenTargetId != null && saveSession != null) {
+        return _writer.writeRegenError(
+          errorText: message,
+          saveSession: saveSession,
+          regenTargetId: regenTargetId,
+          visibleStartIndex: vsi,
+          studioWriterCheckpoint: checkpoint?.toJson(),
+          studioOutputs: outputs,
+          reasoning: reasoning,
+          guidanceText: guidanceText,
+          guidanceType: guidanceType,
+        );
+      }
+      return _writer.writeError(
+        errorText: message,
+        currentSession: session,
+        visibleStartIndex: vsi,
+        studioWriterCheckpoint: checkpoint?.toJson(),
+        studioOutputs: outputs,
+        reasoning: reasoning,
+        guidanceText: guidanceText,
+        guidanceType: guidanceType,
+      );
+    }
+
     if (_isAborted()) {
       cancelToken.cancel('Generation owner retired');
       return ChatState(
@@ -193,6 +249,19 @@ class StreamGenerationService {
         );
       }
 
+      StudioWriterCheckpoint? retryCheckpoint;
+      if (studioFinalOnly) {
+        final target = saveSession?.messages.lastOrNull;
+        if (target != null && target.id == regenTargetId) {
+          retryCheckpoint = StudioWriterCheckpoint.forMessage(target);
+        }
+        if (!turnConfig.enabled ||
+            retryCheckpoint == null ||
+            retryCheckpoint.source != source) {
+          return fail('studio_writer_checkpoint_stale'.tr());
+        }
+      }
+
       _phase(GenerationPhase.preparing);
       final builder = _ref.read(promptPayloadBuilderProvider);
       final inputs = await builder.collectGenerationContext(
@@ -204,7 +273,12 @@ class StreamGenerationService {
             ? null
             : kContinueInstruction,
         includeEffectiveCanon: turnConfig.enabled,
-        excludeSnapshotMessageId: regenTargetId,
+        // Reproduce the exact canon/summary projection that produced the
+        // saved controller phase. A checkpoint from full regeneration used
+        // its replaced message ID; one from an initial send used null.
+        excludeSnapshotMessageId: studioFinalOnly
+            ? retryCheckpoint!.excludeSnapshotMessageId
+            : regenTargetId,
         shouldAbort: _isAborted,
         cancelToken: cancelToken,
         onPhase: _phase,
@@ -521,77 +595,167 @@ class StreamGenerationService {
         if (_isAborted()) {
           throw const PromptBuildStaleException('Generation cancelled.');
         }
-        final studioResult = await studioService.runTrackerCycle(
-          beforeFinalSend: () => builder.ensureMemoryEntriesCurrent(
-            sessionId: session.id,
-            selection: inputs.memorySelection,
-            triggered: promptResult.triggeredMemories,
-          ),
-          config: studioConfig,
-          inputs: inputs,
-          trackerContext: trackerStudioContext,
-          finalContext: finalStudioContext!,
-          apiConfig: apiConfig,
-          sessionId: session.id,
-          turnConfig: turnConfig,
-          cancelToken: cancelToken,
-          onThinkingUpdate: (text) {
-            if (_isAborted()) return;
-            latestStudioReasoning = text;
-            reportStudioStreamPhase('');
-            scheduleStudioStreamingUpdate();
-          },
-          onFinalStart: () {
-            if (_isAborted()) return;
-            timing('studio final writer started');
-            _phase(GenerationPhase.waiting);
-            final cur = _ref.read(studioCycleStateProvider);
-            if (cur.phase == StudioCyclePhase.running) {
-              finalStartTime ??= DateTime.now();
-              _ref
-                  .read(studioCycleStateProvider.notifier)
-                  .state = StudioCycleState.writingFinal(
+        final studioResult = await studioService
+            .runTrackerCycle(
+              beforeFinalSend: () => builder.ensureMemoryEntriesCurrent(
                 sessionId: session.id,
-                totalAgents: cur.totalAgents,
-                completedAgents: cur.completedAgents,
-                failedAgents: cur.failedAgents,
-                failedAgentNames: cur.failedAgentNames,
-              );
-            }
-          },
-          onFinalResponseUpdate: (text, reasoning) {
-            if (_isAborted()) return;
-            final transformedText = transformStudioOutput(text);
-            latestStudioText = transformedText;
-            latestStudioReasoning = reasoning;
-            reportStudioStreamPhase(transformedText);
-            // Phase transition is handled by onFinalStart above; here we only
-            // push the streaming text to the UI. Guard against the rare case
-            // where onFinalStart was not wired (e.g. older callers) so the
-            // indicator still flips once tokens arrive.
-            final cur = _ref.read(studioCycleStateProvider);
-            if (cur.phase == StudioCyclePhase.running) {
-              _ref
-                  .read(studioCycleStateProvider.notifier)
-                  .state = StudioCycleState.writingFinal(
-                sessionId: session.id,
-                totalAgents: cur.totalAgents,
-                completedAgents: cur.completedAgents,
-                failedAgents: cur.failedAgents,
-                failedAgentNames: cur.failedAgentNames,
-              );
-            }
-            scheduleStudioStreamingUpdate();
-          },
-          onFinalMessagesBuilt: (messages) {
-            studioFinalMessages = messages;
-          },
-          onFinalLorebookClassificationsBuilt: (classifications) {
-            studioLorebookClassifications = classifications;
-          },
-        );
-        closeStudioStreamPublishing();
+                selection: inputs.memorySelection,
+                triggered: promptResult.triggeredMemories,
+              ),
+              config: studioConfig,
+              inputs: inputs,
+              trackerContext: trackerStudioContext,
+              finalContext: finalStudioContext!,
+              apiConfig: apiConfig,
+              sessionId: session.id,
+              turnConfig: turnConfig,
+              cancelToken: cancelToken,
+              writerCheckpoint: retryCheckpoint,
+              onPregenCompleted: (presetId, briefs) async {
+                if (_isAborted() || continueTargetId != null) return;
+                completedPregen = StudioWriterCheckpoint(
+                  presetId: presetId,
+                  source: source,
+                  briefs: briefs,
+                  excludeSnapshotMessageId: studioFinalOnly
+                      ? retryCheckpoint!.excludeSnapshotMessageId
+                      : regenTargetId,
+                  phaseInputs: StudioWriterCheckpoint.fingerprintPhase(
+                    turnConfig.preset!,
+                    trackerStudioContext,
+                    finalStudioContext,
+                  ),
+                );
+                // A writer-only retry already has a durable checkpoint on its
+                // selected variation. Stop must leave that variation untouched.
+                if (studioFinalOnly) return;
+                final ownerId = _ref
+                    .read(chatProvider(_charId).notifier)
+                    .studioWriterPendingOwnerFor(_genId);
+                if (ownerId == null) {
+                  throw const PromptBuildStaleException(
+                    'Studio owner retired.',
+                  );
+                }
+                final pending = StudioWriterPending.capture(
+                  ownerId: ownerId,
+                  baseSession: saveSession ?? session,
+                  targetId: regenTargetId,
+                  guidanceText: guidanceText,
+                  guidanceType: guidanceType,
+                  checkpoint: completedPregen!,
+                );
+                if (pending == null) {
+                  throw const PromptBuildStaleException(
+                    'Studio target changed.',
+                  );
+                }
+                // Persist the first phase before the writer's network request.
+                // Keep it separate from message/variation anchors while that
+                // request is in flight. Only the owning run may replace it.
+                final durable = await _ref
+                    .read(chatRepoProvider)
+                    .mutateSession(
+                      sessionId: session.id,
+                      updatedAt: currentTimestampSeconds(),
+                      mutate: (latest) {
+                        if (_isAborted()) return null;
+                        if (regenTargetId != null &&
+                            latest.messages.lastOrNull?.id != regenTargetId) {
+                          return null;
+                        }
+                        final prompt = regenTargetId == null
+                            ? latest
+                            : latest.copyWith(
+                                messages: latest.messages
+                                    .take(latest.messages.length - 1)
+                                    .toList(),
+                              );
+                        if (StudioWriterCheckpoint.sourceFor(
+                              prompt,
+                              guidanceText,
+                            ) !=
+                            source) {
+                          return null;
+                        }
+                        return latest.copyWith(
+                          sessionVars: {
+                            ...latest.sessionVars,
+                            StudioWriterCheckpoint.pendingSessionKey: pending
+                                .encode(),
+                          },
+                        );
+                      },
+                    );
+                if (_isAborted() || durable == null) {
+                  throw const PromptBuildStaleException(
+                    'Studio phase owner changed.',
+                  );
+                }
+              },
+              onThinkingUpdate: (text) {
+                if (_isAborted()) return;
+                latestStudioReasoning = text;
+                reportStudioStreamPhase('');
+                scheduleStudioStreamingUpdate();
+              },
+              onFinalStart: () {
+                if (_isAborted()) return;
+                timing('studio final writer started');
+                _phase(GenerationPhase.waiting);
+                final cur = _ref.read(studioCycleStateProvider);
+                if (cur.phase == StudioCyclePhase.running) {
+                  finalStartTime ??= DateTime.now();
+                  _ref
+                      .read(studioCycleStateProvider.notifier)
+                      .state = StudioCycleState.writingFinal(
+                    sessionId: session.id,
+                    totalAgents: cur.totalAgents,
+                    completedAgents: cur.completedAgents,
+                    failedAgents: cur.failedAgents,
+                    failedAgentNames: cur.failedAgentNames,
+                  );
+                }
+              },
+              onFinalResponseUpdate: (text, reasoning) {
+                if (_isAborted()) return;
+                final transformedText = transformStudioOutput(text);
+                latestStudioText = transformedText;
+                latestStudioReasoning = reasoning;
+                reportStudioStreamPhase(transformedText);
+                // Phase transition is handled by onFinalStart above; here we only
+                // push the streaming text to the UI. Guard against the rare case
+                // where onFinalStart was not wired (e.g. older callers) so the
+                // indicator still flips once tokens arrive.
+                final cur = _ref.read(studioCycleStateProvider);
+                if (cur.phase == StudioCyclePhase.running) {
+                  _ref
+                      .read(studioCycleStateProvider.notifier)
+                      .state = StudioCycleState.writingFinal(
+                    sessionId: session.id,
+                    totalAgents: cur.totalAgents,
+                    completedAgents: cur.completedAgents,
+                    failedAgents: cur.failedAgents,
+                    failedAgentNames: cur.failedAgentNames,
+                  );
+                }
+                scheduleStudioStreamingUpdate();
+              },
+              onFinalMessagesBuilt: (messages) {
+                studioFinalMessages = messages;
+              },
+              onFinalLorebookClassificationsBuilt: (classifications) {
+                studioLorebookClassifications = classifications;
+              },
+            )
+            .whenComplete(closeStudioStreamPublishing);
         if (_isAborted() || studioResult.status == 'aborted') {
+          // Native connection repair can retire the transport without retiring
+          // this chat generation. Promote the already durable controller phase
+          // now; otherwise it remains hidden until a later startup recovery.
+          if (_ref.mounted && !_ownerAborted() && completedPregen != null) {
+            return fail('studio_writer_connection_changed'.tr());
+          }
           if (!_isAborted()) {
             _ref.read(studioCycleStateProvider.notifier).state =
                 const StudioCycleState.idle();
@@ -618,22 +782,7 @@ class StreamGenerationService {
           );
           _ref.read(studioCycleStateProvider.notifier).state =
               StudioCycleState.error(sessionId: session.id);
-          if (continueTargetId != null) {
-            return _continueFailure(message, session, vsi);
-          }
-          if (regenTargetId != null && saveSession != null) {
-            return _writer.writeRegenError(
-              errorText: message,
-              saveSession: saveSession,
-              regenTargetId: regenTargetId,
-              visibleStartIndex: vsi,
-            );
-          }
-          return _writer.writeError(
-            errorText: message,
-            currentSession: session,
-            visibleStartIndex: vsi,
-          );
+          return fail(message);
         }
 
         final elapsed = DateTime.now().difference(startGenTime).inMilliseconds;
@@ -697,6 +846,8 @@ class StreamGenerationService {
               triggeredMemories: triggeredMemories,
               regenTargetId: regenTargetId,
               visibleStartIndex: vsi,
+              studioFinalOnly: studioFinalOnly,
+              studioWriterCheckpoint: completedPregen?.toJson(),
               studioOutputs: StudioStreamInterceptor.studioOutputsToJson(
                 studioResult.stageBriefs,
               ),
@@ -1200,6 +1351,12 @@ class StreamGenerationService {
       // cycle state — which was set to writingFinal by onFinalStart. Without
       // this reset the StudioStatusCard stays visible forever with a spinner.
       if (_isAborted()) {
+        // A native Writer source can retire by throwing rather than returning
+        // an aborted cycle. If this chat run still owns the generation, expose
+        // the already-durable controller phase exactly as in the result path.
+        if (_ref.mounted && !_ownerAborted() && completedPregen != null) {
+          return fail('studio_writer_connection_changed'.tr());
+        }
         return ChatState(
           session: session,
           isGenerating: false,
@@ -1210,22 +1367,7 @@ class StreamGenerationService {
         _ref.read(studioCycleStateProvider.notifier).state =
             StudioCycleState.error(sessionId: session.id);
       }
-      if (continueTargetId != null) {
-        return _continueFailure(formatError(e), session, vsi);
-      }
-      if (regenTargetId != null && saveSession != null) {
-        return _writer.writeRegenError(
-          errorText: formatError(e),
-          saveSession: saveSession,
-          regenTargetId: regenTargetId,
-          visibleStartIndex: vsi,
-        );
-      }
-      return _writer.writeError(
-        errorText: formatError(e),
-        currentSession: session,
-        visibleStartIndex: vsi,
-      );
+      return fail(formatError(e));
     }
   }
 

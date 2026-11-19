@@ -11,11 +11,14 @@ import '../../../core/db/repositories/lorebook_use_manifest_repo.dart';
 import '../../../core/llm/prompt/exact_lorebook_manifest.dart';
 import '../../../core/llm/studio/studio_history_limiter.dart';
 import '../../../core/llm/studio/studio_stream_interceptor.dart';
+import '../../../core/llm/studio/studio_writer_checkpoint.dart';
+import 'studio_writer_pending.dart';
 import '../../../core/llm/studio_turn_config_snapshot.dart';
 import '../../../core/services/generation_notification_service.dart';
 import '../../../core/state/db_provider.dart';
 import '../../../core/state/lorebook_embedding_provider.dart';
 import '../../../core/utils/time_helpers.dart';
+import '../../../shared/widgets/glaze_toast.dart';
 import '../../../core/state/studio_turn_config_resolver.dart';
 import '../../chat_history/chat_history_provider.dart';
 import '../abort_handler.dart';
@@ -106,6 +109,7 @@ class GenerationPipeline {
     List<Map<String, dynamic>>? previousSwipesMeta,
     String? regenTargetId,
     String? continueTargetId,
+    bool studioFinalOnly = false,
   }) async {
     if (!ctx.ref.mounted || !ctx.abortHandler.isCurrentGen(genId)) return null;
     ctx.abortHandler.clearStreaming();
@@ -130,6 +134,10 @@ class GenerationPipeline {
         return null;
       }
       final service = ctx.ref.read(chatGenerationServiceProvider);
+      bool ownsSession() =>
+          ctx.ref.mounted &&
+          ctx.abortHandler.isCurrentGen(genId) &&
+          ctx.getState().value?.session?.id == session.id;
       var result = await service.generate(
         session: session,
         saveSession: saveSession,
@@ -137,9 +145,9 @@ class GenerationPipeline {
         genId: genId,
         currentState: ctx.getState().value ?? ChatState(session: session),
         onStateUpdate: (s) {
-          if (ctx.abortHandler.isCurrentGen(genId)) ctx.setState(AsyncData(s));
+          if (ownsSession()) ctx.setState(AsyncData(s));
         },
-        isAborted: () => !ctx.abortHandler.isCurrentGen(genId),
+        isAborted: () => !ownsSession(),
         previousSwipes: previousSwipes,
         previousSwipeId: previousSwipeId,
         previousReasoning: previousReasoning,
@@ -150,10 +158,11 @@ class GenerationPipeline {
         guidanceType: guidanceType,
         regenTargetId: regenTargetId,
         continueTargetId: continueTargetId,
+        studioFinalOnly: studioFinalOnly,
         studioTurnConfig: studioTurnConfig,
       );
 
-      if (!ctx.ref.mounted || !ctx.abortHandler.isCurrentGen(genId)) {
+      if (!ownsSession()) {
         return null;
       }
 
@@ -196,6 +205,28 @@ class GenerationPipeline {
         return outcome;
       }
 
+      // Failed writer-only retries leave the saved phase and all variants
+      // untouched, rather than appending an outer error variation.
+      if (studioFinalOnly && result.error != null) {
+        final durable = await ctx.ref
+            .read(chatRepoProvider)
+            .getById(session.id);
+        if (!ownsSession()) {
+          return null;
+        }
+        if (durable != null) ChatSessionService.updateCache(durable);
+        ctx.abortHandler.clearStreaming();
+        ctx.abortHandler.restorationMessage = null;
+        final settled = result.copyWith(
+          session: durable ?? saveSession,
+          isGenerating: false,
+          regenTargetId: null,
+        );
+        ctx.setState(AsyncData(settled));
+        GlazeToast.showWithoutContext(result.error!, isError: true);
+        return GenerationOutcome(state: settled, clearRestorationMessage: null);
+      }
+
       final durableSession = await _commitGenerationResult(
         baseSession: saveSession ?? session,
         generatedSession: result.session!,
@@ -203,12 +234,36 @@ class GenerationPipeline {
         manifest:
             result.mainModelContextSnapshot?.promptResult.exactLorebookManifest,
         studioTurnConfig: studioTurnConfig,
+        genId: genId,
+        promptSession: session,
+        guidanceText: guidanceText,
       );
       if (durableSession == null) {
+        if (ownsSession()) {
+          final latest = await ctx.ref
+              .read(chatRepoProvider)
+              .getById(session.id);
+          if (!ownsSession()) {
+            return null;
+          }
+          ctx.abortHandler.clearStreaming();
+          ctx.abortHandler.restorationMessage = null;
+          if (latest != null) ChatSessionService.updateCache(latest);
+          ctx.setState(
+            AsyncData(
+              result.copyWith(
+                session: latest ?? saveSession ?? session,
+                isGenerating: false,
+                regenTargetId: null,
+                isPostGenRunning: false,
+              ),
+            ),
+          );
+        }
         return null;
       }
       result = result.copyWith(session: durableSession);
-      if (!ctx.ref.mounted || !ctx.abortHandler.isCurrentGen(genId)) {
+      if (!ownsSession()) {
         return null;
       }
       ChatSessionService.updateCache(durableSession);
@@ -502,6 +557,9 @@ class GenerationPipeline {
     required String? regenTargetId,
     required ExactLorebookManifest? manifest,
     required StudioTurnConfigSnapshot studioTurnConfig,
+    int? genId,
+    ChatSession? promptSession,
+    String? guidanceText,
   }) async {
     final durableManifest = validateGenerationManifestForCommit(manifest);
     var sessionToCommit = generatedSession;
@@ -534,44 +592,76 @@ class GenerationPipeline {
     }
     var wakeLoreEmbeddingWorker = false;
     final chatRepo = ctx.ref.read(chatRepoProvider);
-    Future<ChatSession?> commit(ExactLorebookManifest? manifest) =>
-        chatRepo.commitGenerationResult(
-          baseSession: baseSession,
-          generatedSession: sessionToCommit,
+    final pendingOwnerId = genId == null
+        ? null
+        : ctx.abortHandler.studioWriterPendingOwnerFor(genId);
+    Future<ChatSession?> commit(
+      ExactLorebookManifest? manifest,
+    ) => chatRepo.commitGenerationResult(
+      baseSession: baseSession,
+      generatedSession: sessionToCommit,
+      regenTargetId: regenTargetId,
+      manifest: manifest,
+      canCommit: genId == null
+          ? null
+          : (latest) {
+              if (!ctx.ref.mounted || !ctx.abortHandler.isCurrentGen(genId)) {
+                return false;
+              }
+              if (promptSession == null || !studioTurnConfig.enabled) {
+                return true;
+              }
+              if (regenTargetId != null &&
+                  latest.messages.lastOrNull?.id != regenTargetId) {
+                return false;
+              }
+              final prompt = regenTargetId == null
+                  ? latest
+                  : latest.copyWith(
+                      messages: latest.messages
+                          .take(latest.messages.length - 1)
+                          .toList(),
+                    );
+              return StudioWriterCheckpoint.sourceFor(prompt, guidanceText) ==
+                  StudioWriterCheckpoint.sourceFor(promptSession, guidanceText);
+            },
+      sessionVarKeysToRemove: pendingOwnerId == null
+          ? const {}
+          : {
+              StudioWriterCheckpoint.pendingSessionKey: (raw) =>
+                  StudioWriterPending.owns(raw, pendingOwnerId),
+            },
+      beforeWrite: (before, after) async {
+        final changedIds = changedRegenerationEvidenceIds(
+          before: before,
+          after: after,
           regenTargetId: regenTargetId,
-          manifest: manifest,
-          beforeWrite: (before, after) async {
-            final changedIds = changedRegenerationEvidenceIds(
-              before: before,
-              after: after,
-              regenTargetId: regenTargetId,
-            );
-            if (changedIds.isNotEmpty) {
-              await ctx.ref
-                  .read(cardEvolutionProposalRunRepoProvider)
-                  .cancelPendingForMessageMutationInTransaction(
-                    sessionId: after.id,
-                    messageIds: changedIds,
-                  );
-              await ctx.ref
-                  .read(ledgerReconciliationRunRepoProvider)
-                  .invalidateForMessageMutation(
-                    sessionId: after.id,
-                    messageIds: changedIds,
-                    reason: 'message_evidence_changed',
-                    createdAt: currentTimestampSeconds(),
-                  );
-            }
-            final canonRollback = await ctx.ref
-                .read(sessionCanonRollbackRepoProvider)
-                .reconcileInTransaction(
-                  sessionId: after.id,
-                  survivingMessages: after.messages,
-                );
-            wakeLoreEmbeddingWorker =
-                canonRollback.shouldWakeLoreEmbeddingWorker;
-          },
         );
+        if (changedIds.isNotEmpty) {
+          await ctx.ref
+              .read(cardEvolutionProposalRunRepoProvider)
+              .cancelPendingForMessageMutationInTransaction(
+                sessionId: after.id,
+                messageIds: changedIds,
+              );
+          await ctx.ref
+              .read(ledgerReconciliationRunRepoProvider)
+              .invalidateForMessageMutation(
+                sessionId: after.id,
+                messageIds: changedIds,
+                reason: 'message_evidence_changed',
+                createdAt: currentTimestampSeconds(),
+              );
+        }
+        final canonRollback = await ctx.ref
+            .read(sessionCanonRollbackRepoProvider)
+            .reconcileInTransaction(
+              sessionId: after.id,
+              survivingMessages: after.messages,
+            );
+        wakeLoreEmbeddingWorker = canonRollback.shouldWakeLoreEmbeddingWorker;
+      },
+    );
     final committed = await commitGenerationWithManifestFallback(
       manifest: durableManifest,
       commit: commit,

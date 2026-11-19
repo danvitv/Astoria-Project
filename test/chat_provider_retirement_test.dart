@@ -46,6 +46,7 @@ class _Generation extends ChatGenerationService {
     String guidanceType = 'GENERATION',
     String? regenTargetId,
     String? continueTargetId,
+    bool studioFinalOnly = false,
     StudioTurnConfigSnapshot? studioTurnConfig,
   }) async {
     final run = _Run()..isAborted = isAborted;

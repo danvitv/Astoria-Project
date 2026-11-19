@@ -4,6 +4,8 @@ import '../../../core/utils/time_helpers.dart';
 import '../../image_gen/services/image_tag_markup.dart';
 import '../chat_state.dart';
 
+const _studioWriterCheckpointKey = 'studioWriterCheckpoint';
+
 /// Pure-function helpers for building the final [ChatState] after one
 /// generation cycle (success or error). Constructor injection of
 /// pre-computed inputs (pendingSessionVars, previous swipes, etc.) so
@@ -16,12 +18,15 @@ class SavedMessageWriter {
 
   /// Success path: build the assistant message, attach swipes/meta, and
   /// return a [ChatState] with the new last message appended to the session.
-  /// If [regenTargetId] is given, the message replaces the existing swipe
-  /// at that id instead of appending a new one.
+  /// If [regenTargetId] is given, update that message rather than appending
+  /// a new message.
   ///
   /// On regen, the new text is appended to `swipes[]` (green icons) as a
   /// new swipe and `swipeId` points at it; on a new generation, `swipes[]`
   /// is seeded with a single swipe pointing at the new text.
+  /// A [studioFinalOnly] regen stays in the current outer swipe: it appends
+  /// a nested final to a healthy swipe or replaces an errored swipe in place.
+  /// It leaves the session unchanged if the saved target is missing.
   ChatState writeAssistant({
     required String text,
     required String? reasoning,
@@ -47,6 +52,8 @@ class SavedMessageWriter {
     String? regenTargetId,
     int visibleStartIndex = 0,
     List<Map<String, dynamic>> studioOutputs = const [],
+    Map<String, dynamic>? studioWriterCheckpoint,
+    bool studioFinalOnly = false,
   }) {
     // A reply can only *ask* for a picture. Glaze is the sole writer of a
     // finished image block — it writes the `<img data-iig-…>` element the
@@ -79,6 +86,7 @@ class SavedMessageWriter {
       // post-turn Ledger update.
       'time': ?time,
       if (studioOutputs.isNotEmpty) 'studioOutputs': studioOutputs,
+      _studioWriterCheckpointKey: ?studioWriterCheckpoint,
       // Persist triggered entries per swipe so each variation shows its own
       // lorebook/memory activations (restored on swipe in ChatMessageService).
       if (triggeredLorebooks.isNotEmpty)
@@ -94,23 +102,33 @@ class SavedMessageWriter {
     }
 
     List<Map<String, dynamic>> swipesMeta;
-    if (previousSwipesMeta != null && previousSwipesMeta.isNotEmpty) {
-      swipesMeta = [...previousSwipesMeta, currentSwipeMeta];
-    } else if (previousSwipes != null && previousSwipes.isNotEmpty) {
+    if (previousSwipes != null && previousSwipes.isNotEmpty) {
       final prevMeta = <String, dynamic>{
         'genTime': previousGenTime,
         'reasoning': previousReasoning,
         'tokens': previousTokens,
       };
-      swipesMeta = List<Map<String, dynamic>>.generate(
-        previousSwipes.length,
-        (i) => i == previousSwipeId ? prevMeta : {},
-      );
-      swipesMeta.add(currentSwipeMeta);
+      swipesMeta = [
+        for (var i = 0; i < previousSwipes.length; i++)
+          if (previousSwipesMeta != null && i < previousSwipesMeta.length)
+            previousSwipesMeta[i]
+          else
+            i == previousSwipeId ? prevMeta : <String, dynamic>{},
+        currentSwipeMeta,
+      ];
     } else {
       swipesMeta = [currentSwipeMeta];
     }
 
+    final finalSwipe = AgentSwipe(
+      content: text,
+      kind: 'final',
+      reasoning: reasoning,
+      genTime: genTime,
+      tokens: tokens,
+      time: time,
+      studioOutputs: studioOutputs,
+    );
     if (regenTargetId != null) {
       if (isAborted()) {
         return ChatState(
@@ -125,32 +143,58 @@ class SavedMessageWriter {
       if (idx >= 0) {
         final existing = currentSession.messages[idx];
 
-        // Nested swipes: full regen replaces agentSwipes with a fresh
-        // single 'final' pointing at the new text (the old 'cleaned'
-        // sub-swipe applied to the previous content and is dropped).
-        final agentSwipes = [
-          AgentSwipe(
-            content: text,
-            kind: 'final',
-            reasoning: reasoning,
-            genTime: genTime,
-            tokens: tokens,
-            time: time,
-            studioOutputs: studioOutputs,
-          ),
-        ];
-        const agentSwipeId = 0;
-        // Sync agentSwipes into swipesMeta[swipeId] so green-swipe
-        // round-trips (setSwipe) restore the correct blue swipes.
-        var syncedSwipesMeta = swipesMeta;
-        if (swipeId >= 0 && swipeId < swipesMeta.length) {
-          syncedSwipesMeta = List<Map<String, dynamic>>.from(swipesMeta);
-          syncedSwipesMeta[swipeId] = {
-            ...syncedSwipesMeta[swipeId],
-            'agentSwipes': agentSwipes.map((e) => e.toJson()).toList(),
-            'agentSwipeId': agentSwipeId,
+        // Full regen creates a new outer swipe with a single nested final.
+        final agentSwipes = <AgentSwipe>[];
+        if (studioFinalOnly) {
+          // Use the saved target, not the caller's full-regen swipe inputs.
+          swipes = existing.swipes.isEmpty
+              ? [existing.content]
+              : [...existing.swipes];
+          swipeId = existing.swipes.isEmpty
+              ? 0
+              : existing.swipeId.clamp(0, swipes.length - 1);
+          swipesMeta = _alignedMeta(existing, swipes.length);
+          final activeMeta = swipesMeta[swipeId];
+          if (!existing.isError && activeMeta['isError'] != true) {
+            agentSwipes.addAll(_activeAgentSwipes(existing));
+            if (agentSwipes.isEmpty) {
+              // Backfill the old reply before adding a final to a legacy swipe.
+              agentSwipes.add(
+                AgentSwipe(
+                  content: existing.content,
+                  kind: 'final',
+                  parentSwipeId: swipeId,
+                  reasoning: existing.reasoning,
+                  genTime: existing.genTime,
+                  tokens: existing.tokens,
+                  time: existing.time,
+                  studioOutputs: existing.studioOutputs,
+                ),
+              );
+            }
+          }
+          swipes[swipeId] = text;
+          swipesMeta[swipeId] = {
+            ...activeMeta,
+            ...currentSwipeMeta,
+            'isError': false,
+            'time': time,
+            'studioOutputs': studioOutputs,
+            'continuationOffset': null,
+            'guidanceText': guidanceText,
+            'guidanceType': guidanceType,
+            'triggeredLorebooks': currentSwipeMeta['triggeredLorebooks'],
+            'triggeredMemories': currentSwipeMeta['triggeredMemories'],
           };
         }
+        agentSwipes.add(finalSwipe.copyWith(parentSwipeId: swipeId));
+        final agentSwipeId = agentSwipes.length - 1;
+        // Green-swipe round-trips restore the selected nested variation.
+        swipesMeta[swipeId] = {
+          ...swipesMeta[swipeId],
+          'agentSwipes': agentSwipes.map((e) => e.toJson()).toList(),
+          'agentSwipeId': agentSwipeId,
+        };
 
         final updated = existing.copyWith(
           content: text,
@@ -163,7 +207,7 @@ class SavedMessageWriter {
           // that carries it, so it leaves no block on this one.
           guidanceText: guidanceType == 'SWIPE' ? guidanceText : null,
           guidanceType: guidanceType,
-          // A full regen is a fresh event: restamp the message so the chat
+          // Regen is a fresh event: restamp the message so the chat
           // list (sorted on the last message's timestamp) surfaces the
           // session again. The message keeps its position in the chat — only
           // the stamp moves.
@@ -172,9 +216,12 @@ class SavedMessageWriter {
           isTyping: false,
           genTime: genTime,
           tokens: tokens,
+          continuationOffset: studioFinalOnly
+              ? null
+              : existing.continuationOffset,
           swipes: swipes,
           swipeId: swipeId,
-          swipesMeta: syncedSwipesMeta,
+          swipesMeta: swipesMeta,
           swipeDirection: 'right',
           memoryCoverage: persistedMemoryCoverage,
           triggeredLorebooks: triggeredLorebooks,
@@ -202,7 +249,7 @@ class SavedMessageWriter {
       }
     }
 
-    if (isAborted()) {
+    if (studioFinalOnly || isAborted()) {
       return ChatState(
         session: currentSession,
         isGenerating: false,
@@ -210,19 +257,10 @@ class SavedMessageWriter {
       );
     }
 
-    // New message: seed agentSwipes with a single 'final' pointing at the
-    // new text so the blue sub-swipe model is consistent from creation.
-    final newAgentSwipes = [
-      AgentSwipe(
-        content: text,
-        kind: 'final',
-        reasoning: reasoning,
-        genTime: genTime,
-        tokens: tokens,
-        time: time,
-        studioOutputs: studioOutputs,
-      ),
-    ];
+    if (studioWriterCheckpoint != null) {
+      currentSwipeMeta['agentSwipes'] = [finalSwipe.toJson()];
+      currentSwipeMeta['agentSwipeId'] = 0;
+    }
     final assistantMsg = ChatMessage(
       id: generateId(),
       role: 'assistant',
@@ -239,7 +277,7 @@ class SavedMessageWriter {
       memoryCoverage: persistedMemoryCoverage,
       triggeredLorebooks: triggeredLorebooks,
       triggeredMemories: triggeredMemories,
-      agentSwipes: newAgentSwipes,
+      agentSwipes: [finalSwipe],
       agentSwipeId: 0,
       studioOutputs: studioOutputs,
     );
@@ -269,19 +307,28 @@ class SavedMessageWriter {
     return out;
   }
 
-  /// Error path (non-regen): append an error message. Does NOT write
-  /// [pendingSessionVars] — those must only persist on the success path
-  /// (see INV-C5). The current session's sessionVars are kept as-is.
+  /// Error path (non-regen): append an error message without changing session
+  /// variables (INV-C5). Think display fields require a completed checkpoint.
   /// Called from SSE onError and from the top-level catch.
   ChatState writeError({
     required String errorText,
     required ChatSession currentSession,
     int visibleStartIndex = 0,
+    Map<String, dynamic>? studioWriterCheckpoint,
+    List<Map<String, dynamic>> studioOutputs = const [],
+    String? reasoning,
+    String? guidanceText,
+    String guidanceType = 'GENERATION',
   }) {
+    final hasCheckpoint = studioWriterCheckpoint != null;
     final errorMsg = ChatMessage(
       id: generateId(),
       role: 'assistant',
       content: errorText,
+      reasoning: hasCheckpoint ? reasoning : null,
+      studioOutputs: hasCheckpoint ? studioOutputs : const [],
+      guidanceText: guidanceText,
+      guidanceType: guidanceType,
       isError: true,
       timestamp: DateTime.now().millisecondsSinceEpoch,
       swipes: [errorText],
@@ -290,7 +337,13 @@ class SavedMessageWriter {
       // (see ChatMessageService.setSwipe), so swiping to a healthy swipe
       // clears the error window.
       swipesMeta: [
-        <String, dynamic>{'isError': true},
+        _errorMeta(
+          studioWriterCheckpoint,
+          studioOutputs,
+          reasoning,
+          guidanceText,
+          guidanceType,
+        ),
       ],
     );
     final finalMessages = [...currentSession.messages, errorMsg];
@@ -304,13 +357,18 @@ class SavedMessageWriter {
     );
   }
 
-  /// Error path (regen): replace the swipe at [regenTargetId] with the
-  /// error text. Does NOT write [pendingSessionVars] (see INV-C5).
+  /// Error path (full regen): append an error outer swipe to [regenTargetId]
+  /// without changing session variables (INV-C5).
   ChatState writeRegenError({
     required String errorText,
     required ChatSession saveSession,
     required String regenTargetId,
     int visibleStartIndex = 0,
+    Map<String, dynamic>? studioWriterCheckpoint,
+    List<Map<String, dynamic>> studioOutputs = const [],
+    String? reasoning,
+    String? guidanceText,
+    String guidanceType = 'GENERATION',
   }) {
     final idx = saveSession.messages.indexWhere((m) => m.id == regenTargetId);
     if (idx < 0) {
@@ -318,6 +376,11 @@ class SavedMessageWriter {
         errorText: errorText,
         currentSession: saveSession,
         visibleStartIndex: visibleStartIndex,
+        studioWriterCheckpoint: studioWriterCheckpoint,
+        studioOutputs: studioOutputs,
+        reasoning: reasoning,
+        guidanceText: guidanceText,
+        guidanceType: guidanceType,
       );
     }
     final original = saveSession.messages[idx];
@@ -330,24 +393,59 @@ class SavedMessageWriter {
     // styling stays bound to this variation only (see
     // ChatMessageService.setSwipe). The list is kept aligned 1:1 with
     // [errorSwipes] so the marker lands on the error swipe's index.
-    final priorMeta = <Map<String, dynamic>>[];
-    for (var i = 0; i < priorSwipes.length; i++) {
-      if (i < original.swipesMeta.length) {
-        priorMeta.add(original.swipesMeta[i]);
-      } else if (i == original.swipeId) {
-        priorMeta.add(<String, dynamic>{
-          'genTime': original.genTime,
+    final priorMeta = _alignedMeta(original, priorSwipes.length);
+    final priorId = original.swipes.isEmpty ? 0 : original.swipeId;
+    if (priorId >= 0 && priorId < priorMeta.length) {
+      final activeMeta = priorMeta[priorId];
+      final priorIsError = activeMeta['isError'] == true || original.isError;
+      final nested = priorIsError
+          ? const <AgentSwipe>[]
+          : _activeAgentSwipes(original);
+      priorMeta[priorId] = {
+        ...activeMeta,
+        if (!activeMeta.containsKey('genTime')) 'genTime': original.genTime,
+        if (!activeMeta.containsKey('reasoning'))
           'reasoning': original.reasoning,
-          'tokens': original.tokens,
-          'time': original.time,
-        });
-      } else {
-        priorMeta.add(<String, dynamic>{});
-      }
+        if (!activeMeta.containsKey('tokens')) 'tokens': original.tokens,
+        if (!activeMeta.containsKey('time')) 'time': original.time,
+        if (!activeMeta.containsKey('studioOutputs'))
+          'studioOutputs': original.studioOutputs,
+        if (!activeMeta.containsKey('continuationOffset') &&
+            original.continuationOffset != null)
+          'continuationOffset': original.continuationOffset,
+        if (!activeMeta.containsKey('guidanceText') &&
+            original.guidanceText != null)
+          'guidanceText': original.guidanceText,
+        if (!activeMeta.containsKey('guidanceType') &&
+            original.guidanceText != null)
+          'guidanceType': original.guidanceType,
+        if (!activeMeta.containsKey('triggeredLorebooks') &&
+            original.triggeredLorebooks.isNotEmpty)
+          'triggeredLorebooks': original.triggeredLorebooks
+              .map((e) => e.toJson())
+              .toList(),
+        if (!activeMeta.containsKey('triggeredMemories') &&
+            original.triggeredMemories.isNotEmpty)
+          'triggeredMemories': original.triggeredMemories
+              .map((e) => e.toJson())
+              .toList(),
+        if (!activeMeta.containsKey('isError') && original.isError)
+          'isError': true,
+        if (nested.isNotEmpty)
+          'agentSwipes': nested.map((e) => e.toJson()).toList(),
+        if (nested.isNotEmpty)
+          'agentSwipeId': original.agentSwipeId.clamp(0, nested.length - 1),
+      };
     }
     final errorSwipesMeta = [
       ...priorMeta,
-      <String, dynamic>{'isError': true},
+      _errorMeta(
+        studioWriterCheckpoint,
+        studioOutputs,
+        reasoning,
+        guidanceText,
+        guidanceType,
+      ),
     ];
     final updated = original.copyWith(
       content: errorText,
@@ -356,10 +454,21 @@ class SavedMessageWriter {
       swipes: errorSwipes,
       swipesMeta: errorSwipesMeta,
       swipeId: errorSwipes.length - 1,
-      reasoning: null,
+      reasoning: studioWriterCheckpoint != null ? reasoning : null,
+      studioOutputs: studioWriterCheckpoint != null ? studioOutputs : const [],
+      guidanceText: guidanceText,
+      guidanceType: guidanceType,
+      // The new error outer has no nested finals. Its predecessor's variants
+      // now live in that predecessor's meta, never under the error bubble.
+      agentSwipes: const [],
+      agentSwipeId: 0,
       genTime: null,
       tokens: null,
       time: null,
+      continuationOffset: null,
+      isAllReasoning: false,
+      triggeredLorebooks: const [],
+      triggeredMemories: const [],
     );
     final finalMessages = [...saveSession.messages];
     finalMessages[idx] = updated;
@@ -372,6 +481,47 @@ class SavedMessageWriter {
       regenTargetId: regenTargetId,
       visibleStartIndex: visibleStartIndex,
     );
+  }
+
+  static Map<String, dynamic> _errorMeta(
+    Map<String, dynamic>? checkpoint,
+    List<Map<String, dynamic>> studioOutputs,
+    String? reasoning,
+    String? guidanceText,
+    String guidanceType,
+  ) => {
+    'isError': true,
+    _studioWriterCheckpointKey: ?checkpoint,
+    if (checkpoint != null) ...{
+      'reasoning': reasoning,
+      'studioOutputs': studioOutputs,
+    },
+    if (guidanceText != null || guidanceType != 'GENERATION') ...{
+      'guidanceText': guidanceText,
+      'guidanceType': guidanceType,
+    },
+  };
+
+  static List<Map<String, dynamic>> _alignedMeta(
+    ChatMessage message,
+    int length,
+  ) => [
+    for (var i = 0; i < length; i++)
+      i < message.swipesMeta.length
+          ? Map<String, dynamic>.from(message.swipesMeta[i])
+          : <String, dynamic>{},
+  ];
+
+  static List<AgentSwipe> _activeAgentSwipes(ChatMessage message) {
+    final swipes = [...message.agentSwipes];
+    final active = message.agentSwipeId;
+    if (active >= 0 &&
+        active < swipes.length &&
+        swipes[active].time == null &&
+        message.time != null) {
+      swipes[active] = swipes[active].copyWith(time: message.time);
+    }
+    return swipes;
   }
 
   /// Strip residual inline reasoning markers from streamed text. The

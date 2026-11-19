@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/llm/generation_phase.dart';
@@ -14,6 +15,7 @@ import 'state/studio_cycle_state_provider.dart';
 import 'chat_session_service.dart';
 import 'chat_state.dart';
 import 'services/continuation_message_merger.dart';
+import 'services/studio_writer_pending.dart';
 
 typedef AbortSessionMutation =
     Future<ChatSession?> Function(
@@ -46,8 +48,22 @@ class AbortHandler {
     required this._loadSession,
   });
 
-  int nextGenId() => ++_activeGenId;
+  bool writerOnlyGeneration = false;
+  String? _studioWriterPendingOwnerId;
+
+  int nextGenId() {
+    writerOnlyGeneration = false;
+    _studioWriterPendingOwnerId = null;
+    return ++_activeGenId;
+  }
+
   bool isCurrentGen(int genId) => !_disposed && _activeGenId == genId;
+
+  /// A durable run nonce, distinct across provider rebuilds that reset genId.
+  String? studioWriterPendingOwnerFor(int genId) {
+    if (!isCurrentGen(genId)) return null;
+    return _studioWriterPendingOwnerId ??= generateId();
+  }
 
   /// Retires this owner without accessing Ref, publishing state or settling DB
   /// work. Unlike Stop, this is safe during provider lifetime cleanup.
@@ -147,7 +163,13 @@ class AbortHandler {
 
   Future<void> _abortGeneration() async {
     if (_disposed || !_ref.mounted) return;
-    _activeGenId++;
+    final pendingOwnerId = _studioWriterPendingOwnerId;
+    _studioWriterPendingOwnerId = null;
+    final writerOnly = writerOnlyGeneration;
+    writerOnlyGeneration = false;
+    final restorationSnapshot = _restorationMessage;
+    _restorationMessage = null;
+    final abortGenId = ++_activeGenId;
     final StreamingState partialStreaming = _ref.read(
       streamingStateProvider(_charId),
     );
@@ -174,24 +196,52 @@ class AbortHandler {
     clearStudioCycle();
     setGenerationPhase(_ref, _charId, GenerationPhase.idle);
 
+    if (!_ref.mounted || !isCurrentGen(abortGenId)) return;
     final current = _getState().value;
     if (current != null && (current.isGenerating || current.isPostGenRunning)) {
-      final restorationSnapshot = _restorationMessage;
-      final abortGenId = _activeGenId;
+      final session = current.session;
+      bool ownsAbort() =>
+          _ref.mounted &&
+          isCurrentGen(abortGenId) &&
+          _getState().value?.session?.id == session?.id;
       try {
-        final durableSession = await _finalizeAbortWithPartial(
-          current,
-          partialStreaming,
-          restorationSnapshot,
-        );
-        if (!_ref.mounted || !isCurrentGen(abortGenId)) return;
+        ChatSession? durableSession;
+        if (session != null && writerOnly) {
+          durableSession = await _loadSession(session.id);
+        } else {
+          if (session != null && pendingOwnerId != null) {
+            final interrupted = 'error_request_cancelled'.tr();
+            durableSession = await _mutateSession(session.id, (latest) {
+              if (!ownsAbort()) return null;
+              return StudioWriterPending.recover(
+                latest,
+                ownerId: pendingOwnerId,
+                interruptedText: interrupted,
+                partialText: partialStreaming.text,
+                partialReasoning: partialStreaming.reasoning,
+              );
+            });
+          }
+          if (!ownsAbort()) return;
+          durableSession ??= await _finalizeAbortWithPartial(
+            current,
+            partialStreaming,
+            restorationSnapshot,
+          );
+        }
+        if (!ownsAbort()) return;
         if (durableSession != null) {
           ChatSessionService.updateCache(durableSession);
         }
+        // A missing durable row is not permission to show the retry's
+        // optimistic typing placeholder as if it were a saved variation.
+        final settled = writerOnly && durableSession == null
+            ? ChatState(visibleStartIndex: current.visibleStartIndex)
+            : current;
         _setState(
           AsyncData(
-            current.copyWith(
-              session: durableSession ?? current.session,
+            settled.copyWith(
+              session: durableSession,
               isGenerating: false,
               isGeneratingImage: false,
               isPostGenRunning: false,
@@ -201,19 +251,24 @@ class AbortHandler {
           ),
         );
       } catch (error) {
-        if (!_ref.mounted || !isCurrentGen(abortGenId)) return;
-        final sessionId = current.session?.id;
-        final durableSession = sessionId == null
-            ? current.session
-            : await _loadSession(sessionId);
-        if (!_ref.mounted || !isCurrentGen(abortGenId)) return;
+        if (!ownsAbort()) return;
+        ChatSession? durableSession;
+        try {
+          if (session != null) durableSession = await _loadSession(session.id);
+        } catch (_) {
+          // The failed save remains the reported error. Still settle Stop.
+        }
+        if (!ownsAbort()) return;
         if (durableSession != null) {
           ChatSessionService.updateCache(durableSession);
         }
+        final settled = writerOnly && durableSession == null
+            ? ChatState(visibleStartIndex: current.visibleStartIndex)
+            : current;
         _setState(
           AsyncData(
-            current.copyWith(
-              session: durableSession ?? current.session,
+            settled.copyWith(
+              session: durableSession,
               isGenerating: false,
               isGeneratingImage: false,
               isPostGenRunning: false,
@@ -231,7 +286,6 @@ class AbortHandler {
     } else if (current != null && current.isGeneratingImage) {
       _setState(AsyncData(current.copyWith(isGeneratingImage: false)));
     }
-    _restorationMessage = null;
   }
 
   /// Stop pressed while `continueMessage()` was streaming. The partial text

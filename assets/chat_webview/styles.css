@@ -999,13 +999,13 @@
   text-align: center;
 }
 
-/* Nested swipes: blue agent-switcher (tertiary accent). */
+/* Keep finals in the theme's normal text color; only a cleaned swipe is blue. */
 .agent-switcher {
+  color: var(--text-color, #e0e0e0);
+}
+.agent-switcher[data-agent-swipe-kind="cleaned"] {
   border-color: rgba(120, 180, 255, 0.25);
   color: rgb(120, 180, 255);
-}
-.agent-switcher .msg-switcher-btn svg {
-  fill: rgb(120, 180, 255);
 }
 
 .msg-regenerate {
@@ -1026,24 +1026,29 @@
 }
 .msg-regenerate.icon-only { padding: 2px 6px; }
 .msg-regenerate svg { width: 14px; height: 14px; fill: currentColor; }
+.studio-final-only,
+.studio-extra-regenerate { display: none; }
+.studio-enabled:not(.regeneration-busy) .studio-final-only,
+.studio-enabled:not(.regeneration-busy) .studio-extra-regenerate { display: inline-flex; }
+.studio-enabled .msg-center-controls.has-studio-final-only {
+  min-width: 0;
+  flex-wrap: wrap;
+}
 .msg-regenerate.studio-final-only {
-    color: var(--vk-blue);
-    gap: 4px;
-    padding: 2px 10px;
-    border: 1px solid rgba(var(--primary-rgb, 245, 196, 0), 0.55);
-  }
-  .studio-final-only-label {
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 1;
-    letter-spacing: 0.2px;
-  }
-  .studio-final-only-badge {
-    font-size: 9px;
-    font-weight: 700;
-    line-height: 1;
-    margin-left: -2px;
-  }
+  color: var(--text-color, #e0e0e0);
+  font-family: inherit;
+  padding: 2px 10px;
+  border: 1px solid rgba(var(--primary-rgb, 245, 196, 0), 0.55);
+  white-space: nowrap;
+}
+.studio-final-only:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.studio-final-only-label {
+  font-weight: 700;
+  line-height: 1;
+}
 
 .msg-guided-swipe-btn {
   display: flex;

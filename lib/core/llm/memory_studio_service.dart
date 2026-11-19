@@ -23,6 +23,7 @@ import 'studio_turn_config_snapshot.dart';
 import 'studio/studio_context_preparer.dart';
 import 'studio/studio_history_limiter.dart';
 import 'studio/studio_stream_interceptor.dart';
+import 'studio/studio_writer_checkpoint.dart';
 import 'controller_batcher.dart';
 import 'studio/controller_phase_runner.dart';
 import 'studio/controller_result_mapper.dart';
@@ -101,6 +102,9 @@ class MemoryStudioService {
     void Function(String text)? onThinkingUpdate,
     void Function()? onFinalStart,
     Future<void> Function()? beforeFinalSend,
+    StudioWriterCheckpoint? writerCheckpoint,
+    Future<void> Function(String presetId, List<StudioStageBrief> briefs)?
+    onPregenCompleted,
     void Function(List<Map<String, dynamic>> messages)? onFinalMessagesBuilt,
     void Function(Set<String> classifications)?
     onFinalLorebookClassificationsBuilt,
@@ -110,21 +114,28 @@ class MemoryStudioService {
     if (token.isCancelled) {
       return const StudioPipelineResult(status: 'aborted', response: '');
     }
-    final phaseResult = await _phaseRunner.run(
-      config: config,
-      presetId:
-          turnConfig?.preset?.id ??
-          await _ref.read(activeStudioPresetProvider.future),
-      studioPreset: turnConfig?.preset,
-      inputs: inputs,
-      context: trackerContext,
-      finalContext: finalContext,
-      apiConfig: apiConfig,
-      sessionId: sessionId,
-      token: token,
-      turnConfig: turnConfig,
-      onThinkingUpdate: onThinkingUpdate,
-    );
+    final phaseResult = writerCheckpoint != null
+        ? _resumeWriterPhase(
+            turnConfig?.preset,
+            writerCheckpoint,
+            trackerContext,
+            finalContext,
+          )
+        : await _phaseRunner.run(
+            config: config,
+            presetId:
+                turnConfig?.preset?.id ??
+                await _ref.read(activeStudioPresetProvider.future),
+            studioPreset: turnConfig?.preset,
+            inputs: inputs,
+            context: trackerContext,
+            finalContext: finalContext,
+            apiConfig: apiConfig,
+            sessionId: sessionId,
+            token: token,
+            turnConfig: turnConfig,
+            onThinkingUpdate: onThinkingUpdate,
+          );
     if (token.isCancelled) {
       return const StudioPipelineResult(status: 'aborted', response: '');
     }
@@ -164,6 +175,10 @@ class MemoryStudioService {
     final normalBriefs = briefs
         .where((brief) => !brief.isThinkReplacement)
         .toList();
+    await onPregenCompleted?.call(studioPreset.id, briefs);
+    if (token.isCancelled) {
+      return const StudioPipelineResult(status: 'aborted', response: '');
+    }
     onFinalStart?.call();
     final agentResult = await _executor.runFinalGenerator(
       agent: finalAgent,
@@ -189,7 +204,10 @@ class MemoryStudioService {
     var mainResponse = agentResult.text;
     var mainReasoning = agentResult.reasoning;
     final postBriefs = <StudioStageBrief>[];
-    for (final agent in split.postGenTrackers) {
+    for (final agent
+        in writerCheckpoint == null
+            ? split.postGenTrackers
+            : const <StudioAgent>[]) {
       if (token.isCancelled) {
         return const StudioPipelineResult(status: 'aborted', response: '');
       }
@@ -233,6 +251,37 @@ class MemoryStudioService {
       error: mainResponse.trim().isEmpty
           ? 'Final generator returned an empty response'
           : null,
+    );
+  }
+
+  PreGenPhaseResult _resumeWriterPhase(
+    StudioPreset? preset,
+    StudioWriterCheckpoint checkpoint,
+    StudioContext trackerContext,
+    StudioContext finalContext,
+  ) {
+    const unavailable = PreGenPhaseResult(
+      status: 'error',
+      error: 'Studio controllers changed. Use full regeneration.',
+    );
+    if (preset == null) return unavailable;
+    final agents = preset.agents.where((agent) => agent.enabled).toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
+    final split = StudioActivationGate.splitAgentsByPhase(agents);
+    if (!checkpoint.matchesTopology(preset.id, split) ||
+        checkpoint.phaseInputs !=
+            StudioWriterCheckpoint.fingerprintPhase(
+              preset,
+              trackerContext,
+              finalContext,
+            )) {
+      return unavailable;
+    }
+    return PreGenPhaseResult(
+      status: 'ok',
+      briefs: checkpoint.briefs,
+      split: split,
+      studioPreset: preset,
     );
   }
 

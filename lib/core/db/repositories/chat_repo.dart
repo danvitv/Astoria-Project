@@ -50,6 +50,10 @@ class _PreparedUserMessageAppend {
   final bool didAppend;
 }
 
+class _GenerationCommitRetired implements Exception {
+  const _GenerationCommitRetired();
+}
+
 class ChatRepo implements SyncChatStore {
   static const maxControlMetadataOffset = 0x7fffffff;
 
@@ -739,129 +743,155 @@ ORDER BY updated_at DESC
     required String? regenTargetId,
     ExactLorebookManifest? manifest,
     Future<void> Function(ChatSession before, ChatSession after)? beforeWrite,
+    bool Function(ChatSession latest)? canCommit,
+    Map<String, bool Function(String? value)> sessionVarKeysToRemove = const {},
   }) async {
-    return _db.transaction(() async {
-      final row =
-          await (_db.select(_db.chatSessions)
-                ..where((table) => table.sessionId.equals(generatedSession.id)))
-              .getSingleOrNull();
-      if (row == null) return null;
+    try {
+      return await _db.transaction(() async {
+        final row =
+            await (_db.select(_db.chatSessions)..where(
+                  (table) => table.sessionId.equals(generatedSession.id),
+                ))
+                .getSingleOrNull();
+        if (row == null) return null;
 
-      final latest = _toModel(row);
-      final messages = List<ChatMessage>.from(latest.messages);
-      ChatMessage? committed;
-      if (regenTargetId != null) {
-        final baseIndex = baseSession.messages.indexWhere(
-          (message) => message.id == regenTargetId,
-        );
-        final generatedIndex = generatedSession.messages.indexWhere(
-          (message) => message.id == regenTargetId,
-        );
-        final latestIndex = messages.indexWhere(
-          (message) => message.id == regenTargetId,
-        );
-        if (baseIndex < 0 || generatedIndex < 0 || latestIndex < 0) {
-          return null;
+        final latest = _toModel(row);
+        final messages = List<ChatMessage>.from(latest.messages);
+        if (canCommit != null && !canCommit(latest)) return null;
+        ChatMessage? committed;
+        if (regenTargetId != null) {
+          final baseIndex = baseSession.messages.indexWhere(
+            (message) => message.id == regenTargetId,
+          );
+          final generatedIndex = generatedSession.messages.indexWhere(
+            (message) => message.id == regenTargetId,
+          );
+          final latestIndex = messages.indexWhere(
+            (message) => message.id == regenTargetId,
+          );
+          if (baseIndex < 0 || generatedIndex < 0 || latestIndex < 0) {
+            return null;
+          }
+          final base = baseSession.messages[baseIndex];
+          final current = messages[latestIndex];
+          if (!_sameGenerationAnchor(base, current)) return null;
+          committed = generatedSession.messages[generatedIndex].copyWith(
+            isHidden: current.isHidden,
+            imageHidden: current.imageHidden,
+          );
+          messages[latestIndex] = committed;
+        } else {
+          if (generatedSession.messages.length !=
+              baseSession.messages.length + 1) {
+            return null;
+          }
+          final expectedTail = baseSession.messages.lastOrNull?.id;
+          final currentTail = messages.lastOrNull?.id;
+          if (expectedTail != currentTail) return null;
+          committed = generatedSession.messages.last;
+          messages.add(committed);
         }
-        final base = baseSession.messages[baseIndex];
-        final current = messages[latestIndex];
-        if (!_sameGenerationAnchor(base, current)) return null;
-        committed = generatedSession.messages[generatedIndex].copyWith(
-          isHidden: current.isHidden,
-          imageHidden: current.imageHidden,
-        );
-        messages[latestIndex] = committed;
-      } else {
-        if (generatedSession.messages.length !=
-            baseSession.messages.length + 1) {
-          return null;
-        }
-        final expectedTail = baseSession.messages.lastOrNull?.id;
-        final currentTail = messages.lastOrNull?.id;
-        if (expectedTail != currentTail) return null;
-        committed = generatedSession.messages.last;
-        messages.add(committed);
-      }
 
-      final updated = latest.copyWith(
-        messages: messages,
-        sessionVars: applySessionVarDelta(
+        final committedVars = applySessionVarDelta(
           latest.sessionVars,
           baseSession.sessionVars,
           generatedSession.sessionVars,
-        ),
-      );
-      if (beforeWrite != null) await beforeWrite(latest, updated);
-      final messagesJson = jsonEncode(
-        updated.messages.map((e) => e.toJson()).toList(),
-      );
-      final sessionVarsJson = _sessionVarsJsonWithDelta(
-        row.sessionVarsJson,
-        baseSession.sessionVars,
-        generatedSession.sessionVars,
-      );
-      final authorsNoteJson = updated.authorsNote != null
-          ? jsonEncode(updated.authorsNote!.toJson())
-          : null;
-      final lastScrollAnchorJson = updated.lastScrollAnchor.isNotEmpty
-          ? jsonEncode(updated.lastScrollAnchor)
-          : null;
-
-      await (_db.update(
-        _db.chatSessions,
-      )..where((table) => table.sessionId.equals(generatedSession.id))).write(
-        ChatSessionsCompanion(
-          messagesJson: Value(messagesJson),
-          sessionVarsJson: Value(sessionVarsJson),
-          authorsNoteJson: Value(authorsNoteJson),
-          draft: Value(updated.draft),
-          lastScrollAnchorJson: Value(lastScrollAnchorJson),
-          updatedAt: Value(generatedSession.updatedAt),
-        ),
-      );
-
-      if (manifest != null) {
-        // A durable round trip verifies all strict schema/content/hash
-        // invariants before any provenance row can be written.
-        final durable = ExactLorebookManifest.decodeDurable(manifest.toJson());
-        await LorebookUseManifestRepo(_db).insertGenerationManifest(
-          identity: LorebookUseGenerationIdentity(
-            sessionId: updated.id,
-            messageId: committed.id,
-            swipeId: committed.swipeId,
-            agentSwipeId: committed.agentSwipeId,
-          ),
-          manifest: LorebookUseManifestInput(
-            manifestJson: durable.canonicalJson,
-            manifestHash: durable.canonicalHash,
-            manifestSchemaVersion: 1,
-            finalPromptHash: durable.providerMessagesHash,
-            presetSnapshotHash: durable.promptProvenance.presetSnapshotHash,
-          ),
-          createdAt: generatedSession.updatedAt,
-          entries: [
-            for (var index = 0; index < durable.entries.length; index++)
-              LorebookUseManifestEntryInput(
-                lorebookId: durable.entries[index].lorebookId,
-                entryId: durable.entries[index].entryId,
-                entryOrder: index,
-                evidenceJson: jsonEncode(durable.entries[index].toJson()),
-              ),
-          ],
         );
-      }
+        for (final entry in sessionVarKeysToRemove.entries) {
+          if (entry.value(latest.sessionVars[entry.key])) {
+            committedVars.remove(entry.key);
+          }
+        }
+        final updated = latest.copyWith(
+          messages: messages,
+          sessionVars: committedVars,
+        );
+        if (beforeWrite != null) await beforeWrite(latest, updated);
+        if (canCommit != null && !canCommit(latest)) {
+          throw const _GenerationCommitRetired();
+        }
+        final messagesJson = jsonEncode(
+          updated.messages.map((e) => e.toJson()).toList(),
+        );
+        final sessionVarsJson = _sessionVarsJsonWithDelta(
+          row.sessionVarsJson,
+          latest.sessionVars,
+          committedVars,
+        );
+        final authorsNoteJson = updated.authorsNote != null
+            ? jsonEncode(updated.authorsNote!.toJson())
+            : null;
+        final lastScrollAnchorJson = updated.lastScrollAnchor.isNotEmpty
+            ? jsonEncode(updated.lastScrollAnchor)
+            : null;
 
-      return _toModel(
-        row.copyWith(
-          messagesJson: messagesJson,
-          sessionVarsJson: Value(sessionVarsJson),
-          authorsNoteJson: Value(authorsNoteJson),
-          draft: Value(updated.draft),
-          lastScrollAnchorJson: Value(lastScrollAnchorJson),
-          updatedAt: generatedSession.updatedAt,
-        ),
-      );
-    });
+        await (_db.update(
+          _db.chatSessions,
+        )..where((table) => table.sessionId.equals(generatedSession.id))).write(
+          ChatSessionsCompanion(
+            messagesJson: Value(messagesJson),
+            sessionVarsJson: Value(sessionVarsJson),
+            authorsNoteJson: Value(authorsNoteJson),
+            draft: Value(updated.draft),
+            lastScrollAnchorJson: Value(lastScrollAnchorJson),
+            updatedAt: Value(generatedSession.updatedAt),
+          ),
+        );
+
+        if (manifest != null) {
+          // A durable round trip verifies all strict schema/content/hash
+          // invariants before any provenance row can be written.
+          final durable = ExactLorebookManifest.decodeDurable(
+            manifest.toJson(),
+          );
+          await LorebookUseManifestRepo(_db).insertGenerationManifest(
+            identity: LorebookUseGenerationIdentity(
+              sessionId: updated.id,
+              messageId: committed.id,
+              swipeId: committed.swipeId,
+              agentSwipeId: committed.agentSwipeId,
+            ),
+            manifest: LorebookUseManifestInput(
+              manifestJson: durable.canonicalJson,
+              manifestHash: durable.canonicalHash,
+              manifestSchemaVersion: 1,
+              finalPromptHash: durable.providerMessagesHash,
+              presetSnapshotHash: durable.promptProvenance.presetSnapshotHash,
+            ),
+            createdAt: generatedSession.updatedAt,
+            entries: [
+              for (var index = 0; index < durable.entries.length; index++)
+                LorebookUseManifestEntryInput(
+                  lorebookId: durable.entries[index].lorebookId,
+                  entryId: durable.entries[index].entryId,
+                  entryOrder: index,
+                  evidenceJson: jsonEncode(durable.entries[index].toJson()),
+                ),
+            ],
+          );
+        }
+
+        // The transaction must still belong to the generation after every
+        // awaited write. Throwing here rolls back the message, session vars,
+        // reconciliation side effects and optional provenance together.
+        if (canCommit != null && !canCommit(latest)) {
+          throw const _GenerationCommitRetired();
+        }
+
+        return _toModel(
+          row.copyWith(
+            messagesJson: messagesJson,
+            sessionVarsJson: Value(sessionVarsJson),
+            authorsNoteJson: Value(authorsNoteJson),
+            draft: Value(updated.draft),
+            lastScrollAnchorJson: Value(lastScrollAnchorJson),
+            updatedAt: generatedSession.updatedAt,
+          ),
+        );
+      });
+    } on _GenerationCommitRetired {
+      return null;
+    }
   }
 
   static bool _sameGenerationAnchor(ChatMessage expected, ChatMessage current) {

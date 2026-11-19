@@ -45,6 +45,7 @@ class _ControlledChatGenerationService extends ChatGenerationService {
     String guidanceType = 'GENERATION',
     String? regenTargetId,
     String? continueTargetId,
+    bool studioFinalOnly = false,
     StudioTurnConfigSnapshot? studioTurnConfig,
   }) {
     calls++;

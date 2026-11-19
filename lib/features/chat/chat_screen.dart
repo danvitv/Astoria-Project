@@ -1823,7 +1823,10 @@ class _ChatBodyState extends ConsumerState<_ChatBody>
                             if (!await _maybeSeedGameTime()) return;
                             await ref
                                 .read(chatProvider(widget.charId).notifier)
-                                .regenerateLastAssistant();
+                                .regenerateLastAssistant(
+                                  studioFinalOnly: mode == 'final',
+                                  expectedMessageId: id,
+                                );
                           },
                           onRerunCleaner: (id) {
                             ref

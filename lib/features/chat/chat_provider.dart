@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -32,6 +34,8 @@ import 'controllers/chat_swipe_controller.dart';
 import 'controllers/chat_session_controller.dart';
 import 'controllers/chat_draft_controller.dart';
 import 'services/generation_pipeline.dart';
+import 'services/studio_writer_pending.dart';
+import '../../core/llm/studio/studio_writer_checkpoint.dart';
 import 'services/impersonation_service.dart';
 import 'state/chat_session_write_queue.dart';
 import 'state/chat_native_owner_registry.dart';
@@ -205,8 +209,28 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
         return state.value ?? ChatState(session: existing);
       }
       if (existing != null) {
-        final fixed = _fixupSwipesWithImageResults(existing);
-        if (!identical(fixed, existing)) {
+        var recovered = existing;
+        if (existing.sessionVars.containsKey(
+          StudioWriterCheckpoint.pendingSessionKey,
+        )) {
+          recovered =
+              await buildRef
+                  .read(chatRepoProvider)
+                  .mutateSession(
+                    sessionId: existing.id,
+                    mutate: (latest) => current()
+                        ? StudioWriterPending.recover(
+                            latest,
+                            interruptedText: 'error_request_cancelled'.tr(),
+                          )
+                        : null,
+                  ) ??
+              existing;
+          if (!current()) return const ChatState();
+          ChatSessionService.updateCache(recovered);
+        }
+        final fixed = _fixupSwipesWithImageResults(recovered);
+        if (!identical(fixed, recovered)) {
           await buildRef.read(chatRepoProvider).put(fixed);
           if (!current()) return const ChatState();
           ChatSessionService.updateCache(fixed);
@@ -292,6 +316,9 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
 
   void setCancelToken(CancelToken token, {required int genId}) =>
       _abortHandler.setCancelToken(token, genId: genId);
+
+  String? studioWriterPendingOwnerFor(int genId) =>
+      _abortHandler.studioWriterPendingOwnerFor(genId);
 
   bool get isGeneratingImage => _abortHandler.isGeneratingImage;
 
@@ -654,10 +681,43 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
         return;
       }
       await operation(controller);
+      await _recoverPendingForSelectedSession();
     } finally {
       _sessionChangesInFlight--;
       selection.release();
     }
+  }
+
+  Future<void> _recoverPendingForSelectedSession() async {
+    if (!ref.mounted) return;
+    final current = state.value;
+    final session = current?.session;
+    if (current == null || session == null) return;
+    final sessionId = session.id;
+    // The selected session may be a cache snapshot from before the controller
+    // phase was persisted. Let the repository inspect the durable row instead
+    // of treating an absent cached key as proof that no recovery is needed.
+    final recovered = await ref
+        .read(chatRepoProvider)
+        .mutateSession(
+          sessionId: sessionId,
+          mutate: (latest) {
+            if (!ref.mounted || state.value?.session?.id != sessionId) {
+              return null;
+            }
+            return StudioWriterPending.recover(
+              latest,
+              interruptedText: 'error_request_cancelled'.tr(),
+            );
+          },
+        );
+    if (!ref.mounted ||
+        recovered == null ||
+        state.value?.session?.id != sessionId) {
+      return;
+    }
+    ChatSessionService.updateCache(recovered);
+    state = AsyncData(state.requireValue.copyWith(session: recovered));
   }
 
   Future<void> saveDraft(String draftText) => _draftCtrl.saveDraft(draftText);
@@ -1139,10 +1199,20 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     }
   }
 
-  Future<void> regenerateLastAssistant({String? guidanceText}) async {
+  Future<void> regenerateLastAssistant({
+    String? guidanceText,
+    bool studioFinalOnly = false,
+    String? expectedMessageId,
+  }) async {
+    final expectedFinalTarget = studioFinalOnly
+        ? state.value?.messages.lastOrNull
+        : null;
     await _withForegroundMutation(
       () => _regenerateLastAssistant(
         guidanceText: guidanceText,
+        studioFinalOnly: studioFinalOnly,
+        expectedMessageId: expectedMessageId,
+        expectedFinalTarget: expectedFinalTarget,
         expectedSessionId: state.value?.session?.id,
       ),
     );
@@ -1150,6 +1220,9 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
 
   Future<void> _regenerateLastAssistant({
     String? guidanceText,
+    bool studioFinalOnly = false,
+    String? expectedMessageId,
+    ChatMessage? expectedFinalTarget,
     required String? expectedSessionId,
   }) async {
     final ref = this.ref;
@@ -1182,6 +1255,18 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     if (lastIdx < 0) return;
 
     final lastMsg = current.messages[lastIdx];
+    if (expectedMessageId != null && lastMsg.id != expectedMessageId) return;
+    if (studioFinalOnly && lastMsg.role != 'assistant') return;
+    bool sameFinalTarget(ChatMessage? target) =>
+        expectedFinalTarget != null &&
+        target != null &&
+        target.id == expectedFinalTarget.id &&
+        target.swipeId == expectedFinalTarget.swipeId &&
+        jsonEncode(target.swipesMeta) ==
+            jsonEncode(expectedFinalTarget.swipesMeta);
+    if (studioFinalOnly && !sameFinalTarget(lastMsg)) return;
+    // A writer-only retry keeps the instruction that produced this phase.
+    if (studioFinalOnly) guidanceText = lastMsg.guidanceText;
 
     final genId = abortHandler.nextGenId();
     final budgetSession = current.session!.copyWith(
@@ -1194,6 +1279,10 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       genId: genId,
       requiredMessageId: budgetSession.messages.lastOrNull?.id,
     )) {
+      return;
+    }
+
+    if (studioFinalOnly && !sameFinalTarget(state.value?.messages.lastOrNull)) {
       return;
     }
 
@@ -1231,6 +1320,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     final prevAssistant = lastMsg;
     final regenTargetId = prevAssistant.id;
     abortHandler.restorationMessage = prevAssistant;
+    abortHandler.writerOnlyGeneration = studioFinalOnly;
 
     // The reply always lands as a *new* variation (`SavedMessageWriter`
     // appends it to `swipes[]`), so open that slot the moment the run starts
@@ -1258,9 +1348,13 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       tokens: null,
       time: null,
       isError: false,
-      swipes: pendingSwipes,
-      swipeId: pendingSwipes.length - 1,
-      swipesMeta: pendingSwipesMeta,
+      swipes: studioFinalOnly ? prevAssistant.swipes : pendingSwipes,
+      swipeId: studioFinalOnly
+          ? prevAssistant.swipeId
+          : pendingSwipes.length - 1,
+      swipesMeta: studioFinalOnly
+          ? prevAssistant.swipesMeta
+          : pendingSwipesMeta,
       // The pending variation owns the instruction from the moment it opens,
       // so the block is up while the reply streams; a plain regenerate clears
       // whatever the previous variation showed.
@@ -1299,6 +1393,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       guidanceText: guidanceText,
       guidanceType: guidanceType,
       regenTargetId: regenTargetId,
+      studioFinalOnly: studioFinalOnly,
       previousSwipes: prevAssistant.swipes.isNotEmpty
           ? prevAssistant.swipes
           : [prevAssistant.content],
@@ -1587,6 +1682,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
     List<Map<String, dynamic>>? previousSwipesMeta,
     String? regenTargetId,
     String? continueTargetId,
+    bool studioFinalOnly = false,
   }) {
     final runGenId = genId ?? _abortHandler.nextGenId();
     if (!ref.mounted || !_abortHandler.isCurrentGen(runGenId)) {
@@ -1621,6 +1717,7 @@ class ChatNotifier extends AsyncNotifier<ChatState> {
       previousSwipesMeta: previousSwipesMeta,
       regenTargetId: regenTargetId,
       continueTargetId: continueTargetId,
+      studioFinalOnly: studioFinalOnly,
     );
   }
 

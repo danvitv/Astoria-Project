@@ -34,6 +34,7 @@ class ChatGenerationService {
     String guidanceType = 'GENERATION',
     String? regenTargetId,
     String? continueTargetId,
+    bool studioFinalOnly = false,
     StudioTurnConfigSnapshot? studioTurnConfig,
   }) async {
     return StreamGenerationService(
@@ -54,6 +55,7 @@ class ChatGenerationService {
       guidanceType: guidanceType,
       regenTargetId: regenTargetId,
       continueTargetId: continueTargetId,
+      studioFinalOnly: studioFinalOnly,
       currentState: currentState,
       studioTurnConfig: studioTurnConfig,
     );

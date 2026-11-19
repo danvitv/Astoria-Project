@@ -47,6 +47,7 @@ class _HookGenerationService extends ChatGenerationService {
     String guidanceType = 'GENERATION',
     String? regenTargetId,
     String? continueTargetId,
+    bool studioFinalOnly = false,
     StudioTurnConfigSnapshot? studioTurnConfig,
   }) async {
     calls++;
