@@ -61,6 +61,7 @@ abstract final class StudioPresetValidator {
     'world',
     'meta',
     'beauty',
+    'think',
     'final',
   };
 

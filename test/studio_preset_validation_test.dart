@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glaze_flutter/core/llm/studio/studio_context.dart';
 import 'package:glaze_flutter/core/models/studio_config.dart';
@@ -112,6 +114,31 @@ void main() {
         'Unsupported Studio section "writeloop".',
       ]),
     );
+  });
+
+  test('an exported think-mode preset remains importable', () {
+    const preset = StudioPreset(
+      id: 'think_export',
+      name: 'Think export',
+      agentEnabled: {'think': true},
+      blocks: [
+        StudioPresetBlock(
+          id: 'think_prompt',
+          content: 'Reason before writing.',
+          targetAgentId: 'think',
+          injectionPoint: 'specificAgent',
+        ),
+      ],
+    );
+
+    final exported = jsonDecode(jsonEncode(preset.toJson()));
+    final decoded = StudioPresetCodec.decodePreset(
+      Map<String, dynamic>.from(exported as Map),
+    );
+    final issues = StudioPresetValidator.validate(decoded.preset);
+
+    expect(decoded.preset.blocks.single.targetAgentId, 'think');
+    expect(StudioPresetValidator.hasErrors(issues), isFalse);
   });
 
   test('warns on an unsupported insertion mode string', () {
