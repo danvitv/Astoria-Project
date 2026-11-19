@@ -25,8 +25,8 @@ branches. Regenerate after editing a Freezed/Drift model with
 
 Promote a tested `dev` revision to `master` only when the maintainer requests
 it. Updating `master` or building from it does not by itself publish a binary
-release. Follow `docs/ASTORIA_LICENSE_AUDIT.md` before distributing proprietary
-binaries.
+release. Binary distribution requires a separate maintainer decision plus the
+applicable third-party notices, platform signing and runtime validation.
 
 ## Checks
 
@@ -62,6 +62,5 @@ separate `danvitv/Astoria-Project-Release` repository currently hosts the
 README, logo and Our Picks feed; the app source and history live here.
 
 Do not turn on automatic public binary distribution by repointing the old
-same-repository release job. Establish publication rights, dependency notices,
-destination credentials and a public release process first; see
-`docs/ASTORIA_LICENSE_AUDIT.md`.
+same-repository release job. Establish dependency notices, destination
+credentials, signing, runtime validation and a public release process first.

@@ -56,5 +56,5 @@ bundle ID needs its own Google iOS OAuth registration. Full setup:
 
 Build outputs are workflow artifacts, not published GitHub Releases. Automatic
 release publishing and Telegram delivery remain disabled; do not equate channel
-`stable` with a public binary release. Consult `docs/WORKFLOW.md` and
-`docs/ASTORIA_LICENSE_AUDIT.md` before distribution.
+`stable` with a public binary release. Consult `docs/WORKFLOW.md` before
+distribution.
