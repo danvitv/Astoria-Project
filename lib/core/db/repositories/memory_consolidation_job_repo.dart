@@ -1159,30 +1159,72 @@ cancelled.status = 'cancelled'
     SELECT 1 FROM memory_consolidation_job_item_rows AS cancelled_item
     WHERE cancelled_item.job_id = cancelled.id
   )
-  AND NOT EXISTS (
-    SELECT 1 FROM memory_consolidation_job_item_rows AS cancelled_item
-    WHERE cancelled_item.job_id = cancelled.id
-      AND NOT EXISTS (
-        SELECT 1 FROM memory_consolidation_job_item_rows AS accepted_item
-        INNER JOIN memory_consolidation_job_rows AS completed
-          ON completed.id = accepted_item.job_id
-        WHERE completed.session_id = cancelled.session_id
-          AND completed.branch_id = cancelled.branch_id
-          AND completed.status = 'completed'
-          AND accepted_item.status = 'accepted'
-          AND accepted_item.memory_entry_id = cancelled_item.memory_entry_id
-          AND accepted_item.revision_id = cancelled_item.revision_id
-          AND accepted_item.fingerprint = cancelled_item.fingerprint
+  AND (
+    NOT EXISTS (
+      SELECT 1 FROM memory_consolidation_job_item_rows AS cancelled_item
+      WHERE cancelled_item.job_id = cancelled.id
+        AND NOT EXISTS (
+          SELECT 1 FROM memory_consolidation_job_item_rows AS accepted_item
+          INNER JOIN memory_consolidation_job_rows AS completed
+            ON completed.id = accepted_item.job_id
+          WHERE completed.session_id = cancelled.session_id
+            AND completed.branch_id = cancelled.branch_id
+            AND completed.status = 'completed'
+            AND accepted_item.status = 'accepted'
+            AND accepted_item.memory_entry_id = cancelled_item.memory_entry_id
+            AND accepted_item.revision_id = cancelled_item.revision_id
+            AND accepted_item.fingerprint = cancelled_item.fingerprint
+        )
+    )
+    OR (
+      EXISTS (
+        SELECT 1 FROM memory_book_rows AS book
+        WHERE book.session_id = cancelled.session_id
       )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM memory_consolidation_job_item_rows AS cancelled_item
+        WHERE cancelled_item.job_id = cancelled.id
+          AND EXISTS (
+            SELECT 1
+            FROM memory_book_rows AS book, json_each(book.entries_json) AS entry
+            WHERE book.session_id = cancelled.session_id
+              AND json_extract(entry.value, '\$.id') = cancelled_item.memory_entry_id
+              AND COALESCE(json_extract(entry.value, '\$.status'), 'active') = 'active'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM memory_event_source_rows AS event_source
+            INNER JOIN memory_event_rows AS event
+              ON event.id = event_source.event_id
+            WHERE event_source.session_id = cancelled.session_id
+              AND event_source.branch_id = cancelled.branch_id
+              AND event_source.memory_entry_id = cancelled_item.memory_entry_id
+              AND event.status = 'active'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM memory_event_invalidation_rows AS invalidation
+                WHERE invalidation.session_id = cancelled.session_id
+                  AND invalidation.branch_id = cancelled.branch_id
+                  AND invalidation.target_type = 'event'
+                  AND invalidation.target_id = event.id
+              )
+          )
+      )
+    )
   )
 ''';
 
-  /// Cancelled jobs whose exact source snapshots have all since been accepted
-  /// by completed jobs in the same session branch. They remain durable history,
-  /// but no longer represent work the queue can usefully rebuild.
+  /// Cancelled jobs that no longer contain rebuildable work. Exact completed
+  /// snapshots qualify directly; so do jobs whose current entries are all
+  /// covered by active registry events or have left the current Memory Book.
   Stream<Set<String>> watchSupersededCancelledJobIds(String sessionId) {
     final jobs = db.memoryConsolidationJobRows;
     final items = db.memoryConsolidationJobItemRows;
+    final books = db.memoryBookRows;
+    final events = db.memoryEventRows;
+    final eventSources = db.memoryEventSourceRows;
+    final invalidations = db.memoryEventInvalidationRows;
     return db
         .customSelect(
           '''
@@ -1192,7 +1234,7 @@ WHERE cancelled.session_id = ?
   AND ($_supersededCancelled)
 ''',
           variables: [Variable.withString(sessionId)],
-          readsFrom: {jobs, items},
+          readsFrom: {jobs, items, books, events, eventSources, invalidations},
         )
         .watch()
         .map((rows) => {for (final row in rows) row.read<String>('id')});
@@ -1210,6 +1252,11 @@ WHERE cancelled.session_id = ?
           OR EXISTS (SELECT 1 FROM memory_consolidation_job_item_rows LIMIT 1 OFFSET 8192)
           OR EXISTS (SELECT 1 FROM memory_consolidation_job_item_rows
                      WHERE job_id = cancelled.id LIMIT 1 OFFSET 64)
+          OR EXISTS (SELECT 1 FROM memory_event_rows LIMIT 1 OFFSET 4096)
+          OR EXISTS (SELECT 1 FROM memory_event_source_rows LIMIT 1 OFFSET 8192)
+          OR EXISTS (SELECT 1 FROM memory_event_invalidation_rows LIMIT 1 OFFSET 4096)
+          OR EXISTS (SELECT 1 FROM memory_book_rows
+                     WHERE json_array_length(entries_json) > 1024)
           THEN 'unknown_work_limit'
         WHEN $_supersededCancelled THEN 'superseded'
         ELSE 'not_superseded'

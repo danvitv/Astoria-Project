@@ -643,6 +643,70 @@ void main() {
     },
   );
 
+  test(
+    'superseded stream follows current book and active registry coverage',
+    () async {
+      final cancelled = await createJob();
+      await repo.cancel(cancelled.id, reason: 'source_context_changed');
+      await db.customStatement(
+        '''INSERT INTO memory_book_rows(session_id, entries_json)
+        VALUES(?, ?)''',
+        ['session-1', '[{"id":"entry-1","status":"active"}]'],
+      );
+      await db.customStatement(
+        '''INSERT INTO memory_event_rows(
+          id,session_id,branch_id,kind,description,state,status,accepted_at,created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)''',
+        [
+          'accepted-event',
+          'session-1',
+          'session-1',
+          'fact',
+          'Covered current entry',
+          'completed',
+          'active',
+          now,
+          now,
+        ],
+      );
+      await db.customStatement(
+        '''INSERT INTO memory_event_source_rows(
+          id,event_id,session_id,branch_id,memory_entry_id,revision_id,fingerprint
+        ) VALUES(?,?,?,?,?,?,?)''',
+        [
+          'accepted-source',
+          'accepted-event',
+          'session-1',
+          'session-1',
+          'entry-1',
+          'entry-1:r1',
+          'a' * 64,
+        ],
+      );
+
+      expect(await repo.watchSupersededCancelledJobIds('session-1').first, {
+        cancelled.id,
+      });
+
+      await db
+          .into(db.memoryEventInvalidationRows)
+          .insert(
+            MemoryEventInvalidationRowsCompanion.insert(
+              sessionId: 'session-1',
+              branchId: 'session-1',
+              targetType: 'event',
+              targetId: 'accepted-event',
+              reason: 'source_provenance_stale',
+              createdAt: now,
+            ),
+          );
+      expect(
+        await repo.watchSupersededCancelledJobIds('session-1').first,
+        isEmpty,
+      );
+    },
+  );
+
   test('getSessionJobs lists one session newest first', () async {
     final first = await createJob();
     now += 10;
