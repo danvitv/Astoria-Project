@@ -47,8 +47,11 @@ user terminal; see `CLAUDE.md`.
 
 Start **Build (Branch)** (`.github/workflows/build-branch.yml`) from GitHub
 Actions with **Use workflow from: dev**, selecting the platforms needed. It
-uploads workflow artifacts; it does not create a public GitHub Release. CI
-supplies `.env` from repository Actions secrets. Channel
+uploads workflow artifacts with 90-day retention; it does not create a public
+GitHub Release. The optional Discord announcement links directly to the Actions
+run and does not copy builds through Google Drive. Downloading artifacts may
+require signing in to GitHub. CI supplies `.env` from repository Actions
+secrets. Channel
 identities, data paths and Google OAuth client selection are documented in
 `docs/RELEASE_CHANNELS.md` and `docs/ASTORIA_WINDOWS_DEV.md`. Verify Android
 and Windows builds on actual devices before promoting a release; iOS builds are
@@ -56,8 +59,9 @@ currently unsigned and require an Apple signing or re-signing setup before
 installation.
 
 **Build Release (Artifacts only)** (`.github/workflows/build-release.yml`)
-also only uploads workflow artifacts. Its GitHub Release job and the old
-Telegram delivery jobs are disabled. There are no public binaries yet. The
+also only uploads 90-day workflow artifacts. Its GitHub Release job and the old
+Telegram delivery jobs are disabled; its optional Discord announcement links to
+the workflow artifacts. There are no permanent public binaries yet. The
 separate `danvitv/Astoria-Project-Release` repository currently hosts the
 README, logo and Our Picks feed; the app source and history live here.
 

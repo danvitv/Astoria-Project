@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Posts a build announcement (with Google Drive download links) to the Astoria
+# Posts a build announcement with a GitHub Actions artifact link to the Astoria
 # Discord release channels — RU (#версии) and EN (#releases) — via webhooks.
 #
 # Environment:
@@ -13,7 +13,8 @@
 #   ANNOUNCEMENT_RU      optional RU preview/release note
 #   ANNOUNCEMENT_EN      optional EN preview/release note
 #   PING_ROLE_ID         optional Discord role ID to mention
-#   LINKS_FILE           drive_upload.py output                   [default: drive_links.md]
+#   RUN_URL              GitHub Actions run containing artifacts   [required]
+#   DISCORD_DRY_RUN      print payloads instead of posting         [default: false]
 set -euo pipefail
 
 : "${DISCORD_WEBHOOK_RU:?DISCORD_WEBHOOK_RU is required}"
@@ -23,16 +24,12 @@ DISCORD_WEBHOOK_EN=$(printf '%s' "$DISCORD_WEBHOOK_EN" | tr -d '[:space:]')
 : "${VERSION:?VERSION is required}"
 : "${BUILD_DATE:?BUILD_DATE is required}"
 : "${BUILD_BRANCH:?BUILD_BRANCH is required}"
+: "${RUN_URL:?RUN_URL is required}"
 BUILD_CHANNEL="${BUILD_CHANNEL:-dev}"
-LINKS_FILE="${LINKS_FILE:-drive_links.md}"
 PING_ROLE_ID="${PING_ROLE_ID:-}"
+DISCORD_DRY_RUN="${DISCORD_DRY_RUN:-false}"
 
 COLOR=$((0xA855F7))
-
-LINKS=""
-if [ -s "$LINKS_FILE" ]; then
-  LINKS=$(cat "$LINKS_FILE")
-fi
 
 # Unescape HTML entities produced by the metadata step for Telegram HTML mode.
 CLEAN_COMMITS=$(printf '%s' "${COMMITS:-}" \
@@ -61,6 +58,10 @@ post() { # $1 = webhook url, $2 = title, $3 = description body, $4 = footer
         footer: { text: $footer }
       }]
     }')
+  if [ "$DISCORD_DRY_RUN" = "true" ]; then
+    printf '%s\n' "$payload"
+    return 0
+  fi
   local resp
   resp=$(curl -sS -X POST "$url" \
     -H 'Content-Type: application/json' -d "$payload")
@@ -77,9 +78,8 @@ CHANNEL_LABEL="dev"
 # ── RU (#версии) ───────────────────────────────────────────────────
 RU_DESC=$(printf '**Дата сборки:** `%s UTC`\n**Ветка:** `%s` · **Канал:** `%s`' \
   "$BUILD_DATE" "$BUILD_BRANCH" "$CHANNEL_LABEL")
-if [ -n "$LINKS" ]; then
-  RU_DESC=$(printf '%s\n\n**📦 Скачать сборку (Google Drive):**\n%s' "$RU_DESC" "$LINKS")
-fi
+RU_DESC=$(printf '%s\n\n**📦 Скачать сборку:** [артефакты GitHub Actions](%s)\n_Для скачивания может потребоваться вход в GitHub._' \
+  "$RU_DESC" "$RUN_URL")
 if [ -n "${ANNOUNCEMENT_RU:-}" ]; then
   RU_DESC=$(printf '%s\n\n%s' "$RU_DESC" "$ANNOUNCEMENT_RU")
 fi
@@ -89,14 +89,13 @@ fi
 post "$DISCORD_WEBHOOK_RU" \
   "🚀 Новая сборка · Astoria $VERSION" \
   "$RU_DESC" \
-  "Astoria Builds · На диске хранятся последние 3 сборки 🐈‍⬛"
+  "Astoria Builds · Артефакты размещены в GitHub Actions 🐈‍⬛"
 
 # ── EN (#releases) ─────────────────────────────────────────────────
 EN_DESC=$(printf '**Build date:** `%s UTC`\n**Branch:** `%s` · **Channel:** `%s`' \
   "$BUILD_DATE" "$BUILD_BRANCH" "$CHANNEL_LABEL")
-if [ -n "$LINKS" ]; then
-  EN_DESC=$(printf '%s\n\n**📦 Download build (Google Drive):**\n%s' "$EN_DESC" "$LINKS")
-fi
+EN_DESC=$(printf '%s\n\n**📦 Download build:** [GitHub Actions artifacts](%s)\n_A GitHub sign-in may be required to download._' \
+  "$EN_DESC" "$RUN_URL")
 if [ -n "${ANNOUNCEMENT_EN:-}" ]; then
   EN_DESC=$(printf '%s\n\n%s' "$EN_DESC" "$ANNOUNCEMENT_EN")
 fi
@@ -106,4 +105,4 @@ fi
 post "$DISCORD_WEBHOOK_EN" \
   "🚀 New build · Astoria $VERSION" \
   "$EN_DESC" \
-  "Astoria Builds · Latest 3 builds are retained on Drive 🐈‍⬛"
+  "Astoria Builds · Artifacts are hosted by GitHub Actions 🐈‍⬛"

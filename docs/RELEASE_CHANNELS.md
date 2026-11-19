@@ -54,7 +54,8 @@ client ID matching the intended bundle ID into the ignored `.env` and run
 bundle ID needs its own Google iOS OAuth registration. Full setup:
 `docs/ASTORIA_WINDOWS_DEV.md`.
 
-Build outputs are workflow artifacts, not published GitHub Releases. Automatic
-release publishing and Telegram delivery remain disabled; do not equate channel
-`stable` with a public binary release. Consult `docs/WORKFLOW.md` before
-distribution.
+Build outputs are 90-day workflow artifacts, not published GitHub Releases.
+Optional Discord announcements link directly to the Actions run without Google
+Drive. Automatic release publishing and Telegram delivery remain disabled; do
+not equate channel `stable` with a permanent public binary release. Consult
+`docs/WORKFLOW.md` before distribution.
