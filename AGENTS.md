@@ -50,8 +50,9 @@ specific slice.
 
 ### Preview and distribution boundary
 
-- Windows and Android may be built locally, and the private `Build (Branch)`
+- Windows and Android may be built locally, and the manual `Build (Branch)`
   workflow may build an unsigned iOS artifact. These are dev-channel builds.
 - Do not distribute binaries to testers or enable Drive/Discord/Telegram delivery
-  until `docs/ASTORIA_LICENSE_AUDIT.md` is cleared. Private build artifacts are not
-  evidence of release rights, signing, installation or runtime acceptance.
+  without an explicit maintainer request and the required platform notices,
+  signing and runtime validation. Workflow artifacts are not evidence of release
+  rights, installation or runtime acceptance.

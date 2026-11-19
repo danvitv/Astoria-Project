@@ -13,9 +13,8 @@ on:
         required: false
         type: string
         default: ''
-      # Platform selection. Each toggle gates its build job, the GitHub Release
-      # asset and the Telegram post, so an unchecked platform is simply absent
-      # from the release.
+      # Platform selection. Each toggle gates its build job and artifact, so an
+      # unchecked platform is simply absent from the build.
       build_android:
         description: 'Android (APK)'
         required: false
@@ -51,8 +50,8 @@ on:
         required: false
         default: false
         type: boolean
-      distribute_to_drive:
-        description: 'Upload build to Google Drive and post to Discord (#версии / #releases)'
+      post_to_discord:
+        description: 'Post GitHub Actions artifact link to Discord (#версии / #releases)'
         required: false
         default: true
         type: boolean
@@ -212,13 +211,6 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      - name: Cache pub
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
-          restore-keys: pub-${{ runner.os }}-
-
       - name: Install dependencies
         run: flutter pub get
 
@@ -313,6 +305,7 @@ jobs:
         with:
           name: Astoria-release-APK
           path: "build/app/outputs/flutter-apk/${{ needs.metadata.outputs.tag_name }}*.apk"
+          retention-days: 90
 
   # ── windows ────────────────────────────────────────────────────────────────
   build-windows:
@@ -358,13 +351,6 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Cache pub
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
-          restore-keys: pub-${{ runner.os }}-
-
       - name: Install dependencies
         run: flutter pub get
 
@@ -393,6 +379,7 @@ jobs:
         with:
           name: Astoria-release-Windows
           path: "${{ needs.metadata.outputs.tag_name }}-windows.zip"
+          retention-days: 90
 
   # ── ios ────────────────────────────────────────────────────────────────────
   build-ios:
@@ -445,13 +432,6 @@ jobs:
           flutter-version: '3.44.9'
           channel: 'stable'
           cache: true
-
-      - name: Cache pub
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
-          restore-keys: pub-${{ runner.os }}-
 
       - name: Cache CocoaPods
         uses: actions/cache@v4
@@ -512,6 +492,7 @@ jobs:
         with:
           name: Astoria-release-iOS
           path: "${{ needs.metadata.outputs.tag_name }}.ipa"
+          retention-days: 90
 
   # ── linux ──────────────────────────────────────────────────────────────────
   build-linux:
@@ -570,13 +551,6 @@ jobs:
           flutter-version: '3.44.9'
           channel: 'stable'
           cache: true
-
-      - name: Cache pub
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
-          restore-keys: pub-${{ runner.os }}-
 
       - name: Install dependencies
         run: flutter pub get
@@ -641,24 +615,28 @@ jobs:
         with:
           name: Astoria-release-DEB
           path: "build/linux/deb/${{ needs.metadata.outputs.tag_name }}-linux.deb"
+          retention-days: 90
 
       - name: Upload Pacman artifact
         uses: actions/upload-artifact@v4
         with:
           name: Astoria-release-Pacman
           path: "build/linux/arch/${{ needs.metadata.outputs.tag_name }}-linux.pkg.tar.zst"
+          retention-days: 90
 
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
           name: Astoria-release-AppImage
           path: "build/linux/appimage/${{ needs.metadata.outputs.tag_name }}-linux.AppImage"
+          retention-days: 90
 
       - name: Upload tar.zst artifact
         uses: actions/upload-artifact@v4
         with:
           name: Astoria-release-TarZst
           path: "build/linux/tarzst/${{ needs.metadata.outputs.tag_name }}-linux.tar.zst"
+          retention-days: 90
 
   # ── github release ─────────────────────────────────────────────────────────
   release:
@@ -716,41 +694,16 @@ jobs:
           files: release-assets/*
           fail_on_unmatched_files: false
 
-  # ── google drive + discord distribute ──────────────────────────────────────
-  distribute:
+  # ── discord announcement ───────────────────────────────────────────────────
+  announce-discord:
     needs: [metadata, build-android, build-windows, build-ios, build-linux]
     runs-on: ubuntu-latest
-    if: ${{ always() && github.event.inputs.distribute_to_drive == 'true' && !cancelled() && needs.metadata.result == 'success' && needs.build-android.result != 'failure' && needs.build-windows.result != 'failure' && needs.build-ios.result != 'failure' && needs.build-linux.result != 'failure' && (needs.build-android.result == 'success' || needs.build-windows.result == 'success' || needs.build-ios.result == 'success' || needs.build-linux.result == 'success') }}
+    if: ${{ always() && github.event.inputs.post_to_discord == 'true' && !cancelled() && needs.metadata.result == 'success' && needs.build-android.result != 'failure' && needs.build-windows.result != 'failure' && needs.build-ios.result != 'failure' && needs.build-linux.result != 'failure' && (needs.build-android.result == 'success' || needs.build-windows.result == 'success' || needs.build-ios.result == 'success' || needs.build-linux.result == 'success') }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
-
-      - name: Download built artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: Astoria-release-*
-          merge-multiple: true
-          path: artifacts/
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install Google Drive dependencies
-        run: pip install google-auth requests
-
-      - name: Upload to Google Drive & prune old builds
-        env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          GDRIVE_FOLDER_ID: '1WtUxHfQ6cMxUV4l4ULT4MtqpiJYFXhxX'
-          UPLOAD_DIR: artifacts
-          VERSION_SLUG: ${{ needs.metadata.outputs.tag_name }}
-          KEEP: '3'
-          LINK_OUTPUT: drive_links.md
-        run: python .github/scripts/drive_upload.py
 
       - name: Post announcement to Discord (#версии / #releases)
         env:
@@ -762,7 +715,7 @@ jobs:
           BUILD_CHANNEL: ${{ needs.metadata.outputs.build_channel }}
           COMMITS: ${{ github.event.inputs.release_notes != '' && github.event.inputs.release_notes || needs.metadata.outputs.commits }}
           PING_ROLE_ID: ${{ github.event.inputs.ping_discord_releases == 'true' && '1559920581707571230' || '' }}
-          LINKS_FILE: drive_links.md
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash .github/scripts/discord_post.sh
 
       - name: Advance build/last tag

@@ -94,7 +94,7 @@ the existing backlog is picked up too.
 **The audited source is always `dev`.** The workflow checks the triage code
 out from the branch the run was started on, and `dev` separately into
 `audit-src/`, which is what the agent greps and reads (`AUDIT_REPO_ROOT`).
-Scheduled runs fire only from the repository's default branch (`dev`).
+Scheduled runs fire only from the repository's default branch (`master`).
 
 ## Architecture
 
@@ -204,5 +204,5 @@ python -m unittest discover -p 'test_*.py'
 Daily at 18:00 UTC (`.github/workflows/bug-triage.yml`). Trigger manually from
 the Actions tab ("Run workflow"), optionally with **dry run** checked.
 
-> **Scheduled runs only fire from the repository's default branch** (`dev`).
+> **Scheduled runs only fire from the repository's default branch** (`master`).
 > On a feature branch the cron is inert — only `workflow_dispatch` works there.
