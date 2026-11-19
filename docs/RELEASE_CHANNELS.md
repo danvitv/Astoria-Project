@@ -1,6 +1,6 @@
 # Astoria build channels
 
-The private source repository defaults to `dev`. `main` / `master` are reserved
+The public source repository defaults to `dev`. `main` / `master` are reserved
 for tested stable builds and have not been created. Both manual build workflows
 derive `BUILD_CHANNEL` from the selected branch and pass it to Flutter and the
 native Android/iOS build steps:
@@ -54,7 +54,7 @@ client ID matching the intended bundle ID into the ignored `.env` and run
 bundle ID needs its own Google iOS OAuth registration. Full setup:
 `docs/ASTORIA_WINDOWS_DEV.md`.
 
-Build artifacts are private Actions artifacts. Automatic release publishing
-and Telegram delivery remain disabled; do not equate channel `stable` with a
-public release. Consult `docs/WORKFLOW.md` and `docs/ASTORIA_LICENSE_AUDIT.md`
-before distribution.
+Build outputs are workflow artifacts, not published GitHub Releases. Automatic
+release publishing and Telegram delivery remain disabled; do not equate channel
+`stable` with a public binary release. Consult `docs/WORKFLOW.md` and
+`docs/ASTORIA_LICENSE_AUDIT.md` before distribution.

@@ -1,8 +1,8 @@
 # Astoria
 
-Native LLM frontend for AI roleplay. This private standalone repository retains
-the original Glaze commit history; the public catalog and future downloads live
-in `danvitv/Astoria-Project-Release`.
+Native LLM frontend for AI roleplay. This public AGPL-3.0 repository retains the
+original Glaze commit history; the curated catalog and future downloads live in
+`danvitv/Astoria-Project-Release`.
 **Stack:** Flutter 3.44 + Riverpod 3 + Drift (SQLite) + GoRouter. **Language:** Dart only. **License:** AGPL-3.0.
 
 Architecture: `docs/ARCHITECTURE.md`. Git and build workflow: `docs/WORKFLOW.md`.
@@ -228,9 +228,9 @@ When editing files matching a pattern below, READ the corresponding rule file FI
 
 ## Workflow
 
-- `origin` is the private standalone `danvitv/Astoria-Project`; `dev` is its
+- `origin` is the public standalone `danvitv/Astoria-Project`; `dev` is its
   default branch. Work on `dev` when the maintainer requests it; use feature
-  branches from `dev` for isolated changes. PRs, if used, target this private
+  branches from `dev` for isolated changes. PRs, if used, target this
   repository's `dev`, never Glaze. See `docs/WORKFLOW.md`.
 - `main` / `master` are reserved for tested stable builds; neither has been
   created/published yet.

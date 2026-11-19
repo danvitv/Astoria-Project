@@ -1,22 +1,27 @@
 # Astoria: release rights checklist
 
-This is a working inventory for the private Astoria repository, not a change to
-the licence of the existing Glaze code or a clearance for a proprietary release.
+This is a working inventory for binary releases and any future proprietary
+distribution. The Astoria source repository and its retained Glaze history are
+public under AGPL-3.0; that publication does not relicense third-party materials
+or clear a closed-source release.
 
 ## App code and history
 
-- The repository retains Glaze's full commit history and its AGPL-3.0 `LICENSE`.
-  Keeping the Git repository private does not by itself change the conditions
-  for distributing binaries or running an AGPL-covered network service.
+- The public repository retains Glaze's full commit history and its AGPL-3.0
+  `LICENSE`. Source publication satisfies the chosen open-source direction but
+  does not by itself satisfy platform packaging, attribution or corresponding-
+  source obligations for a particular binary release.
 - Obtain a written grant from the holders of *all* incorporated app code before
   distributing a closed-source derivative. The grant from Hydall should
   explicitly cover his Glaze contributions, contributions made under his other
   accounts, any incorporated Glaze Vue code and the JAR-origin code, and permit
   modification and distribution of proprietary binaries without publishing the
   app's source. Keep the scope and effective versions/revisions unambiguous.
-- The private history contains earlier versions of bundled third-party presets
-  and the SillyTavern ComfyUI template. Do not publish the repository or its
-  complete history as the source for a proprietary release.
+- The public history contains earlier versions of bundled third-party presets
+  and the SillyTavern ComfyUI template. The maintainer explicitly chose to retain
+  and publish that history. Their presence does not place those third-party
+  materials under Astoria's AGPL licence; provenance and upstream terms still
+  need to be respected when reusing or packaging them.
 
 ## Incorporated materials
 

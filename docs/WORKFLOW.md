@@ -1,17 +1,17 @@
 # Astoria workflow
 
-Git, branching, checks and build distribution for the private standalone
+Git, branching, checks and build distribution for the public AGPL-3.0
 `danvitv/Astoria-Project` repository. The full Git history of the Glaze-derived
-project is preserved here; history preservation does not authorize publishing
-it. `origin` points only to this private repository. Never open a PR against or
-push Astoria work to `hydall/Glaze`, `danvitv/Glaze`, or the public
+project is intentionally preserved here. `origin` points only to this
+repository. Never open a PR against or push Astoria work to `hydall/Glaze`,
+`danvitv/Glaze`, or the separate
 `danvitv/Astoria-Project-Release` repository.
 
 ## Branches
 
 | Branch | Build channel | Purpose |
 |---|---|---|
-| `dev` | `dev` | Default branch, current development and internal builds |
+| `dev` | `dev` | Default branch and current development builds |
 | `main` / `master` | `stable` | Production branch when created |
 | `feat/*`, `fix/*` | `dev` when built by CI | Optional isolated work based on `dev` |
 
@@ -47,8 +47,8 @@ user terminal; see `CLAUDE.md`.
 
 Start **Build (Branch)** (`.github/workflows/build-branch.yml`) from GitHub
 Actions with **Use workflow from: dev**, selecting the platforms needed. It
-uploads build artifacts to that private workflow run; it does not release
-anything publicly. CI supplies `.env` from repository Actions secrets. Channel
+uploads workflow artifacts; it does not create a public GitHub Release. CI
+supplies `.env` from repository Actions secrets. Channel
 identities, data paths and Google OAuth client selection are documented in
 `docs/RELEASE_CHANNELS.md` and `docs/ASTORIA_WINDOWS_DEV.md`. Verify Android
 and Windows builds on actual devices before promoting a release; iOS builds are
@@ -56,10 +56,10 @@ currently unsigned and require an Apple signing or re-signing setup before
 installation.
 
 **Build Release (Artifacts only)** (`.github/workflows/build-release.yml`)
-also only uploads private run artifacts. Its GitHub Release job and the old
+also only uploads workflow artifacts. Its GitHub Release job and the old
 Telegram delivery jobs are disabled. There are no public binaries yet. The
-public `danvitv/Astoria-Project-Release` repository currently hosts the
-README, logo and Our Picks feed, not the private source or Git history.
+separate `danvitv/Astoria-Project-Release` repository currently hosts the
+README, logo and Our Picks feed; the app source and history live here.
 
 Do not turn on automatic public binary distribution by repointing the old
 same-repository release job. Establish publication rights, dependency notices,
