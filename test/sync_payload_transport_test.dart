@@ -547,7 +547,11 @@ void main() {
   test(
     'compression threshold is inclusive and measured in UTF8 bytes',
     () async {
-      for (final type in ['reconciliation_state', 'chat']) {
+      for (final type in [
+        'reconciliation_state',
+        'tracker_snapshot',
+        'chat',
+      ]) {
         for (final bytes in [
           _compressionThreshold - 1,
           _compressionThreshold,
@@ -595,6 +599,34 @@ void main() {
       );
     },
   );
+
+  test('tracker snapshot aggregate over 30 MiB uses chunk transport', () async {
+    final cloud = FakeCloudAdapter();
+    final data = {
+      '__trackerSnapshots': true,
+      'items': [
+        {
+          'sessionId': _sessionId,
+          'messageId': 'assistant',
+          'trackers': [
+            {'name': 'large', 'value': 'x' * (31 * 1024 * 1024)},
+          ],
+        },
+      ],
+    };
+    final entry = _entry(data, type: 'tracker_snapshot');
+    expect(
+      utf8.encode(jsonEncode(data)).length,
+      greaterThan(maxSyncPayloadBytes),
+    );
+
+    await SyncPayloadTransport.upload(cloud, entry, data);
+
+    final root = _root(cloud, entry);
+    expect(root['__syncPayload'], isTrue);
+    expect(root['type'], 'tracker_snapshot');
+    expect(await SyncPayloadTransport.download(cloud, entry), data);
+  });
 
   test(
     'multipart payload over 30 MiB roundtrips and publishes root last',

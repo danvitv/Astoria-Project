@@ -21,7 +21,9 @@ class SyncPayloadTransport {
   static final _hashPattern = RegExp(r'^[a-f0-9]{64}$');
 
   static bool _allowsChunked(SyncManifestEntry entry) =>
-      entry.type == 'reconciliation_state' || entry.type == 'chat';
+      entry.type == 'reconciliation_state' ||
+      entry.type == 'tracker_snapshot' ||
+      entry.type == 'chat';
 
   static int _jsonLimit(SyncManifestEntry entry) =>
       _allowsChunked(entry) ? _maxDecodedBytes : maxSyncPayloadBytes;
