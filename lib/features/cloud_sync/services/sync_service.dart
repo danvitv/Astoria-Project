@@ -67,6 +67,7 @@ class SyncService {
   // Trusted constructor seam; production defaults to the actual provider below.
   final CloudAdapter Function(SyncProvider)? _selectAdapter;
   final ReconciliationPageCache? _reconciliationPageCache;
+  final Map<SyncProvider, CloudAdapter> _adapterCache = {};
 
   SyncProvider _provider = SyncProvider.dropbox;
   SyncStatus _status = SyncStatus.idle;
@@ -285,12 +286,13 @@ class SyncService {
   CloudAdapter get _adapter {
     final selector = _selectAdapter;
     if (selector != null) return selector(_provider);
-    switch (_provider) {
-      case SyncProvider.dropbox:
-        return DropboxAdapter(_dropboxAuth);
-      case SyncProvider.gdrive:
-        return GDriveAdapter(_gdriveAuth);
-    }
+    return _adapterCache.putIfAbsent(
+      _provider,
+      () => switch (_provider) {
+        SyncProvider.dropbox => DropboxAdapter(_dropboxAuth),
+        SyncProvider.gdrive => GDriveAdapter(_gdriveAuth),
+      },
+    );
   }
 
   SyncManifestBuilder get _manifestBuilder => SyncManifestBuilder(
@@ -773,6 +775,8 @@ class SyncService {
     await pending;
     _checkWorkflow();
     if (!credential()) throw const CredentialVaultAdmissionDenied();
+    await _adapter.invalidateFolderCache();
+    _checkWorkflow();
     _storageWarnings.remove(SyncProvider.dropbox);
     _disconnectWarning = null;
     final info = await _adapter.getAccountInfo();
@@ -793,6 +797,8 @@ class SyncService {
     await pending;
     _checkWorkflow();
     if (!credential()) throw const CredentialVaultAdmissionDenied();
+    await _adapter.invalidateFolderCache();
+    _checkWorkflow();
     _storageWarnings.remove(SyncProvider.gdrive);
     _disconnectWarning = null;
     await _saveTokens();
@@ -823,6 +829,8 @@ class SyncService {
     _publicationGuard = () => lifecycle() && credential();
     _publicationClauses!.add(credential);
     final result = await pending;
+    _checkWorkflow();
+    await _adapter.invalidateFolderCache();
     _checkWorkflow();
     _disconnectWarning = result.warning;
     _accountInfo = null;

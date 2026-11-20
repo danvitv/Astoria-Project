@@ -120,6 +120,10 @@ class SyncManifestBuilder implements SyncManifestProvider {
     final entries = <String, SyncManifestEntry>{};
 
     final previous = await readLocalManifest();
+    final deletedEntries = await _readDeletedEntries();
+    final deletedKeys = deletedEntries
+        .map((row) => entryKey(row['type'] as String, row['id'] as String))
+        .toSet();
     final characterAcceptedHashes = <String, String>{};
 
     final characters = await _read(_characterRepo.getAll);
@@ -471,7 +475,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
       final sessionIds = await _read(store.getAllSessionIds);
       for (final sessionId in sessionIds) {
         if (!chatSessionIds.contains(sessionId) ||
-            await isDeleted('chat', sessionId)) {
+            deletedKeys.contains(entryKey('chat', sessionId))) {
           continue;
         }
         final registry = await _read(() => store.getBySessionId(sessionId));
@@ -559,8 +563,8 @@ class SyncManifestBuilder implements SyncManifestProvider {
             cloudEntry.deleted ||
             cloudEntry.hash != previousEntry.hash ||
             !previous.acceptedLocalHashes.containsKey(previousEntry.key) ||
-            await isDeleted(previousEntry.type, previousEntry.id) ||
-            await isDeleted('chat', previousEntry.id)) {
+            deletedKeys.contains(previousEntry.key) ||
+            deletedKeys.contains(entryKey('chat', previousEntry.id))) {
           continue;
         }
         // An accepted empty aggregate has no local rows to rebuild from.
@@ -615,8 +619,8 @@ class SyncManifestBuilder implements SyncManifestProvider {
             cloudEntry.deleted ||
             cloudEntry.hash != previousEntry.hash ||
             !previous.acceptedLocalHashes.containsKey(previousEntry.key) ||
-            await isDeleted(previousEntry.type, previousEntry.id) ||
-            await isDeleted('chat', previousEntry.id)) {
+            deletedKeys.contains(previousEntry.key) ||
+            deletedKeys.contains(entryKey('chat', previousEntry.id))) {
           continue;
         }
         // A cloud state may normalize to no durable runs (for example, stale
@@ -630,7 +634,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
       final sessionIds = await _read(_rewriteJobHistoryStore.getAllSessionIds);
       for (final sessionId in sessionIds) {
         if (!chatSessionIds.contains(sessionId) ||
-            await isDeleted('chat', sessionId)) {
+            deletedKeys.contains(entryKey('chat', sessionId))) {
           continue;
         }
         final history = await _read(
@@ -655,7 +659,7 @@ class SyncManifestBuilder implements SyncManifestProvider {
     }
 
     await _addSingletons(entries, previous, now, cloudManifest);
-    await _addDeletedEntries(entries, now);
+    _addDeletedEntries(entries, now, deletedEntries);
 
     final trackerSnapshotRestoreHashes = <String, String>{};
     for (final pending in previous.trackerSnapshotRestoreHashes.entries) {
@@ -669,8 +673,8 @@ class SyncManifestBuilder implements SyncManifestProvider {
           snapshot.hash != pending.value ||
           chat == null ||
           chat.deleted ||
-          await isDeleted('chat', snapshot.id) ||
-          await isDeleted(snapshot.type, snapshot.id)) {
+          deletedKeys.contains(entryKey('chat', snapshot.id)) ||
+          deletedKeys.contains(snapshot.key)) {
         continue;
       }
       trackerSnapshotRestoreHashes[pending.key] = pending.value;
@@ -923,15 +927,11 @@ class SyncManifestBuilder implements SyncManifestProvider {
     }
   }
 
-  Future<void> _addDeletedEntries(
+  void _addDeletedEntries(
     Map<String, SyncManifestEntry> entries,
     int now,
-  ) async {
-    final prefs = await _read(SharedPreferences.getInstance);
-    final raw = prefs.getString(_deletedKey);
-    if (raw == null) return;
-
-    final deleted = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+    List<Map<String, dynamic>> deleted,
+  ) {
     for (final d in deleted) {
       final type = d['type'] as String;
       final id = d['id'] as String;
@@ -994,10 +994,14 @@ class SyncManifestBuilder implements SyncManifestProvider {
 
   @override
   Future<bool> isDeleted(String type, String id) async {
+    final deleted = await _readDeletedEntries();
+    return deleted.any((row) => row['type'] == type && row['id'] == id);
+  }
+
+  Future<List<Map<String, dynamic>>> _readDeletedEntries() async {
     final prefs = await _read(SharedPreferences.getInstance);
     final raw = prefs.getString(_deletedKey);
-    if (raw == null) return false;
-    final deleted = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
-    return deleted.any((row) => row['type'] == type && row['id'] == id);
+    if (raw == null) return const [];
+    return (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
   }
 }

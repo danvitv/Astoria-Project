@@ -222,25 +222,27 @@ class SyncEngine {
             )).getBool(SyncSerialization.syncIncludeApiKeysPrefKey) ??
             false);
     await _adapter.ensureFolder(cloudBase);
-    await _adapter.ensureFolder('$cloudBase/characters');
-    await _adapter.ensureFolder('$cloudBase/personas');
-    await _adapter.ensureFolder('$cloudBase/chats');
-    await _adapter.ensureFolder('$cloudBase/memory_books');
-    await _adapter.ensureFolder('$cloudBase/persona_avatars');
-    await _adapter.ensureFolder('$cloudBase/preset_images');
-    await _adapter.ensureFolder('$cloudBase/extension_presets');
-    await _adapter.ensureFolder('$cloudBase/info_blocks');
-    await _adapter.ensureFolder('$cloudBase/tracker_snapshots');
-    await _adapter.ensureFolder('$cloudBase/tracker_values');
-    await _adapter.ensureFolder('$cloudBase/studio_configs');
-    await _adapter.ensureFolder('$cloudBase/studio_presets');
-    await _adapter.ensureFolder('$cloudBase/chat_summaries');
-    await _adapter.ensureFolder('$cloudBase/memory_graphs');
-    await _adapter.ensureFolder('$cloudBase/character_knowledge');
-    await _adapter.ensureFolder('$cloudBase/session_lorebook_overlays');
-    await _adapter.ensureFolder('$cloudBase/reconciliation_state');
-    await _adapter.ensureFolder('$cloudBase/rewrite_job_history');
-    await _adapter.ensureFolder('$cloudBase/memory_event_registry');
+    await _runBounded(const [
+      'characters',
+      'personas',
+      'chats',
+      'memory_books',
+      'persona_avatars',
+      'preset_images',
+      'extension_presets',
+      'info_blocks',
+      'tracker_snapshots',
+      'tracker_values',
+      'studio_configs',
+      'studio_presets',
+      'chat_summaries',
+      'memory_graphs',
+      'character_knowledge',
+      'session_lorebook_overlays',
+      'reconciliation_state',
+      'rewrite_job_history',
+      'memory_event_registry',
+    ], (folder) => _adapter.ensureFolder('$cloudBase/$folder'));
 
     onProgress(const SyncProgress(message: 'Building sync manifest...'));
     final previousManifest = await _read(_manifestBuilder.readLocalManifest);
@@ -384,16 +386,6 @@ class SyncEngine {
             candidatePaths,
             onProgress: onProgress,
           );
-
-    final galleryDirs = <String>{};
-    for (final entry in entries) {
-      if (entry.type == 'character' && !entry.deleted) {
-        galleryDirs.add('$cloudBase/gallery/${entry.id}');
-      }
-    }
-    for (final dir in galleryDirs) {
-      await _adapter.ensureFolder(dir);
-    }
 
     await _unorderedBridge.verifyAnchors(localManifest);
     final tasks = <Future<void> Function()>[];
@@ -632,9 +624,10 @@ class SyncEngine {
     final folders = entryPaths.map(_cloudParentFolder).toSet();
     final paths = <String>{};
     final foldersWithFiles = <String>{};
-    for (final folder in folders) {
+    await _runBounded(folders, (folder) async {
       try {
         final files = await _adapter.listFolder(folder);
+        _checkCurrent();
         if (files.any((file) => !file.isFolder)) {
           foldersWithFiles.add(folder);
         }
@@ -650,8 +643,30 @@ class SyncEngine {
         // regardless of listing success.
         debugPrint('[sync] listFolder failed for "$folder": $e\n$st');
       }
-    }
+    });
     return (paths: paths, foldersWithFiles: foldersWithFiles);
+  }
+
+  Future<void> _runBounded<T>(
+    Iterable<T> items,
+    Future<void> Function(T item) operation, {
+    int concurrency = 4,
+  }) async {
+    final pending = items.toList(growable: false);
+    var next = 0;
+
+    Future<void> worker() async {
+      while (next < pending.length) {
+        _checkCurrent();
+        final item = pending[next++];
+        await operation(item);
+        _checkCurrent();
+      }
+    }
+
+    await Future.wait(
+      List.generate(pending.length.clamp(0, concurrency), (_) => worker()),
+    );
   }
 
   String _cloudParentFolder(String path) {

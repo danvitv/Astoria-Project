@@ -25,6 +25,7 @@ class SyncBinaryAssetSyncer {
     _check();
     return result;
   }
+
   Future<void> _commit(Future<void> Function() action) async {
     _check();
     final commit = _originalCommit;
@@ -54,6 +55,7 @@ class SyncBinaryAssetSyncer {
     if (!await _read(file.exists)) return;
     final bytes = await _read(file.readAsBytes);
     final ext = c.avatarPath!.split('.').last;
+    await _adapter.ensureFolder('$cloudBase/gallery/$charId');
     await _adapter.uploadBinary(galleryCloudPath(charId, 'avatar', ext), bytes);
   }
 

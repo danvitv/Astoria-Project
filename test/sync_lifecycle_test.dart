@@ -612,6 +612,7 @@ class FakeCloudAdapter implements CloudAdapter {
   final Map<String, String> files = {};
   final List<String> downloadCalls = [];
   final List<String> listFolderCalls = [];
+  final List<String> ensureFolderCalls = [];
   final Set<String> ensuredFolders = {};
   final Set<String> downloadFailures = {};
 
@@ -620,6 +621,9 @@ class FakeCloudAdapter implements CloudAdapter {
   bool omitFilesFromList = false;
   bool listFolderThrows = false;
   final Set<String> listFolderFailures = {};
+  Duration listFolderDelay = Duration.zero;
+  int activeFolderListings = 0;
+  int maxActiveFolderListings = 0;
   bool requireEnsuredParentForUpload = false;
   final uploadFailures = <String>{};
   final binaryUploadFailures = <String>{};
@@ -629,6 +633,7 @@ class FakeCloudAdapter implements CloudAdapter {
 
   @override
   Future<void> ensureFolder(String path) async {
+    ensureFolderCalls.add(path);
     ensuredFolders.add(path);
   }
 
@@ -691,22 +696,33 @@ class FakeCloudAdapter implements CloudAdapter {
   @override
   Future<List<CloudFileInfo>> listFolder(String path) async {
     listFolderCalls.add(path);
-    if (listFolderThrows || listFolderFailures.contains(path)) {
-      throw Exception('listFolder failed: $path');
+    activeFolderListings++;
+    if (activeFolderListings > maxActiveFolderListings) {
+      maxActiveFolderListings = activeFolderListings;
     }
-    if (omitFilesFromList) return [];
-    return files.keys.where((k) => k.startsWith(path) && !k.endsWith('/')).map((
-      k,
-    ) {
-      final listedPath = stripGlazePrefixInList && k.startsWith('$cloudBase/')
-          ? k.substring(cloudBase.length)
-          : k;
-      return CloudFileInfo(
-        path: listedPath,
-        name: k.split('/').last,
-        isFolder: false,
-      );
-    }).toList();
+    try {
+      if (listFolderDelay > Duration.zero) {
+        await Future<void>.delayed(listFolderDelay);
+      }
+      if (listFolderThrows || listFolderFailures.contains(path)) {
+        throw Exception('listFolder failed: $path');
+      }
+      if (omitFilesFromList) return [];
+      return files.keys.where((k) => k.startsWith(path) && !k.endsWith('/')).map((
+        k,
+      ) {
+        final listedPath = stripGlazePrefixInList && k.startsWith('$cloudBase/')
+            ? k.substring(cloudBase.length)
+            : k;
+        return CloudFileInfo(
+          path: listedPath,
+          name: k.split('/').last,
+          isFolder: false,
+        );
+      }).toList();
+    } finally {
+      activeFolderListings--;
+    }
   }
 
   @override
@@ -3699,6 +3715,37 @@ void main() {
       );
     },
   );
+
+  test('Push does not prepare gallery folders for unchanged cards', () async {
+    final world = SyncWorld();
+    await world.characters.put(makeChar('c1', name: 'Alpha'));
+    await world.engine.pushEntities(onProgress: (_) {});
+    world.cloud.ensureFolderCalls.clear();
+
+    await world.engine.pushEntities(onProgress: (_) {});
+
+    expect(
+      world.cloud.ensureFolderCalls.where(
+        (path) => path.startsWith('$cloudBase/gallery/'),
+      ),
+      isEmpty,
+    );
+  });
+
+  test('Push checks independent cloud folders with bounded concurrency', () async {
+    final world = SyncWorld();
+    await world.characters.put(makeChar('c1', name: 'Alpha'));
+    await world.personas.put(makePersona('p1', name: 'Persona'));
+    await world.chats.put(makeChat('s1', charId: 'c1'));
+    await world.engine.pushEntities(onProgress: (_) {});
+    world.cloud.listFolderDelay = const Duration(milliseconds: 10);
+    world.cloud.maxActiveFolderListings = 0;
+
+    await world.engine.pushEntities(onProgress: (_) {});
+
+    expect(world.cloud.maxActiveFolderListings, greaterThan(1));
+    expect(world.cloud.maxActiveFolderListings, lessThanOrEqualTo(4));
+  });
 
   test('Wipe progress reports indeterminate (no total)', () async {
     final world = SyncWorld();
