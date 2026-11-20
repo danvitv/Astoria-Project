@@ -286,6 +286,18 @@ database identities or new tool definitions are exposed. Verified on a synthetic
 through the native Source4 navigation and result envelope; full Send and live sync
 remain unverified for this slice.
 
+Second slice: `applicationData` → Accepted Memory event registry sync metadata reads
+only the accepted local aggregate's finite event kind/state/revision, normalized
+epoch-second display timestamps and bounded source/link/invalidation counts. It states
+the actual merge owner's metadata winner order and collision-preserving semantic plus
+exact-source variant policy, but deliberately reports collision occurrence as unknown:
+that origin is not persisted. Local aggregate participation does not attest cloud
+presence, upload, auth health or complete remote convergence. Event descriptions,
+accepted-by values, identities, source manifests and fingerprints remain private. The
+native Source4 file path, result-envelope secret scan, stale-snapshot refusal and the
+existing sync merge/collision suite pass; live cloud sync and full model Send remain
+unverified for this slice. No definition slot or mutation authority was added.
+
 ### 3. Extended actions and conditional Undo — separate bounded slices
 
 Remaining scope includes roleplay session/message operations, composite deletions,

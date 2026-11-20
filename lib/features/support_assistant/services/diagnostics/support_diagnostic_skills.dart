@@ -86,6 +86,7 @@ abstract final class SupportDiagnosticSkills {
       [
         'Separate Memory book settings, approved entries, drafts, derived catalog and canon assembly.',
         'For Memory consolidation, read Saved Memory consolidation packages under applicationData Maintenance status. Distinguish a cancelled package from one whose exact sources were already accepted. A work-limit result is unknown, and local queue status does not establish sync success or the cause of cancellation.',
+        'For accepted event-registry sync metadata, read the applicationData Memory event registry status dataset. It can attest local aggregate participation, normalized display timestamps and the finite convergence/collision policy. It cannot attest cloud presence, remote completeness or that a collision actually occurred.',
         'Use bounded integrity checks; physical checks and recorded hashes do not prove narrative truth or universal health.',
         'Respect sample/page/truncation limits. An empty page is not proof of an empty database.',
         'Only propose an available exact native repair; fresh confirmation and a retained conditional Undo receipt remain required.',

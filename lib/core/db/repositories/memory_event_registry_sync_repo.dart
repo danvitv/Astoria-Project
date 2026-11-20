@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 
 import '../../application/sync_repo_interfaces.dart';
 import '../../models/memory_source_manifest.dart';
+import '../../utils/time_helpers.dart';
 import '../app_db.dart';
 import 'memory_event_registry_repo.dart';
 
@@ -17,6 +18,91 @@ class MemoryEventRegistrySyncRepo implements SyncMemoryEventRegistryStore {
   const MemoryEventRegistrySyncRepo(this.db);
 
   final AppDatabase db;
+
+  /// Bounded, prose-free projection for native support sources. This describes
+  /// the local aggregate's sync contract; it never attests a cloud upload,
+  /// remote completeness or that a legacy collision happened.
+  Future<Map<String, Object?>?> readSavedSyncMetadata(int rowPosition) async {
+    final overLimit = await db.customSelect('''SELECT
+      EXISTS(SELECT 1 FROM memory_event_rows LIMIT 1 OFFSET 4096)
+      OR EXISTS(SELECT 1 FROM memory_event_source_rows LIMIT 1 OFFSET 8192)
+      OR EXISTS(SELECT 1 FROM memory_event_link_rows LIMIT 1 OFFSET 4096)
+      OR EXISTS(SELECT 1 FROM memory_event_invalidation_rows LIMIT 1 OFFSET 4096)
+      AS over_limit''').getSingle();
+    if (overLimit.read<int>('over_limit') == 1) {
+      return const {
+        'syncMetadataStatus': 'unknown_work_limit',
+        'syncCollection': 'memory_event_registry',
+        'cloudPresence': 'unknown_not_attested',
+        'collisionObserved': 'unknown_not_persisted',
+      };
+    }
+    final row = await db
+        .customSelect(
+          '''SELECT
+      event.kind,event.state,event.status,event.revision,
+      event.accepted_at,event.created_at,
+      (SELECT count(*) FROM memory_event_source_rows source
+        WHERE source.event_id=event.id) AS source_count,
+      (SELECT count(*) FROM memory_event_link_rows link
+        WHERE link.from_event_id=event.id OR link.to_event_id=event.id) AS link_count,
+      (SELECT count(*) FROM memory_event_invalidation_rows invalidation
+        WHERE invalidation.target_type='event'
+          AND invalidation.target_id=event.id) AS invalidation_count
+      FROM memory_event_rows event WHERE event.rowid=?''',
+          variables: [Variable.withInt(rowPosition)],
+        )
+        .getSingleOrNull();
+    if (row == null) return null;
+    final kind = row.read<String>('kind');
+    final state = row.read<String>('state');
+    final status = row.read<String>('status');
+    final revision = row.read<int>('revision');
+    final acceptedAt = row.read<int>('accepted_at');
+    final createdAt = row.read<int>('created_at');
+    final sourceCount = row.read<int>('source_count');
+    final linkCount = row.read<int>('link_count');
+    final invalidationCount = row.read<int>('invalidation_count');
+    if (!MemoryEventRegistryRepo.eventKinds.contains(kind) ||
+        !MemoryEventRegistryRepo.eventStates.contains(state) ||
+        status != 'active' ||
+        revision < 1 ||
+        acceptedAt < 0 ||
+        createdAt < 0 ||
+        sourceCount < 1 ||
+        sourceCount > 8192 ||
+        linkCount < 0 ||
+        linkCount > 4096 ||
+        invalidationCount < 0 ||
+        invalidationCount > 4096) {
+      return const {
+        'syncMetadataStatus': 'unknown_saved_format',
+        'syncCollection': 'memory_event_registry',
+        'cloudPresence': 'unknown_not_attested',
+        'collisionObserved': 'unknown_not_persisted',
+      };
+    }
+    return Map.unmodifiable({
+      'syncMetadataStatus': 'safe_local_projection',
+      'eventKind': kind,
+      'eventState': state,
+      'registryStatus': status,
+      'revision': revision,
+      'acceptedAtEpochSeconds': normalizeTimestampSeconds(acceptedAt),
+      'createdAtEpochSeconds': normalizeTimestampSeconds(createdAt),
+      'timestampProjection': 'seconds_or_milliseconds_normalized_to_seconds',
+      'sourceCount': sourceCount,
+      'linkCount': linkCount,
+      'invalidationCount': invalidationCount,
+      'syncCollection': 'memory_event_registry',
+      'syncParticipation': 'included_in_local_session_registry_aggregate',
+      'metadataConvergence':
+          'earliest_accepted_at_then_created_at_then_accepted_by',
+      'collisionPolicy': 'semantic_and_exact_source_variants_preserved',
+      'collisionObserved': 'unknown_not_persisted',
+      'cloudPresence': 'unknown_not_attested',
+    });
+  }
 
   @override
   Future<List<String>> getAllSessionIds() async {

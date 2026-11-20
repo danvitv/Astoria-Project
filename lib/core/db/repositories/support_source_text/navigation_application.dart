@@ -569,6 +569,22 @@ extension _NavApplication on SupportSourceNavigationRepo {
       return result;
     }
 
+    if (table.section == 'memoryEventSyncEvents' && unavailable == null) {
+      final summary = await MemoryEventRegistrySyncRepo(
+        _db,
+      ).readSavedSyncMetadata(ordinal);
+      _guard();
+      _rootValidation?._check();
+      if (summary == null) _fail(SupportSourceReadFailure.changed);
+      final encoded = jsonEncode(summary);
+      if (_projectionPolicy!.redactText(encoded) != encoded) {
+        emit({'status': 'projection_unavailable'}, 'projectionStatus');
+      } else {
+        emit(summary, 'savedMemoryEventSyncMetadata');
+      }
+      return result;
+    }
+
     void flatten(Object? value, String field) {
       if (value is Map<String, Object?>) {
         var index = 0;

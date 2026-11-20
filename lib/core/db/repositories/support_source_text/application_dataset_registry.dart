@@ -511,6 +511,19 @@ const _applicationDatasets = [
     ],
   ),
   _ApplicationDataset(
+    'memoryEventRegistryStatus',
+    'Accepted Memory event registry sync metadata (no Memory prose)',
+    [
+      _ApplicationTable(
+        'memoryEventSyncEvents',
+        'Accepted event sync participation and convergence metadata',
+        'memory_event_rows',
+        'kind,state,status,revision,accepted_at,created_at',
+        session: 'session_id',
+      ),
+    ],
+  ),
+  _ApplicationDataset(
     'astoriaSavedContext',
     'Astoria saved summaries, settings and action/report status',
     [
