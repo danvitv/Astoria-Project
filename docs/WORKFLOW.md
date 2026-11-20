@@ -11,8 +11,8 @@ repository. Never open a PR against or push Astoria work to `hydall/Glaze`,
 
 | Branch | Build channel | Purpose |
 |---|---|---|
-| `dev` | `dev` | Default branch and current development builds |
-| `main` / `master` | `stable` | Production branch when created |
+| `master` | `stable` | Default branch and tested stable source |
+| `dev` | `dev` | Current development and dev-channel builds |
 | `feat/*`, `fix/*` | `dev` when built by CI | Optional isolated work based on `dev` |
 
 When asked to work directly on `dev`, verify the branch and push only to
@@ -23,10 +23,10 @@ history. Preserve authorship and existing history; do not force-push shared
 branches. Regenerate after editing a Freezed/Drift model with
 `dart run build_runner build`.
 
-`main` or `master` can be cut from a tested `dev` revision only when the
-maintainer requests it. Building from that branch alone does not publish a
-release. Follow `docs/ASTORIA_LICENSE_AUDIT.md` before distributing proprietary
-binaries.
+Promote a tested `dev` revision to `master` only when the maintainer requests
+it. Updating `master` or building from it does not by itself publish a binary
+release. Binary distribution requires a separate maintainer decision plus the
+applicable third-party notices, platform signing and runtime validation.
 
 ## Checks
 
@@ -47,8 +47,11 @@ user terminal; see `CLAUDE.md`.
 
 Start **Build (Branch)** (`.github/workflows/build-branch.yml`) from GitHub
 Actions with **Use workflow from: dev**, selecting the platforms needed. It
-uploads workflow artifacts; it does not create a public GitHub Release. CI
-supplies `.env` from repository Actions secrets. Channel
+uploads workflow artifacts with 90-day retention; it does not create a public
+GitHub Release. The optional Discord announcement links directly to the Actions
+run and does not copy builds through Google Drive. Downloading artifacts may
+require signing in to GitHub. CI supplies `.env` from repository Actions
+secrets. Channel
 identities, data paths and Google OAuth client selection are documented in
 `docs/RELEASE_CHANNELS.md` and `docs/ASTORIA_WINDOWS_DEV.md`. Verify Android
 and Windows builds on actual devices before promoting a release; iOS builds are
@@ -56,12 +59,12 @@ currently unsigned and require an Apple signing or re-signing setup before
 installation.
 
 **Build Release (Artifacts only)** (`.github/workflows/build-release.yml`)
-also only uploads workflow artifacts. Its GitHub Release job and the old
-Telegram delivery jobs are disabled. There are no public binaries yet. The
+also only uploads 90-day workflow artifacts. Its GitHub Release job and the old
+Telegram delivery jobs are disabled; its optional Discord announcement links to
+the workflow artifacts. There are no permanent public binaries yet. The
 separate `danvitv/Astoria-Project-Release` repository currently hosts the
 README, logo and Our Picks feed; the app source and history live here.
 
 Do not turn on automatic public binary distribution by repointing the old
-same-repository release job. Establish publication rights, dependency notices,
-destination credentials and a public release process first; see
-`docs/ASTORIA_LICENSE_AUDIT.md`.
+same-repository release job. Establish dependency notices, destination
+credentials, signing, runtime validation and a public release process first.

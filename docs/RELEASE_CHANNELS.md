@@ -1,15 +1,15 @@
 # Astoria build channels
 
-The public source repository defaults to `dev`. `main` / `master` are reserved
-for tested stable builds and have not been created. Both manual build workflows
-derive `BUILD_CHANNEL` from the selected branch and pass it to Flutter and the
-native Android/iOS build steps:
+The public source repository uses `master` as its default stable branch and
+`dev` for ongoing development. Both manual build workflows derive
+`BUILD_CHANNEL` from the selected branch and pass it to Flutter and the native
+Android/iOS build steps:
 
 | Branch | Channel | Android applicationId | iOS bundle ID | Windows data folder | Drive root |
 |---|---|---|---|---|---|
+| `master` | `stable` | `app.astoria.flutter` | `com.danvitv.astoria` | `Astoria` | `Astoria` |
 | `dev` | `dev` | `app.astoria.flutter.dev` | `com.danvitv.astoria.dev` | `Astoria-dev` | `Astoria-dev` |
 | feature / other working branch | `dev` | `app.astoria.flutter.dev` | `com.danvitv.astoria.dev` | `Astoria-dev` | `Astoria-dev` |
-| `main` / `master` (future) | `stable` | `app.astoria.flutter` | `com.danvitv.astoria` | `Astoria` | `Astoria` |
 
 A local Flutter build without `--dart-define=BUILD_CHANNEL=...` defaults to
 `dev`; Android Gradle and iOS `Channel.xcconfig` default to `dev` as well.
@@ -42,7 +42,7 @@ bundle ID must match the build:
 | Channel | Actions secret for iOS OAuth client ID |
 |---|---|
 | `dev` | `GDRIVE_IOS_CLIENT_ID` (existing dev secret) |
-| `stable` (`main` / `master`) | `GDRIVE_IOS_CLIENT_ID_RELEASE` (create before building) |
+| `stable` (`master`) | `GDRIVE_IOS_CLIENT_ID_RELEASE` (create before building) |
 
 The iOS jobs of both manual workflows select the corresponding secret and
 generate the reversed Google URL scheme from it before building. If that
@@ -54,7 +54,8 @@ client ID matching the intended bundle ID into the ignored `.env` and run
 bundle ID needs its own Google iOS OAuth registration. Full setup:
 `docs/ASTORIA_WINDOWS_DEV.md`.
 
-Build outputs are workflow artifacts, not published GitHub Releases. Automatic
-release publishing and Telegram delivery remain disabled; do not equate channel
-`stable` with a public binary release. Consult `docs/WORKFLOW.md` and
-`docs/ASTORIA_LICENSE_AUDIT.md` before distribution.
+Build outputs are 90-day workflow artifacts, not published GitHub Releases.
+Optional Discord announcements link directly to the Actions run without Google
+Drive. Automatic release publishing and Telegram delivery remain disabled; do
+not equate channel `stable` with a permanent public binary release. Consult
+`docs/WORKFLOW.md` before distribution.
