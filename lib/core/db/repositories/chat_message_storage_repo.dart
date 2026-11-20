@@ -143,9 +143,9 @@ final class ChatMessageStorageRepo {
   }
 
   Future<String?> materializeMessagesJson(String sessionId) async {
-    final messages = await loadMessagesBySessionId(sessionId);
+    final messages = await loadRawMessagesBySessionId(sessionId);
     if (messages == null) return null;
-    return jsonEncode(messages.map((message) => message.toJson()).toList());
+    return jsonEncode(messages);
   }
 
   Future<ChatMessageStorageSnapshot> load(ChatSessionRow session) async {

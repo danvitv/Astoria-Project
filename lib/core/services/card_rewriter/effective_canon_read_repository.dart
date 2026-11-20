@@ -6,13 +6,14 @@ import 'package:glaze_flutter/core/db/repositories/applied_canon_transition_repo
 import 'package:glaze_flutter/core/db/repositories/canon_transition_fact_ref_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/character_knowledge_fact_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/character_repo.dart';
-import 'package:glaze_flutter/core/db/repositories/chat_repo.dart';
+import 'package:glaze_flutter/core/db/repositories/chat_message_storage_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/session_canon_checkpoint_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/character_revision_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/character_session_baseline_repo.dart';
 import 'package:glaze_flutter/core/db/repositories/ledger_raw_tracker_state_reader.dart';
 import 'package:glaze_flutter/core/models/ledger_raw_tracker_state.dart';
 import 'package:glaze_flutter/core/models/character.dart';
+import 'package:glaze_flutter/core/models/chat_message.dart';
 import 'package:glaze_flutter/core/models/historical_message_window.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/effective_canon_assembler.dart';
 import 'package:glaze_flutter/core/services/card_rewriter/card_rewriter_contracts.dart';
@@ -182,13 +183,43 @@ class EffectiveCanonReadRepository {
     String targetId,
   ) async {
     final watch = Stopwatch()..start();
-    final session = await ChatRepo(db).getById(sessionId);
-    if (session == null) {
+    final rawMessages = await ChatMessageStorageRepo(
+      db,
+    ).loadRawMessagesBySessionId(sessionId);
+    if (rawMessages == null) {
       throw const EffectiveCanonAssemblyUnavailable(
         'Historical session is missing.',
       );
     }
-    final window = HistoricalMessageWindow.before(session.messages, targetId);
+    final messages = <ChatMessage>[];
+    for (final raw in rawMessages) {
+      if (raw is! Map ||
+          raw['id'] is! String ||
+          raw['role'] is! String ||
+          raw['content'] is! String) {
+        throw const EffectiveCanonAssemblyUnavailable(
+          'Historical message anchors are malformed.',
+        );
+      }
+      final swipeId = raw['swipeId'];
+      final agentSwipeId = raw['agentSwipeId'];
+      if (swipeId != null && swipeId is! int ||
+          agentSwipeId != null && agentSwipeId is! int) {
+        throw const EffectiveCanonAssemblyUnavailable(
+          'Historical message variation anchors are malformed.',
+        );
+      }
+      messages.add(
+        ChatMessage(
+          id: raw['id'] as String,
+          role: raw['role'] as String,
+          content: raw['content'] as String,
+          swipeId: swipeId as int? ?? 0,
+          agentSwipeId: agentSwipeId as int? ?? 0,
+        ),
+      );
+    }
+    final window = HistoricalMessageWindow.before(messages, targetId);
     debugPrint(
       '[effective-canon-read] session=$sessionId '
       't+${watch.elapsedMilliseconds}ms historical window',

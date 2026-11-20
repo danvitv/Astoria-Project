@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import '../../models/chat_message.dart';
 import '../../utils/cast_helpers.dart';
 import '../app_db.dart';
 
@@ -95,22 +94,25 @@ final class CardEvolutionSelectedChatEvidence {
     try {
       final decoded = jsonDecode(messagesJson);
       if (decoded is! List) return false;
-      final messages = decoded
-          .whereType<Map<dynamic, dynamic>>()
-          .map((raw) => ChatMessage.fromJson(Map<String, dynamic>.from(raw)))
-          .toList(growable: false);
+      final messages = decoded.whereType<Map<dynamic, dynamic>>().toList(
+        growable: false,
+      );
       var previousIndex = -1;
       for (final entry in entries) {
         final index = messages.indexWhere(
-          (message) => message.id == entry.messageId,
+          (message) => message['id'] == entry.messageId,
         );
         if (index <= previousIndex) return false;
         final message = messages[index];
-        if (message.role != entry.role ||
-            message.swipeId != entry.swipeId ||
-            message.agentSwipeId != entry.agentSwipeId ||
-            message.content != entry.content ||
-            computeHash(message.content) != entry.contentHash) {
+        final swipeId = message['swipeId'] ?? 0;
+        final agentSwipeId = message['agentSwipeId'] ?? 0;
+        final content = message['content'];
+        if (message['role'] != entry.role ||
+            swipeId != entry.swipeId ||
+            agentSwipeId != entry.agentSwipeId ||
+            content != entry.content ||
+            content is! String ||
+            computeHash(content) != entry.contentHash) {
           return false;
         }
         previousIndex = index;

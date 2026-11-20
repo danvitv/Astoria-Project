@@ -4,7 +4,6 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../models/character.dart';
-import '../../models/chat_message.dart';
 import '../../models/tracker.dart';
 import '../../services/card_rewriter/card_evolution_cadence.dart';
 import '../../services/card_rewriter/card_rewrite_operation_parser.dart';
@@ -1101,24 +1100,21 @@ class CardEvolutionRepo {
           CardEvolutionSelectionFailure.sessionMissing,
         );
       }
-      List<ChatMessage>? storedMessages;
+      List<Object?>? messages;
       try {
-        storedMessages = await ChatMessageStorageRepo(
+        messages = await ChatMessageStorageRepo(
           db,
-        ).loadMessagesBySessionId(sessionId);
+        ).loadRawMessagesBySessionId(sessionId);
       } on Object {
         return const CardEvolutionSelection.failed(
           CardEvolutionSelectionFailure.messagesMalformed,
         );
       }
-      if (storedMessages == null) {
+      if (messages == null) {
         return const CardEvolutionSelection.failed(
           CardEvolutionSelectionFailure.messagesMalformed,
         );
       }
-      final messages = <dynamic>[
-        for (final message in storedMessages) message.toJson(),
-      ];
       final runRepo = LedgerReconciliationRunRepo(db);
       final validRuns = await runRepo.readSession(sessionId);
       if (validRuns.isEmpty &&

@@ -553,6 +553,30 @@ void main() {
   });
 
   test(
+    'automatic proposal ignores unrelated legacy message dialect fields',
+    () async {
+      await seed();
+      await addAutomaticProposal();
+      final stamp = await restampJobAsAutomated();
+      final session = await db.select(db.chatSessions).getSingle();
+      final messages = jsonDecode(session.messagesJson) as List<dynamic>;
+      (messages.first as Map<String, dynamic>)['extraImagePaths'] = [1];
+      await db.update(db.chatSessions).write(
+        ChatSessionsCompanion(messagesJson: Value(jsonEncode(messages))),
+      );
+
+      final outcome = await ManualRewriteApplyRepo(db: db, canonReader: reader)
+          .applyApproved(
+            jobId: 'job',
+            expectedCanonStamp: stamp,
+            expectedJobVersion: 1,
+          );
+
+      expect(outcome.kind, 'applied');
+    },
+  );
+
+  test(
     'apply consumes only promoted observations targeted by applied ops',
     () async {
       await seed();

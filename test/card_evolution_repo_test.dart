@@ -462,6 +462,24 @@ void main() {
     );
   });
 
+  test(
+    'legacy history ignores unrelated fields rejected by the current codec',
+    () async {
+      final messages = [
+        for (final message in _messages) Map<String, Object?>.from(message),
+      ];
+      messages.first['extraImagePaths'] = [1];
+      await db.customStatement(
+        'UPDATE chat_sessions SET messages_json = ? WHERE session_id = ?',
+        [jsonEncode(messages), 'session'],
+      );
+
+      expect(await evolution.selectionFailure('session'), isNull);
+      expect(await evolution.isEligible('session'), isTrue);
+      expect(await evolution.buildObservationSnapshot('session'), isNotNull);
+    },
+  );
+
   test('a single-turn history is attributed as too short', () async {
     await db.customStatement(
       'UPDATE chat_sessions SET messages_json = ? WHERE session_id = ?',
