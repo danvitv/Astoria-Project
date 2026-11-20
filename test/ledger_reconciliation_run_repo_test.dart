@@ -192,57 +192,45 @@ void main() {
       expect(copied.branchOrdinalBySourceOrdinal, {1: 1, 2: 2});
       final branchRows = await repo.readSession('branch');
       expect(branchRows, hasLength(2));
-      expect(
-        jsonDecode(branchRows[0].acceptedManifestRefsJson),
-        [
-          {
-            'acceptanceId': 'variation:branch:a1',
-            'sessionId': 'branch',
-            'messageId': 'a1',
-            'swipeId': 0,
-            'agentSwipeId': 0,
-            'manifestHash': 'manifest-a1',
-            'acceptedByUserMessageId': 'u1',
-          },
-        ],
-      );
-      expect(
-        jsonDecode(branchRows[1].acceptedManifestRefsJson),
-        [
-          {
-            'acceptanceId': 'variation:branch:a2',
-            'sessionId': 'branch',
-            'messageId': 'a2',
-            'swipeId': 0,
-            'agentSwipeId': 0,
-            'manifestHash': 'manifest-a2',
-            'acceptedByUserMessageId': 'u2',
-          },
-        ],
-      );
+      expect(jsonDecode(branchRows[0].acceptedManifestRefsJson), [
+        {
+          'acceptanceId': 'variation:branch:a1',
+          'sessionId': 'branch',
+          'messageId': 'a1',
+          'swipeId': 0,
+          'agentSwipeId': 0,
+          'manifestHash': 'manifest-a1',
+          'acceptedByUserMessageId': 'u1',
+        },
+      ]);
+      expect(jsonDecode(branchRows[1].acceptedManifestRefsJson), [
+        {
+          'acceptanceId': 'variation:branch:a2',
+          'sessionId': 'branch',
+          'messageId': 'a2',
+          'swipeId': 0,
+          'agentSwipeId': 0,
+          'manifestHash': 'manifest-a2',
+          'acceptedByUserMessageId': 'u2',
+        },
+      ]);
 
       // Complete provenance exists at the branch coordinates.
-      final branchManifests =
-          await (db.select(db.lorebookUseManifests)
-                ..where((row) => row.sessionId.equals('branch')))
-              .get();
+      final branchManifests = await (db.select(
+        db.lorebookUseManifests,
+      )..where((row) => row.sessionId.equals('branch'))).get();
       expect(
         branchManifests.map((row) => (row.messageId, row.manifestHash)),
         containsAll(const [('a1', 'manifest-a1'), ('a2', 'manifest-a2')]),
       );
-      final branchEntries =
-          await (db.select(db.lorebookUseManifestEntries)
-                ..where((row) => row.sessionId.equals('branch')))
-              .get();
+      final branchEntries = await (db.select(
+        db.lorebookUseManifestEntries,
+      )..where((row) => row.sessionId.equals('branch'))).get();
       expect(branchEntries, hasLength(2));
-      expect(
-        branchEntries.every((row) => row.evidenceJson == '{}'),
-        isTrue,
-      );
-      final branchAcceptances =
-          await (db.select(db.lorebookUseAcceptanceRecords)
-                ..where((row) => row.sessionId.equals('branch')))
-              .get();
+      expect(branchEntries.every((row) => row.evidenceJson == '{}'), isTrue);
+      final branchAcceptances = await (db.select(
+        db.lorebookUseAcceptanceRecords,
+      )..where((row) => row.sessionId.equals('branch'))).get();
       expect(
         branchAcceptances
             .map(
@@ -363,18 +351,20 @@ void main() {
       await _insertBranchSession(db, 'branch', _multiMessages);
 
       await expectLater(
-        db.transaction(() => repo.copyForSessionBranch(
-              fromSessionId: 'session',
-              toSessionId: 'branch',
-              messageIds: const {'a1', 'u1', 'a2', 'u2', 'a3', 'u3'},
-            )),
+        db.transaction(
+          () => repo.copyForSessionBranch(
+            fromSessionId: 'session',
+            toSessionId: 'branch',
+            messageIds: const {'a1', 'u1', 'a2', 'u2', 'a3', 'u3'},
+          ),
+        ),
         throwsStateError,
       );
       expect(await repo.readPhysicalSession('branch'), isEmpty);
       expect(
-        await (db.select(db.lorebookUseManifests)
-              ..where((row) => row.sessionId.equals('branch')))
-            .get(),
+        await (db.select(
+          db.lorebookUseManifests,
+        )..where((row) => row.sessionId.equals('branch'))).get(),
         isEmpty,
       );
 
@@ -978,6 +968,34 @@ void main() {
       expect(await repo.getHead('session'), isNull);
     },
   );
+
+  test(
+    'legacy evidence ignores unrelated fields rejected by the current codec',
+    () async {
+      await _seedSession(db);
+      expect(await repo.append(_run()), isA<ReconciliationRunAppended>());
+      final messages =
+          jsonDecode(
+                (await (db.select(db.chatSessions)
+                          ..where((row) => row.sessionId.equals('session')))
+                        .getSingle())
+                    .messagesJson,
+              )
+              as List<dynamic>;
+      (messages.first as Map<String, dynamic>)['triggeredLorebooks'] = [1];
+      await (db.update(
+        db.chatSessions,
+      )..where((row) => row.sessionId.equals('session'))).write(
+        ChatSessionsCompanion(messagesJson: Value(jsonEncode(messages))),
+      );
+
+      expect(
+        await repo.validateChain('session'),
+        isA<ReconciliationRunValid>(),
+      );
+      expect(await repo.readSession('session'), hasLength(1));
+    },
+  );
 }
 
 Future<void> _seedSession(AppDatabase db) => db.customStatement(
@@ -1085,7 +1103,9 @@ Future<LedgerReconciliationRun> _appendMultiRun(
     effectiveCanonStamp: 'stamp-$ordinal',
     effectiveCanonRevision: 1,
     effectiveCanonHash: 'canon-$ordinal',
-    canonicalResult: {'facts': ['fact-$ordinal']},
+    canonicalResult: {
+      'facts': ['fact-$ordinal'],
+    },
     predecessorChainHash: predecessor,
     contractVersion: 1,
     opsApplied: const [],

@@ -50,6 +50,24 @@ final class ChatMessageStorageRepo {
   )..where((table) => table.sessionId.equals(sessionId))).getSingleOrNull();
 
   Future<List<ChatMessage>?> loadMessagesBySessionId(String sessionId) async {
+    final rawMessages = await loadRawMessagesBySessionId(sessionId);
+    if (rawMessages == null) return null;
+    return List.unmodifiable(
+      rawMessages.map((entry) {
+        if (entry is! Map) {
+          throw const FormatException('Chat message is not an object');
+        }
+        return ChatMessage.fromJson(Map<String, dynamic>.from(entry));
+      }),
+    );
+  }
+
+  /// Loads the original message JSON values through one SQLite snapshot.
+  ///
+  /// Evidence readers use this narrower representation so unrelated fields
+  /// from an older message dialect cannot invalidate content/variation anchors
+  /// merely because the current full [ChatMessage] codec is stricter.
+  Future<List<Object?>?> loadRawMessagesBySessionId(String sessionId) async {
     // One SQLite statement is the snapshot boundary. In particular, never read
     // state and active rows in separate autocommit snapshots: an equal-count
     // edit or generation switch could otherwise be observed half-old/half-new.
@@ -82,9 +100,11 @@ final class ChatMessageStorageRepo {
     final first = rows.first;
     final generation = first.readNullable<int>('active_generation');
     if (generation == null) {
-      return List.unmodifiable(
-        _decodeLegacyMessages(first.read<String>('legacy_json')),
-      );
+      final decoded = jsonDecode(first.read<String>('legacy_json'));
+      if (decoded is! List) {
+        throw const FormatException('Chat messages payload is not an array');
+      }
+      return List<Object?>.unmodifiable(decoded);
     }
     final revision = first.readNullable<int>('revision');
     final expectedCount = first.readNullable<int>('message_count');
@@ -95,7 +115,7 @@ final class ChatMessageStorageRepo {
         expectedCount < 0) {
       throw StateError('Chat message storage state mismatch for $sessionId');
     }
-    final messages = <ChatMessage>[];
+    final messages = <Object?>[];
     var previousPosition = 0;
     for (final row in rows) {
       if (row.readNullable<int>('row_id') == null) continue;
@@ -109,13 +129,12 @@ final class ChatMessageStorageRepo {
       if (decoded is! Map<String, dynamic>) {
         throw const FormatException('Chat message row is not an object');
       }
-      final message = ChatMessage.fromJson(decoded);
-      if (message.id != row.readNullable<String>('message_id') ||
-          message.role != row.readNullable<String>('role') ||
-          message.timestamp != row.readNullable<int>('message_timestamp')) {
+      if (decoded['id'] != row.readNullable<String>('message_id') ||
+          decoded['role'] != row.readNullable<String>('role') ||
+          decoded['timestamp'] != row.readNullable<int>('message_timestamp')) {
         throw StateError('Chat message projection mismatch for $sessionId');
       }
-      messages.add(message);
+      messages.add(decoded);
     }
     if (messages.length != expectedCount) {
       throw StateError('Chat message count mismatch for $sessionId');

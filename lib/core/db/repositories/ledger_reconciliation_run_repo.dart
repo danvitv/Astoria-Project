@@ -1671,11 +1671,16 @@ final class _ReconciliationEvidence {
     try {
       final messages = await ChatMessageStorageRepo(
         db,
-      ).loadMessagesBySessionId(sessionId);
+      ).loadRawMessagesBySessionId(sessionId);
       if (messages == null) return indexed;
       for (final entry in messages.indexed) {
-        final message = entry.$2.toJson();
-        indexed.putIfAbsent(entry.$2.id, () => (entry.$1, message));
+        final message = entry.$2;
+        if (message is Map && message['id'] is String) {
+          indexed.putIfAbsent(
+            message['id'] as String,
+            () => (entry.$1, message),
+          );
+        }
       }
     } catch (_) {}
     return indexed;
